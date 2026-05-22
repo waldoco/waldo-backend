@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env*
+.dev.vars
+.wrangler/
+supabase/.branches/
+supabase/.temp/
+*.local

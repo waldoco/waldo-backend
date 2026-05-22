@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2020"],
+    "types": ["@cloudflare/workers-types"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@waldo/types": ["../waldo-types/src/index.ts"]
+    }
+  },
+  "include": ["cloudflare/**/*", "supabase/**/*"],
+  "exclude": ["node_modules"]
+}
