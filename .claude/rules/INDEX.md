@@ -33,6 +33,8 @@ All canonical rules live in `waldo-brain/.claude/rules/`. This index points at t
 
 ## Skills active for this repo
 
+- `/session-bus` — **MANDATORY at session start AND end.** Cross-session bus, see ADR-0043.
+
 - `/grill-me` — before any new design decision lands as ADR
 - `/grill-with-docs` — when extending an existing ADR
 - `/diagnose` — for any recurring bug (RCA discipline per memory rca_framework)

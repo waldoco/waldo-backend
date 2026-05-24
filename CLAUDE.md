@@ -151,3 +151,7 @@ When in doubt, in order:
 4. The ADR's "Grounded in" references
 
 Anything in `Docs/archive/` is superseded.
+
+## Cross-session bus
+
+**[MUST]** Invoke `/session-bus` at session START and END. Reads/writes Linear `State — waldo-backend` doc + Linear Session Log issue + `waldo-brain/04-Sessions/handoffs/waldo-backend/`. See ADR-0043. This is how Shivansh, Pranav, Aachi avoid divergence across machines.
