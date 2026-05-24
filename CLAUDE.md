@@ -1,89 +1,139 @@
-# Waldo Backend — Claude Code Instructions
+# waldo-backend — Claude Code Instructions
 
-## What This Repo Is
+## What this repo is
 
-Supabase data layer + Cloudflare Durable Objects agent brain for Waldo.
+**Supabase + Cloudflare** = Waldo's brain.
 
-**Brand:** Waldo (dalmatian). Tagline: "Already on it."  
-**Stack:** Supabase Postgres (ap-south-1) + Cloudflare DO + CF AI Gateway + R2  
-**Phase:** Phase 1 — Launch (June 2026)
+- Supabase Postgres (16 tables · RLS on every one) — health data layer
+- Supabase Edge Functions (Deno) — webhook ingestion, OAuth, cron triggers
+- Cloudflare Worker — agent runtime entry router
+- Cloudflare Durable Object — per-user agent brain with built-in SQLite (10 tables: memory_blocks, episodes, procedures, ...)
+- Cloudflare R2 — cold archive (episodes 90d+)
+- Cloudflare AI Gateway — single key, all LLM calls routed through
 
-## The Non-Negotiable Rules
+No mobile code. No marketing site. Just data + agent.
 
-1. **CF DO = the ONLY agent brain.** EFs = data sync + CRS computation ONLY. No LLM calls from EFs, ever.
-2. **12 EFs max.** Adding a 13th requires a team discussion.
-3. **Raw health values NEVER enter DO SQLite.** Only derived insights (zone, summary, pillar_drag). Raw values (HRV ms, RHR bpm, sleep_duration_min) stay in Supabase health_daily only.
-4. **Every EF: `validateJWT()` in the first 10 lines.** Not line 50. First 10.
-5. **Every tool result: `sanitizeToolReturn()` before the ReAct loop sees it.**
-6. **CRS engine (`core/crs/`) has zero imports from adapters or providers.** Pure TypeScript math.
-7. **`invoke-agent` EF does not exist.** If you see one being created, stop.
+## Tech stack
 
-## Source-of-Truth Docs (read these before touching any file)
+- Deno 1.46+ (Supabase Edge Functions runtime)
+- TypeScript 5.4+ strict mode
+- Wrangler 4.x (CF Workers + Durable Objects)
+- Postgres 16 + pgvector + pg_cron
+- `@anthropic-ai/sdk` for Claude calls (Haiku 4.5 default, Sonnet 4.6 for ~5%)
+- `@google/genai` + Workers AI for Gemma 4 27B/9B
+- grammY for Telegram (ADR-0012)
+- `@waldo/types` from private npm (HEY-7 + HEY-63)
+- OpenTelemetry SDK (OTLP export to CF AI Gateway)
+- Node 22 LTS for local dev (`tsx`)
 
-- `../waldo-brain/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md` — shared decisions, DDL, phases
-- `../waldo-brain/01-Waldo/planning/WALDO_BACKEND_PLAN.md` — build sequence, EF specs
-- `../waldo-brain/01-Waldo/planning/WALDO_AGENT_HARNESS_PLAN.md` — harness, memory, tools
+## Commands
 
-## Architecture
+```bash
+pnpm install
+pnpm typecheck
+pnpm test                              # vitest
 
-```
-supabase/
-  migrations/           ← 13 tables, each with rollback pair
-  functions/
-    _shared/            ← auth.ts, zod-schemas.ts, rate-limit.ts (imported by every EF)
-    [12 EF directories]
+# Supabase
+supabase functions serve               # local EF
+supabase db push                       # apply migrations
+supabase functions deploy <name>
 
-cloudflare/waldo-agent/src/
-  adapters/llm/         ← GemmaProvider, AnthropicProvider, FallbackChain
-  adapters/channel/     ← TelegramAdapter, PushAdapter (APNs + FCM)
-  adapters/health/      ← SupabaseHealthSource
-  core/crs/             ← engine.ts, weights.ts (LOCKED — SAFTE-FAST grounded)
-  core/memory/          ← scribe, bm25, temporal, fusion, decay, cara, fence, security, retrieve
-  core/harness/         ← runAgentLoop, promptBuilder, preFilter, qualityGates, compaction
-  core/dreaming/        ← orchestrator, consolidate, precompute
-  tools/                ← 16 files, one tool per file
-  agent.ts              ← DO class + HTTP routing ONLY (<300 lines)
-```
+# Cloudflare
+wrangler dev --local                   # local Worker
+wrangler deploy --env staging
+wrangler tail --env staging            # live logs
+wrangler durable-objects:list
 
-## CRS Formula (LOCKED — do not change without team discussion)
-
-```
-Form     = Sleep×0.50 + HRV×0.35 + Circadian×0.075 + Motion×0.075
-Recovery = Sleep×0.50 + CASS×0.25 + RHRTS×0.15 + RRS×0.10
-Weight   = Load×0.20 + Stack×0.25 + Signal×0.20 + Task×0.20 + Mind×0.15
+# Eval
+pnpm eval                              # 30-case golden test set
 ```
 
-## Waldo Brand Naming (use in all agent output, logs, code comments)
+## Issue tracker
 
-| Code name | User-facing name |
-|---|---|
-| CRS / Form score | **Form** |
-| Fetch Alert | **The Fetch** |
-| Morning Brief | **Morning Wag** |
-| Day Strain | **Load** (0-21) |
-| Activity Score | **Motion** |
-| Recovery Score | **Recovery** |
-| Nap Score | **Form** (never "Nap Score") |
+**Linear team HeyWaldo** → [linear.app/heywaldo](https://linear.app/heywaldo)
 
-## Health Data Security (NON-NEGOTIABLE)
+- PR title MUST include `HEY-NN`
+- Branch name: `hey-NN-<slug>`
+- PR description: `Closes HEY-NN`
+- Active tickets here: filter `repo:waldo-backend`
 
-- Raw health values never in logs, never in DO SQLite, never in agent context
-- JWT validated on every EF before any data access
-- RLS on every Supabase table from day 0
-- Samsung HRV proxy: DO NOT implement without validated formula from physiological research
+## Triage labels (Matt Pocock state machine)
 
-## Waldo Agent AI Gateway
+Same set as the other repos (P0-P3 · ready-for-agent/human · type:* · repo:*). See `waldo-brain/01-Waldo/repo-bootstraps/README.md`.
 
-```
-Base URL: https://gateway.ai.cloudflare.com/v1/31680869a0e27d263df99818ceca94fb/waldo
-Primary model: @cf/google/gemma-4-27b-a4b (~95% calls)
-Reasoning model: claude-sonnet-4-6 (~5% — pattern analysis only)
-OTel: → Langfuse OTLP endpoint (automatic, zero code needed)
-```
+## Domain docs (waldo-brain)
 
-## CI Hooks (enforced — not aspirational)
+- **`waldo-brain/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md`** — build plan
+- **`waldo-brain/01-Waldo/Architecture Decision Records (ADR)/`** — 42 ADRs
+- **`waldo-brain/04-Agent-Harness/`** — agent runtime master notes
+- **`waldo-brain/03-References/ADL/`** — research grounding (Hermes, Cursor, MemPalace, Cognee, agentic-stack, Fowler SPDD, squad, federated learning)
+- **`waldo-brain/05-Team/suyash/app-task-flows/`** — UX flow specs (read these BEFORE building any tool that affects user-facing surface)
+- **Soul files (immutable)** — `waldo-brain/01-Waldo/agent/SOUL_*.md`. NEVER edit at runtime. Git PR + review only.
 
-- `file-size-check.sh` — any .ts > 800 lines = fail
-- `health-value-lockout.sh` — raw HRV/RHR in DO code = fail
-- `no-invoke-agent.sh` — invoke-agent reference = fail
-- `no-verify-check.sh` — --no-verify attempt = blocked
+Critical ADRs for this repo:
+- ADR-0002 Agent in CF DO, health in Supabase
+- ADR-0003 Gemma 4 27B primary
+- ADR-0004 CF AI Gateway single LLM gateway
+- ADR-0005 5 typed memory halls
+- ADR-0006 Scribe inbox-merge
+- ADR-0008 Per-trigger tool ACL
+- ADR-0017 Patrol cadence (15 min + pre-Brief sweep)
+- ADR-0020 Intervention triggers + cooldown + learning
+- ADR-0022 Skill system architecture
+- ADR-0024 Scribe sanitiser canonical spec (5 checks)
+- ADR-0030 Verification layer (LLM-judge + WIS + trace eval)
+- ADR-0031 Recall-before-act explicit wiring
+- ADR-0032 Hooks-based safety layers (7 events)
+- ADR-0033 Session trust reset on DO alarm wake
+- ADR-0034 Tool output compression + search_tools lazy discovery
+- ADR-0037 Append-only event log + stable pattern_id
+- ADR-0040/41/42 — Calendar + voice memo + pre_activity_spot
+
+## Rules
+
+See `.claude/rules/INDEX.md`. Highlights:
+
+- JWT validation on EVERY EF (first 10 lines) via `_shared/auth.ts`
+- RLS policy `auth.uid() = user_id` on every Postgres table
+- `safeFetch()` wrapper for all outbound HTTP (URL allowlist)
+- Secrets in CF Secrets Store ONLY — never env vars, never code
+- Health values NEVER in agent_logs, DO SQLite, or R2
+- Append-only on agent_logs / episodes / patrol_log / interventions / trace_evaluations / sheet_commits / outcome_signals / crs_history / agent_evolutions / waldo_experiments — UPDATE/DELETE blocked via `AuditedDB` wrapper (HEY-11)
+- Tool ACL enforcement at tool-handler entry (per trigger) via `enforceACL()` — see ADR-0008
+
+## Conventional commits
+
+`feat(agent): ...` · `fix(scribe): ...` · `feat(adapter): ...` · `chore(deps): ...` · `docs: ...` · `test: ...` · `refactor: ...`
+
+## NEVER
+
+- Never log raw health values (HRV, HR, sleep hours, SpO2, weight, blood pressure)
+- Never write to memory_blocks directly — use Scribe inbox-merge (ADR-0006)
+- Never UPDATE or DELETE on append-only tables (use AuditedDB)
+- Never bypass `_shared/auth.ts` JWT validation
+- Never use service-role key outside of `build-intelligence` + audit writes
+- Never call LLM provider directly — route through `LLMProvider` adapter + CF AI Gateway
+- Never `eval()` or `new Function()` — execute_code must go through CF Sandbox SDK (ADR-0023)
+- Never include user PII (emails, phones, names) in prompts unless sandwich-defended and template-wrapped
+- Never use `--no-verify` on commits
+- Never auto-modify soul files (SOUL_BASE, SOUL_STRESS, SOUL_MORNING) — they are read-only at runtime
+
+## Build → Break → Fix philosophy
+
+1. Read the ADR (it's the spec)
+2. Read the `.claude/rules/INDEX.md` for the rules
+3. Write golden test from the ADR's Acceptance section
+4. Implement until green
+5. Run /diagnose if recurring bugs
+6. Run /grill-with-docs to validate the design holds under pressure
+7. Open PR with `Closes HEY-NN`
+
+## Source of truth
+
+When in doubt, in order:
+1. The Linear ticket description (it links the ADR)
+2. The ADR (it links research + grounding docs)
+3. `WALDO_V1_MASTER_PLAN.md` for cross-cutting context
+4. The ADR's "Grounded in" references
+
+Anything in `Docs/archive/` is superseded.
