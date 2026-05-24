@@ -61,60 +61,6 @@
       "Write(**/.env*)"
     ]
   },
-  "hooks": {
-    "Notification": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "osascript -e 'display notification \"Claude needs attention\" with title \"Waldo Backend\"' 2>/dev/null || true"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/no-verify-check.sh"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/file-size-check.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/health-value-lockout.sh"
-          },
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/no-invoke-agent.sh"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash .claude/hooks/check-console-log.sh"
-          }
-        ]
-      }
-    ]
-  },
   "enabledPlugins": {
     "supabase@claude-plugins-official": true
   }

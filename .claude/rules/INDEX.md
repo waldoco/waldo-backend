@@ -2,8 +2,9 @@
 
 All canonical rules live in `waldo-brain/.claude/rules/`. This index points at the ones an agent working in this repo MUST read before generating code.
 
-## Hard rules (read first, in order)
+## Hard rules (read first, IN ORDER)
 
+0. **`waldo-brain/.claude/rules/mental-model.md`** — **READ THIS FIRST. Always.** 4 non-negotiable disciplines: Problem-first · Product-first · First-principles · Test-heavy + thorough QA. Every other rule builds on these.
 1. **`waldo-brain/.claude/rules/health-data-security.md`** — NON-NEGOTIABLE. Encryption, RLS, secrets, prompt injection, egress, audit. Health data is special-category under GDPR Art 9. Every line in this file is a P0 rule.
 2. **`waldo-brain/.claude/rules/architecture.md`** — 10+ locked decisions. Tool ACL matrix (ADR-0008). Adapter pattern. Reliability patterns. Agent security hardening. Memory architecture.
 3. **`waldo-brain/.claude/rules/coding-standards.md`** — TypeScript strict mode. Edge Function patterns. Worker + DO patterns. Adapter pattern code structure. NEVER list.
@@ -47,14 +48,15 @@ See `waldo-brain/.claude/rules/phase-orchestration.md` for the full per-phase ma
 - **`workflow-mapper`** — BEFORE writing any new trigger / agent loop logic
 - **`crs-validator`** — every PR that touches CRS algorithm
 
-## Pre-commit hook checklist (automatic via .husky)
+## Pre-commit checks (skill-driven, not hook-blocked)
 
-- `pnpm typecheck` passes (strict)
-- `pnpm test` passes (vitest)
-- No `console.log` of HRV / HR / sleep / SpO2 / weight
-- No `--no-verify` in commit message
-- Conventional commit prefix present
-- Linear ticket `HEY-NN` in branch name OR PR title
+We rejected blocking pre-commit hooks. Hooks add friction; skills + review agents add discipline. Checks below run via skills / agents / CI — not as commit blockers.
+
+- `pnpm typecheck` runs in CI; agent runs it before PR
+- `pnpm test` runs in CI; `/tdd` skill enforces test-first locally
+- Health-value lockout enforced by Scribe sanitiser (ADR-0024) at runtime, by `security-reviewer` agent at PR time
+- `--no-verify` is forbidden by CLAUDE.md NEVER list (agent self-policed)
+- Conventional commit prefix + `HEY-NN` reference checked by `/diagnose` if a PR title looks off
 
 ## Things NOT in scope for this repo
 
