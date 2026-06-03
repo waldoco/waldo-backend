@@ -61,6 +61,32 @@ pnpm eval                              # 30-case golden test set
 
 Same set as the other repos (P0-P3 · ready-for-agent/human · type:* · repo:*). See `waldo-brain/01-Waldo/repo-bootstraps/README.md`.
 
+## Multi-agent workflow (Claude × Codex) — HEY-109
+
+This repo is built by two agents in parallel — **Claude Code** and **Codex** — coordinated through Linear **HEY-109** (the session bus, ADR-0043). Read HEY-109 at session start; update at session end.
+
+**Cluster split — single writer per cluster** (reviewer comments, writer applies; reviewer never edits the body):
+
+- **Claude writes:** `@pin4sf/waldo-types` contracts · memory / Scribe / recall · CRS / body-context · GDPR / consent / privacy · product-gap classification · global dependency graph · HEY-109.
+- **Codex writes:** DO loop · run-journal / outbox · hooks · tool dispatcher / ACL · Telegram ChannelAdapter inbound + threading · LLMProvider · eval / observability · internal infra (wrangler, AuditedDB).
+
+Most of `waldo-backend` lives in Codex's cluster (runtime + infra + delivery). Claude owns Supabase schema (HEY-9), the CRS engine (HEY-102), memory/Scribe/recall, and the GDPR erasure runbook.
+
+**Ownership + review-state labels:**
+
+| Label | Meaning |
+|---|---|
+| `agent:claude` | Claude Code owns the body + grabs to implement |
+| `agent:codex` | Codex owns the body + grabs to implement |
+| `review:claude` | Waiting on Claude to review (typically state `In Review`) |
+| `review:codex` | Waiting on Codex to review |
+
+**Lifecycle:** owner adds `agent:X` while writing body → `ready-for-agent` once Agent-Ready bar met → agent branches → on PR open flips `agent:X` → `review:Y` (other cluster), state → `In Review` → fix-pass cycles via PR comments until reviewer approves → squash-merge → state `Done`. Labels stay as audit trail.
+
+**Filters:** `ready-for-agent + agent:me + state:Todo` = my next pickup; `review:me` = my review queue.
+
+**Agent-Ready bar (10 items):** SoT links · Module/Interface/Seam · deps · acceptance (golden test) · validation commands · 5-bucket failure paths (null / permission-revoked / network / hostile / concurrent) · reversibility · security/privacy · out-of-scope · zero open founder/legal questions. Missing any → `needs-info` or `ready-for-human`.
+
 ## Domain docs (waldo-brain)
 
 - **`waldo-brain/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md`** — build plan
