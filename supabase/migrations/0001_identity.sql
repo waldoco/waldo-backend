@@ -33,6 +33,12 @@ alter table users enable row level security;
 alter table users force row level security;
 revoke all on users from anon, authenticated;
 grant select on users to authenticated;
+-- service_role (EFs/agent) owns all writes; grants are explicit, not inherited from Supabase
+-- defaults. Append-only immutability (agent_logs, notification_log, feedback_signals) is
+-- enforced application-layer by AuditedDB (HEY-11), not by grants — and patrol_entries takes
+-- legitimate post-insert updates (user_thumbs, importance_score), so grant-level append-only
+-- is not viable here.
+grant select, insert, update, delete on users to service_role;
 -- Direct auth.uid() form (NOT app_user_id(): that reads users → would recurse).
 create policy users_select_own on users
   for select to authenticated
@@ -70,6 +76,7 @@ alter table user_consents enable row level security;
 alter table user_consents force row level security;
 revoke all on user_consents from anon, authenticated;
 grant select on user_consents to authenticated;
+grant select, insert, update, delete on user_consents to service_role;
 create policy user_consents_select_own on user_consents
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));

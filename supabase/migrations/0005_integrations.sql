@@ -20,9 +20,10 @@ alter table user_devices enable row level security;
 alter table user_devices force row level security;
 revoke all on user_devices from anon, authenticated;
 grant select on user_devices to authenticated;
+grant select, insert, update, delete on user_devices to service_role;
 create policy user_devices_select_own on user_devices
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));
 
 -- §5 #9 — oauth_tokens (encrypted credentials via Supabase Vault). Service-role only.
 create table oauth_tokens (
@@ -39,12 +40,15 @@ create table oauth_tokens (
   sync_error text,
   sync_error_since timestamptz,
   is_active boolean default true,
-  unique (user_id, provider, account_email)
+  -- NULLS NOT DISTINCT (PG15+) so a null account_email can't create duplicate (user,provider)
+  -- connections — a null is treated as equal, capping it at one row per provider (#4).
+  unique nulls not distinct (user_id, provider, account_email)
 );
 
 alter table oauth_tokens enable row level security;
 alter table oauth_tokens force row level security;
 revoke all on oauth_tokens from anon, authenticated;
+grant select, insert, update, delete on oauth_tokens to service_role;
 
 -- §5 #14 — one_time_tokens (Telegram link + OAuth PKCE state + password reset). Bearer
 -- secrets, created/consumed by EFs → service-role only. used_at set on consume (single-use).
@@ -60,6 +64,7 @@ create table one_time_tokens (
 alter table one_time_tokens enable row level security;
 alter table one_time_tokens force row level security;
 revoke all on one_time_tokens from anon, authenticated;
+grant select, insert, update, delete on one_time_tokens to service_role;
 
 create index idx_one_time_tokens_expires on one_time_tokens (expires_at);
 
@@ -80,6 +85,7 @@ alter table subscriptions enable row level security;
 alter table subscriptions force row level security;
 revoke all on subscriptions from anon, authenticated;
 grant select on subscriptions to authenticated;
+grant select, insert, update, delete on subscriptions to service_role;
 create policy subscriptions_select_own on subscriptions
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));

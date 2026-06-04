@@ -28,9 +28,10 @@ alter table spots enable row level security;
 alter table spots force row level security;
 revoke all on spots from anon, authenticated;
 grant select on spots to authenticated;
+grant select, insert, update, delete on spots to service_role;
 create policy spots_select_own on spots
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));
 
 create index idx_spots_user_date_confidence on spots (user_id, date desc, confidence desc);
 
@@ -59,9 +60,10 @@ alter table patrol_entries enable row level security;
 alter table patrol_entries force row level security;
 revoke all on patrol_entries from anon, authenticated;
 grant select on patrol_entries to authenticated;
+grant select, insert, update, delete on patrol_entries to service_role;
 create policy patrol_entries_select_own on patrol_entries
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));
 
 create index idx_patrol_entries_user_time on patrol_entries (user_id, occurred_at desc);
 create index idx_patrol_entries_chain on patrol_entries (causal_chain_id) where causal_chain_id is not null;
@@ -82,9 +84,10 @@ alter table feedback_signals enable row level security;
 alter table feedback_signals force row level security;
 revoke all on feedback_signals from anon, authenticated;
 grant select on feedback_signals to authenticated;
+grant select, insert, update, delete on feedback_signals to service_role;
 create policy feedback_signals_select_own on feedback_signals
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));
 
 create index idx_feedback_user_time on feedback_signals (user_id, occurred_at desc);
 create index idx_feedback_trace on feedback_signals (trace_id) where trace_id is not null;
@@ -116,5 +119,6 @@ create table agent_logs (
 alter table agent_logs enable row level security;
 alter table agent_logs force row level security;
 revoke all on agent_logs from anon, authenticated;
+grant select, insert, update, delete on agent_logs to service_role;
 
 create index idx_agent_logs_user_date on agent_logs (user_id, created_at desc);

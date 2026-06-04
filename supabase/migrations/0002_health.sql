@@ -47,9 +47,10 @@ alter table health_daily enable row level security;
 alter table health_daily force row level security;
 revoke all on health_daily from anon, authenticated;
 grant select on health_daily to authenticated;
+grant select, insert, update, delete on health_daily to service_role;
 create policy health_daily_select_own on health_daily
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));
 
 create index idx_health_daily_user_date on health_daily (user_id, date desc);
 
@@ -86,9 +87,10 @@ alter table crs_scores enable row level security;
 alter table crs_scores force row level security;
 revoke all on crs_scores from anon, authenticated;
 grant select on crs_scores to authenticated;
+grant select, insert, update, delete on crs_scores to service_role;
 create policy crs_scores_select_own on crs_scores
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));
 
 create index idx_crs_scores_user_date on crs_scores (user_id, date desc);
 
@@ -109,6 +111,7 @@ alter table user_baselines enable row level security;
 alter table user_baselines force row level security;
 revoke all on user_baselines from anon, authenticated;
 grant select on user_baselines to authenticated;
+grant select, insert, update, delete on user_baselines to service_role;
 create policy user_baselines_select_own on user_baselines
   for select to authenticated
-  using (user_id = app_user_id());
+  using (user_id = (select app_user_id()));
