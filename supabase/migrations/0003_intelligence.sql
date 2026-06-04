@@ -1,9 +1,10 @@
 -- HEY-9 · Supabase schema · 0003 intelligence & audit
 -- Source: WALDO_V1_MASTER_PLAN.md §5 #6,7,12,16.
--- Written by build-intelligence / the agent (service role); clients read own rows.
--- patrol_entries, feedback_signals, agent_logs are append-only (ADR-0037) — enforced at the
--- application layer via AuditedDB (HEY-11, out of scope here). Client grants are read-only,
--- which already blocks client mutation; no DB-level UPDATE/DELETE trigger is added.
+-- Written by service-role Edge Functions (e.g. build-intelligence); clients read own rows.
+-- The DO/agent loop never holds the service-role key (ADR-0052) — it reads via RLS JWT.
+-- patrol_entries, feedback_signals, agent_logs are append-only (ADR-0037), enforced at the
+-- application layer via AuditedDB (HEY-11, out of scope). Client grants are read-only; the
+-- service_role grants below additionally drop UPDATE on the write-once logs.
 
 -- §5 #6 — spots (individual observations, 90d display expiry). patrol_entry_id /
 -- constellation_id are soft references (no FK in §5) to avoid coupling retention lifecycles.
@@ -60,6 +61,7 @@ alter table patrol_entries enable row level security;
 alter table patrol_entries force row level security;
 revoke all on patrol_entries from anon, authenticated;
 grant select on patrol_entries to authenticated;
+-- UPDATE retained: user_thumbs / importance_score / reversed_at / outcome are set post-insert.
 grant select, insert, update, delete on patrol_entries to service_role;
 create policy patrol_entries_select_own on patrol_entries
   for select to authenticated
@@ -84,7 +86,8 @@ alter table feedback_signals enable row level security;
 alter table feedback_signals force row level security;
 revoke all on feedback_signals from anon, authenticated;
 grant select on feedback_signals to authenticated;
-grant select, insert, update, delete on feedback_signals to service_role;
+-- write-once event stream → no UPDATE (DELETE kept for R2 archival/retention, ADR-0061).
+grant select, insert, delete on feedback_signals to service_role;
 create policy feedback_signals_select_own on feedback_signals
   for select to authenticated
   using (user_id = (select app_user_id()));
@@ -119,6 +122,8 @@ create table agent_logs (
 alter table agent_logs enable row level security;
 alter table agent_logs force row level security;
 revoke all on agent_logs from anon, authenticated;
+-- UPDATE retained: wis_engagement / wis_action_acceptance / delivery_status are backfilled
+-- post-delivery (ADR-0038). DELETE kept for the 90d → R2 aggregation/retention.
 grant select, insert, update, delete on agent_logs to service_role;
 
 create index idx_agent_logs_user_date on agent_logs (user_id, created_at desc);

@@ -1,7 +1,9 @@
 -- HEY-9 · Supabase schema · 0004 comms
 -- Source: WALDO_V1_MASTER_PLAN.md §5 #10,11,13.
--- Chat is created server-side (messages route through the DO agent, overview); clients read
--- own threads/messages via RLS. notification_log is service-role only (§5 principle 6).
+-- Chat is created server-side: the conversation runs in the DO agent, but the service-role
+-- write to these tables is performed by an Edge Function / worker — the DO never holds the
+-- service-role key (ADR-0052). Clients read own threads/messages via RLS. notification_log is
+-- service-role only (§5 principle 6).
 
 -- §5 #10 — chat_threads (persistent by topic, cross-surface)
 create table chat_threads (
@@ -80,4 +82,5 @@ create table notification_log (
 alter table notification_log enable row level security;
 alter table notification_log force row level security;
 revoke all on notification_log from anon, authenticated;
-grant select, insert, update, delete on notification_log to service_role;
+-- write-once send record → no UPDATE (DELETE kept for retention; no status column to update).
+grant select, insert, delete on notification_log to service_role;
