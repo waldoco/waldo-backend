@@ -2,9 +2,8 @@
 -- Source: WALDO_V1_MASTER_PLAN.md §5 #6,7,12,16.
 -- Written by service-role Edge Functions (e.g. build-intelligence); clients read own rows.
 -- The DO/agent loop never holds the service-role key (ADR-0052) — it reads via RLS JWT.
--- patrol_entries, feedback_signals, agent_logs are append-only (ADR-0037), enforced at the
--- application layer via AuditedDB (HEY-11, out of scope). Client grants are read-only; the
--- service_role grants below additionally drop UPDATE on the write-once logs.
+-- Client grants are read-only. agent_logs and feedback_signals are write-once at the grant
+-- level; patrol_entries keeps documented post-insert feedback/outcome updates.
 
 -- §5 #6 — spots (individual observations, 90d display expiry). patrol_entry_id /
 -- constellation_id are soft references (no FK in §5) to avoid coupling retention lifecycles.
@@ -36,8 +35,8 @@ create policy spots_select_own on spots
 
 create index idx_spots_user_date_confidence on spots (user_id, date desc, confidence desc);
 
--- §5 #7 — patrol_entries (immutable audit trail, retain all time). data_reference holds NO
--- raw health values (overview logging redline).
+-- §5 #7 — patrol_entries (audit trail, retain all time). data_reference holds NO raw health
+-- values (overview logging redline).
 create table patrol_entries (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references users(id) on delete cascade,

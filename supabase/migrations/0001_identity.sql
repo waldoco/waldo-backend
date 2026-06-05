@@ -35,11 +35,8 @@ alter table users force row level security;
 revoke all on users from anon, authenticated;
 grant select on users to authenticated;
 -- service_role = Edge Functions / admin only, NEVER the DO/agent loop (ADR-0052). Grants are
--- explicit, not inherited from Supabase defaults. Write-once logs (notification_log,
--- feedback_signals) drop UPDATE at the grant level; agent_logs + patrol_entries keep UPDATE
--- because they take legitimate post-insert backfill (agent_logs: wis_*/delivery_status per
--- ADR-0038; patrol_entries: user_thumbs/importance_score). Full append-only immutability is
--- enforced by AuditedDB (HEY-11).
+-- explicit, not inherited from Supabase defaults. Write-once logs drop UPDATE at the grant
+-- level; post-insert mutation exceptions are documented at each table.
 grant select, insert, update, delete on users to service_role;
 -- Direct auth.uid() form (NOT app_user_id(): that reads users → would recurse).
 create policy users_select_own on users
