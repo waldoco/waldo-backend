@@ -83,4 +83,5 @@ alter table notification_log enable row level security;
 alter table notification_log force row level security;
 revoke all on notification_log from anon, authenticated;
 -- write-once send record → no UPDATE (DELETE kept for retention; no status column to update).
+revoke all on notification_log from service_role;
 grant select, insert, delete on notification_log to service_role;

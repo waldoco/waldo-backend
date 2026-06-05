@@ -54,6 +54,34 @@ create policy health_daily_select_own on health_daily
 
 create index idx_health_daily_user_date on health_daily (user_id, date desc);
 
+create function health_daily_requires_consent()
+  returns trigger
+  language plpgsql
+  security invoker
+  set search_path = ''
+as $$
+begin
+  if not exists (
+    select 1
+    from public.user_consents
+    where user_id = new.user_id
+      and health_data_consent = true
+  ) then
+    raise exception 'health_daily write requires health data consent'
+      using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function health_daily_requires_consent() from public;
+
+create trigger health_daily_requires_consent
+  before insert or update of user_id on health_daily
+  for each row
+  execute function health_daily_requires_consent();
+
 -- §5 #4 — crs_scores (computed Form/Recovery/Weight + sub-scores, upserted). Re-derivable
 -- from health_daily, so retention can drop old rows (ADR-0061). zone enum per ADR-0029.
 create table crs_scores (

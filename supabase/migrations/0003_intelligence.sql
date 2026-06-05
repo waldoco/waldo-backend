@@ -87,6 +87,7 @@ alter table feedback_signals force row level security;
 revoke all on feedback_signals from anon, authenticated;
 grant select on feedback_signals to authenticated;
 -- write-once event stream → no UPDATE (DELETE kept for R2 archival/retention, ADR-0061).
+revoke all on feedback_signals from service_role;
 grant select, insert, delete on feedback_signals to service_role;
 create policy feedback_signals_select_own on feedback_signals
   for select to authenticated
@@ -122,8 +123,8 @@ create table agent_logs (
 alter table agent_logs enable row level security;
 alter table agent_logs force row level security;
 revoke all on agent_logs from anon, authenticated;
--- UPDATE retained: wis_engagement / wis_action_acceptance / delivery_status are backfilled
--- post-delivery (ADR-0038). DELETE kept for the 90d → R2 aggregation/retention.
-grant select, insert, update, delete on agent_logs to service_role;
+-- strict append-only audit trail (ADR-0037): write new events, do not mutate rows.
+revoke all on agent_logs from service_role;
+grant select, insert on agent_logs to service_role;
 
 create index idx_agent_logs_user_date on agent_logs (user_id, created_at desc);
