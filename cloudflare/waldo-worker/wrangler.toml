@@ -1,0 +1,21 @@
+name = "waldo-worker"
+main = "src/index.ts"
+# HEY-71 pins current Workers runtime behavior for the bootstrap harness.
+compatibility_date = "2026-06-07"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[vars]
+ENVIRONMENT = "local"
+SUPABASE_URL = "https://gororukpipahvpvsydwz.supabase.co"
+WALDO_WORKER_URL = ""
+
+[env.staging]
+name = "waldo-worker-staging"
+vars = { ENVIRONMENT = "staging", SUPABASE_URL = "https://gororukpipahvpvsydwz.supabase.co", WALDO_WORKER_URL = "" }
+
+[env.production]
+name = "waldo-worker-production"
+vars = { ENVIRONMENT = "production", SUPABASE_URL = "https://atywijhgfevryxhkemfu.supabase.co", WALDO_WORKER_URL = "" }
