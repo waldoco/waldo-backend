@@ -1,10 +1,10 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/language.md @ 833eb449309e -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/language.md @ e09f89f49985 -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Architecture Language
 
-> **Canonical source:** `waldo-brain/.claude/rules/language.md` @ `833eb449309e`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/language.md` @ `e09f89f49985`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
 
 > RFC2119 keywords (**MUST**, **SHOULD**, **MAY**, etc.) apply per [`posture.md`](posture.md).
 
