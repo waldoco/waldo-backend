@@ -1,10 +1,16 @@
 export type RuntimeEnvironment = "local" | "staging" | "production";
 
+export type WaldoAgentBinding = {
+  idFromName(name: string): DurableObjectId;
+  get(id: DurableObjectId): { fetch(request: Request): Promise<Response> };
+};
+
 export type Env = {
   ENVIRONMENT?: RuntimeEnvironment | string;
   SUPABASE_URL?: string;
   WALDO_WORKER_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
+  WALDO_AGENT?: WaldoAgentBinding;
 };
 
 export type RuntimeConfig = {
