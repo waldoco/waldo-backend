@@ -1,10 +1,10 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/mental-model.md @ b81466591c72 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/mental-model.md @ 8f74f163fdb0 -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Mental Model — Non-Negotiable Across All 4 Repos
 
-> **Canonical source:** `waldo-brain/.claude/rules/mental-model.md` @ `b81466591c72`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/mental-model.md` @ `8f74f163fdb0`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
 
 > RFC2119 keywords (**MUST**, **SHOULD**, **MAY**, etc.) apply per [`posture.md`](posture.md).
 
@@ -216,11 +216,14 @@ Most code here is AI-generated. Review it like an adversary, not a rubber stamp 
 | Markdown headers + bullet lists on a yes/no question | Format-drift |
 | "I will now…" / "Sure, I'd be happy to…" / "Let me think about this…" | Filler, no information |
 | Comments explaining WHAT the code does | Well-named code already explains; only WHY non-obvious deserves a comment |
+| `// added for HEY-123` / `// per Suyash's review` / `// see PR #456` / `// fixes 2026-06-04 incident` | Cross-references rot the moment the ticket closes / the PR merges / the date stops being relevant. Those facts belong in the PR description, the ADR, or the Evidence Trail — NEVER in code. Future readers don't have the context; the rot taxes every future session. |
+| Code comment that summarises the PR ("This change adds…", "Refactors the foo to bar") | PR descriptions are the home for that. Code comments describe code as it is, not the change that produced it. |
 | Backward-compat shims for code nobody calls | Patch, not root cause |
 | Test that only verifies the mock returned the mock value | Doesn't exercise real behaviour |
 | Re-importing the same type three different ways | Cargo-culted boilerplate |
 | Implementation that "handles all edge cases" you didn't define | Defensive coding for hypothetical bugs |
 | 20-line ASCII diagram in a commit body | Format-drift, ignored at review |
+| Function/file/module created "because we'll need it later" | Speculative abstraction. Add when the second caller appears, not the first. |
 
 ### Every line of code must answer
 
@@ -236,6 +239,8 @@ If any answer is "no" or "I'm not sure" — rewrite or delete.
 
 - Never add code "just in case"
 - Never add comments that paraphrase the line below
+- Never write code comments that reference tickets (`HEY-123`), PR numbers, dates, names, or one-off discussions. Those rot. PR description, ADR, and Evidence Trail are the right homes.
+- Never write comments that summarise the change ("This refactor moves X to Y"). The diff and the PR description do that.
 - Never add disclaimers, apologies, or hedging in code or commits
 - Never patch a symptom when the root cause is one layer up
 - Never copy-paste a pattern without checking it fits THIS situation
@@ -243,6 +248,7 @@ If any answer is "no" or "I'm not sure" — rewrite or delete.
 - Never use placeholder names (`tempData`, `result2`, `handleStuff`)
 - Never write a test that doesn't fail when the code is wrong
 - Never ship verbose where tight wins
+- Never add a function, file, or module "because we'll need it later"
 
 ### The test
 
@@ -252,10 +258,19 @@ If the answer is the second — you're shipping slop. Don't.
 
 ### Context hygiene (no rot)
 
-Stale text is slop that compounds — every future session pays tokens to read it, for nothing. Two rules:
+Stale text is slop that compounds — every future session pays tokens to read it, for nothing. Three rules:
 
 - **Completed work scrubs its own scaffolding.** When a ticket / ADR ships, delete its now-stale forward-references from md files: `⏳ pending`, `until X ships`, `(future) HEY-NN`, "this is coming". Flip to past-tense or remove. A future session must NEVER read "X is pending" for work that is already done — that is pure context rot. This is part of Definition-of-Done, backed by a `stale-ref` CI check (flags md pointers to closed tickets / shipped "(future)" ADRs).
-- **No unnecessary comments in code.** A comment earns its place ONLY when it explains WHY something non-obvious is done. Comments restating WHAT the code does, commented-out blocks, and `TODO` landmines are deleted on sight (see the slop table above).
+- **No unnecessary comments in code.** A comment earns its place ONLY when it explains WHY something non-obvious is done — a hidden constraint, a subtle invariant, a workaround for a specific bug whose *cause* (not ticket number) matters, behaviour that would surprise a reader. If removing the comment wouldn't confuse a future reader who lacks today's context, don't write it. Comments restating WHAT the code does, commented-out blocks, and `TODO` landmines are deleted on sight (see the slop table above).
+- **No cross-references to transient artefacts in code.** Code outlives the ticket, the PR, the date, the Slack thread, the person. Never write `// added for HEY-123`, `// per Suyash's review`, `// see PR #456`, `// fixes 2026-06-04 incident`. Those rot. The PR description carries the *why for this change*; the ADR carries the *why for this design*; the Evidence Trail in waldo-brain carries the *why we know what we know*. Code carries the *what it is now*. Three homes, no overlap.
+
+### Every line of code earns its place
+
+This is the **core philosophy of NO AI SLOP**. We do not need a thousand lines for any feature; we need the most optimized and best possible lines a thoughtful person or thoughtful agent would ship.
+
+- A feature is not done when it works. A feature is done when it works **and** every line in the diff would pass independent review by a senior engineer who has never seen the ticket.
+- If you cannot defend a line on its own merits — its purpose, its placement, its absence of redundancy — delete it.
+- The bar is not "fewer lines" for its own sake; the bar is **each line carries its weight**. Sometimes that means more explicit code, not less.
 
 ---
 

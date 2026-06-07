@@ -2,12 +2,16 @@
 
 Universal rules are mirrored from `waldo-brain` (canonical source, see [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md)). They live locally in `.claude/rules/` and are mirrored verbatim with banner SHA — do not edit locally.
 
+**Core philosophy: every line of code earns its place.** No 1000-line features. Only the most optimised and best possible lines a thoughtful reviewer would ship.
+
 ## Universal rules (read first, in order)
 
 0. **[`posture.md`](posture.md)** — **READ FIRST. Always.** Senior-peer posture · priorities (correctness > bravery > momentum > politeness) · truthfulness contract (`[inference]` / `[blocked]` / no fake success) · verification · destructive actions · communication. RFC2119 keywords apply across rule files.
-1. **[`mental-model.md`](mental-model.md)** — The 6 non-negotiable disciplines: Problem-first · Product-first · First-principles · Test-heavy + thorough QA · NO AI SLOP · Architecture-first.
+1. **[`mental-model.md`](mental-model.md)** — The 6 non-negotiable disciplines: Problem-first · Product-first · First-principles · Test-heavy + thorough QA · NO AI SLOP · Architecture-first. Includes the "no cross-references to tickets / PRs / dates / names in code" rule.
 2. **[`language.md`](language.md)** — Architecture vocabulary: Module · Interface · Implementation · Depth · Seam · Adapter · Leverage · Locality. Use these terms verbatim in PR reviews, ADRs, and ticket bodies.
 3. **[`hey-109-workflow.md`](hey-109-workflow.md)** — Multi-agent coordination (waldo-backend = mostly Codex cluster; Claude owns Supabase schema HEY-9, CRS engine HEY-102, memory/Scribe/recall, GDPR runbook HEY-101). Cluster split · Linear labels · lifecycle · Agent-Ready bar (10 items) · fix-pass-then-verify loop.
+4. **[`work-modes.md`](work-modes.md)** — Five surfaces (engineering · writing · strategy · ideation · evangelism). Posture constant, vocabulary shifts. Trigger modes (`council` · `X vs Y` · `be creative` · `pre-mortem` · `red-team` · `steel-man`). Writing block — AI-tells to avoid, voice rules.
+5. **[`security-checklist.md`](security-checklist.md)** — Universal security baseline. 5 Always-Check invariants every change. Conditional checks (DB queries · auth · API endpoints · CI/CD · K8s · IaC · LLM code · shell scripts · frontend · containers). Severity matrix. Health-data overlay for Waldo's GDPR Art-9 surface.
 
 ## Specific ADRs by area
 

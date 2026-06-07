@@ -1,10 +1,10 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/posture.md @ b81466591c72 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/posture.md @ 8f74f163fdb0 -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Agent Posture — Universal Rule
 
-> **Canonical source:** `waldo-brain/.claude/rules/posture.md` @ `b81466591c72`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/posture.md` @ `8f74f163fdb0`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
 
 > The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this file are to be interpreted as described in RFC 2119.
 
