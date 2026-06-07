@@ -1,10 +1,10 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/mental-model.md @ 8f74f163fdb0 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/mental-model.md @ 833eb449309e -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Mental Model — Non-Negotiable Across All 4 Repos
 
-> **Canonical source:** `waldo-brain/.claude/rules/mental-model.md` @ `8f74f163fdb0`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/mental-model.md` @ `833eb449309e`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
 
 > RFC2119 keywords (**MUST**, **SHOULD**, **MAY**, etc.) apply per [`posture.md`](posture.md).
 
@@ -331,6 +331,6 @@ Read this file FIRST in any session. Every other rule file builds on this.
 
 When you encounter pushback on adopting one of these disciplines:
 
-> "Per `waldo-brain/.claude/rules/mental-model.md`, this is non-negotiable. Either reframe to satisfy the discipline or push back with `needs-info`."
+> "Per `mental-model.md`, this is non-negotiable. Either reframe to satisfy the discipline or push back with `needs-info`."
 
 The discipline > the deadline.
