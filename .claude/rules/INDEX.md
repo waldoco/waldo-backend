@@ -1,15 +1,17 @@
 # waldo-backend — Rule Index
 
-All canonical rules live in `waldo-brain/.claude/rules/`. This index points at the ones an agent working in this repo MUST read before generating code.
+Universal rules are mirrored from `waldo-brain` (canonical source, see [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md)). They live locally in `.claude/rules/` and are mirrored verbatim with banner SHA — do not edit locally.
 
-## Hard rules (read first, IN ORDER)
+**Core philosophy: every line of code earns its place.** No 1000-line features. Only the most optimised and best possible lines a thoughtful reviewer would ship.
 
-0. **`waldo-brain/.claude/rules/mental-model.md`** — **READ THIS FIRST. Always.** 4 non-negotiable disciplines: Problem-first · Product-first · First-principles · Test-heavy + thorough QA. Every other rule builds on these.
-1. **`waldo-brain/.claude/rules/health-data-security.md`** — NON-NEGOTIABLE. Encryption, RLS, secrets, prompt injection, egress, audit. Health data is special-category under GDPR Art 9. Every line in this file is a P0 rule.
-2. **`waldo-brain/.claude/rules/architecture.md`** — 10+ locked decisions. Tool ACL matrix (ADR-0008). Adapter pattern. Reliability patterns. Agent security hardening. Memory architecture.
-3. **`waldo-brain/.claude/rules/coding-standards.md`** — TypeScript strict mode. Edge Function patterns. Worker + DO patterns. Adapter pattern code structure. NEVER list.
-4. **`waldo-brain/.claude/rules/phase-orchestration.md`** — Which review agents to run per phase. Dev-QA loop. Handoff templates.
-5. **`waldo-brain/.claude/rules/language.md`** — Architecture vocabulary (Module · Interface · Implementation · Depth · Seam · Adapter · Leverage · Locality).
+## Universal rules (read first, in order)
+
+0. **[`posture.md`](posture.md)** — **READ FIRST. Always.** Senior-peer posture · priorities (correctness > bravery > momentum > politeness) · truthfulness contract (`[inference]` / `[blocked]` / no fake success) · verification · destructive actions · communication. RFC2119 keywords apply across rule files.
+1. **[`mental-model.md`](mental-model.md)** — The 6 non-negotiable disciplines: Problem-first · Product-first · First-principles · Test-heavy + thorough QA · NO AI SLOP · Architecture-first. Includes the "no cross-references to tickets / PRs / dates / names in code" rule.
+2. **[`language.md`](language.md)** — Architecture vocabulary: Module · Interface · Implementation · Depth · Seam · Adapter · Leverage · Locality. Use these terms verbatim in PR reviews, ADRs, and ticket bodies.
+3. **[`hey-109-workflow.md`](hey-109-workflow.md)** — Multi-agent coordination (waldo-backend = mostly Codex cluster; Claude owns Supabase schema HEY-9, CRS engine HEY-102, memory/Scribe/recall, GDPR runbook HEY-101). Cluster split · Linear labels · lifecycle · Agent-Ready bar (10 items) · fix-pass-then-verify loop.
+4. **[`work-modes.md`](work-modes.md)** — Five surfaces (engineering · writing · strategy · ideation · evangelism). Posture constant, vocabulary shifts. Trigger modes (`council` · `X vs Y` · `be creative` · `pre-mortem` · `red-team` · `steel-man`). Writing block — AI-tells to avoid, voice rules.
+5. **[`security-checklist.md`](security-checklist.md)** — Universal security baseline. 5 Always-Check invariants every change. Conditional checks (DB queries · auth · API endpoints · CI/CD · K8s · IaC · LLM code · shell scripts · frontend · containers). Severity matrix. Health-data overlay for Waldo's GDPR Art-9 surface.
 
 ## Specific ADRs by area
 
@@ -30,44 +32,27 @@ All canonical rules live in `waldo-brain/.claude/rules/`. This index points at t
 | Voice memo | 0041 |
 | CRS algorithm | 0011 |
 | Episode log + pattern_id | 0037 |
+| Durable agent execution (run journal + outbox) | 0054 |
+| GDPR deletion runbook | 0055 |
+| DO SQLite compaction + lifecycle | 0056 |
+| Working-memory carryover buckets | 0057 |
+| Supabase production readiness | 0058 · 0059 · 0060 · 0061 · 0062 |
+| **Canonical rules mirroring (this file's pattern)** | **0063** |
 
-## Skills active for this repo
+ADRs themselves live in `waldo-brain/01-Waldo/Architecture Decision Records (ADR)/`. They are decision documents (append-only), not rule files. The cross-repo reference is intentional — ADRs are versioned in waldo-brain, the team's single decision log. If you cloned only this repo, browse ADRs at https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo.
 
-- `/session-bus` — **MANDATORY at session start AND end.** Cross-session bus, see ADR-0043.
+## Repo-specific NEVER list
 
-- `/grill-me` — before any new design decision lands as ADR
-- `/grill-with-docs` — when extending an existing ADR
-- `/diagnose` — for any recurring bug (RCA discipline per memory rca_framework)
-- `/tdd` — golden test FIRST for every tool handler
-- `/zoom-out` — when a single-ticket fix risks cross-cutting impact
+See the `## NEVER` section in [`CLAUDE.md`](../../CLAUDE.md) — this is the canonical NEVER list for waldo-backend. Not a cross-repo concern.
 
-## Phase-specific review agents
-
-See `waldo-brain/.claude/rules/phase-orchestration.md` for the full per-phase matrix. For Sprint 1-2 work in this repo:
-
-- **`security-reviewer`** — every PR that touches: auth, RLS, JWT, secrets, egress, hooks, scribe
-- **`health-data-reviewer`** — every PR that touches: CRS engine, baselines, health-data flow
-- **`workflow-mapper`** — BEFORE writing any new trigger / agent loop logic
-- **`crs-validator`** — every PR that touches CRS algorithm
-
-## Pre-commit checks (skill-driven, not hook-blocked)
-
-We rejected blocking pre-commit hooks. Hooks add friction; skills + review agents add discipline. Checks below run via skills / agents / CI — not as commit blockers.
-
-- `pnpm typecheck` runs in CI; agent runs it before PR
-- `pnpm test` runs in CI; `/tdd` skill enforces test-first locally
-- Health-value lockout enforced by Scribe sanitiser (ADR-0024) at runtime, by `security-reviewer` agent at PR time
-- `--no-verify` is forbidden by CLAUDE.md NEVER list (agent self-policed)
-- Conventional commit prefix + `HEY-NN` reference checked by `/diagnose` if a PR title looks off
-
-## Things NOT in scope for this repo
-
-- Mobile UI code (belongs in waldo-app)
-- iOS Swift modules (belongs in waldo-app)
-- Android Kotlin modules (belongs in waldo-app)
-- Marketing site (belongs in waldo-web, deferred)
-- Type definitions consumed by 2+ repos (belongs in waldo-types)
-- Research docs / ADRs themselves (belong in waldo-brain)
+Highlights:
+- Health values **NEVER** in `agent_logs`, DO SQLite, or R2.
+- Append-only on 10 audit tables — UPDATE/DELETE blocked via `AuditedDB` wrapper (HEY-11).
+- JWT validation on every EF first 10 lines via `_shared/auth.ts`.
+- RLS `auth.uid() = user_id` on every Postgres table.
+- Tool ACL enforcement per trigger via `enforceACL()` — see ADR-0008.
+- LLM provider calls routed through `LLMProvider` adapter + CF AI Gateway — never direct.
+- Service-role key never outside `build-intelligence` + audit writes.
 
 ## Egress allowlist (`safeFetch` enforcement)
 
@@ -85,3 +70,39 @@ Adding a new host requires:
 1. A code change to `_shared/safeFetch.ts`
 2. PR review by Shivansh
 3. An ADR if the new integration is structural (Phase-2-onwards)
+
+## Skills active for this repo
+
+- `/session-bus` — **MANDATORY at session start AND end.** Cross-session bus, see ADR-0043.
+- `/grill-me` — before any new design decision lands as ADR
+- `/grill-with-docs` — when extending an existing ADR
+- `/diagnose` — for any recurring bug (RCA discipline)
+- `/tdd` — golden test FIRST for every tool handler
+- `/zoom-out` — when a single-ticket fix risks cross-cutting impact
+
+## Phase-specific review agents
+
+See `AGENTS.md` for the full agent roster. For Sprint 1-2:
+- **`security-reviewer`** — every PR that touches auth, RLS, JWT, secrets, egress, hooks, scribe
+- **`health-data-reviewer`** — every PR that touches CRS engine, baselines, health-data flow
+- **`workflow-mapper`** — BEFORE writing any new trigger / agent loop logic
+- **`crs-validator`** — every PR that touches CRS algorithm
+
+## Pre-commit checks (skill-driven, not hook-blocked)
+
+We rejected blocking pre-commit hooks. Hooks add friction; skills + review agents add discipline. Checks below run via skills / agents / CI — not as commit blockers.
+
+- `pnpm typecheck` runs in CI; agent runs it before PR
+- `pnpm test` runs in CI; `/tdd` skill enforces test-first locally
+- Health-value lockout enforced by Scribe sanitiser (ADR-0024) at runtime, by `security-reviewer` agent at PR time
+- `--no-verify` is forbidden by `CLAUDE.md` NEVER list (agent self-policed)
+- Conventional commit prefix + `HEY-NN` reference checked by `/diagnose` if a PR title looks off
+
+## Things NOT in scope for this repo
+
+- Mobile UI code (belongs in waldo-app)
+- iOS Swift modules (belongs in waldo-app)
+- Android Kotlin modules (belongs in waldo-app)
+- Marketing site (belongs in waldo-web, deferred)
+- Type definitions consumed by 2+ repos (belongs in waldo-types)
+- Research docs / ADRs themselves (belong in waldo-brain)

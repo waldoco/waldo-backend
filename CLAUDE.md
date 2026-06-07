@@ -1,5 +1,24 @@
 # waldo-backend — Claude Code Instructions
 
+## Universal Cross-Repo Rules (read first)
+
+These six files are mirrored from `waldo-brain` (the canonical source per [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md)). Read them before this file.
+
+**Core philosophy: every line of code earns its place.** No 1000-line features. Only the most optimised and best possible lines a thoughtful reviewer would ship.
+
+| File | What it governs |
+|---|---|
+| [`.claude/rules/posture.md`](.claude/rules/posture.md) | Role · truthfulness (`[inference]`/`[blocked]`) · communication · verification · destructive actions. Read first. |
+| [`.claude/rules/mental-model.md`](.claude/rules/mental-model.md) | 6 disciplines: problem-first · product-first · first-principles · test-heavy · NO AI SLOP · architecture-first. Includes the "no cross-references to tickets/PRs/dates in code" rule. |
+| [`.claude/rules/language.md`](.claude/rules/language.md) | Architecture vocabulary (Module · Interface · Seam · Adapter · Depth · Leverage · Locality). |
+| [`.claude/rules/hey-109-workflow.md`](.claude/rules/hey-109-workflow.md) | Multi-agent coordination — cluster split, Linear labels, lifecycle, Agent-Ready bar (10 items). |
+| [`.claude/rules/work-modes.md`](.claude/rules/work-modes.md) | Five surfaces (engineering · writing · strategy · ideation · evangelism) · trigger modes · writing block. |
+| [`.claude/rules/security-checklist.md`](.claude/rules/security-checklist.md) | 5 Always-Check invariants every change · conditional checks (DB · auth · API · CI/CD · K8s · IaC · LLM · shell · frontend · containers) · severity matrix · health-data overlay. |
+
+See [`.claude/rules/INDEX.md`](.claude/rules/INDEX.md) for the full index + per-area ADR map.
+
+---
+
 ## What this repo is
 
 **Supabase + Cloudflare** = Waldo's brain.
@@ -118,15 +137,16 @@ See `.claude/rules/INDEX.md`. Highlights:
 - Never use `--no-verify` on commits
 - Never auto-modify soul files (SOUL_BASE, SOUL_STRESS, SOUL_MORNING) — they are read-only at runtime
 
-## Mental model (the 5 non-negotiable disciplines)
+## Mental model (the 6 non-negotiable disciplines)
 
-Before any work, read **`waldo-brain/.claude/rules/mental-model.md`**. Summary:
+Before any work, read [`.claude/rules/mental-model.md`](.claude/rules/mental-model.md). Summary:
 
 1. **Problem-first** — find ROOT CAUSE at system + library level. Never patch symptoms. `/diagnose`.
 2. **Product-first** — every line traces to a JTBD. If you can't name the user problem, delete it. `/grill-me`.
 3. **First-principles** — decompose every claim. Cite primary sources. `/grill-with-docs`.
 4. **Test-heavy + thorough QA** — E2E is the only truth. 40/40/20 inverted pyramid. 5-step adversarial QA per feature. `/tdd` + `qa-breaker`.
-5. **NO AI SLOP** — every line earns its place. Slop = correct-but-bad: verbose where tight wins, generic where specific is needed, hedged where opinion was asked, format-drift, unrequested disclaimers, junk that fills context windows for the next session. Each line of code answers: WHY is it here, is it solving the requested purpose, is it the real fix not a patch, would a thoughtful reviewer ship it without changes. Delete anything that fails the test. See `waldo-brain/.claude/rules/mental-model.md` §5.
+5. **NO AI SLOP** — every line earns its place. Slop = correct-but-bad: verbose where tight wins, generic where specific is needed, hedged where opinion was asked, format-drift, unrequested disclaimers, junk that fills context windows for the next session. Each line of code answers: WHY is it here, is it solving the requested purpose, is it the real fix not a patch, would a thoughtful reviewer ship it without changes. Delete anything that fails the test. See [`.claude/rules/mental-model.md`](.claude/rules/mental-model.md) §5.
+6. **Architecture-first** — services, ownership, state — get them right before code. Name the services touched, locate the state, draw the boundary, check against locked ADRs. New service / new state location / new ownership boundary = ADR, not commit. See [`.claude/rules/mental-model.md`](.claude/rules/mental-model.md) §6.
 
 ## Build → Break → Fix philosophy (for THIS repo)
 
