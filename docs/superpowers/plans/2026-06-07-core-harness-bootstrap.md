@@ -572,3 +572,10 @@ Supabase docs confirm that the working directory should be `.` when the `supabas
 - Spec coverage: `HEY-112` backend dependency migration is covered; `waldo-app` and ADR-0029 cross-repo CI gate are explicitly left for a separate cross-repo PR because this repo cannot modify those workspaces. `HEY-71` files and acceptance criteria are covered.
 - Placeholder scan: no `TBD`, `TODO`, or "implement later" steps are present.
 - Type consistency: `Env`, `handleRequest`, and `parseLocalAuthStub` names are defined before use and reused consistently.
+
+## Review Follow-up Applied
+
+- `parseLocalAuthStub` is disabled outside `ENVIRONMENT=local` and only accepts UUID-shaped user IDs.
+- `src/env.ts` validates required Worker config and rejects accidental `SUPABASE_SERVICE_ROLE_KEY` bindings.
+- `WALDO_WORKER_URL` is now represented in `Env` and `wrangler.toml` vars as an explicit placeholder.
+- `/health` now returns 405 for non-GET methods and 500 for misconfigured runtime env.

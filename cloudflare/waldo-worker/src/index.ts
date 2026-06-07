@@ -1,31 +1,29 @@
-export type Env = {
-  ENVIRONMENT: string;
-  SUPABASE_URL: string;
-};
-
-function json(body: unknown, init: ResponseInit = {}): Response {
-  const headers = new Headers(init.headers);
-  headers.set("Content-Type", "application/json");
-
-  return Response.json(body, {
-    ...init,
-    headers
-  });
-}
+import { type Env, readRuntimeConfig } from "./env";
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
-  if (request.method === "GET" && url.pathname === "/health") {
-    return json({
+  if (url.pathname === "/health") {
+    if (request.method !== "GET") {
+      return Response.json({ error: "method_not_allowed" }, { status: 405, headers: { Allow: "GET" } });
+    }
+
+    const config = readRuntimeConfig(env);
+
+    if (!config) {
+      return Response.json({ error: "misconfigured" }, { status: 500 });
+    }
+
+    return Response.json({
       status: "ok",
       service: "waldo-worker",
-      environment: env.ENVIRONMENT,
-      supabaseUrlConfigured: env.SUPABASE_URL.length > 0
+      environment: config.environment,
+      supabaseUrlConfigured: true,
+      waldoWorkerUrlConfigured: config.waldoWorkerUrl !== undefined
     });
   }
 
-  return json({ error: "not_found" }, { status: 404 });
+  return Response.json({ error: "not_found" }, { status: 404 });
 }
 
 export default {
