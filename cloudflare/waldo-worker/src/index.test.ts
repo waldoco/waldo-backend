@@ -130,6 +130,25 @@ describe("waldo-worker", () => {
     await expect(response.json()).resolves.toEqual({ status: "queued", userId, trigger: "brief", traceId: "trace-1" });
   });
 
+  it("rejects oversized runtime triggers before touching the user Durable Object", async () => {
+    const agent = createWaldoAgentBinding(Response.json({ status: "queued" }));
+    const request = new Request("https://worker.test/runtime/trigger", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer local-user:${userId}`,
+        "Content-Length": "32769"
+      },
+      body: "{}"
+    });
+
+    const response = await handleRequest(request, { ...env, WALDO_AGENT: agent.binding });
+
+    expect(response.status).toBe(413);
+    expect(agent.routedNames).toEqual([]);
+    expect(agent.forwardedRequests).toEqual([]);
+    await expect(response.json()).resolves.toEqual({ error: "oversize" });
+  });
+
   it("parses the local auth stub format", () => {
     const request = new Request("https://worker.test/run", {
       headers: { Authorization: `Bearer local-user:${userId}` }

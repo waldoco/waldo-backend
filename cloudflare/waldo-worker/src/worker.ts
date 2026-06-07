@@ -1,6 +1,6 @@
 import { parseLocalAuthStub } from "./auth";
 import { type Env, readRuntimeConfig } from "./env";
-import { WALDO_USER_HEADER } from "./waldo-agent-core";
+import { MAX_TRIGGER_BODY_BYTES, WALDO_USER_HEADER } from "./runtime-constants";
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
@@ -43,6 +43,10 @@ export async function routeTriggerToUserDo(request: Request, env: Env): Promise<
     return Response.json({ error: "auth_failed" }, { status: 401 });
   }
 
+  if (declaredBodyTooLarge(request)) {
+    return Response.json({ error: "oversize" }, { status: 413 });
+  }
+
   if (!readRuntimeConfig(env) || !env.WALDO_AGENT) {
     return Response.json({ error: "misconfigured" }, { status: 500 });
   }
@@ -55,4 +59,10 @@ export async function routeTriggerToUserDo(request: Request, env: Env): Promise<
   const stub = env.WALDO_AGENT.get(id);
 
   return stub.fetch(new Request(request, { headers }));
+}
+
+function declaredBodyTooLarge(request: Request): boolean {
+  const declaredLength = Number(request.headers.get("Content-Length") ?? "0");
+
+  return Number.isFinite(declaredLength) && declaredLength > MAX_TRIGGER_BODY_BYTES;
 }

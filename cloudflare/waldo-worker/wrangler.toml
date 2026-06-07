@@ -32,6 +32,6 @@ class_name = "WaldoAgent"
 name = "waldo-worker-production"
 vars = { ENVIRONMENT = "production", SUPABASE_URL = "https://atywijhgfevryxhkemfu.supabase.co", WALDO_WORKER_URL = "" }
 
-[[env.production.durable_objects.bindings]]
-name = "WALDO_AGENT"
-class_name = "WaldoAgent"
+[env.production.durable_objects]
+# Production WALDO_AGENT binding is deferred until production auth and runtime gates land.
+bindings = []

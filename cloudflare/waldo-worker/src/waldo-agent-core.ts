@@ -6,16 +6,12 @@ import {
   type TriggerType
 } from "@pin4sf/waldo-types";
 import { isUuidUserId } from "./auth";
-
-export const WALDO_USER_HEADER = "X-Waldo-User-Id";
-
-const MAX_TRIGGER_BODY_BYTES = 32_768;
-const MAX_TRACE_ID_LENGTH = 128;
+import { MAX_TRIGGER_BODY_BYTES, WALDO_USER_HEADER } from "./runtime-constants";
 
 export type AgentStorage = {
   getAlarm(): Promise<number | null>;
   put(key: string, value: unknown): Promise<void>;
-  setAlarm(scheduledTime: number | Date): Promise<void>;
+  setAlarm(scheduledTime: number): Promise<void>;
 };
 
 export type RuntimeChannelEvent = {
@@ -51,6 +47,8 @@ type WaldoAgentCoreOptions = {
   now?: () => Date;
   tickDueRuns?: () => Promise<TickDueRunsResult>;
 };
+
+const SAFE_LOG_ID_PATTERN = /^[A-Za-z0-9_\-:.]{1,128}$/;
 
 export class WaldoAgentCore {
   private readonly now: () => Date;
@@ -197,7 +195,7 @@ function parseRuntimeTriggerEnvelope(value: unknown): RuntimeTriggerEnvelope | n
   }
 
   const trigger = triggerTypeSchema.safeParse(value.trigger);
-  const traceId = parseBoundedString(value.traceId, MAX_TRACE_ID_LENGTH);
+  const traceId = parseSafeLogId(value.traceId);
   const triggeredAt = parseIsoTimestamp(value.triggeredAt);
   const channelEvent = parseRuntimeChannelEvent(value.channelEvent);
   const nextWakeAt = value.nextWakeAt === undefined ? undefined : parseIsoTimestamp(value.nextWakeAt);
@@ -225,7 +223,7 @@ function parseRuntimeChannelEvent(value: unknown): RuntimeChannelEvent | undefin
   }
 
   const channel = channelNameSchema.safeParse(value.channel);
-  const eventId = parseBoundedString(value.eventId, MAX_TRACE_ID_LENGTH);
+  const eventId = parseSafeLogId(value.eventId);
   const payload = value.payload;
 
   if (!channel.success || !eventId || (payload !== undefined && !isRecord(payload))) {
@@ -237,6 +235,10 @@ function parseRuntimeChannelEvent(value: unknown): RuntimeChannelEvent | undefin
     eventId,
     ...(payload ? { payload } : {})
   };
+}
+
+function parseSafeLogId(value: unknown): string | null {
+  return typeof value === "string" && SAFE_LOG_ID_PATTERN.test(value) ? value : null;
 }
 
 function parseBoundedString(value: unknown, maxLength: number): string | null {
