@@ -7,6 +7,14 @@ compatibility_date = "2026-06-07"
 enabled = true
 head_sampling_rate = 1
 
+[[durable_objects.bindings]]
+name = "WALDO_AGENT"
+class_name = "WaldoAgent"
+
+[[migrations]]
+tag = "v1_waldo_agent"
+new_sqlite_classes = ["WaldoAgent"]
+
 [vars]
 ENVIRONMENT = "local"
 SUPABASE_URL = "https://gororukpipahvpvsydwz.supabase.co"
@@ -16,6 +24,14 @@ WALDO_WORKER_URL = ""
 name = "waldo-worker-staging"
 vars = { ENVIRONMENT = "staging", SUPABASE_URL = "https://gororukpipahvpvsydwz.supabase.co", WALDO_WORKER_URL = "" }
 
+[[env.staging.durable_objects.bindings]]
+name = "WALDO_AGENT"
+class_name = "WaldoAgent"
+
 [env.production]
 name = "waldo-worker-production"
 vars = { ENVIRONMENT = "production", SUPABASE_URL = "https://atywijhgfevryxhkemfu.supabase.co", WALDO_WORKER_URL = "" }
+
+[[env.production.durable_objects.bindings]]
+name = "WALDO_AGENT"
+class_name = "WaldoAgent"

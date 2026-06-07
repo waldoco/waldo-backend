@@ -11,6 +11,10 @@ type LocalAuthEnv = {
 const LOCAL_BEARER_PREFIX = "Bearer local-user:";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+export function isUuidUserId(value: string): boolean {
+  return UUID_PATTERN.test(value);
+}
+
 export function parseLocalAuthStub(request: Request, env: LocalAuthEnv): AuthContext | null {
   if (env.ENVIRONMENT !== "local") {
     return null;
@@ -24,7 +28,7 @@ export function parseLocalAuthStub(request: Request, env: LocalAuthEnv): AuthCon
 
   const userId = authorization.slice(LOCAL_BEARER_PREFIX.length).trim();
 
-  if (!UUID_PATTERN.test(userId)) {
+  if (!isUuidUserId(userId)) {
     return null;
   }
 
