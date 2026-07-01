@@ -9,5 +9,10 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
+  },
+  "pnpm": {
+    "overrides": {
+      "vite": "8.0.16"
+    }
   }
 }

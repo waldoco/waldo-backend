@@ -33,6 +33,11 @@ not used as the build base (per founder decision to rewrite from scratch).
 | wrangler | 4.105.0 | `wrangler.jsonc`; DO migration key `new_sqlite_classes`; compat_date ≥ 2026-02-24. |
 | pnpm / node | 10.34.4 / ≥22 | Workspace; `@waldo/contracts` consumed via `workspace:*`, exports point at `./src` (internal packages consume source — no build/dist). |
 
+`vite` is pinned to `8.0.16` via a pnpm override (root `package.json`): Vitest 4.1.9 pulls `vite`
+transitively, its latest (`8.1.2`, published ~1 day before review) fails the supply-chain
+release-age gate, and `8.0.16` (~30 days aged) sits in Vitest's `^6||^7||^8` range. Dev-only build
+tool — not shipped to the runtime.
+
 No publish machinery: the only emitted artifact is `packages/contracts/openapi/waldo-public-api.json`.
 
 ## Build order (dependency DAG)
@@ -47,10 +52,11 @@ Then, in dependency layers: memory (`trust`→`pattern-id`→`hall`→`episode`�
 
 ## Status
 
-- [x] **Root** — `core/error`, `core/trigger` (leaf), `model/roster`; toolchain wiring; 15 tests green, strict typecheck clean.
-- [ ] verify.yml CI wall (SHA-pinned actions) — next.
-- [ ] Layer waves 1–N via parallel build workflow, `tsc`+`vitest` barrier between waves.
-- [ ] Adversarial-verify pass, then Codex audit.
+- [x] **Root** — `core/error`, `core/trigger`, `model/roster`; toolchain wiring; 15 tests green,
+  strict typecheck clean, **verified under an active 14-day release-age gate** (vite pinned).
+- [x] **Codex audit** (of commit 368e2b3) — verdict + dispositions below.
+- [ ] verify.yml CI wall (SHA-pinned actions).
+- [ ] Scheduled tracer bullet + `@cloudflare/vitest-pool-workers` (settled next step below).
 
 ## Grounding flags & dispositions
 
@@ -78,3 +84,35 @@ Vocabulary (single-owner, enforced): `modelName`←roster, `channelName`←`adap
   staging spike (ADR-0066); gates the DO→Supabase data plane.
 - **Outbox exactly-once authority per kind** + idempotency hash (SHA-256 + canonical serialization) —
   pin when building `runtime/run` + the outbox flusher.
+
+## Codex review verdict (commit 368e2b3) & settled next step
+
+Codex audited the root: approach sound, root ADR alignment passes, tests real-but-thin (roster +
+canary mutation-confirmed real). Two blocks, both accepted + actioned:
+- **(1) official commands failed under the release-age gate** (vite too new) → **fixed**: vite
+  pinned to 8.0.16; verified green under an active gate + strict tsc.
+- Tests strengthened: `error`/`trigger` now assert the exact enum tuple (change-detector), per review.
+- **(2) CI wall absent** → next-session deliverable (below).
+
+Additional dispositions:
+- **ADR-0068:** build delivery from the current implementation block (`fetch_alert` exempt-but-
+  counted, cap+cooldown-bounded), NOT the stale `agent_invocable ∩ exempt = ∅` invariant. Encode:
+  every agent-reachable exempt class has a non-null cap.
+- **`AdapterResult<T>`** stays a type helper at the contract layer, but adapter *runtime* boundaries
+  need `adapterResultSchema(dataSchema)` + valid/invalid tests — do not replicate the type-only
+  shape as the runtime validation pattern.
+
+**Settled next step — Codex-validated as tracer-first, NOT full-spine:**
+1. Land the minimum CI wall: install · typecheck · test (no `--passWithNoTests`) · model-name
+   guard · stale `@waldo/types` guard · health/internal-leak grep · ADR-status lint. Run with the
+   release-age gate active.
+2. Build only the contracts the scheduled tracer bullet needs: trigger/session/canary, run journal,
+   outbox, schedule entry, LoopPolicy, DeliveryPolicy, minimal channel sink, public API stub.
+3. Stand up `@cloudflare/vitest-pool-workers` before the full spine.
+4. Prove the scheduled tracer bullet end-to-end: `DO alarm → Loop Governor → journaled run →
+   DeliveryGate → outbox`, with a crash-inject/resume test.
+5. Resume contract waves with evidence from the tracer bullet.
+
+Testing depth (Codex-agreed): deterministic-simulation for run-journal/outbox exactly-once +
+DeliveryGate budgets; property/fuzz for Scribe sanitisation + health/PII egress; targeted mutation
+on deterministic security invariants at the beta gate — not broad mutation now.

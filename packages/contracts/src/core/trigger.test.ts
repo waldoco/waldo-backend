@@ -4,9 +4,20 @@ import { briefVariantSchema, canaryTokensSchema, triggerTypeSchema } from './tri
 const hex = (c: string): string => c.repeat(16).slice(0, 16);
 
 describe('triggerType', () => {
-  it('holds the eleven canonical triggers incl. pre_activity_spot', () => {
-    expect(triggerTypeSchema.options).toHaveLength(11);
-    expect(triggerTypeSchema.safeParse('pre_activity_spot').success).toBe(true);
+  it('is exactly the eleven canonical triggers, in order', () => {
+    expect(triggerTypeSchema.options).toEqual([
+      'brief',
+      'fetch_alert',
+      'patrol',
+      'handoff_explore',
+      'handoff_plan',
+      'handoff_act',
+      'handoff_replan',
+      'intervention',
+      'user_message',
+      'dreaming_mode',
+      'pre_activity_spot',
+    ]);
   });
 
   it('rejects a retired/unknown trigger', () => {
