@@ -109,3 +109,95 @@ Before running the workflow: show the phase plan + raw script, wait for approval
 - Phase C: scheduled tracer bullet (`DO alarm → Loop Governor → run journal → DeliveryGate → outbox → fake sink`), crash/resume exactly-once. Do NOT start.
 - Phase D: contract-spine waves. Do NOT start.
 - OpenAPI/contract-drift/generated-client walls. Do NOT start.
+
+---
+
+## 9. Ready Prompt (paste into a fresh Claude Code session)
+
+> If the new session is cloud/web, push the branch first: `git push -u origin greenfield/harness-foundation`. A local session needs no push.
+
+```text
+ultracode
+
+Build the next Waldo backend foundation phase — Phase B ONLY (Cloudflare Workers
+runtime test substrate) — on branch greenfield/harness-foundation.
+
+This is GDPR Art-9 health infrastructure: no real secrets, providers, or user
+data. Fakes and hermetic Miniflare tests only.
+
+Do not launch a dynamic workflow yet. First orient + preflight in the main
+session. If the branch is wrong or the tree is dirty, stop and report — do not
+clean, revert, or stash.
+
+Orient first:
+1. Confirm branch greenfield/harness-foundation and clean tree. Phase A is
+   committed (cdea092); the CI/conformance wall is live.
+2. Preflight with the PINNED toolchain (the wall is pnpm-version-sensitive):
+     corepack enable
+     corepack prepare pnpm@10.34.4 --activate
+     pnpm install --frozen-lockfile
+     pnpm verify        # must exit 0 under pnpm 10.34.4. Plain pnpm 11.x FAILS
+                        # the release-age gate against the lockfile — use the pin
+   If pnpm verify is not green under the pinned version, stop and report.
+3. Read, in order:
+   - .claude/rules/INDEX.md + the six rule files
+   - docs/foundation/PHASE-B-PLAN.md   <- authoritative, founder-verified Phase B
+     plan; follow it exactly
+   - docs/foundation/PHASE-A-CONFORMANCE-WALL-REPORT.md section 0 (what the wall
+     enforces; the guard-setalarm seam note)
+   - docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md (Gate 5 + Runtime Verification
+     Spine)
+   - the Cloudflare docs linked in PHASE-B-PLAN section 0 (verify APIs, do not
+     assume)
+
+Phase B target (full detail in PHASE-B-PLAN.md — the two adjustments are
+founder-locked):
+- New package packages/runtime (NOT contracts) with Worker/DO code + a Worker-pool
+  Vitest config + a package-local wrangler.jsonc (new_sqlite_classes,
+  compatibility_date >= 2026-02-24).
+- Add the smallest alarm-owner seam packages/runtime/src/scheduler/alarm-slot.ts;
+  update guard-setalarm to exempt ONLY that exact file (single-file allowlist, NOT
+  a broad scheduler/** glob); the test-only DO arms its alarm via that seam.
+- One Workers-runtime test in @cloudflare/vitest-pool-workers (real workerd, not
+  Node): DO stub -> write/read DO SQLite -> runDurableObjectAlarm ->
+  evictDurableObject -> assert state survives eviction.
+- Aged pins (release-age gate applies at add-time under pnpm 10.34.4; confirm >=14d
+  or justify a minimumReleaseAgeExclude): @cloudflare/vitest-pool-workers@0.16.16,
+  wrangler@4.101.0, @cloudflare/workers-types@4.20260616.1; keep vitest@4.1.9.
+- Fold verify:workers into root pnpm verify once the Workers test is green.
+- Document known Workers-pool limitations.
+
+Discipline:
+- Every agent obeys .claude/rules/* (posture, mental-model, language,
+  security-checklist, work-modes, hey-109).
+- Runtime implementation is single-writer. Use dynamic workflows for
+  research/verify/attack lanes only.
+- No live providers/secrets/production CF/Supabase resources. Hermetic only.
+- No raw health values in code/logs/prompts/fixtures.
+- Verify Cloudflare APIs against the docs — never assume.
+
+Execution:
+- One phase per workflow. Phase B only.
+- Before running the workflow: show the phase plan AND the raw generated workflow
+  script; wait for approval.
+- Reject your own plan if it: puts Worker/DO code in packages/contracts; adds a
+  broad scheduler/** exemption; uses live secrets/providers; skips the CF-docs
+  grounding or the ADRs/rules; skips the verify gate; lacks an adversarial/verify
+  lane; folds nothing into pnpm verify; or starts Phase C or the contract spine.
+
+Done (report after):
+- The runtime test runs in @cloudflare/vitest-pool-workers (workerd, not Node),
+  proving alarm + DO SQLite + eviction-survival.
+- verify:workers folded into pnpm verify; the whole wall is green under pinned
+  pnpm 10.34.4.
+- guard-setalarm single-file alarm-slot exemption added + re-proven RED/GREEN.
+- git diff --check clean; a Codex-review handoff note appended.
+- Report: files changed, commands + exact results, intentional-failure evidence,
+  residual risks (incl. Cloudflare runtime limits), whether Phase B is green, and
+  the exact Phase C recommendation.
+
+Do not claim Phase B green unless the Workers-runtime test runs in the pool AND is
+folded into a green pnpm verify. Do not start Phase C or the contract spine.
+ultracode
+```
+
