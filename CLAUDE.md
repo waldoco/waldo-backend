@@ -1,5 +1,36 @@
 # waldo-backend — Claude Code Instructions
 
+## Active Foundation Override (2026-07-01)
+
+This branch is the greenfield harness foundation branch. The legacy guidance
+below is kept for repo background, but it is not the source of truth for current
+foundation work.
+
+Before any implementation:
+
+1. Read `.claude/rules/INDEX.md`.
+2. Read `docs/foundation/BUILD-PLAN.md`.
+3. Read `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
+4. Read `docs/foundation/NEXT-SESSION-PLAN.md`.
+5. Read the relevant Waldo Brain DeepWiki pages and accepted ADRs.
+
+Current facts:
+
+- Collaboration model: Claude Code builds; Codex audits adversarially.
+- Foundation root is built: `core/error`, `core/trigger`, `model/roster`.
+- Next work is tracer-first: CI wall -> `@cloudflare/vitest-pool-workers` ->
+  minimal scheduled-path contracts -> DO alarm tracer -> crash/resume
+  exactly-once proof -> contract waves.
+- `@waldo/types` and legacy `waldo-types` references are stale for this branch.
+  Current contracts live in `waldo-backend/packages/contracts`.
+- ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
+- ADR-0068 current block owns DeliveryGate: no `defer_next_day`; `fetch_alert`
+  is budget-exempt but class-capped and telemetry-counted.
+- Do not claim runtime green until Workers/Durable Object tests run inside
+  `@cloudflare/vitest-pool-workers`.
+- Current commands: `pnpm install`, `pnpm -r typecheck`, `pnpm -r test`.
+  Target command `pnpm verify` is not implemented yet.
+
 ## What this repo is
 
 **Supabase + Cloudflare** = Waldo's brain.

@@ -1,87 +1,69 @@
-# waldo-backend — Rule Index
+# waldo-backend - Rule Index
 
-All canonical rules live in `waldo-brain/.claude/rules/`. This index points at the ones an agent working in this repo MUST read before generating code.
+This repo mirrors the six universal Waldo rule files from
+`waldo-brain/.claude/rules/`. In cloud sessions, read the mirrored local files in
+this directory. Do not depend on a sibling `waldo-brain` checkout being present.
 
-## Hard rules (read first, IN ORDER)
+## Hard Rules - Read First, In Order
 
-0. **`waldo-brain/.claude/rules/mental-model.md`** — **READ THIS FIRST. Always.** 4 non-negotiable disciplines: Problem-first · Product-first · First-principles · Test-heavy + thorough QA. Every other rule builds on these.
-1. **`waldo-brain/.claude/rules/health-data-security.md`** — NON-NEGOTIABLE. Encryption, RLS, secrets, prompt injection, egress, audit. Health data is special-category under GDPR Art 9. Every line in this file is a P0 rule.
-2. **`waldo-brain/.claude/rules/architecture.md`** — 10+ locked decisions. Tool ACL matrix (ADR-0008). Adapter pattern. Reliability patterns. Agent security hardening. Memory architecture.
-3. **`waldo-brain/.claude/rules/coding-standards.md`** — TypeScript strict mode. Edge Function patterns. Worker + DO patterns. Adapter pattern code structure. NEVER list.
-4. **`waldo-brain/.claude/rules/phase-orchestration.md`** — Which review agents to run per phase. Dev-QA loop. Handoff templates.
-5. **`waldo-brain/.claude/rules/language.md`** — Architecture vocabulary (Module · Interface · Implementation · Depth · Seam · Adapter · Leverage · Locality).
+| # | File | What it governs |
+|---|---|---|
+| 0 | `posture.md` | Role, truthfulness, scope control, verification, destructive actions. |
+| 1 | `mental-model.md` | Problem-first, product-first, first-principles, science loop, systems loop, every-line-earned discipline. |
+| 2 | `language.md` | Architecture vocabulary: Module, Interface, Contract, Capability Manifest, Seam, Adapter, Drift, Conformance Rule. |
+| 3 | `hey-109-workflow.md` | Multi-agent coordination, Claude/Codex split, Agent-Ready bar, review loop. |
+| 4 | `work-modes.md` | Engineering, writing, strategy, ideation, evangelism mode discipline. |
+| 5 | `security-checklist.md` | Always-check security invariants, conditional checks, health-data overlay. |
 
-## Specific ADRs by area
+## Foundation Branch Override
 
-| Working on... | Required ADRs |
-|---|---|
-| Agent runtime (DO) | 0002, 0033, 0034, 0037 |
-| Memory architecture | 0005, 0006, 0007, 0024, 0031, 0037 |
-| LLM routing | 0003, 0004, 0035 |
-| Tool ACL + skills | 0008, 0021, 0022, 0023, 0028 |
-| Triggers | 0014, 0015, 0017, 0020, 0042 |
-| Adjustment / autonomy | 0018, 0019 |
-| Channels | 0012, 0035 (Telegram + APNs) |
-| Threading | 0014, 0039 |
-| Pricing + budget | 0009, 0016 |
-| Verification + evolution | 0030, 0036, 0038 |
-| Security gates | 0024, 0032, 0033 |
-| Calendar adapter | 0040, 0042 |
-| Voice memo | 0041 |
-| CRS algorithm | 0011 |
-| Episode log + pattern_id | 0037 |
+For `greenfield/harness-foundation`, also read these before any implementation:
 
-## Skills active for this repo
+1. `docs/foundation/BUILD-PLAN.md`
+2. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
+3. `docs/foundation/NEXT-SESSION-PLAN.md`
+4. Relevant DeepWiki pages under `waldo-brain/01-Waldo/waldo-harness-deepwiki/`
+5. Relevant accepted ADRs from `waldo-brain/01-Waldo/Architecture Decision Records (ADR)/`
 
-- `/session-bus` — **MANDATORY at session start AND end.** Cross-session bus, see ADR-0043.
+The active foundation source of truth is the accepted ADR corpus plus the
+DeepWiki/build bible. Legacy backend code and old package snippets are evidence
+only when the DeepWiki labels them that way.
 
-- `/grill-me` — before any new design decision lands as ADR
-- `/grill-with-docs` — when extending an existing ADR
-- `/diagnose` — for any recurring bug (RCA discipline per memory rca_framework)
-- `/tdd` — golden test FIRST for every tool handler
-- `/zoom-out` — when a single-ticket fix risks cross-cutting impact
+## Current Foundation Gates
 
-## Phase-specific review agents
+- Root is built: `core/error`, `core/trigger`, `model/roster`.
+- Next work is tracer-first, not full-spine-first.
+- Minimum sequence: CI wall -> `@cloudflare/vitest-pool-workers` -> minimal
+  scheduled-path contracts -> scheduled DO alarm tracer -> crash/resume
+  exactly-once proof -> resume contract waves.
+- `@waldo/types` is stale for this branch. The current contract source is
+  `waldo-backend/packages/contracts`.
+- Model IDs are owned by `model/roster` per ADR-0069.
+- ADR-0068 must be read from its current 2026-06-27 block: no
+  `defer_next_day`; `fetch_alert` is budget-exempt but class-capped and
+  telemetry-counted.
 
-See `waldo-brain/.claude/rules/phase-orchestration.md` for the full per-phase matrix. For Sprint 1-2 work in this repo:
+## Required Commands
 
-- **`security-reviewer`** — every PR that touches: auth, RLS, JWT, secrets, egress, hooks, scribe
-- **`health-data-reviewer`** — every PR that touches: CRS engine, baselines, health-data flow
-- **`workflow-mapper`** — BEFORE writing any new trigger / agent loop logic
-- **`crs-validator`** — every PR that touches CRS algorithm
+Until `pnpm verify` exists, the minimum local gate is:
 
-## Pre-commit checks (skill-driven, not hook-blocked)
+```bash
+pnpm install
+pnpm -r typecheck
+pnpm -r test
+```
 
-We rejected blocking pre-commit hooks. Hooks add friction; skills + review agents add discipline. Checks below run via skills / agents / CI — not as commit blockers.
+For docs-only work, run `git diff --check` and report that runtime tests were
+not rerun because no code changed.
 
-- `pnpm typecheck` runs in CI; agent runs it before PR
-- `pnpm test` runs in CI; `/tdd` skill enforces test-first locally
-- Health-value lockout enforced by Scribe sanitiser (ADR-0024) at runtime, by `security-reviewer` agent at PR time
-- `--no-verify` is forbidden by CLAUDE.md NEVER list (agent self-policed)
-- Conventional commit prefix + `HEY-NN` reference checked by `/diagnose` if a PR title looks off
+## Cloud / Ultracode Discipline
 
-## Things NOT in scope for this repo
+Claude Code cloud sessions only see committed repo files. Before launching a
+cloud ultracode workflow, push the branch and ensure this `.claude/rules/`
+mirror is committed.
 
-- Mobile UI code (belongs in waldo-app)
-- iOS Swift modules (belongs in waldo-app)
-- Android Kotlin modules (belongs in waldo-app)
-- Marketing site (belongs in waldo-web, deferred)
-- Type definitions consumed by 2+ repos (belongs in waldo-types)
-- Research docs / ADRs themselves (belong in waldo-brain)
-
-## Egress allowlist (`safeFetch` enforcement)
-
-Currently allowed outbound hosts:
-- `api.anthropic.com`
-- `api.openai.com` (Whisper API — HEY-67)
-- `api.telegram.org`
-- `api.open-meteo.com`
-- `gateway.ai.cloudflare.com` (AI Gateway)
-- `<your-supabase-project-id>.supabase.co`
-- `accounts.google.com` + `oauth2.googleapis.com` (Calendar OAuth — HEY-64)
-- `www.googleapis.com` (Calendar API)
-
-Adding a new host requires:
-1. A code change to `_shared/safeFetch.ts`
-2. PR review by Shivansh
-3. An ADR if the new integration is structural (Phase-2-onwards)
+Dynamic workflows are useful for parallel research, review, attack, and
+independent module waves. They are risky for uncontrolled write-heavy work.
+Use judge panels and adversarial reviewers in parallel; keep runtime code
+single-writer unless the files are disjoint and the phase has an explicit
+barrier.

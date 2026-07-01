@@ -57,6 +57,7 @@ Then, in dependency layers: memory (`trust`→`pattern-id`→`hall`→`episode`�
 - [x] **Codex audit** (of commit 368e2b3) — verdict + dispositions below.
 - [ ] verify.yml CI wall (SHA-pinned actions).
 - [ ] Scheduled tracer bullet + `@cloudflare/vitest-pool-workers` (settled next step below).
+- [x] **Local verification discipline** — documented in `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
 
 ## Grounding flags & dispositions
 
