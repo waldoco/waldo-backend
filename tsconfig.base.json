@@ -1,0 +1,20 @@
+{
+  // Shared strict base. exactOptionalPropertyTypes is deliberately OFF: it conflicts with
+  // Zod's z.infer optional-field inference (a `foo?: T` schema infers `foo?: T`, which EOPT
+  // rejects against `foo?: T | undefined`). strict + noUncheckedIndexedAccess stay on.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": [],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  }
+}
