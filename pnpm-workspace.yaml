@@ -1,2 +1,11 @@
 packages:
   - packages/*
+
+overrides:
+  vite: 8.0.16
+
+minimumReleaseAge: 20160
+minimumReleaseAgeExclude:
+  # Add pkg names / globs / pkg@version only for justified hotfixes:
+  # - '@myorg/*'
+  # - some-critical-hotfix@1.2.3

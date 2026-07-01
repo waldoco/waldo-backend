@@ -8,11 +8,8 @@
   },
   "scripts": {
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
-  },
-  "pnpm": {
-    "overrides": {
-      "vite": "8.0.16"
-    }
+    "test": "pnpm -r test",
+    "verify:guards": "for f in scripts/guards/*.mjs; do node \"$f\" || exit 1; done",
+    "verify": "pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm -r test && pnpm verify:guards"
   }
 }
