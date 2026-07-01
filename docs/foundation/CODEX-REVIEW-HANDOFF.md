@@ -85,3 +85,52 @@ Feasibility questions for you:
   testing** of the run-journal (crash-inject + assert exactly-once) + **property/fuzz testing**
   of the Scribe sanitiser + **mutation testing** on the deterministic core — or is that
   over-engineering for the beta?
+
+---
+
+# Phase B — Codex Review Handoff (Workers-runtime test substrate)
+
+> **Author cluster:** `agent:claude` · **Reviewer:** `review:codex` · **Branch:** `greenfield/harness-foundation` · builds on Phase A `cdea092`.
+> **Verdict up front (main-session Opus verified, not the workflow's self-report):** Phase B is **GREEN** — `pnpm verify` exit 0 under pinned pnpm@10.34.4, the runtime test runs in **workerd** (not Node), and the `guard-setalarm` single-file exemption holds against 8 spoof attempts. **Uncommitted**, pending human review. Nothing pushed.
+> **Discipline note (why you can trust this line):** the Phase A report §0.1 documents a workflow that self-reported "GREEN" while `pnpm verify` was actually RED. So this phase's green was re-derived **independently in the main session** (own `pnpm verify`, own real-tree intentional break, own workerd negative-control, own greps), treating the workflow output as a lead only.
+
+## Files changed (6)
+
+| File | Kind | What |
+|---|---|---|
+| `packages/runtime/` (8 files) | new | Worker/DO test substrate: `package.json`, `tsconfig.json`, `vitest.config.ts` (cloudflareTest plugin), `wrangler.jsonc` (DO binding + `new_sqlite_classes`, `compatibility_date 2026-06-16`), `src/index.ts` (test-only `RuntimeProbeDO` + default 404 fetch), `src/scheduler/alarm-slot.ts` (the sole `setAlarm` owner), `test/runtime-probe.test.ts`, `README.md` (pool limitations). |
+| `scripts/guards/guard-setalarm.mjs` | M | Added exact single-file exemption for `packages/runtime/src/scheduler/alarm-slot.ts` via `segmentsEqual` on a 5-segment array (NOT a `scheduler/**` glob). Updated the stale doc comment + finding message to name the real seam. |
+| `package.json` | M | `verify` chain now `install --frozen-lockfile && -r typecheck && verify:node && verify:workers && verify:guards`; added `verify:node` (contracts) + `verify:workers` (runtime). `verify:workers` folds in **exactly once** — `pnpm -r test` removed from `verify` to avoid double-running the pool. Top-level `test` kept for ad-hoc use. |
+| `pnpm-workspace.yaml` | M | 5 justified `minimumReleaseAgeExclude` entries (see Deviations). |
+| `pnpm-lock.yaml` | M | +43 deps from the non-frozen add; frozen install clean afterward. |
+| `docs/foundation/PHASE-B-PLAN.md` | M | Pin note corrected: 0.16.16 → 0.16.20 with reason (its §3.1 + §9). |
+
+## Deviations from the founder-locked plan (all forced by installed reality — challenge these)
+
+1. **`@cloudflare/vitest-pool-workers` 0.16.16 → 0.16.20** (founder-approved). 0.16.16 does not expose `evictDurableObject`; the helper the acceptance bar requires shipped in 0.16.20 (CF changelog 2026-06-25). Verified against the **installed** `types/cloudflare-test.d.ts` (`evictDurableObject(stub, options?): Promise<void>` present). Config form is the `cloudflareTest()` plugin (no `./config`/`defineWorkersConfig` in any of 0.16.16/0.16.20/0.17.0).
+2. **`wrangler` 4.101.0 → 4.105.0** (forced). pool@0.16.20 exact-pins `wrangler@4.105.0`; the plan's 4.101.0 would create a dual resolution. Direct devDep set to 4.105.0 to dedupe.
+3. **5 release-age excludes, not 1** (forced). pnpm's `minimumReleaseAge` (14d) gates **every** resolved dep. pool@0.16.20 exact-pins `miniflare@4.20260625.0` + `wrangler@4.105.0`, which pull `workerd@1.20260625.1` and its per-platform `@cloudflare/workerd-*` binaries — all 2026-06-25 (<14d). Excludes: `@cloudflare/vitest-pool-workers@0.16.20`, `miniflare@4.20260625.0`, `wrangler@4.105.0`, `workerd@1.20260625.1`, and the **name glob** `@cloudflare/workerd-*`.
+   - **⚡ Review tradeoff (LOW, flagged not buried):** the `@cloudflare/workerd-*` glob is unversioned (pnpm rejects a version-union on a name pattern), so it permanently exempts all future workerd platform binaries from the freshness gate — looser than 5 enumerated `@cloudflare/workerd-<platform>@1.20260625.1` entries. Kept for cross-platform robustness (a missed variant breaks a teammate on another OS at their next non-frozen install) and because the gate only fires on non-frozen resolution (frozen CI ignores it) and these are first-party Cloudflare binaries. Swap to the 5 exact entries if you prefer tightness.
+4. **`navigator.userAgent` read via a narrow cast** — workers-types@4.20260616.1 doesn't declare the `navigator` global (runtime-only), so `(globalThis as { navigator: { userAgent: string } })`. Kept only as a **secondary** workerd signal; primary proof is functional (below).
+5. **Peer warning (non-blocking):** `wrangler@4.105.0` wants `@cloudflare/workers-types@^4.20260625.1`; we pin the aged `4.20260616.1` (≥14d). Typecheck + test both pass on it.
+
+## Verification evidence (main session, independent, 2026-07-02)
+
+- **Pinned invocation (use this):** `npx -y pnpm@10.34.4 verify` → **exit 0**: frozen install → `-r typecheck` both packages → `verify:node` contracts 15/15 → `verify:workers` runtime 2/2 (pool) → all 6 guards ok. **Do NOT run a bare `pnpm verify` unless the shell's default `pnpm` is 10.34.4** — a pnpm 11.x default purges the pnpm-10 modules dir and fails before tests (Codex hit this; `pnpm --version` was 11.7.0 in that shell). Reliable options: `npx -y pnpm@10.34.4 …`, `corepack prepare pnpm@10.34.4 --activate`, or a 10.34.4-default shell. Phase A report §0.6 #5 documents the same version sensitivity.
+- **Ran in workerd, not Node (first-hand):** negative control `node --input-type=module -e "await import('cloudflare:workers')"` → `ERR_UNSUPPORTED_ESM_URL_SCHEME` (Node cannot resolve the `cloudflare:` scheme). The test imports `cloudflare:workers` + `cloudflare:test` and passed → it executed in workerd. `navigator.userAgent === 'Cloudflare-Workers'` assertion also passed.
+- **Non-vacuous eviction proof:** test asserts, after `evictDurableObject`, reconstructed `readTick() === 2` (durable SQLite survived) **AND** `inMemoryTouched === false` (in-memory flag reset → eviction genuinely tore down the instance, not a no-op read). Alarm fired via `runDurableObjectAlarm(stub) === true`.
+- **Intentional-failure (RED/GREEN), real tree:** injected `this.ctx.storage.setAlarm(Date.now())` into the DO `alarm()` → `guard-setalarm` exit **1**, flagged `packages/runtime/src/index.ts:46` with the seam message. Reverted → `guard-setalarm: ok` (exit 0). Runtime test re-run 2/2 post-revert.
+- **Adversarial (workflow Attack lane, temp fixtures via `--root`):** 8/8 spoofs CAUGHT (nested-under-seam, sibling-suffix, prefix, case-variant, `.tsx`/`.mts` ext-swap, wrong-package, extra-leading-segment) and the exact seam ALLOWED. Exact segment-equality is not spoofable.
+- **`git diff --check` clean.** `.setAlarm(` appears as a **call** only in `alarm-slot.ts:7`. No health identifiers in `packages/runtime`.
+
+## Residual risks / limits that affect confidence
+
+- **Cloudflare pool limitations (documented in `packages/runtime/README.md`):** per-test-file storage isolation (multiple `it()` in one file share DO state — a footgun when Phase C adds more runtime tests; use `reset()`/separate files); must `await` all storage promises; must consume response bodies; no native V8 coverage (use Istanbul); fake timers don't drive alarms (use `runDurableObjectAlarm`); dynamic `import()` unsupported in handlers; WebSockets+DO need `--no-isolate`.
+- **No pool stdout banner** in 0.16.20 (routed through the `debug` package). The functional negative-control is the workerd proof, not a banner.
+- **`git diff --check` does not scan untracked files**, so the new `packages/runtime/*` isn't whitespace-scanned by it (content was reviewed directly instead).
+- The `@cloudflare/workerd-*` exclude glob tradeoff (above).
+- **Package-manager version footgun (Codex-found, doc-mitigated).** The wall is only green under pnpm 10.34.4; a shell defaulting to pnpm 11.x fails bare `pnpm verify` before tests. Mitigated in docs (pinned invocation above). **Recommended future hardening (deferred, not blocking Phase B):** a `scripts/guards/guard-package-manager.mjs` that fails fast if the running pnpm major ≠ the `packageManager` pin — graduates this from prose to a deterministic conformance check. Suggest folding it in at Phase C.
+
+## Exact Phase C recommendation (NOT started — do not start without a fresh session)
+
+Phase B proves the substrate (workerd + DO SQLite + alarm + eviction-survival), **not** any product logic. Phase C = the **scheduled tracer bullet**: `DO alarm → Loop Governor → run journal → DeliveryGate → outbox → fake channel sink`, with crash/resume exactly-once (deterministic-simulation: crash-inject after each journal step, assert no double-send). Build it on this same `packages/runtime` substrate, reusing the `alarm-slot` seam as the real Scheduler's single alarm owner. Keep contracts-spine (Phase D) after. Recommend a fresh Ultracode session with the same ground→implement→verify→attack shape.

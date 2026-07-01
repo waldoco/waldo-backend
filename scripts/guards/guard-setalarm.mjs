@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Guard: ban direct Durable Object alarm registration outside the Scheduler.
+// Guard: ban direct Durable Object alarm registration outside the alarm-slot seam.
 // Grounding: ADR-0065 (DO alarm multiplexer — single alarm slot). A DO has one
 // alarm slot; scattered setAlarm calls silently overwrite each other. All alarm
-// registration MUST flow through the reserved Scheduler module so occurrence-key
+// registration MUST flow through the reserved alarm-slot seam so occurrence-key
 // idempotency, DST/jitter, and liveness tracking have a single enforcement point.
-// The Scheduler module (packages/contracts/src/scheduler/**) does not exist yet,
-// so any direct setAlarm call today is a violation.
+// The seam is the single file packages/runtime/src/scheduler/alarm-slot.ts, which
+// owns the one raw setAlarm call; any direct setAlarm call elsewhere is a violation.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -27,12 +27,16 @@ const SKIP_DIRS = new Set(['node_modules', '.git']);
 // This guard's own source contains the literal pattern text in a doc comment, so
 // its home is exempt to avoid self-flagging. Matched as consecutive path segments
 // (not substring) so a fixture dir literally named "guard-setalarm" is not
-// accidentally exempted. NOTE: the reserved Scheduler module
-// (packages/contracts/src/scheduler/**) is deliberately NOT exempted — it does not
-// exist yet, so any setAlarm today is a violation. When Phase C builds the alarm
-// multiplexer, add a narrow single-file exemption there, not a whole-dir glob
-// (a directory exemption is attacker-spoofable — proven by the attack pass).
+// accidentally exempted.
 const GUARD_HOME_SEGMENTS = ['scripts', 'guards'];
+
+// The single alarm-slot seam is the sole file allowed to call setAlarm directly.
+// Matched by EXACT full-segment equality — not a directory glob and not a segment
+// run — so a spoofed path (a fixture dir named "scheduler", a nested alarm-slot.ts,
+// or extra leading segments) cannot inherit the exemption. A whole-dir exemption
+// would be attacker-spoofable, which the attack pass proved; exact-path equality
+// closes that hole.
+const ALARM_SLOT_SEGMENTS = ['packages', 'runtime', 'src', 'scheduler', 'alarm-slot.ts'];
 
 const SCANNED_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts']);
 
@@ -73,9 +77,20 @@ function containsSegmentRun(segments, run) {
   return false;
 }
 
+function segmentsEqual(a, b) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 function isExempt(relativePath) {
   const segments = segmentsOf(relativePath);
-  return containsSegmentRun(segments, GUARD_HOME_SEGMENTS);
+  return (
+    containsSegmentRun(segments, GUARD_HOME_SEGMENTS) ||
+    segmentsEqual(segments, ALARM_SLOT_SEGMENTS)
+  );
 }
 
 function extensionOf(name) {
@@ -130,9 +145,9 @@ function main() {
     for (let n = 0; n < lines.length; n++) {
       if (SETALARM.test(lines[n])) {
         findings.push(
-          `${rel}:${n + 1}: direct setAlarm call is banned outside the Scheduler module ` +
-            `(packages/contracts/src/scheduler/**); all DO alarm registration must flow ` +
-            `through the Scheduler multiplexer (ADR-0065, one-alarm-slot).`,
+          `${rel}:${n + 1}: direct setAlarm call is banned outside the alarm-slot seam ` +
+            `(packages/runtime/src/scheduler/alarm-slot.ts); all DO alarm registration must ` +
+            `flow through that seam (ADR-0065, one-alarm-slot).`,
         );
       }
     }

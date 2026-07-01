@@ -44,11 +44,11 @@ Phase B is deliberately small: one test-only DO, one runtime test proving alarm 
 
 ## 3. Build steps
 
-1. **Deps (aged pins — release-age gate applies at add-time under pnpm 10.34.4).** Latest Cloudflare packages are too new for the 14-day `minimumReleaseAge`. Use aged pins (verify each is ≥14 days old at the time you run; else add a justified `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml`). Founder-checked aged candidates:
-   - `@cloudflare/vitest-pool-workers@0.16.16`
-   - `wrangler@4.101.0`
-   - `@cloudflare/workers-types@4.20260616.1`
-   - Keep `vitest@4.1.9` (CF's DO testing example uses `vitest@^4.1.0` — compatible). Confirm pool↔vitest compatibility against CF docs.
+1. **Deps (aged pins — release-age gate applies at add-time under pnpm 10.34.4).** Latest Cloudflare packages are too new for the 14-day `minimumReleaseAge`. Use aged pins (verify each is ≥14 days old at the time you run; else add a justified `minimumReleaseAgeExclude` entry in `pnpm-workspace.yaml`). Confirmed pins:
+   - `@cloudflare/vitest-pool-workers@0.16.20` — **corrected from `0.16.16`**. `0.16.16` does **not** expose `evictDurableObject`; the eviction test helpers this phase's done-criteria require shipped in `0.16.20` (CF changelog, 2026-06-25). `0.16.20` is ~6 days old, **below** the 14-day gate, so it **requires** an explicit, justified `minimumReleaseAgeExclude` entry (`'@cloudflare/vitest-pool-workers@0.16.20'`). Note also: the `defineWorkersConfig`/`defineWorkersProject` config helpers were removed across the whole `0.16.x`/`0.17.x` line — the config uses the `cloudflareTest()` Vite plugin (verified: `0.16.16`/`0.16.20`/`0.17.0` all export only `.`, `./types`, `./codemods/vitest-v3-to-v4`; no `./config`). Fallback if `0.16.20`'s installed types diverge from docs: `0.17.0` (also requires the exclude).
+   - `wrangler@4.105.0` — **corrected from `4.101.0`**. `@cloudflare/vitest-pool-workers@0.16.20` exact-pins `wrangler@4.105.0`; a direct `4.101.0` dep would create a dual/duplicate resolution. Pin the direct dep to `4.105.0` to dedupe. `4.105.0` (2026-06-25) is <14d, so it also needs a `minimumReleaseAgeExclude` entry (see §2.1). Its peer wants `@cloudflare/workers-types ^4.20260625.1`; we deliberately keep the aged `4.20260616.1` (≥14d) — typecheck+tests pass on it.
+   - `@cloudflare/workers-types@4.20260616.1` (≥14d)
+   - Keep `vitest@4.1.9` (pool `0.16.20` peer is `vitest@^4.1.0` — compatible).
    - Adding deps rewrites `pnpm-lock.yaml` → do a non-frozen install to add, then commit the lockfile. `pnpm verify`'s frozen install must pass afterward under pinned pnpm@10.34.4.
 2. **`packages/runtime/wrangler.jsonc`** — one Durable Object binding; migration key `new_sqlite_classes`; `compatibility_date ≥ 2026-02-24`.
 3. **`packages/runtime/vitest.config.*`** — `@cloudflare/vitest-pool-workers` pool pointing at the `wrangler.jsonc`. This is a Workers-env project, separate from the Node-env contract tests.
@@ -162,8 +162,11 @@ founder-locked):
   Node): DO stub -> write/read DO SQLite -> runDurableObjectAlarm ->
   evictDurableObject -> assert state survives eviction.
 - Aged pins (release-age gate applies at add-time under pnpm 10.34.4; confirm >=14d
-  or justify a minimumReleaseAgeExclude): @cloudflare/vitest-pool-workers@0.16.16,
-  wrangler@4.101.0, @cloudflare/workers-types@4.20260616.1; keep vitest@4.1.9.
+  or justify a minimumReleaseAgeExclude): @cloudflare/vitest-pool-workers@0.16.20
+  (NOT 0.16.16 — 0.16.16 lacks evictDurableObject; 0.16.20 is <14d so it needs a
+  justified minimumReleaseAgeExclude), wrangler@4.105.0 (NOT 4.101.0 — the pool
+  exact-pins 4.105.0; also <14d so it needs an exclude too),
+  @cloudflare/workers-types@4.20260616.1; keep vitest@4.1.9.
 - Fold verify:workers into root pnpm verify once the Workers test is green.
 - Document known Workers-pool limitations.
 
