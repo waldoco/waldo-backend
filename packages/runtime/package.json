@@ -7,6 +7,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@waldo/contracts": "workspace:*"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.16.20",
     "@cloudflare/workers-types": "4.20260616.1",

@@ -134,3 +134,112 @@ Feasibility questions for you:
 ## Exact Phase C recommendation (NOT started — do not start without a fresh session)
 
 Phase B proves the substrate (workerd + DO SQLite + alarm + eviction-survival), **not** any product logic. Phase C = the **scheduled tracer bullet**: `DO alarm → Loop Governor → run journal → DeliveryGate → outbox → fake channel sink`, with crash/resume exactly-once (deterministic-simulation: crash-inject after each journal step, assert no double-send). Build it on this same `packages/runtime` substrate, reusing the `alarm-slot` seam as the real Scheduler's single alarm owner. Keep contracts-spine (Phase D) after. Recommend a fresh Ultracode session with the same ground→implement→verify→attack shape.
+
+---
+
+# Phase C — Scheduled Tracer Bullet (2026-07-02)
+
+Phase C landed the one path end-to-end on the Phase B substrate. This section is the Codex-review handoff for that slice. **This is the minimal tracer, not the contract spine** — the full DELIVERY_POLICY table, priority arbiter, recurrence-advance, quarantine, 7-schedule multiplexer, and cross-run guards are explicitly **deferred to Phase D**.
+
+## The Module and its Interface (proven)
+
+**Module:** `TracerDO` (`packages/runtime/src/tracer/tracer-do.ts`) — a Durable Object whose `alarm()` is the deep entry point. **Interface:** `schedule({userId, trigger, occurrenceAt}) → runId` opens the journal at `RUN_OPENED` and arms the one-shot alarm; `alarm()` is START-OR-RESUME and drives the path to terminal `DONE`. Everything behind that interface (governor admit, gate verdict, outbox insert, sink flush, ack, finalize) is Implementation.
+
+**The one path proven:** a scheduled wake **starts** a journaled run (no open run) or **resumes** it (open run, enter at committed step); commits a delivery decision + an outbox row; **survives eviction/crash at every committed step**; and delivers to the fake sink **exactly once**. Reconstruction reads **DO SQLite only** — eviction wipes every in-memory field and `alarm()` rebuilds from the journal row. That is the durability thesis, asserted directly (`inMemory` state never load-bearing across a crash).
+
+## Reduced run-journal FSM (ADR-0054 sliver)
+
+Persisted step log in DO SQLite (`journal` table, `run_id` PK, one row per run). Transition table is the **contract** in `packages/contracts/src/runtime/journal.ts` (`runStateTransitions`), enforced by `Journal.advance()` (illegal transition throws):
+
+```
+RUN_OPENED → GOVERNOR_ADMITTED → GATED → SINK_SENT → ACK_RECORDED → DONE
+                    ↓ (governor deny)
+                  FAILED
+```
+
+**No `LLM_CALLED` / `TOOLS_DONE` states** — the tracer does no LLM/tools work. **Reconciliation note for Phase D:** the full ADR-0054 FSM is `PENDING → CONTEXT_BUILT → LLM_CALLED → TOOLS_DONE → GATED → DELIVERED → DONE`. The tracer's `RUN_OPENED` maps to `PENDING`/`CONTEXT_BUILT`; `GOVERNOR_ADMITTED` is a **new pre-context admit gate** (ADR-0074) that Phase D must slot before `CONTEXT_BUILT`; the tracer collapses `LLM_CALLED`/`TOOLS_DONE` (absent here); `GATED` matches; the tracer splits ADR-0054's single `DELIVERED` into `SINK_SENT → ACK_RECORDED` to make the sink-call/ack-record boundary a crash seam (points #5/#6). Phase D reconciles by inserting the context/LLM/tools states and mapping the delivery split — no name here contradicts the ADR.
+
+## Gate atomicity — Reading A (ADR-0068 sliver), LOCKED
+
+`admit() IS the GATED step` — one DO SQLite `transactionSync`. In `runGate()` the verdict is computed **pure** (`computeVerdict`, no I/O, `now` injected) and the idempotency key is hashed (async SHA-256) **before** the transaction opens (async/read work stays out of the synchronous closure). The transaction then does, atomically:
+
+```
+stampVerdict → incrementClassState → incrementExemptSend → outbox.insert → advance(GATED)
+```
+
+`transactionSync` rolls back the whole closure on throw. **fetch_alert budget_exempt semantics:** the DeliveryGate is the single writer of `daily_push_budget`, `class_state`, and `exempt_telemetry` — all keyed by `userId`, all DO-local. For `fetch_alert` the **daily push budget is NEVER touched**; admission gates only on the **per-class cap** (`count < daily_cap`, cap 3/day) **AND** the 2h cooldown (`gate.ts`). On send, `class_state.fetch_alert.count` and the `exempt_telemetry` (audit/WIS/push-pressure) counter each increment **exactly once**, inside the GATED transaction. The **current** block rule is encoded as a Conformance Rule in contracts — `agentReachableExemptHasCap`: *every agent-reachable exempt class has a non-null daily cap*. The stale, provably-false `agent_invocable ∩ budget:exempt = ∅` invariant is **not** encoded (fetch_alert is both agent-invocable AND budget-exempt — it falsifies that old invariant).
+
+## 6-point crash matrix — results (all resume to terminal DONE)
+
+Committed boundaries (#1/#2/#4) need **zero** production fault code: drive one committed step, `evictDurableObject`, re-drive `runDurableObjectAlarm`, assert resume-from-committed. The three genuinely mid-flight points (#3/#5/#6) use **one** crash-injection seam — a single `__crashAfter` field (undefined in production, poked only by tests via `runInDurableObject` before the alarm), with one guarded throw per point. That is the sole spot test-serving state touches the production handler.
+
+| # | Crash point | Expected on resume | Result |
+|---|---|---|---|
+| 1 | after `RUN_OPENED` | start from scratch → DONE | ✅ |
+| 2 | after `GOVERNOR_ADMITTED` | enter at admitted, run gate → DONE | ✅ |
+| 3 | verdict computed, before/inside GATED commit | **full rollback** → state stays `GOVERNOR_ADMITTED`, no budget/class/telemetry change, no outbox row, no durable verdict; resume **re-evaluates** the gate from scratch (indistinguishable-on-resume from #2 — correct atomic-commit behavior) | ✅ |
+| 4 | outbox insert / GATED committed, before sink | resume **reads the stamped verdict, SKIPS the gate**; class/telemetry each still exactly 1 | ✅ |
+| 5 | after sink call, before ack recorded | idempotent sink re-send with the **same** idempotency key returns the prior ack, **no second delivery** → DONE | ✅ |
+| 6 | after ack recorded, before handler returns | enter at `ACK_RECORDED`, skip the sink, finalize → DONE | ✅ |
+
+## Exactly-once — asserted at the DURABLE layer (not just sink count)
+
+The idempotent sink can mask a durable double-processing bug, so the load-bearing asserts read SQLite, not sink counters:
+
+- journal terminal state `== DONE`
+- `daily_push_budget` **UNCHANGED** (fetch_alert is budget_exempt)
+- `class_state.fetch_alert.count` incremented **exactly once** across run+resume
+- `exempt_telemetry` counter incremented **exactly once**
+- **TOTAL** outbox rows for `(run_id, kind) == 1` (not just active rows), backed by `idempotency_key UNIQUE` **AND** unconditional `UNIQUE(run_id, kind)` (not a partial/active-only index — an already-acked row still blocks a second insert)
+- fake sink observed **exactly one** successful send (corroborating, not sole proof)
+
+Idempotency key = SHA-256 over `canonicalDeliverySerialization` (stable-ordered) of `{run_id, kind, payload}` (contracts). Fake sink is in-memory and **idempotent on the key** — a second call with the same key returns the prior ack without recording a second delivery.
+
+## Determinism seams
+
+Clock (`now`), IdGen (run/outbox ids), seeded PRNG injected via `packages/runtime/src/seams/deps.ts` with real production defaults (`productionDeps()`). **New Phase C tracer modules never call `Date.now()` / `Math.random()` / `new Date()` directly** — all go through the seam, so crash/resume replays deterministically. The Phase B `RuntimeProbeDO` `Date.now()` substrate probe is **out of scope and untouched**. `guard-determinism` (if wired) checks new Phase C modules only.
+
+## Substrate reuse (no reinvention)
+
+- Scheduler arms exclusively through the existing `packages/runtime/src/scheduler/alarm-slot.ts` `armAlarm()` seam (the sole raw `setAlarm` owner). **No new `setAlarm` anywhere.** `guard-setalarm` exemption unchanged (exact 5-segment path only).
+- Tracer DO binding + SQLite migration added to `packages/runtime/wrangler.jsonc`.
+- Test rig reuses the Phase B `runInDurableObject` / `runDurableObjectAlarm` / `evictDurableObject` pattern from `cloudflare:test` (workerd pool).
+
+## guard-package-manager.mjs (deferred hardening, now landed)
+
+Graduated the pnpm-version footgun from prose to a deterministic Conformance Rule (`disposition: block`). Reads the `packageManager` pin from `package.json` (resolved from the guard's own path, not `cwd`) and the running pnpm major from `npm_config_user_agent`. Fails loud if majors mismatch; passes with a notice when not run under pnpm (invoked directly via node). Wired into `verify:guards`.
+
+## Files changed (Phase C)
+
+- `packages/contracts/src/runtime/` (new): `delivery-policy.ts` (verdict domain `send|hold|degrade|drop`, `FETCH_ALERT_POLICY`, `agentReachableExemptHasCap` conformance rule), `class-state.ts`, `journal.ts` (`runStateTransitions` FSM contract), `loop-policy.ts`, `schedule.ts`, `outbox.ts` (incl. `canonicalDeliverySerialization`), `sink.ts` + colocated `.test.ts` for each
+- `packages/contracts/src/index.ts` (modified): re-export the runtime contracts
+- `packages/runtime/src/seams/deps.ts` (new): Clock/IdGen/PRNG seam + `productionDeps()`
+- `packages/runtime/src/tracer/` (new): `tracer-do.ts`, `gate.ts`, `governor.ts`, `journal.ts`, `outbox.ts`, `store.ts`, `scheduler.ts`, `sink.ts`, `schema.ts`
+- `packages/runtime/test/tracer.test.ts` (new): 16 tests — happy path, 6-point crash matrix, 4 edge lanes (null / hostile duplicate-after-DONE / concurrent / degraded no-ack-then-ack), 3 red proofs (UNIQUE(run_id,kind) refusal, class-state double-increment catch, forged-GATED-has-no-outbox)
+- `packages/runtime/src/index.ts`, `packages/runtime/wrangler.jsonc`, `packages/runtime/package.json` (modified): TracerDO binding/migration + export
+- `scripts/guards/guard-package-manager.mjs` (new): pnpm-major conformance guard
+- `docs/foundation/CODEX-REVIEW-HANDOFF.md` (this section)
+
+## Open risks for Codex
+
+- **Cloudflare pool per-test-file storage isolation:** multiple `it()` in `tracer.test.ts` share DO state unless a fresh DO id is used per test. The suite uses distinct ids/`listDurableObjectIds` discipline; Codex should confirm no cross-test bleed masks a per-run assertion.
+- **`transactionSync` rollback is the crash-#3 correctness pin.** The whole exactly-once story rests on `transactionSync` rolling back atomically on throw. Verified against the installed `cloudflare:workers` `.d.ts` and behaviorally (red proof #3), but it is a workerd runtime guarantee — Codex should keep an eye on it across compat-date bumps.
+- **Crash #3 is indistinguishable-on-resume from #2** by construction (pre-commit rollback leaves state `GOVERNOR_ADMITTED`). This is correct atomic-commit behavior, not a weakened test — but it means #3 does not exercise a *distinct resume branch*, only that no partial commit leaked. Called out so Codex does not read it as redundant.
+- **Idempotent sink can mask durable doubles** — mitigated by asserting at the SQLite layer (class-state/telemetry/outbox counts), not sink count. Red proof #2 confirms the durable assert is load-bearing. If Phase D adds a non-idempotent real ChannelAdapter, the durable asserts must stay primary.
+- **`git diff --check` does not scan untracked files** — the new Phase C files are untracked, so whitespace was reviewed by content, not by the check.
+- **Determinism caveat:** seams inject production defaults, so production still reads a real clock/RNG — determinism holds only because the crash/resume path re-reads persisted values, never a fresh `now` for a verdict. Phase D must preserve this when it adds LLM/tools states (those introduce real non-determinism that must sit behind seams before any trace assertion).
+- **Reduced FSM ≠ full FSM.** The GOVERNOR_ADMITTED-before-context ordering and the DELIVERED split are tracer choices; Phase D must reconcile against ADR-0054/ADR-0068/ADR-0074 (mapping above) before the spine is authoritative.
+
+## Phase D recommendation
+
+Reconcile the reduced FSM with the full ADR-0054 chain (insert `CONTEXT_BUILT`/`LLM_CALLED`/`TOOLS_DONE`, formalize the `GOVERNOR_ADMITTED` pre-context gate per ADR-0074, map the `SINK_SENT`/`ACK_RECORDED` split back to `DELIVERED`). Then widen from the one path to the full contract spine: DELIVERY_POLICY table (all push classes + the daily-budget decrement path for non-exempt classes), priority arbiter, within-run dedup + cross-run no-progress guard, recurrence-advance + quarantine + the 7-schedule multiplexer. Keep the tracer's determinism-seam + durable-layer-assert discipline as the acceptance bar for every new slice.
+
+## Post-review fixes (applied before commit)
+
+An external review pass returned one P2 and two P3 findings; all three were addressed before this commit:
+
+- **[P2] Package-manager guard wired too late** — `verify` ran `pnpm install --frozen-lockfile` before `verify:guards`, so a wrong local pnpm aborted before `guard-package-manager` could fire. Fixed: `node scripts/guards/guard-package-manager.mjs` now runs **first** in the `verify` chain (still also part of `verify:guards`). RED (`npm_config_user_agent=pnpm/11.x` → exit 1) / GREEN (pinned → ok) both re-proven.
+- **[P3] "concurrent" test overstated** — it exercised a post-`DONE` re-drive, not a true interleave (the DO input gate serializes calls, so real interleaving is not expressible in this harness). Renamed to describe the input-gate serialization accurately; a true overlapping-alarm test is deferred to the runtime wave.
+- **[P3] unused `random()` seam** — `Deps.random()` had no caller in Phase C. Removed from the interface and `productionDeps` (no speculative seams); re-add when the first jitter/sampling caller appears in Phase D.
+
+Post-fix `pnpm verify` is green (exit 0; 55 contract tests, 16 runtime/workerd tests, 7 guards) under pinned pnpm@10.34.4.

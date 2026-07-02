@@ -4,10 +4,12 @@
   "compatibility_date": "2026-06-16",
   "durable_objects": {
     "bindings": [
-      { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" }
+      { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
+      { "name": "TRACER_DO", "class_name": "TracerDO" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] }
+    { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["TracerDO"] }
   ]
 }

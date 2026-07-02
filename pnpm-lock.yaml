@@ -25,6 +25,10 @@ importers:
         version: 4.1.9(vite@8.0.16(esbuild@0.28.1))
 
   packages/runtime:
+    dependencies:
+      '@waldo/contracts':
+        specifier: workspace:*
+        version: link:../contracts
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: 0.16.20
