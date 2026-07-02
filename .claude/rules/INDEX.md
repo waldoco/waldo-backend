@@ -15,30 +15,29 @@ this directory. Do not depend on a sibling `waldo-brain` checkout being present.
 | 4 | `work-modes.md` | Engineering, writing, strategy, ideation, evangelism mode discipline. |
 | 5 | `security-checklist.md` | Always-check security invariants, conditional checks, health-data overlay. |
 
-## Foundation Branch Override
+## Stable Operating Discipline
 
-For `greenfield/harness-foundation`, also read these before any implementation:
+This index is a stable rule entrypoint, not a branch guide, phase-progress log,
+or handoff document. Do not infer current implementation status from this file.
+For current work, inspect the active PR, git state, and the task-specific docs
+named by the user or latest handoff.
 
-1. `docs/foundation/BUILD-PLAN.md`
-2. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-3. `docs/foundation/NEXT-SESSION-PLAN.md`
-4. Relevant DeepWiki pages under `waldo-brain/01-Waldo/waldo-harness-deepwiki/`
-5. Relevant accepted ADRs from `waldo-brain/01-Waldo/Architecture Decision Records (ADR)/`
+Every agent should carry the same engineering loop:
 
-The active foundation source of truth is the accepted ADR corpus plus the
-DeepWiki/build bible. Legacy backend code and old package snippets are evidence
-only when the DeepWiki labels them that way.
+1. **Conceive** the problem: user outcome, system constraint, and acceptance bar.
+2. **Design** the seam: the smallest contract that hides the right complexity.
+3. **Implement** a tracer bullet: a production-quality vertical slice through the
+   riskiest path, not a disposable demo.
+4. **Operate** it: verify with the repo gate, name residual risk, and preserve a
+   rollback path.
 
-## Foundation Status
+Prefer deep modules: small interface, large hidden implementation, high leverage,
+and high locality. A shallow module that only forwards work should either deepen,
+merge into its caller, or wait until a second real adapter makes the seam useful.
 
-This index is a stable rule entrypoint, not a phase-progress log. For current
-foundation status, merge gates, and next-session work, read:
-
-1. `docs/foundation/BUILD-PLAN.md`
-2. `docs/foundation/NEXT-SESSION-PLAN.md`
-3. `docs/foundation/CODEX-REVIEW-HANDOFF.md`
-
-Do not infer current implementation status from this file.
+Keep DRY and orthogonal ownership: one owner for each vocabulary, policy constant,
+contract shape, and runtime side effect. If two files must change for one concept,
+consider whether the concept belongs behind a deeper module.
 
 ## Required Commands
 
@@ -65,6 +64,6 @@ separate `.agents/` directory; the agent roster is declared in `AGENTS.md`.
 
 Dynamic workflows are useful for parallel research, review, attack, and
 independent module waves. They are risky for uncontrolled write-heavy work.
-Use judge panels and adversarial reviewers in parallel; keep runtime code
-single-writer unless the files are disjoint and the phase has an explicit
-barrier.
+Use judge panels and adversarial reviewers in parallel. Keep runtime code
+single-writer unless the files are disjoint and the wave has an explicit
+barrier, owner, merge order, and fresh verification gate.
