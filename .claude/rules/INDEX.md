@@ -29,32 +29,16 @@ The active foundation source of truth is the accepted ADR corpus plus the
 DeepWiki/build bible. Legacy backend code and old package snippets are evidence
 only when the DeepWiki labels them that way.
 
-## Current Foundation Gates
+## Foundation Status
 
-- Foundation Phases A/B/C are built on `greenfield/harness-foundation`.
-- Root is built: `core/error`, `core/trigger`, `model/roster`.
-- Phase A is built: SHA-pinned `.github/workflows/verify.yml`, `pnpm verify`,
-  pinned-pnpm guard, and static conformance guards.
-- Phase B is built: `@cloudflare/vitest-pool-workers` runtime substrate,
-  Worker/Durable Object SQLite/alarm/eviction proof, and the `alarm-slot` seam.
-- Phase C is built: scheduled DO alarm tracer bullet proving
-  `alarm -> Loop Governor -> run journal -> DeliveryGate -> outbox -> fake sink`
-  with crash/resume exactly-once evidence in workerd.
-- Phase C is still a tracer, not the full runtime or contract spine. Do not
-  overclaim full delivery policy, recurrence, priority arbitration, live
-  providers, OpenAPI, generated clients, or full scenario/eval artifacts.
-- Phase D Wave 1 is built: memory contracts from ADR-0046/0005/0006/0024/0031/0037.
-- Phase D Wave 2 is built: CRS and prompt contracts from ADR-0011/0028, with
-  health-zone vocabulary owned by `packages/contracts/src/health/crs.ts`.
-- Next work is Phase D Wave 3: routing/LLM contracts with fake providers only,
-  after PR #7 is mergeable/merged and a fresh gate passes. Do not replay A/B/C
-  or Waves 1-2 unless a regression forces it.
-- `@waldo/types` is stale for this branch. The current contract source is
-  `waldo-backend/packages/contracts`.
-- Model IDs are owned by `model/roster` per ADR-0069.
-- ADR-0068 must be read from its current 2026-06-27 block: no
-  `defer_next_day`; `fetch_alert` is budget-exempt but class-capped and
-  telemetry-counted.
+This index is a stable rule entrypoint, not a phase-progress log. For current
+foundation status, merge gates, and next-session work, read:
+
+1. `docs/foundation/BUILD-PLAN.md`
+2. `docs/foundation/NEXT-SESSION-PLAN.md`
+3. `docs/foundation/CODEX-REVIEW-HANDOFF.md`
+
+Do not infer current implementation status from this file.
 
 ## Required Commands
 
