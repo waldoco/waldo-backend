@@ -40,24 +40,47 @@ tool — not shipped to the runtime.
 
 No publish machinery: the only emitted artifact is `packages/contracts/openapi/waldo-public-api.json`.
 
-## Build order (dependency DAG)
+## Build order
 
-Root (landed, green): `core/error` → `core/trigger` (leaf parts) → `model/roster` + toolchain wiring.
-Then, in dependency layers: memory (`trust`→`pattern-id`→`hall`→`episode`→`sanitise`→`recall`)
-→ `health/crs` → `prompt/narrative` → `runtime/routing` → `adapters/llm` → `ui/card`,`notification`
-→ `adapters/*` → `tools/permissions`,`schemas`,`handler` → `core/hooks` → `memory/skill`
-→ `auth/mint`,`consent` → `runtime/run`,`session`,`working-memory` → `scheduler` → `runtime/goal`
-→ `governor` → `delivery` → `telemetry/*` → public DTOs + `emit-openapi` (leaf) → `verify.yml` CI wall.
-`core/trigger`'s `invocationContext` is deferred to the wave after `core/user` + `health/crs` (it depends on both).
+Landed foundation sequence:
+
+1. Root contract leaves: `core/error`, `core/trigger`, `model/roster`.
+2. Phase A: CI/conformance wall, SHA-pinned GitHub Actions, `pnpm verify`, and repo guards.
+3. Phase B: Cloudflare Workers/Durable Object runtime substrate in `@cloudflare/vitest-pool-workers`.
+4. Phase C: scheduled durable-execution tracer bullet proving one alarm-driven path through
+   Loop Governor, run journal, DeliveryGate, outbox, and fake sink with crash/resume exactly-once.
+5. Phase C hardening: journal read validation for corrupt FSM rows, multi-line health-leak guard
+   coverage, and a guard self-test so weakened health scanning cannot silently pass.
+
+Next dependency layers remain Phase D contract-spine work: memory
+(`trust` -> `pattern-id` -> `hall` -> `episode` -> `sanitise` -> `recall`)
+-> `health/crs` -> `prompt/narrative` -> `runtime/routing` -> `adapters/llm`
+-> `ui/card`,`notification` -> `adapters/*` -> `tools/permissions`,`schemas`,`handler`
+-> `core/hooks` -> `memory/skill` -> `auth/mint`,`consent`
+-> `runtime/run`,`session`,`working-memory` -> `scheduler` -> `runtime/goal`
+-> `governor` -> full `delivery` -> `telemetry/*` -> public DTOs + `emit-openapi`.
+`core/trigger`'s `invocationContext` is deferred to the wave after `core/user` + `health/crs`
+because it depends on both.
 
 ## Status
 
-- [x] **Root** — `core/error`, `core/trigger`, `model/roster`; toolchain wiring; 15 tests green,
-  strict typecheck clean, **verified under an active 14-day release-age gate** (vite pinned).
+- [x] **Root** — `core/error`, `core/trigger`, `model/roster`; toolchain wiring; initially
+  verified with 15 root tests, strict typecheck, and an active 14-day release-age gate
+  (vite pinned). The current full gate covers the expanded contract/runtime suites.
 - [x] **Codex audit** (of commit 368e2b3) — verdict + dispositions below.
-- [ ] verify.yml CI wall (SHA-pinned actions).
-- [ ] Scheduled tracer bullet + `@cloudflare/vitest-pool-workers` (settled next step below).
+- [x] **Phase A CI/conformance wall** — SHA-pinned `.github/workflows/verify.yml`,
+  `pnpm verify`, package-manager guard, stale-types guard, model-id guard, no-passWithNoTests
+  guard, ADR-status guard, setAlarm guard, and health-leak guard.
+- [x] **Phase B runtime substrate** — `@cloudflare/vitest-pool-workers`, Durable Object SQLite,
+  alarm driving, and eviction-survival proof in workerd.
+- [x] **Phase C scheduled tracer bullet** — minimal scheduled path through Governor, journal,
+  DeliveryGate, outbox, and fake sink with crash/resume exactly-once proof.
+- [x] **Phase C hardening** — corrupt journal states now fail at the read seam; health-leak guard
+  catches multi-line raw-value shapes; guard self-test added.
 - [x] **Local verification discipline** — documented in `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
+- [ ] **PR #7 mergeability** — resolve any GitHub merge conflicts, then re-run
+  `npx -y pnpm@10.34.4 verify` and `git diff --check` on the mergeable branch.
+- [ ] **Phase D contract spine** — start only after PR #7 is mergeable/merged and the fresh gate passes.
 
 ## Grounding flags & dispositions
 
@@ -86,14 +109,14 @@ Vocabulary (single-owner, enforced): `modelName`←roster, `channelName`←`adap
 - **Outbox exactly-once authority per kind** + idempotency hash (SHA-256 + canonical serialization) —
   pin when building `runtime/run` + the outbox flusher.
 
-## Codex review verdict (commit 368e2b3) & settled next step
+## Historical Codex review verdict (commit 368e2b3)
 
 Codex audited the root: approach sound, root ADR alignment passes, tests real-but-thin (roster +
 canary mutation-confirmed real). Two blocks, both accepted + actioned:
 - **(1) official commands failed under the release-age gate** (vite too new) → **fixed**: vite
   pinned to 8.0.16; verified green under an active gate + strict tsc.
 - Tests strengthened: `error`/`trigger` now assert the exact enum tuple (change-detector), per review.
-- **(2) CI wall absent** → next-session deliverable (below).
+- **(2) CI wall absent** → later resolved in Phase A.
 
 Additional dispositions:
 - **ADR-0068:** build delivery from the current implementation block (`fetch_alert` exempt-but-
@@ -103,17 +126,20 @@ Additional dispositions:
   need `adapterResultSchema(dataSchema)` + valid/invalid tests — do not replicate the type-only
   shape as the runtime validation pattern.
 
-**Settled next step — Codex-validated as tracer-first, NOT full-spine:**
-1. Land the minimum CI wall: install · typecheck · test (no `--passWithNoTests`) · model-name
-   guard · stale `@waldo/types` guard · health/internal-leak grep · ADR-status lint. Run with the
-   release-age gate active.
-2. Build only the contracts the scheduled tracer bullet needs: trigger/session/canary, run journal,
-   outbox, schedule entry, LoopPolicy, DeliveryPolicy, minimal channel sink, public API stub.
-3. Stand up `@cloudflare/vitest-pool-workers` before the full spine.
-4. Prove the scheduled tracer bullet end-to-end: `DO alarm → Loop Governor → journaled run →
-   DeliveryGate → outbox`, with a crash-inject/resume test.
-5. Resume contract waves with evidence from the tracer bullet.
+That review set the tracer-first sequence. That sequence is now complete through Phase C and the
+post-review hardening commit. Do not use this historical section as the next-session plan.
 
-Testing depth (Codex-agreed): deterministic-simulation for run-journal/outbox exactly-once +
-DeliveryGate budgets; property/fuzz for Scribe sanitisation + health/PII egress; targeted mutation
-on deterministic security invariants at the beta gate — not broad mutation now.
+## Current next step
+
+Before starting Phase D, make PR #7 mergeable and prove the current branch with:
+
+```bash
+npx -y pnpm@10.34.4 verify
+git diff --check
+```
+
+Then begin Phase D with a narrow contract wave, not runtime broadening. The first safe wave is
+memory contracts from ADR-0046, provided the wave explicitly names the store ownership and avoids
+raw health values, live providers, production data, and public DTO derivation from internal schemas.
+Done for the first Phase D wave means exact schemas, valid/invalid tests, source refs, and a green
+merge gate. Runtime expansion resumes only when the relevant contract seam exists.

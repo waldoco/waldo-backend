@@ -53,24 +53,40 @@ The **beta gate** is the release-readiness gate before real beta users or real s
 Current committed root command surface:
 
 ```bash
-pnpm install
-pnpm -r typecheck
-pnpm -r test
+npx -y pnpm@10.34.4 verify    # full merge gate
+git diff --check              # whitespace/conflict-marker sanity
 ```
 
-Target command surface to build next:
+`pnpm verify` is also acceptable when the active pnpm is exactly `10.34.4`. The full gate runs:
+
+1. package-manager guard
+2. frozen install with the release-age policy active
+3. workspace typecheck
+4. contract tests
+5. workerd runtime tests
+6. static guards
+
+Current targeted commands:
 
 ```bash
-pnpm verify              # full local merge gate, no secrets, release-age policy active
+pnpm -r typecheck
+pnpm verify:node              # @waldo/contracts tests
+pnpm verify:workers           # @waldo/runtime workerd tests
+pnpm verify:guards            # repo conformance guards
+```
+
+Target-only gates still to build in Phase D+:
+
+```bash
 pnpm verify:fast         # targeted dev loop: typecheck + affected tests + guards
-pnpm verify:contracts    # Zod schemas, exact tuples, OpenAPI freshness, leak checks
-pnpm verify:workers      # @cloudflare/vitest-pool-workers hermetic runtime tests
+pnpm verify:contracts    # contract tests + OpenAPI freshness + leak checks
 pnpm verify:scenarios    # deterministic scenario traces with fake model/sinks
 pnpm verify:property     # fast-check suites for selected deterministic invariants
 pnpm verify:mutation     # Stryker targeted deterministic-core mutation run
 ```
 
-Until a target command exists, do not pretend it passed. Report it as "not implemented yet" and run the closest lower-level command.
+Do not pretend a target-only gate passed. Report it as target-only and run the closest current
+lower-level command.
 
 ## Standard Local Loop
 
@@ -98,8 +114,8 @@ For every feature or fix:
    - Run the nearest gate for the touched layer.
 
 5. **Run merge gate**
-   - Run `pnpm verify` once it exists.
-   - Until then, run `pnpm install`, `pnpm -r typecheck`, and `pnpm -r test`.
+   - Run `npx -y pnpm@10.34.4 verify`.
+   - Run `git diff --check`.
 
 6. **Record evidence**
    - Final response or PR body must include commands run, pass/fail, and skipped gates.
@@ -172,9 +188,10 @@ Fixture names should state intent:
 
 ## Runtime Verification Spine
 
-The next major deliverable is not the full contract spine. It is the verification spine that proves Waldo can be tested in the real runtime.
+Phase C landed the first verification spine. It proves Waldo can test Durable Object code in the
+real Workers runtime before the full contract spine exists.
 
-Minimum target:
+Current proven tracer:
 
 ```text
 DO alarm
@@ -185,19 +202,23 @@ DO alarm
   -> fake channel sink
 ```
 
-This spine needs:
+Already present:
 
 - `@cloudflare/vitest-pool-workers`
 - `wrangler.jsonc`
 - SQLite-backed Durable Object migration using `new_sqlite_classes`
 - fake clock/alarm controls
-- fake model/provider
-- fake APNs/Telegram/in-app sink
-- trace recorder
+- fake channel sink
 - crash injection points
+
+Still target-only for Phase D+:
+
+- fake model/provider scripts
+- fake APNs/Telegram/in-app sink adapters beyond the tracer sink
+- trace recorder
 - evidence JSON artifacts
 
-The first green scenario must prove:
+The Phase C tracer proves:
 
 1. alarm fires
 2. Governor admits the run
@@ -236,7 +257,7 @@ The run-journal/outbox simulator should model:
 - duplicate alarm delivery
 - sink ack/no-ack/permanent failure
 
-Crash points to cover first:
+Crash points covered by the Phase C tracer:
 
 1. after `RUN_OPENED`
 2. after `GOVERNOR_ADMITTED`
@@ -245,12 +266,13 @@ Crash points to cover first:
 5. after sink call but before sink ack is recorded
 6. after ack record but before handler returns
 
-Required invariant:
+Required invariant for future runtime slices:
 
 ```text
 For a fixed event_id and idempotency_key:
-  budget decrements at most once
-  outbox contains at most one active delivery
+  counted budget decrements at most once
+  exempt class telemetry increments at most once
+  outbox contains at most one delivery for the run/kind
   fake sink observes at most one successful send
   resume reaches the same terminal state
 ```
@@ -376,22 +398,28 @@ Later eval lanes:
 
 ## CI Wall
 
-Minimum CI wall:
+Implemented CI wall:
 
 1. checkout with pinned GitHub Actions SHAs
 2. setup pnpm/node using declared versions
 3. install with lockfile and release-age policy active
 4. typecheck
 5. unit/contract tests
-6. Workers/DO tests once runtime package exists
-7. OpenAPI freshness once emitter exists
-8. generated-client freshness once clients exist
-9. stale import guard: no `@waldo/types`
-10. model-name guard: no hardcoded non-roster model IDs
-11. health/internal leak scan
-12. credential-boundary scan
-13. ADR-status lint
-14. no `--passWithNoTests`
+6. Workers/DO tests
+7. stale import guard: no `@waldo/types`
+8. model-name guard: no hardcoded non-roster model IDs
+9. health/internal leak scan
+10. ADR-status lint
+11. direct `setAlarm` guard
+12. no `--passWithNoTests`
+
+Target-only gates still to add:
+
+1. OpenAPI freshness once emitter exists
+2. generated-client freshness once clients exist
+3. credential-boundary scan once auth/env seams exist
+4. scenario/evidence artifacts once the scenario runner exists
+5. property and mutation lanes for deterministic core
 
 Add CI slicing only when test runtime justifies it. Borrow the Hermes pattern: store test durations, slice by longest-processing-time, and merge duration artifacts after successful main-branch runs.
 
@@ -509,7 +537,8 @@ Block or rewrite work that does any of these:
 - calls real providers in default tests
 - stores raw health values in logs, prompts, traces, or committed fixtures
 - treats `wrangler dev` manual success as proof
-- claims "green" while release-age, OpenAPI, generated-client, or runtime gates are absent
+- claims a target-only gate passed before it exists, or claims the full harness is green while
+  OpenAPI, generated-client, scenario, property, or mutation gates remain target-only
 - adds full mutation testing before deterministic core has stable tests
 
 ## Research Baseline
@@ -527,15 +556,16 @@ Waldo differs from coding agents because its hard guarantees are stateful, priva
 
 ## Near-Term Build Order
 
-1. Implement the CI wall and local `pnpm verify` scripts.
-2. Add `@cloudflare/vitest-pool-workers` and a minimal Worker/DO test package.
-3. Build minimal scheduled-path contracts.
-4. Add fake clock, fake model/provider, fake sink, and trace recorder.
-5. Green the scheduled tracer scenario.
-6. Add crash/resume simulation and eviction tests.
-7. Add DeliveryGate property tests.
-8. Add Scribe/sanitizer fuzz tests.
-9. Add targeted mutation for deterministic core.
+1. Resolve PR #7 mergeability, then run `npx -y pnpm@10.34.4 verify` and `git diff --check`.
+2. Start Phase D with memory contracts from ADR-0046.
+3. Add CRS/prompt contracts only after memory seams are typed and tested.
+4. Add routing/LLM contracts with fake providers only; no live providers in default gates.
+5. Add UI/adapters/tools/hooks contracts with valid/invalid schema tests and ACL checks.
+6. Reconcile the Phase C reduced FSM into the full runtime run/session/working-memory contracts.
+7. Expand delivery beyond the `fetch_alert` tracer path: counted budget, priority arbitration,
+   recurrence, quarantine, and cross-run no-progress guards.
+8. Add telemetry/public/OpenAPI once the internal contracts are stable.
+9. Add deterministic scenario artifacts, property tests, and targeted mutation for deterministic core.
 10. Add live/dogfood lanes after hermetic gates are stable.
 
 ## Definition Of Done

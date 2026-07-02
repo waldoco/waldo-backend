@@ -31,11 +31,20 @@ only when the DeepWiki labels them that way.
 
 ## Current Foundation Gates
 
+- Foundation Phases A/B/C are built on `greenfield/harness-foundation`.
 - Root is built: `core/error`, `core/trigger`, `model/roster`.
-- Next work is tracer-first, not full-spine-first.
-- Minimum sequence: CI wall -> `@cloudflare/vitest-pool-workers` -> minimal
-  scheduled-path contracts -> scheduled DO alarm tracer -> crash/resume
-  exactly-once proof -> resume contract waves.
+- Phase A is built: SHA-pinned `.github/workflows/verify.yml`, `pnpm verify`,
+  pinned-pnpm guard, and static conformance guards.
+- Phase B is built: `@cloudflare/vitest-pool-workers` runtime substrate,
+  Worker/Durable Object SQLite/alarm/eviction proof, and the `alarm-slot` seam.
+- Phase C is built: scheduled DO alarm tracer bullet proving
+  `alarm -> Loop Governor -> run journal -> DeliveryGate -> outbox -> fake sink`
+  with crash/resume exactly-once evidence in workerd.
+- Phase C is still a tracer, not the full runtime or contract spine. Do not
+  overclaim full delivery policy, recurrence, priority arbitration, live
+  providers, OpenAPI, generated clients, or full scenario/eval artifacts.
+- Next work is Phase D contract-spine waves after PR #7 is mergeable/merged and
+  a fresh gate passes. Do not replay A/B/C unless a regression forces it.
 - `@waldo/types` is stale for this branch. The current contract source is
   `waldo-backend/packages/contracts`.
 - Model IDs are owned by `model/roster` per ADR-0069.
@@ -45,16 +54,17 @@ only when the DeepWiki labels them that way.
 
 ## Required Commands
 
-Until `pnpm verify` exists, the minimum local gate is:
+Use pinned pnpm for the merge gate:
 
 ```bash
-pnpm install
-pnpm -r typecheck
-pnpm -r test
+npx -y pnpm@10.34.4 verify
+git diff --check
 ```
 
-For docs-only work, run `git diff --check` and report that runtime tests were
-not rerun because no code changed.
+`pnpm verify` is valid only when the shell's active pnpm is `10.34.4`. For
+docs-only work, `git diff --check` is the minimum gate; run the full verify gate
+when the docs change commands, rules, handoffs, CI behavior, or any code-adjacent
+claim.
 
 ## Cloud / Ultracode Discipline
 

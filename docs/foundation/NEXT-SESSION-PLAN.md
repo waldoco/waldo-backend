@@ -1,21 +1,22 @@
-# Next-Session Runbook - Claude Code Ultracode Foundation Build
+# Next-Session Runbook - Phase D Contract Spine
 
 ## Verdict
 
-Use Claude Code Ultracode for a phase-gated dynamic workflow, not as an
-autonomous "finish the foundation" mode. It is useful for Waldo because the next
-work has independent research, review, attack, and contract-wave lanes. It is
-risky if it is allowed to write runtime code concurrently across shared files.
+Use Fable 5 in Claude Code dynamic workflows for a phase-gated Phase D run, not
+as an autonomous "finish the foundation" mode. It is useful for Waldo because
+Phase D has independent research, review, attack, and contract-wave lanes. It is
+risky if it is allowed to write runtime code concurrently across shared files or
+continue after a failed wave barrier.
 
-The correct next move remains tracer-first:
+Phases A/B/C are complete on `greenfield/harness-foundation`. The correct next
+move is not to replay the CI wall, runtime substrate, or scheduled tracer. The
+immediate gate is:
 
 ```text
-CI wall
--> @cloudflare/vitest-pool-workers substrate
--> minimal scheduled-path contracts
--> Durable Object alarm tracer
--> crash/resume exactly-once proof
--> contract waves
+resolve PR #7 mergeability
+-> npx -y pnpm@10.34.4 verify
+-> git diff --check
+-> Phase D contract-spine wave
 ```
 
 Codex remains the external adversarial audit lane after a phase or commit.
@@ -30,10 +31,10 @@ Read these in order:
 2. `docs/foundation/BUILD-PLAN.md`
 3. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
 4. This file
-5. Waldo Brain DeepWiki pages for scheduler, conformance build, run journal,
-   delivery, and harness tests
-6. Accepted ADRs: ADR-0054, ADR-0065, ADR-0068, ADR-0069, ADR-0074, ADR-0029,
-   ADR-0032, ADR-0015, ADR-0042
+5. Waldo Brain DeepWiki pages relevant to the selected Phase D wave
+6. Accepted ADRs for the selected wave. For the first memory wave, include
+   ADR-0046 plus the storage/runtime ADRs it crosses. For runtime reconciliation,
+   include ADR-0054, ADR-0065, ADR-0068, ADR-0074, and ADR-0029.
 
 Cloud Claude Code sessions clone only committed repo files. They do not
 automatically receive a sibling `waldo-brain` checkout. If the cloud session
@@ -117,7 +118,7 @@ and human/CI gates around agent-generated changes.
 
 ## Cloud Session Preflight
 
-Before launching Ultracode:
+Before launching the Fable 5 dynamic workflow:
 
 1. Push `greenfield/harness-foundation` if the cloud session will work from the
    remote.
@@ -135,8 +136,7 @@ pnpm install --frozen-lockfile
 5. Run the baseline:
 
 ```bash
-pnpm -r typecheck
-pnpm -r test
+npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
@@ -145,11 +145,11 @@ git diff --check
 
 ## Workflow Approval Checklist
 
-Before approving any generated Ultracode workflow, reject it if it:
+Before approving any generated dynamic workflow, reject it if it:
 
 - Skips the local rule index, foundation docs, DeepWiki, or accepted ADRs.
 - Plans parallel writes to the same files or tightly coupled modules.
-- Starts the full contract spine before the CI wall and runtime substrate.
+- Replays Phase A/B/C instead of starting the selected Phase D wave.
 - Uses live providers, production data, or production secrets.
 - Calls external LLMs in default tests.
 - Touches unrelated legacy code, stashed work, or old Codex spine branches.
@@ -157,11 +157,11 @@ Before approving any generated Ultracode workflow, reject it if it:
 - Produces implementation without an adversarial review/attack lane.
 - Leaves the cloud session without a committed artifact or clear stop reason.
 
-## Phase A - CI and Conformance Wall
+## Historical Phase A - CI and Conformance Wall
 
-Goal: make quality deterministic before runtime work grows.
+Status: landed. Do not replay unless a regression forces it.
 
-Build:
+Built:
 
 - Add `pnpm verify` as the single local wall.
 - Add `verify.yml` with pinned GitHub Actions SHAs and minimal permissions.
@@ -173,24 +173,17 @@ Build:
   abstraction.
 - Add ADR-status lint against accepted ADR metadata where practical.
 
-Attack:
-
-- Use parallel reviewer agents to try to sneak each forbidden pattern past the
-  wall.
-- A bypass means the guard is weak. Fix the guard before moving on.
-
-Done:
+Done evidence:
 
 - `pnpm verify` passes.
 - At least one intentional violation was proven to fail each new guard.
 - The phase ends with a short Codex-review handoff note.
 
-## Phase B - Cloudflare Runtime Test Substrate
+## Historical Phase B - Cloudflare Runtime Test Substrate
 
-Goal: prove the local loop can run code in the real Workers/Durable Object
-runtime before the harness runtime grows.
+Status: landed. Do not replay unless a regression forces it.
 
-Build:
+Built:
 
 - Add `@cloudflare/vitest-pool-workers`.
 - Add `wrangler.jsonc` with Durable Object binding and
@@ -203,16 +196,16 @@ Build:
   - evicts with `evictDurableObject`,
   - proves state survives eviction.
 
-Done:
+Done evidence:
 
 - The runtime test runs in `@cloudflare/vitest-pool-workers`, not plain Node.
 - The test is wired into `pnpm verify`.
 - Known Cloudflare pool limitations are documented in the test README or file
   header.
 
-## Phase C - Scheduled Tracer Bullet
+## Historical Phase C - Scheduled Tracer Bullet
 
-Goal: prove the durable execution pattern before building 30 more contracts.
+Status: landed and post-review hardened. Do not replay unless a regression forces it.
 
 Minimum slice:
 
@@ -239,7 +232,7 @@ Simulation discipline:
 - Fuzz idempotency keys and trigger variants.
 - Include null, hostile, concurrent, and degraded cases.
 
-Done:
+Done evidence:
 
 - `DO alarm -> Governor -> run journal -> DeliveryGate -> outbox` works in the
   Workers runtime test substrate.
@@ -247,7 +240,7 @@ Done:
 
 ## Phase D - Contract Spine Waves
 
-Resume contract waves only after Phase C is green.
+Resume contract waves only after PR #7 is mergeable/merged and the fresh gate passes.
 
 Suggested wave order:
 
@@ -272,6 +265,20 @@ Per wave:
 - Barrier: `pnpm verify`, ADR drift review, and a focused security/privacy
   review.
 
+Recommended first safe unit:
+
+```text
+Wave 1: memory contracts from ADR-0046
+```
+
+Done criteria:
+
+- exact Zod schemas and exported types for the selected memory contracts
+- valid and invalid tests that would fail on enum, field, or trust-order drift
+- no raw health values, live providers, production data, or public DTO derivation from internals
+- source refs named in tests or docs
+- `npx -y pnpm@10.34.4 verify` and `git diff --check` green
+
 ## Phase E - External Audit
 
 After each major phase, generate a Codex adversarial-review handoff with:
@@ -283,12 +290,12 @@ After each major phase, generate a Codex adversarial-review handoff with:
 - Mutation or intentional-break evidence.
 - Any Cloudflare runtime limitations that still affect confidence.
 
-## Ready Prompt for Claude Code
+## Ready Prompt for Fable 5 Claude Code
 
 ```text
 ultracode
 
-Build the next Waldo backend foundation phase on branch
+Use Fable 5 in Claude Code dynamic workflows to complete Phase D on branch
 greenfield/harness-foundation.
 
 First read:
@@ -296,35 +303,68 @@ First read:
 - docs/foundation/BUILD-PLAN.md
 - docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md
 - docs/foundation/NEXT-SESSION-PLAN.md
-- required Waldo Brain DeepWiki pages and accepted ADRs listed in the runbook
+- docs/foundation/CODEX-REVIEW-HANDOFF.md
+- required Waldo Brain DeepWiki pages and accepted ADRs for each Phase D wave
 
 Use dynamic workflows for research, review, attack, and independent disjoint
-work only. Keep runtime implementation single-writer. One phase per workflow.
-Start with Phase A. Do not start the full contract spine until the CI wall,
-Cloudflare runtime substrate, and scheduled tracer bullet are green.
+contract modules only. Keep runtime implementation single-writer. Keep one
+writer per shared contract surface. Parallelize reading/review/testing lanes,
+not tightly coupled writes.
+
+Phases A/B/C are already landed. First confirm PR #7 is mergeable/merged and run:
+
+```bash
+npx -y pnpm@10.34.4 verify
+git diff --check
+```
+
+If PR #7 is still conflicting or the baseline gate fails, stop and report the
+blocker. Do not start Phase D on an unmergeable or red foundation.
+
+Complete Phase D in this wave order, with a hard verify barrier after every wave:
+
+1. memory contracts from ADR-0046
+2. crs/prompt contracts
+3. routing/llm contracts with fake providers only
+4. ui/adapters contracts
+5. tools/hooks contracts
+6. runtime run/session/working-memory contracts, reconciling Phase C's reduced FSM
+7. full delivery policy beyond the fetch_alert tracer path
+8. telemetry contracts
+9. public DTOs, OpenAPI emitter, and generated-client freshness
+
+For each wave:
+- name the owning ADRs and DeepWiki pages before writing
+- use exact Zod schemas and exported types
+- add valid and invalid tests that fail on enum, field, ordering, trust, ACL, or budget drift
+- keep live providers, production data, production secrets, and raw health values out of default tests
+- do not derive public DTOs with .pick()/.omit() from internal schemas
+- run `npx -y pnpm@10.34.4 verify` and `git diff --check`
+- stop if a wave fails after three focused fix attempts or exposes an ADR conflict
 
 Before running the workflow, show the phase plan and raw script for approval.
 Reject your own plan if it writes shared runtime files in parallel, uses live
-secrets/providers, skips the ADRs, skips pnpm verify, or lacks an adversarial
-review lane.
+secrets/providers, skips the ADRs, skips pnpm verify, broadens runtime before
+contracts exist, or lacks an adversarial review lane.
 
-After the phase, report:
+After Phase D, report:
 - files changed,
 - commands run,
 - intentional failures that proved the guards/tests,
+- OpenAPI/generated-client freshness evidence,
 - residual risks,
 - exact next phase recommendation.
 ```
 
 ## Next-Session Success Criteria
 
-A strong next session does not need to finish the whole foundation. It should
-finish a phase with evidence. The highest-value outcome is:
+A strong Fable 5 session should complete Phase D only if each wave clears its
+barrier. If a blocker appears, the correct outcome is a precise stop reason, not
+partial work dressed up as completion. The highest-value outcome is:
 
-1. CI/conformance wall committed and proven with intentional failures.
-2. Workers/Durable Object runtime test substrate committed.
-3. At least one DO alarm + SQLite + eviction test passing under
-   `@cloudflare/vitest-pool-workers`.
-
-If time remains, start the scheduled tracer bullet. Do not trade away the
-runtime substrate to generate more contracts.
+1. PR #7 mergeability is resolved or explicitly reported as the blocker.
+2. All Phase D waves land in order with exact valid/invalid tests and source refs.
+3. OpenAPI and generated-client freshness are implemented before public/API work is called done.
+4. `npx -y pnpm@10.34.4 verify` and `git diff --check` pass after every wave and at the end.
+5. Residual target-only gates are named honestly: scenario artifacts, property tests, and mutation
+   unless implemented in the Phase D run.
