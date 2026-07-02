@@ -54,41 +54,44 @@ const TOKEN = `\\b(?:${HEALTH_TOKENS.join('|')})\\b`;
 // paired with a raw number (in assignment/interpolation/label position) or emitted
 // through a logging/prompt sink. A stable string label (zone=peak, "high") never
 // carries a raw number, so it is not matched.
+//
+// All detectors run against the WHOLE file text with `g`, not line-by-line: a statement split
+// across lines (`hrv =\n  42`) must not escape the scan. Proximity is kept meaningful with
+// bounded gap windows instead of same-line anchors.
 const DETECTORS = [
   {
-    // Assignment / object property to a raw number:  hrv = 42 · sleepHours: 7.5 · "spo2": 95
+    // Assignment / object property to a raw number:  hrv = 42 · sleepHours:\n  7.5 · "spo2": 95
     reason: 'health value assigned to a raw numeric literal',
     re: new RegExp(
       `${TOKEN}\\s*["'\`]?\\s*[:=]\\s*${NUM}`,
-      'i',
+      'gi',
     ),
   },
   {
-    // Reverse order used in metric-label / tag strings:  spo2=95 · "hr":88 already caught
-    // above; this catches label-style  { name: 'hrv', value: 42 } style pairs on one line.
-    reason: 'health value paired with a raw numeric literal on a label/value line',
+    // Reverse order used in metric-label / tag strings; catches label-style
+    // { name: 'hrv', value: 42 } pairs, including across a line break.
+    reason: 'health value paired with a raw numeric literal on a label/value pair',
     re: new RegExp(
-      `${TOKEN}[^\\n]{0,40}?\\bvalue\\b\\s*[:=]\\s*${NUM}`,
-      'i',
+      `${TOKEN}[\\s\\S]{0,60}?\\bvalue\\b\\s*[:=]\\s*${NUM}`,
+      'gi',
     ),
   },
   {
-    // Template-string interpolation of a health token with a numeric literal on the
-    // same line:  `HR ${88} bpm` · `hrv=${42}` — the literal reveals a raw value.
+    // Template-string interpolation of a health token with a numeric literal inside the same
+    // backtick string, including multi-line templates:  `HR ${88} bpm` · `hrv is\n ${42}`.
     reason: 'health value interpolated with a raw numeric literal in a template string',
     re: new RegExp(
-      `\`[^\`\\n]*${TOKEN}[^\`\\n]*\\$\\{[^}\\n]*${NUM}[^}\\n]*\\}`,
-      'i',
+      `\`[^\`]{0,200}?${TOKEN}[^\`]{0,200}?\\$\\{[^}]{0,80}?${NUM}[^}]{0,80}?\\}`,
+      'gi',
     ),
   },
   {
-    // Logging / prompt / metric-label sink carrying a health token + a raw number on
-    // the same call:  console.log('hrv', 42) · logger.info(`sleep hours ${7.5}`) ·
-    // metric.label('hr', 88) · prompt.push(`weight 70`).
+    // Logging / prompt / metric-label sink carrying a health token + a raw number in the
+    // same call, including a call spread over lines:  console.log(\n 'hrv',\n 42).
     reason: 'health value emitted through a log/prompt/metric sink with a raw numeric literal',
     re: new RegExp(
-      `\\b(?:console|log(?:ger)?|info|warn|error|debug|trace|span|breadcrumb|metric|gauge|counter|histogram|label|prompt|append|push|emit)\\b[^\\n]*${TOKEN}[^\\n]*${NUM}`,
-      'i',
+      `\\b(?:console|log(?:ger)?|info|warn|error|debug|trace|span|breadcrumb|metric|gauge|counter|histogram|label|prompt|append|push|emit)\\b[\\s\\S]{0,160}?${TOKEN}[\\s\\S]{0,80}?${NUM}`,
+      'gi',
     ),
   },
 ];
@@ -131,17 +134,16 @@ function scanFile(file) {
     return [];
   }
   const findings = [];
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    for (const detector of DETECTORS) {
-      if (detector.re.test(line)) {
-        findings.push({ line: i + 1, reason: detector.reason });
-        break; // one finding per line is enough signal
-      }
+  const seenLines = new Set();
+  for (const detector of DETECTORS) {
+    for (const m of text.matchAll(detector.re)) {
+      const line = text.slice(0, m.index).split('\n').length;
+      if (seenLines.has(line)) continue; // one finding per line is enough signal
+      seenLines.add(line);
+      findings.push({ line, reason: detector.reason });
     }
   }
-  return findings;
+  return findings.sort((a, b) => a.line - b.line);
 }
 
 function main() {

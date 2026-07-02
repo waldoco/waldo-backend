@@ -1,11 +1,6 @@
-import type { JournalRow, RunState } from '@waldo/contracts';
-import { runStateTransitions } from '@waldo/contracts';
-import type { DeliveryVerdict } from '@waldo/contracts';
+import type { DeliveryVerdict, JournalRow, RunState } from '@waldo/contracts';
+import { deliveryVerdictSchema, runStateSchema, runStateTransitions } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
-
-// A run is open while it has not reached a terminal state. Exactly one open run per DO at a
-// time in the tracer, so resume reconstructs the whole run from this single SELECT.
-const TERMINAL: ReadonlySet<RunState> = new Set<RunState>(['DONE', 'FAILED']);
 
 type JournalSqlRow = {
   run_id: string;
@@ -18,13 +13,15 @@ type JournalSqlRow = {
   updated_at: number;
 };
 
+// Field parses, not journalRowSchema.parse: inside the GATED transaction the row transiently
+// carries a verdict while still GOVERNOR_ADMITTED, which the row schema's refine forbids.
 function toRow(r: JournalSqlRow): JournalRow {
   return {
     run_id: r.run_id,
     user_id: r.user_id,
     trigger: r.trigger,
-    state: r.state as RunState,
-    verdict: r.verdict as DeliveryVerdict | null,
+    state: runStateSchema.parse(r.state),
+    verdict: r.verdict === null ? null : deliveryVerdictSchema.parse(r.verdict),
     occurrence_at: r.occurrence_at,
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -71,6 +68,8 @@ export class Journal {
     return this.read(runId)?.state ?? null;
   }
 
+  // A run is open while it has not reached a terminal state (DONE/FAILED). Exactly one open run
+  // per DO at a time in the tracer, so resume reconstructs the whole run from this single SELECT.
   findOpenRun(): JournalRow | null {
     const rows = this.sql
       .exec<JournalSqlRow>(
@@ -108,9 +107,5 @@ export class Journal {
       this.deps.now(),
       runId,
     );
-  }
-
-  isTerminal(state: RunState): boolean {
-    return TERMINAL.has(state);
   }
 }

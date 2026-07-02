@@ -446,4 +446,20 @@ describe('TracerDO red proofs: the durable-layer assertions are load-bearing, no
     expect(d.outboxRows).toBe(0);
     expect(sink.observedDeliveries()).toBe(0);
   });
+
+  it('a corrupt journal state fails loudly at the read seam instead of silently stalling the run', async () => {
+    const sink = new FakeSink();
+    const stub = freshStub();
+
+    await schedule(stub);
+
+    // Corrupt the durable state to a value outside the FSM enum. Without validation at the read
+    // seam the alarm would match no step branch and return cleanly — a stuck run, no error signal.
+    await runInDurableObject(stub, (_i, state) => {
+      state.storage.sql.exec("UPDATE journal SET state = 'CORRUPT_STATE'");
+    });
+
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow(/invalid option/i);
+    expect(sink.observedDeliveries()).toBe(0);
+  });
 });
