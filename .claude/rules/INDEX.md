@@ -43,8 +43,12 @@ only when the DeepWiki labels them that way.
 - Phase C is still a tracer, not the full runtime or contract spine. Do not
   overclaim full delivery policy, recurrence, priority arbitration, live
   providers, OpenAPI, generated clients, or full scenario/eval artifacts.
-- Next work is Phase D contract-spine waves after PR #7 is mergeable/merged and
-  a fresh gate passes. Do not replay A/B/C unless a regression forces it.
+- Phase D Wave 1 is built: memory contracts from ADR-0046/0005/0006/0024/0031/0037.
+- Phase D Wave 2 is built: CRS and prompt contracts from ADR-0011/0028, with
+  health-zone vocabulary owned by `packages/contracts/src/health/crs.ts`.
+- Next work is Phase D Wave 3: routing/LLM contracts with fake providers only,
+  after PR #7 is mergeable/merged and a fresh gate passes. Do not replay A/B/C
+  or Waves 1-2 unless a regression forces it.
 - `@waldo/types` is stale for this branch. The current contract source is
   `waldo-backend/packages/contracts`.
 - Model IDs are owned by `model/roster` per ADR-0069.
@@ -71,6 +75,9 @@ claim.
 Claude Code cloud sessions only see committed repo files. Before launching a
 cloud ultracode workflow, push the branch and ensure this `.claude/rules/`
 mirror is committed.
+
+Repo-required skills live under `.claude/skills/`. This repo does not use a
+separate `.agents/` directory; the agent roster is declared in `AGENTS.md`.
 
 Dynamic workflows are useful for parallel research, review, attack, and
 independent module waves. They are risky for uncontrolled write-heavy work.

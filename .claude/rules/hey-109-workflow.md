@@ -1,4 +1,4 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/hey-109-workflow.md @ 556a459a761d -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/hey-109-workflow.md @ 0688c22f440a -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 

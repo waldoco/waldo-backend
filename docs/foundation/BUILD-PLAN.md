@@ -51,10 +51,12 @@ Landed foundation sequence:
    Loop Governor, run journal, DeliveryGate, outbox, and fake sink with crash/resume exactly-once.
 5. Phase C hardening: journal read validation for corrupt FSM rows, multi-line health-leak guard
    coverage, and a guard self-test so weakened health scanning cannot silently pass.
+6. Phase D Wave 1: memory contract spine from ADR-0046/0005/0006/0024/0031/0037.
+7. Phase D Wave 2: CRS and prompt contracts from ADR-0011/0028, with health-zone vocabulary
+   single-owned by `health/crs` and consumed by prompt contracts.
 
-Next dependency layers remain Phase D contract-spine work: memory
-(`trust` -> `pattern-id` -> `hall` -> `episode` -> `sanitise` -> `recall`)
--> `health/crs` -> `prompt/narrative` -> `runtime/routing` -> `adapters/llm`
+Next dependency layers remain Phase D contract-spine work:
+`runtime/routing` -> `adapters/llm`
 -> `ui/card`,`notification` -> `adapters/*` -> `tools/permissions`,`schemas`,`handler`
 -> `core/hooks` -> `memory/skill` -> `auth/mint`,`consent`
 -> `runtime/run`,`session`,`working-memory` -> `scheduler` -> `runtime/goal`
@@ -78,9 +80,15 @@ because it depends on both.
 - [x] **Phase C hardening** — corrupt journal states now fail at the read seam; health-leak guard
   catches multi-line raw-value shapes; guard self-test added.
 - [x] **Local verification discipline** — documented in `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
-- [ ] **PR #7 mergeability** — resolve any GitHub merge conflicts, then re-run
-  `npx -y pnpm@10.34.4 verify` and `git diff --check` on the mergeable branch.
-- [ ] **Phase D contract spine** — start only after PR #7 is mergeable/merged and the fresh gate passes.
+- [x] **Phase D Wave 1 memory contracts** — `memory/pattern-id`, `trust`, `sanitise`, `hall`,
+  `episode`, and `recall`; committed locally in `03b5d49`.
+- [x] **Phase D Wave 2 CRS/prompt contracts** — `health/crs`, `prompt/skill`,
+  `prompt/narrative`, and `prompt/reasons`; included in this PR branch.
+- [x] **PR #7 mergeability** — GitHub currently reports PR #7 `OPEN`, non-draft, and `CLEAN`.
+  Re-run the local gate and GitHub mergeability check before merging.
+- [ ] **Phase D remaining waves** — routing/LLM, UI/adapters, tools/hooks, runtime
+  run/session/working-memory, full delivery, telemetry, and public DTO/OpenAPI/generated-client
+  freshness.
 
 ## Grounding flags & dispositions
 
@@ -131,15 +139,12 @@ post-review hardening commit. Do not use this historical section as the next-ses
 
 ## Current next step
 
-Before starting Phase D, make PR #7 mergeable and prove the current branch with:
+Before merging PR #7, prove the pushed branch with:
 
 ```bash
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-Then begin Phase D with a narrow contract wave, not runtime broadening. The first safe wave is
-memory contracts from ADR-0046, provided the wave explicitly names the store ownership and avoids
-raw health values, live providers, production data, and public DTO derivation from internal schemas.
-Done for the first Phase D wave means exact schemas, valid/invalid tests, source refs, and a green
-merge gate. Runtime expansion resumes only when the relevant contract seam exists.
+After PR #7 lands on `main`, the next safe unit is Phase D Wave 3: routing/LLM contracts with fake
+providers only. Do not broaden runtime implementation before the relevant contract seam exists.

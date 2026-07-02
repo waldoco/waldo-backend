@@ -3,9 +3,9 @@
 // Invariant under test: one destination vocabulary, five ordered fail-closed checks with the
 // ADR-pinned regex set, destination-aware health rules, exact caps/markers/audit codes, and a
 // taint stamp that can never pair 'external' with a trust class above 'inferred'.
-// Failure mode caught: silent spec drift — a loosened regex, a re-ordered check, a 'peak'
-// Form band, a resized cap, or a taint escalation — each of which the runtime sanitiser
-// would inherit as a privacy or injection hole.
+// Failure mode caught: silent spec drift — a loosened regex, a re-ordered check, a resized
+// cap, or a taint escalation — each of which the runtime sanitiser would inherit as a
+// privacy or injection hole. Zone-descriptor vocabulary drift is health/crs territory.
 //
 // Destination-enum divergence (documented per the wave decision): ADR-0024 internally carries
 // THREE destination vocabularies — the 9-literal SanitiseDestination type ('memory_blocks'
@@ -19,18 +19,14 @@ import {
   CANARY_REGEX,
   DERIVED_SCORE_PATTERNS,
   derivedScoreActionSchema,
-  formZoneOf,
-  formZoneSchema,
   HEALTH_DESTINATION_RULES,
   healthRuleSchema,
   INSTRUCTION_PATTERNS,
   INSTRUCTION_REJECT_THRESHOLD,
-  loadZoneSchema,
   MEMORY_BLOCK_CONTENT_MAX,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
   rawSensorActionSchema,
-  recoveryZoneSchema,
   redactionKindSchema,
   redactionSchema,
   SANDBOX_SANITISE_FAILURE_TEXT,
@@ -240,29 +236,6 @@ describe('check 2 — health value lockout', () => {
     for (const rule of Object.values(HEALTH_DESTINATION_RULES)) {
       expect(healthRuleSchema.safeParse(rule).success).toBe(true);
     }
-  });
-});
-
-describe('zone descriptors', () => {
-  it("Form/CRS top band is 'energized' — 'peak' fails Form but stays valid for Load", () => {
-    expect(formZoneSchema.options).toEqual(['energized', 'steady', 'flagging', 'depleted']);
-    expect(formZoneSchema.safeParse('peak').success).toBe(false);
-    expect(loadZoneSchema.safeParse('peak').success).toBe(true);
-  });
-
-  it('Recovery and Load descriptor tuples are exact, in order', () => {
-    expect(recoveryZoneSchema.options).toEqual(['excellent', 'solid', 'mixed', 'compromised']);
-    expect(loadZoneSchema.options).toEqual(['light', 'moderate', 'heavy', 'peak']);
-  });
-
-  it('formZoneOf maps the ADR band boundaries exactly', () => {
-    expect(formZoneOf(100)).toBe('energized');
-    expect(formZoneOf(80)).toBe('energized');
-    expect(formZoneOf(79)).toBe('steady');
-    expect(formZoneOf(60)).toBe('steady');
-    expect(formZoneOf(59)).toBe('flagging');
-    expect(formZoneOf(40)).toBe('flagging');
-    expect(formZoneOf(39)).toBe('depleted');
   });
 });
 

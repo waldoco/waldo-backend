@@ -26,7 +26,7 @@ The agent roster + dev-QA loop below is repo-specific. It sits on top of the uni
 ### Review (run before merging any PR)
 - **`security-reviewer`** — Encryption, RLS, secrets, prompt injection, privacy. Run on any health data path change.
 - **`health-data-reviewer`** — Null handling, personal baselines, Samsung HRV gap, edge cases.
-- **`crs-validator`** — CRS algorithm validation against spec formulas. Run if touching `core/crs/`.
+- **`crs-validator`** — CRS algorithm validation against spec formulas. Run if touching `packages/contracts/src/health/crs.ts` or later CRS runtime code.
 - **`soul-file-reviewer`** — Waldo's personality, conversation quality, medical claims. Run before any soul file deploy.
 
 ### Testing
@@ -60,7 +60,11 @@ Run `security-reviewer` when touching:
 - `/tdd` — red-green-refactor loop for any new core logic
 - `/diagnose` — root cause analysis for bugs and unexpected behavior
 - `/zoom-out` — step back and evaluate if approach is right
+- `/break-feature` — adversarial feature break pass before marking a feature done
+- `/review-all` — broad multi-surface review before merge
+- `/phase-handoff` — write the next-session handoff after a phase/wave
 - `/new-adapter` — scaffold a new adapter implementation
-- `/check-contract` — verify code matches @waldo/types contract
+- `/check-contract` — verify implementation code matches `packages/contracts`
 - `/run-eval` — run the agent eval suite (tools/eval/run-suite.ts)
 - `/write-a-skill` — create a new skill for this repo
+- `/session-bus` — cross-session state handoff; invoke at session start and end

@@ -242,12 +242,16 @@ Done evidence:
 
 Resume contract waves only after PR #7 is mergeable/merged and the fresh gate passes.
 
-Suggested wave order:
+Current wave status:
+
+- Done: Wave 1 memory contracts.
+- Done: Wave 2 CRS/prompt contracts.
+- Remaining: Waves 3-9.
+
+Remaining wave order:
 
 ```text
-memory
--> crs/prompt
--> routing/llm
+routing/llm
 -> ui/adapters
 -> tools/hooks
 -> runtime
@@ -265,10 +269,10 @@ Per wave:
 - Barrier: `pnpm verify`, ADR drift review, and a focused security/privacy
   review.
 
-Recommended first safe unit:
+Recommended next safe unit after PR #7 lands:
 
 ```text
-Wave 1: memory contracts from ADR-0046
+Wave 3: routing/LLM contracts with fake providers only
 ```
 
 Done criteria:
@@ -323,15 +327,13 @@ blocker. Do not start Phase D on an unmergeable or red foundation.
 
 Complete Phase D in this wave order, with a hard verify barrier after every wave:
 
-1. memory contracts from ADR-0046
-2. crs/prompt contracts
-3. routing/llm contracts with fake providers only
-4. ui/adapters contracts
-5. tools/hooks contracts
-6. runtime run/session/working-memory contracts, reconciling Phase C's reduced FSM
-7. full delivery policy beyond the fetch_alert tracer path
-8. telemetry contracts
-9. public DTOs, OpenAPI emitter, and generated-client freshness
+1. routing/llm contracts with fake providers only
+2. ui/adapters contracts
+3. tools/hooks contracts
+4. runtime run/session/working-memory contracts, reconciling Phase C's reduced FSM
+5. full delivery policy beyond the fetch_alert tracer path
+6. telemetry contracts
+7. public DTOs, OpenAPI emitter, and generated-client freshness
 
 For each wave:
 - name the owning ADRs and DeepWiki pages before writing

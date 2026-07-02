@@ -1,4 +1,4 @@
-# Codex Review Handoff - PR #7 Foundation A/B/C
+# Codex Review Handoff - PR #7 Foundation A/B/C + Phase D Waves 1-2
 
 > Claude builds; Codex audits adversarially. Treat reports from any authoring
 > workflow as leads, not proof. Re-run commands and inspect source before
@@ -27,6 +27,19 @@ Foundation Phases A/B/C are built:
 5. Phase C hardening: journal reads validate persisted FSM/verdict values,
    multi-line raw-health leak patterns are covered, and guard self-tests prove
    the health guard catches its own target shapes.
+6. Phase D Wave 1: memory contracts are built from current ADR-0046 canon,
+   including trust dominance, value-free pattern IDs, hall ACLs, sanitiser
+   vocabulary, episode recall hits, and the recall gateway.
+7. Phase D Wave 2: CRS/prompt contracts are built, including CRS zone/source
+   vocabulary, derived-only narrative context, skill loader contract, and
+   REASONS prompt layer/fence contracts.
+
+Branch status to verify at handoff:
+
+- `greenfield/harness-foundation` carries Phase D Wave 1 and Wave 2 on top of
+  the A/B/C foundation.
+- GitHub should report PR #7 `OPEN`, non-draft, and `CLEAN`; re-check after
+  every push before merging.
 
 ## Fresh Orientation
 
@@ -49,6 +62,9 @@ Contracts:
 
 - `packages/contracts/src/core/*`
 - `packages/contracts/src/model/roster.ts`
+- `packages/contracts/src/health/crs.ts`
+- `packages/contracts/src/memory/*`
+- `packages/contracts/src/prompt/*`
 - `packages/contracts/src/runtime/*`
 
 Runtime substrate and tracer:
@@ -81,8 +97,6 @@ ship the full harness.
 
 Still missing before broad developer build-out:
 
-- full memory contract spine from ADR-0046
-- CRS/prompt contracts
 - routing/LLM provider contracts
 - UI/adapters/tools/hooks contracts
 - full run/session/working-memory contracts
@@ -125,16 +139,23 @@ Block or flag immediately if you find:
 
 ## Phase D Recommendation To Challenge
 
-Do not start Phase D until PR #7 is mergeable/merged and the fresh local gate
-passes.
+Do not continue Phase D until PR #7 is mergeable/merged and the fresh local gate
+passes on the pushed branch.
 
-Recommended first safe unit:
+Completed safe units:
 
 ```text
 Wave 1: memory contracts from ADR-0046
+Wave 2: CRS/prompt contracts from ADR-0011/0028
 ```
 
-Done criteria:
+Next safe unit after PR #7 lands:
+
+```text
+Wave 3: routing/LLM contracts with fake providers only
+```
+
+Continuing criteria:
 
 - exact Zod schemas and exported types
 - valid and invalid tests that catch enum, field, trust-order, and raw-value drift
@@ -147,7 +168,7 @@ Done criteria:
 ## Review Output Format
 
 1. Executive verdict: pass/block for PR #7 and pass/block for starting Phase D.
-2. Current foundation map: what exists, what is tracer-only, what is missing.
+2. Current foundation map: what exists, what is tracer-only, and which Phase D waves remain.
 3. Findings: severity-ranked with `file:line`.
 4. Testing/local-dev verdict.
 5. Phase D readiness and the exact next safe unit of work.

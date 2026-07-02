@@ -121,27 +121,6 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
   audit_log: { raw_sensor: 'redact', derived_score: 'redact' },
 };
 
-// The top Form/CRS band is 'energized' — 'peak' belongs to Load alone (ratified ADR-0024
-// reconciliation with the canonical crs zone enum). The CRS contract takes ownership of these
-// literals when the health wave lands; sanitise references, crs owns.
-export const formZoneSchema = z.enum(['energized', 'steady', 'flagging', 'depleted']);
-export type FormZone = z.infer<typeof formZoneSchema>;
-
-export const recoveryZoneSchema = z.enum(['excellent', 'solid', 'mixed', 'compromised']);
-export type RecoveryZone = z.infer<typeof recoveryZoneSchema>;
-
-export const loadZoneSchema = z.enum(['light', 'moderate', 'heavy', 'peak']);
-export type LoadZone = z.infer<typeof loadZoneSchema>;
-
-// The redact-to-zone transform for Form/CRS (ADR-0024 bands: 80-100 / 60-79 / 40-59 / <40).
-// Recovery and Load descriptors carry no ADR-pinned numeric bands, so no mapper exists yet.
-export function formZoneOf(score: number): FormZone {
-  if (score >= 80) return 'energized';
-  if (score >= 60) return 'steady';
-  if (score >= 40) return 'flagging';
-  return 'depleted';
-}
-
 // Check 3 — PII is redacted, never rejected (ADR-0024 false-positive policy: uncertainty
 // defaults to redact + allow). Attendee names and street addresses use heuristics owned by
 // the runtime; these four are the pinned regex forms.

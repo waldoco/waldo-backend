@@ -23,8 +23,12 @@ Current facts:
 - Phase C is still a tracer, not the full contract spine. It proves one
   scheduled path in workerd: `DO alarm -> Loop Governor -> run journal ->
   DeliveryGate -> outbox -> fake sink`, including crash/resume exactly-once.
-- Next work is Phase D contract-spine waves after PR #7 is mergeable/merged and
-  a fresh gate passes. Do not replay A/B/C unless a regression forces it.
+- Phase D Wave 1 is built: memory contracts from ADR-0046/0005/0006/0024/0031/0037.
+- Phase D Wave 2 is built: CRS and prompt contracts from ADR-0011/0028, with
+  health-zone vocabulary owned by `packages/contracts/src/health/crs.ts`.
+- Next work is Phase D Wave 3: routing/LLM contracts with fake providers only,
+  after PR #7 is mergeable/merged and a fresh gate passes. Do not replay A/B/C
+  or Waves 1-2 unless a regression forces it.
 - `@waldo/types` and legacy `waldo-types` references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
