@@ -19,6 +19,14 @@ const LEAK_CASES = [
     code: 'const msg = `resting heart rate\n is ${88} bpm`;\n',
   },
   { name: 'sink call spread over lines', code: 'console.log(\n  "spo2",\n  95,\n);\n' },
+  // Structured/serialized payloads: quoted values, snake_case keys, and camelCase quoted ratios —
+  // the shape health data actually takes in JSON/object literals, which prose-only detectors miss.
+  { name: 'quoted raw value', code: 'const p = { hrv: "42" };\n' },
+  { name: 'snake_case structured key', code: 'const p = { body_weight: 82 };\n' },
+  { name: 'camelCase quoted ratio', code: 'const p = { bloodPressure: "140/90" };\n' },
+  { name: 'unit-suffixed key', code: 'const p = { hrv_ms: 42, weight_kg: 82 };\n' },
+  { name: 'bare bp quoted ratio', code: 'const p = { bp: "140/90" };\n' },
+  { name: 'bp systolic/diastolic aliases', code: 'const p = { bpSys: 140, bpDia: 90 };\n' },
 ];
 
 function runGuardOn(root) {
@@ -51,6 +59,33 @@ const clean = withFixture('clean.ts', 'const zone = "peak";\nconst threshold = 4
 if (clean.stderr.trim() !== '') {
   process.stderr.write(
     `guards-selftest: guard-health-leak FALSE POSITIVE on a clean file:\n${clean.stderr}`,
+  );
+  failures += 1;
+}
+
+// Zone-only prose is the sanctioned external form: derived zone words carry no raw number, so the
+// raw-sensor wall must let them through even alongside an unrelated numeric literal.
+const zoneProse = withFixture(
+  'zone.ts',
+  'const note = "recovery solid, form energized";\nconst pct = 42;\n',
+  runGuardOn,
+);
+if (zoneProse.stderr.trim() !== '') {
+  process.stderr.write(
+    `guards-selftest: guard-health-leak FALSE POSITIVE on zone-only prose:\n${zoneProse.stderr}`,
+  );
+  failures += 1;
+}
+
+// Bare `bp` without a ratio/mmHg unit is ambiguous with basis points and must not be blocked.
+const basisPoints = withFixture(
+  'basis-points.ts',
+  'const change = { bp: 3, note: "basis points move" };\n',
+  runGuardOn,
+);
+if (basisPoints.stderr.trim() !== '') {
+  process.stderr.write(
+    `guards-selftest: guard-health-leak FALSE POSITIVE on basis-points shorthand:\n${basisPoints.stderr}`,
   );
   failures += 1;
 }

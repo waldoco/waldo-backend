@@ -12,7 +12,11 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 const NAME = 'guard-health-leak';
-export const DISPOSITION = 'warn';
+// block: a raw-health finding fails the CI wall — an Art-9 leak into agent_logs / DO SQLite / R2 /
+// prompts / traces is a high-cost violation. The detectors are bounded (a health token paired with a
+// raw number in an assignment / label / template / log-sink position; tests, guards, and non-code
+// files are skipped), and the tree is clean, so the wall blocks without false positives.
+export const DISPOSITION = 'block';
 
 const REPO_ROOT = join(process.cwd());
 const DEFAULT_ROOTS = ['packages', 'scripts', '.github'];
@@ -35,6 +39,8 @@ const HEALTH_TOKENS = [
   'weight',
   'body[_\\s-]?weight',
   'blood[_\\s-]?pressure',
+  'bp[_\\s-]?sys(?:tolic)?',
+  'bp[_\\s-]?dia(?:stolic)?',
   'systolic',
   'diastolic',
   'calorie[_\\s-]?burn',
@@ -47,8 +53,18 @@ const HEALTH_TOKENS = [
 // A raw numeric literal: integer or decimal, standalone (not part of an identifier).
 const NUM = '(?<![\\w.])\\d+(?:\\.\\d+)?';
 
-// Case-insensitive, word-boundary-anchored health-token alternation.
-const TOKEN = `\\b(?:${HEALTH_TOKENS.join('|')})\\b`;
+// Bare `bp` is ambiguous with basis points, so it is not in HEALTH_TOKENS. It only trips on
+// blood-pressure-shaped values: a systolic/diastolic ratio or an mmHg unit.
+const BP_VALUE = `${NUM}\\s*\\/\\s*${NUM}|${NUM}\\s*mmhg\\b`;
+
+// Units that appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg). Mirrors the
+// sanitiser RAW_SENSOR vocabulary so committed code carrying a unit-suffixed health key is caught.
+const UNIT = 'ms|millisec|bpm|beats|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|hours?|hrs?|mins?|minutes?';
+
+// Case-insensitive health-token alternation with an OPTIONAL glued unit suffix, so a snake/camelCase
+// key like `hrv_ms` / `weightKg` is matched. The trailing \b is dropped because the detector's
+// separator (or unit) follows the token; a bounded unit list keeps the suffix from over-consuming.
+const TOKEN = `\\b(?:${HEALTH_TOKENS.join('|')})(?:[_\\s-]?(?:${UNIT}))?`;
 
 // Detectors. Each returns a human-readable reason when it matches a health token
 // paired with a raw number (in assignment/interpolation/label position) or emitted
@@ -60,10 +76,21 @@ const TOKEN = `\\b(?:${HEALTH_TOKENS.join('|')})\\b`;
 // bounded gap windows instead of same-line anchors.
 const DETECTORS = [
   {
-    // Assignment / object property to a raw number:  hrv = 42 · sleepHours:\n  7.5 · "spo2": 95
+    // Bare BP abbreviation: catch blood-pressure-shaped values without turning basis-points deltas
+    // (`bp: 3`) into CI noise.
+    reason: 'blood pressure value assigned to a raw numeric literal',
+    re: new RegExp(
+      `\\bbp\\s*["'\`]?\\s*[:=]\\s*["'\`]?\\s*(?:${BP_VALUE})`,
+      'gi',
+    ),
+  },
+  {
+    // Assignment / object property to a raw number, incl. QUOTED values (`hrv: "42"`, `"spo2":"96"`)
+    // — the optional quote on either side of [:=] catches the serialized-payload shape, not only
+    // prose:  hrv = 42 · sleepHours:\n  7.5 · "spo2": 95 · body_weight: "82"
     reason: 'health value assigned to a raw numeric literal',
     re: new RegExp(
-      `${TOKEN}\\s*["'\`]?\\s*[:=]\\s*${NUM}`,
+      `${TOKEN}\\s*["'\`]?\\s*[:=]\\s*["'\`]?\\s*${NUM}`,
       'gi',
     ),
   },
