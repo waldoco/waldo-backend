@@ -18,6 +18,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { errorCodeSchema } from '../core/error';
+import { triggerTypeSchema } from '../core/trigger';
 import {
   externalToolResultSchema,
   GENERAL_AGENT_TOOLS,
@@ -26,7 +27,7 @@ import {
   taintGateBlocksDirectExecution,
   toolResultSchema,
 } from './handler';
-import { LAZY_DISCOVERY_TRIGGERS } from './permissions';
+import { LAZY_DISCOVERY_TRIGGERS, TOOL_PERMISSIONS } from './permissions';
 
 const echoSchema = z.strictObject({ echo: z.string() });
 const resultSchema = toolResultSchema(echoSchema);
@@ -116,25 +117,42 @@ describe('externalToolResultSchema — ADR-0049 taint stamp', () => {
 });
 
 describe('privileged-action set — ADR-0049', () => {
-  it('is exactly the nine ADR-named privileged tools, in union order', () => {
+  it('is exactly every direct external mutation or send, in tool-union order', () => {
+    // ADR-0049: "a privileged action is any external mutation or send." The set is the full
+    // superset — the connector/copilot writes AND the MCP write bridge AND every thread/message
+    // mutation (create/delete/restore/archive/topics) — so tainted content can drive none of
+    // them straight to execution. Union order is contract (permissions.toolNameSchema).
     expect(PRIVILEGED_ACTION_TOOLS).toEqual([
       'update_memory',
       'execute_action',
       'send_message',
+      'call_mcp_tool',
       'write_task',
       'update_task',
       'draft_document',
       'draft_email',
       'propose_schedule',
       'write_sheet_cell',
+      'create_thread',
+      'delete_message',
+      'restore_message',
+      'archive_thread',
+      'update_thread_topics',
     ]);
   });
 
-  it("excludes 'propose_action' — it IS the human-confirm route", () => {
+  it("excludes 'propose_action' — it IS the human-confirm route the gate falls back to", () => {
     expect(PRIVILEGED_ACTION_TOOLS).not.toContain('propose_action');
   });
 
-  it("excludes 'execute_code' — zero ACLs (ADR-0050) already make it undispatchable", () => {
+  it("excludes 'execute_code' — ADR-0050 zero-ACL makes it undispatchable; Phase-3 ACL re-entry MUST add it here", () => {
+    // The exclusion is sound ONLY while execute_code is unreachable. Coupling the two facts in
+    // one test forces a conscious revisit: if any Phase-3 change grants execute_code an ACL,
+    // this premise breaks and the same change must add it to PRIVILEGED_ACTION_TOOLS.
+    const unreachable = triggerTypeSchema.options.every(
+      (t) => !TOOL_PERMISSIONS[t].includes('execute_code'),
+    );
+    expect(unreachable).toBe(true);
     expect(PRIVILEGED_ACTION_TOOLS).not.toContain('execute_code');
   });
 });
@@ -158,14 +176,43 @@ describe('taint gate — hostile path (ADR-0049)', () => {
     }
   });
 
+  it('blocks the message/thread-mutation and MCP-write tools — the §6.2 omissions this PR closes', () => {
+    // Named explicitly (not only via the set loop above) so a future narrowing of the set is a
+    // visible, deliberate test edit. A hostile web/MCP result asking Waldo to delete a message,
+    // rewrite thread topics, or drive an MCP write must route through propose_action or block.
+    const newlyCovered = [
+      'call_mcp_tool',
+      'create_thread',
+      'delete_message',
+      'restore_message',
+      'archive_thread',
+      'update_thread_topics',
+    ] as const;
+    for (const tool of newlyCovered) {
+      expect(taintGateBlocksDirectExecution(tool, 'external')).toBe(true);
+    }
+  });
+
   it('leaves reads off tainted content executable — the gate guards mutations, not analysis', () => {
-    expect(taintGateBlocksDirectExecution('get_crs', 'external')).toBe(false);
-    expect(taintGateBlocksDirectExecution('search_episodes', 'external')).toBe(false);
+    for (const tool of ['get_crs', 'read_memory', 'search_episodes', 'search_connector'] as const) {
+      expect(taintGateBlocksDirectExecution(tool, 'external')).toBe(false);
+    }
+  });
+
+  it('leaves the external-source READ tools executable — reading tainted content is their whole job', () => {
+    // web_search / read_document PULL external text; gating them would defeat the general agent.
+    // Only call_mcp_tool — a write bridge, not a reader — is gated among the three general tools.
+    expect(taintGateBlocksDirectExecution('web_search', 'external')).toBe(false);
+    expect(taintGateBlocksDirectExecution('read_document', 'external')).toBe(false);
+    expect(taintGateBlocksDirectExecution('call_mcp_tool', 'external')).toBe(true);
   });
 
   it('passes untainted privileged actions — the gate composes with autonomy (ADR-0018), not replaces it', () => {
+    // Proves no authority blocks on taint === external alone: an untainted privileged tool is
+    // never gated here, and a tainted read is never gated above — only tainted ∧ privileged trips.
     expect(taintGateBlocksDirectExecution('update_task', null)).toBe(false);
     expect(taintGateBlocksDirectExecution('execute_action', null)).toBe(false);
+    expect(taintGateBlocksDirectExecution('delete_message', null)).toBe(false);
   });
 });
 

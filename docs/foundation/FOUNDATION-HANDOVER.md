@@ -15,12 +15,12 @@
 - **Baseline is green.** `pnpm verify` on `main@0d4dd26`: 1070 contract tests + 18 workerd tests + 8 guards, clean tree.
 - **The contract spine is safe to build *contracts* against.** Every persisted/egress DTO is a strict Zod object; field-shaped raw-health injection is structurally unrepresentable and pinned by ~9 test files.
 - **The runtime is essentially unbuilt.** Only the Phase-C scheduled tracer executes; the full harness loop, the DO scheduler multiplexer, the delivery flusher, and the sanitiser runtime do not exist. Do not read "contracts shipped" as "runtime built."
-- **Three pre-existing findings surfaced (§6), none introduced by this PR, none blocking a contract-only PR.** The **HIGH** (Art-9) Scribe-sanitiser-vocabulary finding is **RESOLVED in PR #13** (widened to structured payloads on a precision model + guard flipped to block). Two **MEDIUM** remain open: the ADR-0049 taint-gate authority (§6.2, needs a founder call) and exactly-once *delivery* (§6.3, SLICE-3).
+- **Three pre-existing findings surfaced (§6), none introduced by this PR, none blocking a contract-only PR.** The **HIGH** (Art-9) Scribe-sanitiser-vocabulary finding is **RESOLVED in PR #13** (widened to structured payloads on a precision model + guard flipped to block). The **MEDIUM** ADR-0049 taint-gate authority is **RESOLVED** on `foundation/taint-gate-authority` (single authority `taintGateBlocksDirectExecution`; external-taint primitive relocated to `memory/sanitise`; `PRIVILEGED_ACTION_TOOLS` widened 9→15). One **MEDIUM** remains open: exactly-once *delivery* (§6.3, SLICE-3).
 - **This PR (SLICE-1)** widens the Loop Governor from a two-field sliver to the full ADR-0074 manifest + arbiter precedence + fail-closed admission registry. Contract-only + a minimal tracer-compat patch. No DDL, no runtime, no new provider surface.
 
 **When can other agents start building runtime logic?** Not yet, and not uniformly:
 - **Contract waves** (SLICE-2 delivery-policy, telemetry, public DTO) — start now, single-writer per file (§7).
-- **Runtime waves** (delivery flusher, scheduler multiplexer, sanitiser runtime, full run-FSM) — gated on (a) the HIGH sanitiser finding fixed, (b) a DO-runtime test substrate proving exactly-once *delivery* across real cross-instance eviction (today only an in-process fake sink corroborates it), (c) the ADR-0049 taint-gate authority decided.
+- **Runtime waves** (delivery flusher, scheduler multiplexer, sanitiser runtime, full run-FSM) — gated on a DO-runtime test substrate proving exactly-once *delivery* across real cross-instance eviction (today only an in-process fake sink corroborates it). The other two former gates are cleared: the HIGH sanitiser finding (PR #13) and the ADR-0049 taint-gate authority (`foundation/taint-gate-authority`).
 
 ---
 
@@ -55,7 +55,7 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | Delivery-policy table | 0068 | partial-contract | ❌ | ⚠️ | `fetch_alert`-literal slice; verdict `send\|hold\|degrade\|drop` ✓, exempt-cap invariant ✓. Needs 10-member push-class enum, `DeliveryPolicyRow`, tier budget, held-candidates, widened Admission → **SLICE-2**. |
 | Routing + model policy | 0069 | partial-contract | ✅ | ✅ | Roster + routing rows present; shadow-eval + cost/escalation telemetry deferred. |
 | **Loop Governor** | **0074** | **contract-only¹** | ❌ | ✅ | **This PR (SLICE-1)** ships the full manifest + arbiter + fail-closed registry. Runtime arbiter comparator, per-run budget/kill enforcement, dedup, no-progress guard (`loop_progress` table) → **SLICE-3**. |
-| Tools / ACL / auth | 0008/0032/0033 | contract-only | ✅ | ⚠️ | ACL map + mint + consent solid. Taint→privileged-action gate ships two unreconciled functions; authority "OPEN, not decided" (finding §6.2). |
+| Tools / ACL / auth | 0008/0032/0033 | contract-only | ✅ | ✅ | ACL map + mint + consent solid. Taint→privileged-action gate authority **RESOLVED** (`foundation/taint-gate-authority`, §6.2): single authority `taintGateBlocksDirectExecution` (external ∧ privileged), `PRIVILEGED_ACTION_TOOLS` widened 9→15, primitive single-owned in `memory/sanitise`. Runtime dispatcher wiring still deferred to the SLICE-3 wave. |
 | Memory + Scribe sanitiser | 0024/0046 | contract-only | ❌ | ✅ | Contracts complete + consistent. Raw-sensor vocabulary widened to full Art-9 + structured payloads + precision, guard now blocks (§6.1 fixed, PR #13). `sanitise()` runtime still absent. |
 | Contract SoT + tracer boundary | 0029 | built | ✅ | ✅ | Barrel exports + tracer clearly labelled + no HTTP path reaches `TracerDO` (404). Point-in-time safe; re-check when a product route lands. |
 
@@ -104,10 +104,10 @@ All three are pre-existing on `main`, latent (no runtime executes them today), a
 - **Fixed (PR #13):** `RAW_SENSOR_PATTERNS` rebuilt with unit-suffix + quoted-value + BP-ratio coverage and a precision model — specific tokens (hrv/spo2/systolic/blood pressure/body weight/…) match on any separator; **hr/weight take a bare number on a colon/equals key** (the real wearable-field shape) but need a unit on bare whitespace; bp needs a ratio or mmHg; sleep needs a duration unit — so whitespace prose (a duration, a graph edge weight, a basis-points delta, a backoff) is not over-redacted. **Art-9 fail-safe trade:** a colon-keyed non-health token (e.g. an HR-team count) is over-redacted rather than risk a missed reading — a rejected write is recoverable, a leaked body weight is not. `guard-health-leak` flipped `warn`→`block` + gained unit-suffix tolerance; `guards-selftest` proves quoted/snake/camel/unit-suffix leaks fail CI and zone prose passes. Derived via a 4-agent adversarial sweep + deterministic node verification; the bare-colon-key recall regression from the first cut was caught in review and fixed. Mutation-proven non-vacuous.
 - **Remaining (cross-repo follow-up):** amend ADR-0024's canonical §Check-2 block in `waldo-brain` to match the widened set. **Residual** (deterministic-floor limits — the ADR-0074 §Move1.4 grader's job, not this floor): a value nested under an inner key (`hrv: { quantity: 42 }`), a word between key and number (`hrv: approx 42`), CSV commas, and health metrics outside these families (glucose / bmi / temperature / vo2max / respiratory rate) — the latter is the metric-vocabulary curation the ADR-0024 amendment should settle.
 
-### 6.2 [MEDIUM] ADR-0049 taint→privileged-action gate ships two unreconciled authorities
-- **Where:** `packages/contracts/src/core/hooks.ts:155-159` (gate slot `priority: null`, "OPEN, not decided"), `tools/handler.ts:70-72` (`taintGateBlocksDirectExecution`, tool-scoped) vs `hooks.ts:163` (`taintGateTrips`, tool-agnostic). `PRIVILEGED_ACTION_TOOLS` omits `delete_message`/`restore_message`/`archive_thread`/`update_thread_topics`/`call_mcp_tool`.
-- **What:** a future dispatcher wiring the tool-scoped gate would let external-tainted content drive message-mutation/MCP-write without routing through `propose_action` — contradicting ADR-0049's own verification text.
-- **Fix (own PR + founder call on the authority):** pick one of — add the omitted tools to `PRIVILEGED_ACTION_TOOLS`; or collapse to `taintGateTrips` as the single authority; or per-handler `autonomy_gated`. Add a hostile-fixture test. **Do not** bundle into a governor PR — it is a security-boundary design decision.
+### 6.2 [MEDIUM · Art-9/injection] ADR-0049 taint→privileged-action gate authority — RESOLVED on `foundation/taint-gate-authority` (open → main)
+- **Was:** two unreconciled authorities — `tools/handler.ts` `taintGateBlocksDirectExecution` (tool-scoped, correct shape, but its list omitted `call_mcp_tool`/`create_thread`/`delete_message`/`restore_message`/`archive_thread`/`update_thread_topics`) vs `core/hooks.ts` `taintGateTrips` (tool-agnostic — would over-block reads). A dispatcher wiring the tool-scoped gate would let external-tainted content drive message/thread mutation + MCP writes without routing through `propose_action`, contradicting ADR-0049's own verification text.
+- **Fixed:** the founder call (conservative single authority) landed. `taintGateBlocksDirectExecution` is now the **single** gate authority (`external ∧ privileged`); `PRIVILEGED_ACTION_TOOLS` widened 9→15 to cover every direct external mutation/send/MCP-write/thread-message mutation (in tool-union order); `propose_action` (human-confirm route) and `execute_code` (ADR-0050 zero-ACL, pinned by a coupling guard) stay excluded. The external-taint primitive relocated to `memory/sanitise` (`EXTERNAL_SOURCE_TAINT` + `isExternalSourceTaint`) as the single vocabulary owner — the three trust/laundering refines route through it, so a constant rename cannot fail open — and `taintGateTrips` was removed. Hostile fixtures for every newly-covered tool + tainted-read-allowed paths; mutation-proven non-vacuous. The `TAINT_PRIVILEGED_ACTION_GATE` registration slot (still `priority: null`) remains for the dispatcher to place.
+- **Remaining (runtime, deferred — the SLICE-3 dispatcher wave, NOT this contract PR):** the dispatcher must call `taintGateBlocksDirectExecution` at PreToolUse around every privileged dispatch, resolve the open slot ordering / merge-with-autonomy-gate question, and thread taint provenance from tool-result → privileged-action arguments end-to-end. The contract half is proven; the security guarantee is real only once that wiring lands and is itself tested.
 
 ### 6.3 [MEDIUM] Exactly-once *delivery* is unproven (enqueue is airtight)
 - **Where:** `packages/runtime/src/tracer/tracer-do.ts:123-126` (`flushOutbox` calls `sink.send()` with no `ack_recorded` guard); `sink.ts:9-14` (sink contract imposes no dedupe duty; the only dedupe is a process-local `Map` in the fake).
@@ -182,14 +182,15 @@ Pick ONE of these, single-writer, contract-only unless noted, tests-first, its o
    mutation-proven. Remaining sliver: amend ADR-0024's canonical §Check-2 block in waldo-brain
    (cross-repo). (Finding §6.1.)
 
-3. ADR-0049 taint-gate reconciliation (ADR-0049/0032) — own PR + a founder call on the authority
-   (add omitted tools to PRIVILEGED_ACTION_TOOLS | collapse to taintGateTrips | per-handler
-   autonomy_gated). Hostile-fixture test. (Finding §6.2 — needs human-visible decision.)
+3. DONE on `foundation/taint-gate-authority` — ADR-0049 taint-gate authority reconciled (conservative
+   single authority): `taintGateBlocksDirectExecution` is the sole gate (external ∧ privileged),
+   `PRIVILEGED_ACTION_TOOLS` widened 9→15, external-taint primitive relocated to `memory/sanitise`
+   (`isExternalSourceTaint`), `taintGateTrips` removed. Hostile fixtures + mutation-proven. (Finding §6.2.)
 
 Do NOT: start the DO runtime (SLICE-3, delivery flusher, scheduler multiplexer, sanitiser runtime,
-full run-FSM) until (a) PR #13 (§6.1 sanitiser hardening) has merged, (b) a cross-eviction
-@cloudflare/vitest-pool-workers substrate proves exactly-once DELIVERY (not just enqueue), (c) §6.2
-authority is decided. Do NOT
+full run-FSM) until a cross-eviction @cloudflare/vitest-pool-workers substrate proves exactly-once
+DELIVERY (not just enqueue). The other two former gates are cleared: PR #13 (§6.1 sanitiser
+hardening) and §6.2 taint-gate authority (DONE on foundation/taint-gate-authority). Do NOT
 broaden into telemetry, public DTOs, OpenAPI, or generated clients in the same PR as a contract seam.
 
 Use dynamic workflows for research/review/attack/disjoint modules only; keep runtime + shared

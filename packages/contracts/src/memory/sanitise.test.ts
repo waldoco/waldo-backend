@@ -19,10 +19,12 @@ import {
   CANARY_REGEX,
   DERIVED_SCORE_PATTERNS,
   derivedScoreActionSchema,
+  EXTERNAL_SOURCE_TAINT,
   HEALTH_DESTINATION_RULES,
   healthRuleSchema,
   INSTRUCTION_PATTERNS,
   INSTRUCTION_REJECT_THRESHOLD,
+  isExternalSourceTaint,
   MEMORY_BLOCK_CONTENT_MAX,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
@@ -433,6 +435,19 @@ describe('source taint (ADR-0049)', () => {
 
   it("rejects the legacy 'none' spelling — no external origin has one representation, null", () => {
     expect(sourceTaintSchema.safeParse('none').success).toBe(false);
+  });
+
+  it('single-sources the external literal — the schema, the primitive, and the tool gate all consume one constant', () => {
+    // Drift guard on the VALUE: renaming EXTERNAL_SOURCE_TAINT fails here, and because
+    // sourceTaintSchema (z.literal built on it) and isExternalSourceTaint both derive from this
+    // constant, they cannot disagree on what 'external' means. A competing hard-coded literal
+    // elsewhere is caught in review, not by this test.
+    expect(EXTERNAL_SOURCE_TAINT).toBe('external');
+  });
+
+  it('isExternalSourceTaint is external-taint DETECTION, not a gate decision — true on external, false on null', () => {
+    expect(isExternalSourceTaint(EXTERNAL_SOURCE_TAINT)).toBe(true);
+    expect(isExternalSourceTaint(null)).toBe(false);
   });
 
   it('accepts a tainted stamp at inferred trust', () => {

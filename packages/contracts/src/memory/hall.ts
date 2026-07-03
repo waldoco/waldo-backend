@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { iso8601Schema } from '../core/error';
 import { claimKeySchema, patternIdSchema } from './pattern-id';
-import { MEMORY_BLOCK_CONTENT_MAX, sourceTaintSchema } from './sanitise';
+import { isExternalSourceTaint, MEMORY_BLOCK_CONTENT_MAX, sourceTaintSchema } from './sanitise';
 import { conflictClassSchema, trustClassSchema } from './trust';
 import type { TrustClass } from './trust';
 
@@ -127,7 +127,7 @@ export const memoryInboxEntrySchema = z
   })
   // ADR-0049: whatever provenance an external-tainted proposal asserts, it lands 'inferred' —
   // which never dominates — so the injection→supersede path is unrepresentable at this seam.
-  .refine((e) => e.source_taint !== 'external' || e.source_trust === 'inferred', {
+  .refine((e) => !isExternalSourceTaint(e.source_taint) || e.source_trust === 'inferred', {
     error: 'tainted content never escalates trust class',
     path: ['source_trust'],
   });
