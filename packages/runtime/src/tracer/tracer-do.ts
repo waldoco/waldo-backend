@@ -69,7 +69,7 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     if (run === null) return;
 
     if (run.state === 'RUN_OPENED') {
-      this.journal.advance(run.run_id, admitToState(admit({ name: KIND, admit: true })));
+      this.journal.advance(run.run_id, admitToState(admit('fetch')));
     }
     if (this.journal.readState(run.run_id) === 'GOVERNOR_ADMITTED') {
       await this.runGate(run);

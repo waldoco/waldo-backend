@@ -112,9 +112,15 @@ because it depends on both.
   contracts are represented with valid/invalid tests. The Phase C tracer now writes a
   canonical one-shot `handoff` schedule row for its alarm path; this is compatibility with
   the contract, not the Durable Object scheduler/runtime implementation.
-- [ ] **Phase D remaining waves** — full governor and delivery beyond the tracer,
-  telemetry, public DTO/OpenAPI/generated-client freshness, scenario/property/mutation lanes,
-  and live/dogfood lanes.
+- [x] **Loop Governor contract (SLICE-1)** — ADR-0074 full `LoopPolicy` manifest, acute-health-first
+  arbiter `priorityTierRank`, terminal disposition enum, and the fail-closed `LOOP_POLICIES` registry
+  + `lookupLoopPolicy` + `admit(policy|null)` (null → deny). Promotes `runtime/loop-policy` from the
+  two-field tracer sliver to the full contract; the tracer now admits its fetch loop through the
+  registry. Contract-only; the runtime arbiter/budget/kill/no-progress guard remain SLICE-3.
+- [ ] **Phase D remaining waves** — delivery/outbox contract expansion (SLICE-2), the governor +
+  delivery/outbox runtime (SLICE-3, needs DDL + real DO tests), telemetry, public
+  DTO/OpenAPI/generated-client freshness, scenario/property/mutation lanes, and live/dogfood lanes.
+  See `FOUNDATION-HANDOVER.md` §5 for the 3-slice split and §6 for the tracked findings.
 
 ## Grounding flags & dispositions
 
@@ -175,6 +181,9 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The next safe unit after scheduler/goal lands is full governor plus delivery/outbox contract
-expansion. Do not broaden telemetry, public DTOs, or generated-client work before those
-runtime gates are explicit and tested.
+The Loop Governor contract (SLICE-1) has landed. The next safe unit is SLICE-2 — the delivery-policy
+contract expansion (ADR-0068), contract-only. See `FOUNDATION-HANDOVER.md` §5 (the 3-slice split of
+"full governor plus delivery/outbox") and §9 (continuation prompt). Do not start the governor/
+delivery/outbox runtime (SLICE-3) until the HIGH sanitiser finding (§6.1) is fixed and a real
+cross-eviction DO test substrate proves exactly-once delivery. Do not broaden telemetry, public
+DTOs, or generated-client work before those runtime gates are explicit and tested.
