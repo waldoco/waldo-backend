@@ -54,10 +54,13 @@ Landed foundation sequence:
 6. Phase D Wave 1: memory contract spine from ADR-0046/0005/0006/0024/0031/0037.
 7. Phase D Wave 2: CRS and prompt contracts from ADR-0011/0028, with health-zone vocabulary
    single-owned by `health/crs` and consumed by prompt contracts.
+8. Phase D Wave 3: routing and LLM provider contracts with fake-provider seams only.
+9. Phase D Wave 4a: UI card/notification contracts and provider adapter seams for
+   health, calendar, sheet, email, and doc.
 
 Next dependency layers remain Phase D contract-spine work:
-`runtime/routing` -> `adapters/llm`
--> `ui/card`,`notification` -> `adapters/*` -> `tools/permissions`,`schemas`,`handler`
+`adapters/channel`
+-> `tools/permissions`,`schemas`,`handler`
 -> `core/hooks` -> `memory/skill` -> `auth/mint`,`consent`
 -> `runtime/run`,`session`,`working-memory` -> `scheduler` -> `runtime/goal`
 -> `governor` -> full `delivery` -> `telemetry/*` -> public DTOs + `emit-openapi`.
@@ -84,11 +87,15 @@ because it depends on both.
   `episode`, and `recall`; committed locally in `03b5d49`.
 - [x] **Phase D Wave 2 CRS/prompt contracts** — `health/crs`, `prompt/skill`,
   `prompt/narrative`, and `prompt/reasons`; included in this PR branch.
+- [x] **Phase D Wave 3 routing/LLM contracts** — `runtime/routing` and `adapters/llm`,
+  with fake-provider seams only; included in this PR branch.
+- [x] **Phase D Wave 4a UI/provider adapters** — `ui/card`, `ui/notification`, and
+  provider adapter seams for health, calendar, sheet, email, and doc; included in this PR branch.
 - [x] **PR #7 mergeability** — GitHub currently reports PR #7 `OPEN`, non-draft, and `CLEAN`.
   Re-run the local gate and GitHub mergeability check before merging.
-- [ ] **Phase D remaining waves** — routing/LLM, UI/adapters, tools/hooks, runtime
-  run/session/working-memory, full delivery, telemetry, and public DTO/OpenAPI/generated-client
-  freshness.
+- [ ] **Phase D remaining waves** — channel adapters, tools/hooks, auth minting and
+  consent, memory-skill lifecycle, runtime run/session/working-memory, full delivery,
+  telemetry, and public DTO/OpenAPI/generated-client freshness.
 
 ## Grounding flags & dispositions
 
@@ -146,5 +153,7 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-After PR #7 lands on `main`, the next safe unit is Phase D Wave 3: routing/LLM contracts with fake
-providers only. Do not broaden runtime implementation before the relevant contract seam exists.
+After PR #7 lands on `main`, start a fresh post-merge branch for the remaining Phase D contract
+spine. The next safe unit is channel adapters plus the already-planned tools/hooks/auth/memory-skill
+contracts, with exports, docs, and a fresh gate before review. Do not broaden runtime implementation
+before the relevant contract seam exists.

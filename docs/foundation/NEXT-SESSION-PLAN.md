@@ -8,15 +8,16 @@ Phase D has independent research, review, attack, and contract-wave lanes. It is
 risky if it is allowed to write runtime code concurrently across shared files or
 continue after a failed wave barrier.
 
-Phases A/B/C are complete on `greenfield/harness-foundation`. The correct next
-move is not to replay the CI wall, runtime substrate, or scheduled tracer. The
-immediate gate is:
+Phases A/B/C and Phase D Waves 1-4a are complete on `greenfield/harness-foundation`.
+The correct next move is not to replay the CI wall, runtime substrate, scheduled
+tracer, routing/LLM contracts, or completed UI/provider adapter seams. The immediate
+gate is:
 
 ```text
 resolve PR #7 mergeability
 -> npx -y pnpm@10.34.4 verify
 -> git diff --check
--> Phase D contract-spine wave
+-> fresh post-merge branch for the remaining Phase D contract spine
 ```
 
 Codex remains the external adversarial audit lane after a phase or commit.
@@ -246,14 +247,19 @@ Current wave status:
 
 - Done: Wave 1 memory contracts.
 - Done: Wave 2 CRS/prompt contracts.
-- Remaining: Waves 3-9.
+- Done: Wave 3 routing/LLM contracts with fake-provider seams.
+- Done: Wave 4a UI card/notification contracts and provider adapter seams for
+  health, calendar, sheet, email, and doc.
+- Remaining: channel adapters, tools/hooks, auth minting/consent, memory-skill
+  lifecycle, runtime run/session/working-memory, delivery, telemetry, and public/OpenAPI.
 
 Remaining wave order:
 
 ```text
-routing/llm
--> ui/adapters
+channel adapters
 -> tools/hooks
+-> auth minting/consent
+-> memory-skill lifecycle
 -> runtime
 -> delivery
 -> telemetry
@@ -272,12 +278,13 @@ Per wave:
 Recommended next safe unit after PR #7 lands:
 
 ```text
-Wave 3: routing/LLM contracts with fake providers only
+Fresh post-merge PR: channel adapters, tools/hooks, auth minting/consent,
+and memory-skill lifecycle contracts, with exports and docs before runtime expansion.
 ```
 
 Done criteria:
 
-- exact Zod schemas and exported types for the selected memory contracts
+- exact Zod schemas and exported types for the selected contract seams
 - valid and invalid tests that would fail on enum, field, or trust-order drift
 - no raw health values, live providers, production data, or public DTO derivation from internals
 - source refs named in tests or docs
@@ -299,8 +306,9 @@ After each major phase, generate a Codex adversarial-review handoff with:
 ```text
 ultracode
 
-Use Fable 5 in Claude Code dynamic workflows to complete Phase D on branch
-greenfield/harness-foundation.
+Use Fable 5 in Claude Code dynamic workflows to continue Phase D after PR #7 has
+merged. Start from updated `main` and create a fresh post-merge branch for the
+remaining contract-spine work.
 
 First read:
 - .claude/rules/INDEX.md
@@ -315,7 +323,8 @@ contract modules only. Keep runtime implementation single-writer. Keep one
 writer per shared contract surface. Parallelize reading/review/testing lanes,
 not tightly coupled writes.
 
-Phases A/B/C are already landed. First confirm PR #7 is mergeable/merged and run:
+Phases A/B/C and Phase D Waves 1-4a are already landed in PR #7. First confirm
+PR #7 is merged or mergeable, update from `main`, and run:
 
 ```bash
 npx -y pnpm@10.34.4 verify
@@ -323,17 +332,18 @@ git diff --check
 ```
 
 If PR #7 is still conflicting or the baseline gate fails, stop and report the
-blocker. Do not start Phase D on an unmergeable or red foundation.
+blocker. Do not continue Phase D on an unmergeable or red foundation.
 
-Complete Phase D in this wave order, with a hard verify barrier after every wave:
+Continue Phase D in this wave order, with a hard verify barrier after every wave:
 
-1. routing/llm contracts with fake providers only
-2. ui/adapters contracts
-3. tools/hooks contracts
-4. runtime run/session/working-memory contracts, reconciling Phase C's reduced FSM
-5. full delivery policy beyond the fetch_alert tracer path
-6. telemetry contracts
-7. public DTOs, OpenAPI emitter, and generated-client freshness
+1. channel adapter contracts
+2. tools/hooks contracts
+3. auth minting and consent contracts
+4. memory-skill lifecycle contracts
+5. runtime run/session/working-memory contracts, reconciling Phase C's reduced FSM
+6. full delivery policy beyond the fetch_alert tracer path
+7. telemetry contracts
+8. public DTOs, OpenAPI emitter, and generated-client freshness
 
 For each wave:
 - name the owning ADRs and DeepWiki pages before writing

@@ -1,4 +1,4 @@
-# Codex Review Handoff - PR #7 Foundation A/B/C + Phase D Waves 1-2
+# Codex Review Handoff - PR #7 Foundation A/B/C + Phase D Waves 1-4a
 
 > Claude builds; Codex audits adversarially. Treat reports from any authoring
 > workflow as leads, not proof. Re-run commands and inspect source before
@@ -33,10 +33,14 @@ Foundation Phases A/B/C are built:
 7. Phase D Wave 2: CRS/prompt contracts are built, including CRS zone/source
    vocabulary, derived-only narrative context, skill loader contract, and
    REASONS prompt layer/fence contracts.
+8. Phase D Wave 3: routing and LLM provider contracts are built with fake-provider
+   seams only.
+9. Phase D Wave 4a: UI card/notification contracts and provider adapter seams are
+   built for health, calendar, sheet, email, and doc.
 
 Branch status to verify at handoff:
 
-- `greenfield/harness-foundation` carries Phase D Wave 1 and Wave 2 on top of
+- `greenfield/harness-foundation` carries Phase D Waves 1-4a on top of
   the A/B/C foundation.
 - GitHub should report PR #7 `OPEN`, non-draft, and `CLEAN`; re-check after
   every push before merging.
@@ -65,6 +69,8 @@ Contracts:
 - `packages/contracts/src/health/crs.ts`
 - `packages/contracts/src/memory/*`
 - `packages/contracts/src/prompt/*`
+- `packages/contracts/src/ui/*`
+- `packages/contracts/src/adapters/*`
 - `packages/contracts/src/runtime/*`
 
 Runtime substrate and tracer:
@@ -97,8 +103,10 @@ ship the full harness.
 
 Still missing before broad developer build-out:
 
-- routing/LLM provider contracts
-- UI/adapters/tools/hooks contracts
+- channel adapter contracts
+- tools/hooks contracts
+- auth minting and consent contracts
+- memory-skill lifecycle contracts
 - full run/session/working-memory contracts
 - full scheduler and seven-schedule multiplexer
 - full delivery policy: counted budget paths, priority arbitration, recurrence,
@@ -147,12 +155,15 @@ Completed safe units:
 ```text
 Wave 1: memory contracts from ADR-0046
 Wave 2: CRS/prompt contracts from ADR-0011/0028
+Wave 3: routing/LLM contracts with fake providers only
+Wave 4a: UI cards/notifications plus health/calendar/sheet/email/doc adapters
 ```
 
 Next safe unit after PR #7 lands:
 
 ```text
-Wave 3: routing/LLM contracts with fake providers only
+Fresh post-merge PR: channel adapters, tools/hooks, auth minting/consent,
+and memory-skill lifecycle contracts before runtime expansion.
 ```
 
 Continuing criteria:
@@ -167,7 +178,7 @@ Continuing criteria:
 
 ## Review Output Format
 
-1. Executive verdict: pass/block for PR #7 and pass/block for starting Phase D.
+1. Executive verdict: pass/block for PR #7 and pass/block for starting the next Phase D PR.
 2. Current foundation map: what exists, what is tracer-only, and which Phase D waves remain.
 3. Findings: severity-ranked with `file:line`.
 4. Testing/local-dev verdict.

@@ -26,9 +26,15 @@ Current facts:
 - Phase D Wave 1 is built: memory contracts from ADR-0046/0005/0006/0024/0031/0037.
 - Phase D Wave 2 is built: CRS and prompt contracts from ADR-0011/0028, with
   health-zone vocabulary owned by `packages/contracts/src/health/crs.ts`.
-- Next work is Phase D Wave 3: routing/LLM contracts with fake providers only,
-  after PR #7 is mergeable/merged and a fresh gate passes. Do not replay A/B/C
-  or Waves 1-2 unless a regression forces it.
+- Phase D Wave 3 is built: routing and LLM provider contracts with fake-provider
+  seams only.
+- Phase D Wave 4a is built: UI card/notification contracts and provider adapter
+  seams for health, calendar, sheet, email, and doc. Channel adapters are still
+  future work.
+- After PR #7 lands, continue on a fresh post-merge branch. The next work is the
+  remaining Phase D contract spine: channel adapters, tools, hooks, memory-skill
+  lifecycle, auth minting/consent, then runtime run/session/working-memory. Do
+  not replay A/B/C or Waves 1-4a unless a regression forces it.
 - `@waldo/types` and legacy `waldo-types` references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
