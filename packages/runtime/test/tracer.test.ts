@@ -387,24 +387,9 @@ describe('TracerDO edge lanes', () => {
     await expectExactlyOnce(f);
 
     // Re-drive the alarm against a terminal run. findOpenRun returns null (DONE is terminal), so the
-    // handler no-ops: no second gate, no second outbox row, no second delivery.
-    await runInDurableObject(f.stub, async (instance) => {
-      await instance.alarm();
-    });
-
-    await expectExactlyOnce(f);
-  });
-
-  it('serialized re-entry: the DO input gate collapses a racing second alarm to a no-op after DONE', async () => {
-    const f = fresh();
-
-    // The DO input gate serializes every call, so a "concurrent" second alarm cannot interleave with
-    // the first. One schedule arms one alarm; one wake drives that single open run through the path.
-    await schedule(f);
-    expect(await runDurableObjectAlarm(f.stub)).toBe(true);
-
-    // A second alarm invocation racing the first observes the terminal run and no-ops (findOpenRun
-    // returns null once DONE), so counters and the delivery ledger hold at exactly one.
+    // handler no-ops: no second gate, no second outbox row, no second delivery. True concurrency is
+    // precluded upstream by the DO input gate (a platform invariant the receiver's count-then-insert
+    // dedup relies on), so a would-be racing second wake reduces to exactly this sequential no-op.
     await runInDurableObject(f.stub, async (instance) => {
       await instance.alarm();
     });

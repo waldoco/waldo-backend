@@ -37,8 +37,11 @@ export class NotificationReceiverDO extends DurableObject<Cloudflare.Env> {
 
   // Record one delivery. `accepted` is false only on a transient failure (nothing recorded — the sender
   // must retry); `fresh` says whether the key was first-seen (production's "actually push vs suppress
-  // duplicate" signal). Idempotent unless the 'non_idempotent' fault is set. The DO input gate serialises
-  // calls, so the count-then-insert pair cannot interleave with another delivery on this instance.
+  // duplicate" signal). Idempotent unless the 'non_idempotent' fault is set. Dedup is code-level (SELECT
+  // count, then a conditional INSERT) with NO await between the two statements, so the DO's single-threaded
+  // input gate makes the pair atomic — no DB UNIQUE is needed here. Production's notification_log gets the
+  // same once-only guarantee from its `idempotency_key UNIQUE`; this substrate models that effect so the
+  // 'non_idempotent' fault can still demonstrate what an unguarded receiver would do.
   async deliver(req: {
     idempotency_key: string;
     payload: string;

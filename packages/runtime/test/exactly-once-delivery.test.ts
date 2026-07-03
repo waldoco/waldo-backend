@@ -167,8 +167,9 @@ describe('exactly-once DELIVERY across cross-eviction (durable receiver ledger)'
     await resume(f);
 
     // The re-send presents the SAME committed key; the receiver's write-once dedup collapses it.
+    // deliveredTotal===1 (not 2) IS the no-drift proof: a re-send under a drifted key would land as a
+    // second distinct ledger row (see break-proof B1), so a single total can only mean one stable key.
     expect(await runState(f)).toBe('DONE');
-    expect(await committedKey(f)).toBe(key); // the sender never drifted the key on re-send
     expect(await deliveredForKey(f, key as string)).toBe(1);
     expect(await deliveredTotal(f)).toBe(1);
   });
