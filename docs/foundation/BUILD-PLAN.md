@@ -3,8 +3,8 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7 and PR #8 are merged into `main`. Current WIP is the PR #8
-  adversarial hardening branch `codex/pr8-adversarial-verification`.
+- **Baseline:** PR #7, PR #8, and PR #9 are merged into `main`. Current WIP is
+  `codex/runtime-run-session-working-memory`.
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
 - **Canonical sources:** the accepted ADR corpus, the build bible
@@ -61,9 +61,9 @@ Landed foundation sequence:
 10. Post-PR7 Phase D contract wave: channel adapter contracts, tool union/ACL/schemas/handler,
    core hook contracts, memory-skill lifecycle contracts, and auth minting/consent contracts.
 
-Next dependency layers remain runtime and public-surface work:
-`runtime/run`,`session`,`working-memory` -> `scheduler` -> `runtime/goal`
--> `governor` -> full `delivery` -> `telemetry/*` -> public DTOs + `emit-openapi`.
+Next dependency layers remain scheduler/runtime and public-surface work:
+`scheduler` -> `runtime/goal` -> `governor` -> full `delivery` -> `telemetry/*`
+-> public DTOs + `emit-openapi`.
 `core/trigger`'s `invocationContext` is deferred to the wave after `core/user` + `health/crs`
 because it depends on both.
 
@@ -96,12 +96,16 @@ because it depends on both.
 - [x] **Post-PR7 contract wave** — `adapters/channel`, `tools/permissions`, `tools/handler`,
   `tools/schemas/{reads,writes,threading}`, `core/hooks`, `memory/skill`, `auth/mint`, and
   `auth/consent` are implemented as contracts with tests.
-- [x] **PR #8 adversarial hardening** — follow-up contract tests now pin exact mint JWT
+- [x] **PR #9 adversarial hardening** — follow-up contract tests now pin exact mint JWT
   timing, user-scoped active-consent lookup, and channel-message card filtering against
   channel personas.
-- [ ] **Phase D remaining waves** — runtime run/session/working-memory, scheduler/goal
-  contracts, full delivery beyond the tracer, telemetry, public DTO/OpenAPI/generated-client
-  freshness, scenario/property/mutation lanes, and live/dogfood lanes.
+- [x] **Runtime run/session/working-memory contracts** — full ADR-0054 run-state contract,
+  ADR-0033 fresh session trust envelope, and ADR-0057 carryover buckets are now represented
+  in `packages/contracts/src/runtime/*` with valid/invalid tests. This is contract work only;
+  it is not the full harness loop.
+- [ ] **Phase D remaining waves** — scheduler/goal contracts, full delivery beyond the tracer,
+  telemetry, public DTO/OpenAPI/generated-client freshness, scenario/property/mutation lanes,
+  and live/dogfood lanes.
 
 ## Grounding flags & dispositions
 
@@ -129,8 +133,9 @@ Vocabulary (single-owner, enforced): `modelName`←roster, `channelName`←`adap
   `tools/permissions`.
 - **ES256 mint `iss` must be a registered HTTPS issuer URL + JWKS cache-TTL** — needs a day-1
   staging spike (ADR-0066); gates the DO→Supabase data plane.
-- **Outbox exactly-once authority per kind** + idempotency hash (SHA-256 + canonical serialization) —
-  pin when building `runtime/run` + the outbox flusher.
+- **Outbox exactly-once authority per kind** — run idempotency input serialization is pinned in
+  `runtime/run`; per-kind outbox flusher authority and SHA-256 hashing remain for the delivery
+  flusher/runtime wave.
 
 ## Historical Codex review verdict (commit 368e2b3)
 
@@ -161,6 +166,6 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The next safe unit is runtime run/session/working-memory plus the scheduler/goal contracts
-that consume the hook/tool/auth/memory-skill contracts. Do not broaden delivery, telemetry,
-public DTOs, or generated-client work before that runtime seam exists.
+The next safe unit is scheduler/goal contracts that consume the run/session/working-memory,
+hook/tool/auth, and memory-skill contracts. Do not broaden delivery, telemetry, public DTOs,
+or generated-client work before that scheduler/goal seam exists.

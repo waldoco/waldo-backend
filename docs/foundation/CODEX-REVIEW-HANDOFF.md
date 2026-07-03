@@ -1,4 +1,4 @@
-# Codex Review Handoff - PR #8 Phase D Contract Spine
+# Codex Review Handoff - Runtime Run/Session/Working-Memory Contracts
 
 > Claude builds; Codex audits adversarially. Treat reports from any authoring
 > workflow as leads, not proof. Re-run commands and inspect source before
@@ -7,9 +7,9 @@
 ## Current State
 
 - Repo: `waldo-backend`
-- Baseline: PR #7 and PR #8 are merged into `main`.
-- Current verification branch: `codex/pr8-adversarial-verification`
-- PR scope: PR #8 adversarial hardening and truth-only doc updates.
+- Baseline: PR #7, PR #8, and PR #9 are merged into `main`.
+- Current branch: `codex/runtime-run-session-working-memory`
+- PR scope: contract-only runtime run/session/working-memory seam plus truth-only doc updates.
 - Canon: accepted ADR corpus plus `waldo-brain/01-Waldo/waldo-harness-deepwiki/`
 - Current contract source: `packages/contracts`
 - Stale source: `@waldo/types` and old `waldo-types` package snippets
@@ -40,13 +40,17 @@ Foundation Phases A/B/C plus Phase D Waves 1-4a are built on `main`:
    built for health, calendar, sheet, email, and doc.
 10. PR #8 Phase D contract wave: channel adapters, tool union/ACL/schemas/handler,
     core hooks, memory-skill lifecycle, auth minting, and consent contracts are on `main`.
-11. PR #8 follow-up verification: exact mint timing, user-scoped consent lookup, and
-    channel-persona card filtering are covered by adversarial contract tests on this branch.
+11. PR #9 follow-up verification: exact mint timing, user-scoped consent lookup, and
+    channel-persona card filtering are merged to `main`.
+12. Current branch: full ADR-0054 run-state contract, ADR-0033 fresh session trust envelope,
+    and ADR-0057 working-memory carryover buckets are added as contract modules with
+    valid/invalid tests. This does not ship the full harness loop.
 
 Branch status to verify at handoff:
 
-- `codex/pr8-adversarial-verification` should be based on current `origin/main`.
-- A new PR should contain only PR #8 hardening plus doc/handoff updates.
+- `codex/runtime-run-session-working-memory` should be based on current `origin/main`.
+- A new PR should contain only runtime run/session/working-memory contracts plus doc/handoff
+  updates.
 - Re-check GitHub status after every push before merging.
 
 ## Fresh Orientation
@@ -109,7 +113,7 @@ ship the full harness.
 
 Still missing before broad developer build-out:
 
-- full run/session/working-memory contracts
+- full runtime implementation behind the run/session/working-memory contracts
 - full scheduler and seven-schedule multiplexer
 - full delivery policy: counted budget paths, priority arbitration, recurrence,
   quarantine, and cross-run no-progress guards
@@ -149,8 +153,8 @@ Block or flag immediately if you find:
 
 ## Phase D Recommendation To Challenge
 
-Do not broaden runtime implementation until PR #8 and any follow-up verification branch are
-mergeable/merged and the fresh local gate passes on the pushed branch.
+Do not broaden runtime implementation beyond this contract seam until the fresh local gate
+passes on the pushed branch.
 
 Completed safe units:
 
@@ -160,13 +164,15 @@ Wave 2: CRS/prompt contracts from ADR-0011/0028
 Wave 3: routing/LLM contracts with fake providers only
 Wave 4a: UI cards/notifications plus health/calendar/sheet/email/doc adapters
 Post-PR7: channel adapters, tool ACL/schemas/handler, hooks, memory-skill, auth mint/consent
+PR #9: mint timing, user-scoped consent lookup, channel-persona card filtering
+Current branch: runtime run/session/working-memory contracts
 ```
 
 Next safe unit after this PR lands:
 
 ```text
-Fresh post-merge PR: runtime run/session/working-memory and scheduler/goal contracts before
-full delivery, telemetry, or public DTO expansion.
+Fresh post-merge PR: scheduler/goal contracts before full delivery, telemetry, or public DTO
+expansion.
 ```
 
 Continuing criteria:
