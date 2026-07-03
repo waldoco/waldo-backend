@@ -556,17 +556,14 @@ Waldo differs from coding agents because its hard guarantees are stateful, priva
 
 ## Near-Term Build Order
 
-1. Resolve PR #7 mergeability, then run `npx -y pnpm@10.34.4 verify` and `git diff --check`.
-2. Start Phase D with memory contracts from ADR-0046.
-3. Add CRS/prompt contracts only after memory seams are typed and tested.
-4. Add routing/LLM contracts with fake providers only; no live providers in default gates.
-5. Add UI/adapters/tools/hooks contracts with valid/invalid schema tests and ACL checks.
-6. Reconcile the Phase C reduced FSM into the full runtime run/session/working-memory contracts.
-7. Expand delivery beyond the `fetch_alert` tracer path: counted budget, priority arbitration,
+1. Prove the post-PR7 contract branch with `npx -y pnpm@10.34.4 verify` and `git diff --check`.
+2. After it lands, reconcile the Phase C reduced FSM into full runtime run/session/working-memory contracts.
+3. Add scheduler/goal contracts that consume the trigger, hook, tool, auth, and memory-skill seams.
+4. Expand delivery beyond the `fetch_alert` tracer path: counted budget, priority arbitration,
    recurrence, quarantine, and cross-run no-progress guards.
-8. Add telemetry/public/OpenAPI once the internal contracts are stable.
-9. Add deterministic scenario artifacts, property tests, and targeted mutation for deterministic core.
-10. Add live/dogfood lanes after hermetic gates are stable.
+5. Add telemetry/public/OpenAPI once the internal contracts are stable.
+6. Add deterministic scenario artifacts, property tests, and targeted mutation for deterministic core.
+7. Add live/dogfood lanes after hermetic gates are stable.
 
 ## Definition Of Done
 

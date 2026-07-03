@@ -1,10 +1,10 @@
 # waldo-backend — Claude Code Instructions
 
-## Active Foundation Override (2026-07-02)
+## Current Foundation Status (2026-07-03)
 
-This branch is the greenfield harness foundation branch. The legacy guidance
-below is kept for repo background, but it is not the source of truth for current
-foundation work.
+The legacy guidance below is kept for repo background, but current foundation
+work is governed by the local rule index, foundation docs, accepted ADRs, and
+Waldo Brain DeepWiki pages.
 
 Before any implementation:
 
@@ -17,24 +17,18 @@ Before any implementation:
 Current facts:
 
 - Collaboration model: Claude Code builds; Codex audits adversarially.
-- Foundation Phases A/B/C are built on `greenfield/harness-foundation`:
+- Foundation Phases A/B/C and Phase D Waves 1-4a are on `main` via PR #7:
   root contracts, CI/conformance wall, Cloudflare Workers/Durable Object test
-  substrate, and the scheduled durable-execution tracer bullet.
+  substrate, the scheduled durable-execution tracer bullet, memory/CRS/prompt,
+  routing/LLM, UI cards/notifications, and provider adapter contracts.
 - Phase C is still a tracer, not the full contract spine. It proves one
   scheduled path in workerd: `DO alarm -> Loop Governor -> run journal ->
   DeliveryGate -> outbox -> fake sink`, including crash/resume exactly-once.
-- Phase D Wave 1 is built: memory contracts from ADR-0046/0005/0006/0024/0031/0037.
-- Phase D Wave 2 is built: CRS and prompt contracts from ADR-0011/0028, with
-  health-zone vocabulary owned by `packages/contracts/src/health/crs.ts`.
-- Phase D Wave 3 is built: routing and LLM provider contracts with fake-provider
-  seams only.
-- Phase D Wave 4a is built: UI card/notification contracts and provider adapter
-  seams for health, calendar, sheet, email, and doc. Channel adapters are still
-  future work.
-- After PR #7 lands, continue on a fresh post-merge branch. The next work is the
-  remaining Phase D contract spine: channel adapters, tools, hooks, memory-skill
-  lifecycle, auth minting/consent, then runtime run/session/working-memory. Do
-  not replay A/B/C or Waves 1-4a unless a regression forces it.
+- The post-PR7 contract branch adds channel adapters, tool union/ACL/schemas/handler,
+  core hooks, memory-skill lifecycle, and auth minting/consent contracts. Once
+  that branch lands, the next work is runtime run/session/working-memory and
+  scheduler/goal contracts. Do not replay A/B/C or Waves 1-4a unless a regression
+  forces it.
 - `@waldo/types` and legacy `waldo-types` references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
