@@ -39,6 +39,8 @@ const HEALTH_TOKENS = [
   'weight',
   'body[_\\s-]?weight',
   'blood[_\\s-]?pressure',
+  'bp[_\\s-]?sys(?:tolic)?',
+  'bp[_\\s-]?dia(?:stolic)?',
   'systolic',
   'diastolic',
   'calorie[_\\s-]?burn',
@@ -50,6 +52,10 @@ const HEALTH_TOKENS = [
 
 // A raw numeric literal: integer or decimal, standalone (not part of an identifier).
 const NUM = '(?<![\\w.])\\d+(?:\\.\\d+)?';
+
+// Bare `bp` is ambiguous with basis points, so it is not in HEALTH_TOKENS. It only trips on
+// blood-pressure-shaped values: a systolic/diastolic ratio or an mmHg unit.
+const BP_VALUE = `${NUM}\\s*\\/\\s*${NUM}|${NUM}\\s*mmhg\\b`;
 
 // Units that appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg). Mirrors the
 // sanitiser RAW_SENSOR vocabulary so committed code carrying a unit-suffixed health key is caught.
@@ -69,6 +75,15 @@ const TOKEN = `\\b(?:${HEALTH_TOKENS.join('|')})(?:[_\\s-]?(?:${UNIT}))?`;
 // across lines (`hrv =\n  42`) must not escape the scan. Proximity is kept meaningful with
 // bounded gap windows instead of same-line anchors.
 const DETECTORS = [
+  {
+    // Bare BP abbreviation: catch blood-pressure-shaped values without turning basis-points deltas
+    // (`bp: 3`) into CI noise.
+    reason: 'blood pressure value assigned to a raw numeric literal',
+    re: new RegExp(
+      `\\bbp\\s*["'\`]?\\s*[:=]\\s*["'\`]?\\s*(?:${BP_VALUE})`,
+      'gi',
+    ),
+  },
   {
     // Assignment / object property to a raw number, incl. QUOTED values (`hrv: "42"`, `"spo2":"96"`)
     // — the optional quote on either side of [:=] catches the serialized-payload shape, not only

@@ -25,6 +25,8 @@ const LEAK_CASES = [
   { name: 'snake_case structured key', code: 'const p = { body_weight: 82 };\n' },
   { name: 'camelCase quoted ratio', code: 'const p = { bloodPressure: "140/90" };\n' },
   { name: 'unit-suffixed key', code: 'const p = { hrv_ms: 42, weight_kg: 82 };\n' },
+  { name: 'bare bp quoted ratio', code: 'const p = { bp: "140/90" };\n' },
+  { name: 'bp systolic/diastolic aliases', code: 'const p = { bpSys: 140, bpDia: 90 };\n' },
 ];
 
 function runGuardOn(root) {
@@ -71,6 +73,19 @@ const zoneProse = withFixture(
 if (zoneProse.stderr.trim() !== '') {
   process.stderr.write(
     `guards-selftest: guard-health-leak FALSE POSITIVE on zone-only prose:\n${zoneProse.stderr}`,
+  );
+  failures += 1;
+}
+
+// Bare `bp` without a ratio/mmHg unit is ambiguous with basis points and must not be blocked.
+const basisPoints = withFixture(
+  'basis-points.ts',
+  'const change = { bp: 3, note: "basis points move" };\n',
+  runGuardOn,
+);
+if (basisPoints.stderr.trim() !== '') {
+  process.stderr.write(
+    `guards-selftest: guard-health-leak FALSE POSITIVE on basis-points shorthand:\n${basisPoints.stderr}`,
   );
   failures += 1;
 }
