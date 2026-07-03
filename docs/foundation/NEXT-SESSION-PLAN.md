@@ -9,16 +9,18 @@ risky if it is allowed to write runtime code concurrently across shared files or
 continue after a failed wave barrier.
 
 Phases A/B/C and Phase D Waves 1-4a are complete on `main` via PR #7. PR #8 adds channel
-adapters, tools, hooks, auth minting/consent, and memory-skill lifecycle contracts. The
+adapters, tools, hooks, auth minting/consent, and memory-skill lifecycle contracts. PR #10
+adds runtime run/session/working-memory contracts. The
 correct next move is not to replay the CI wall, runtime substrate, scheduled tracer,
-routing/LLM contracts, completed UI/provider adapter seams, or the PR #8 contract spine.
+routing/LLM contracts, completed UI/provider adapter seams, the PR #8 contract spine, or
+the PR #10 runtime contract seam.
 The immediate gate is:
 
 ```text
-make the PR #8 follow-up verification branch reviewable
+make the scheduler/goal branch reviewable
 -> npx -y pnpm@10.34.4 verify
 -> git diff --check
--> fresh post-merge branch for runtime run/session/working-memory
+-> fresh post-merge branch for full governor plus delivery/outbox contracts
 ```
 
 Codex remains the external adversarial audit lane after a phase or commit.
@@ -253,15 +255,18 @@ Current wave status:
   health, calendar, sheet, email, and doc.
 - Done in PR #8: channel adapters, tools/ACL/schemas/handler,
   core hooks, auth minting/consent, and memory-skill lifecycle.
-- Remaining after the follow-up verification branch lands: runtime run/session/working-memory, scheduler/goal,
-  delivery, telemetry, public/OpenAPI, scenario/property/mutation lanes, and live/dogfood lanes.
+- Done in PR #10: runtime run/session/working-memory contracts.
+- Current scheduler/goal branch: ADR-0065 schedule contracts, ADR-0064 goal contracts,
+  `pre_brief_sweep` trigger/ACL/routing coverage, and a minimal Phase C tracer
+  schedule-row compatibility patch.
+- Remaining after the scheduler/goal branch lands: full governor/delivery, telemetry,
+  public/OpenAPI, scenario/property/mutation lanes, and live/dogfood lanes.
 
 Remaining wave order:
 
 ```text
-runtime run/session/working-memory
--> scheduler/goal
--> delivery
+full governor
+-> delivery/outbox
 -> telemetry
 -> public/OpenAPI
 -> scenario/property/mutation/live lanes
@@ -276,11 +281,11 @@ Per wave:
 - Barrier: `pnpm verify`, ADR drift review, and a focused security/privacy
   review.
 
-Recommended next safe unit after the PR #8 follow-up verification branch lands:
+Recommended next safe unit after the scheduler/goal branch lands:
 
 ```text
-Fresh post-merge PR: runtime run/session/working-memory and scheduler/goal contracts,
-with exports, docs, and fresh gates before full delivery or public API expansion.
+Fresh post-merge PR: full governor plus delivery/outbox contracts, with exports,
+docs, and fresh gates before telemetry or public API expansion.
 ```
 
 Done criteria:
@@ -307,9 +312,9 @@ After each major phase, generate a Codex adversarial-review handoff with:
 ```text
 ultracode
 
-Use Fable 5 in Claude Code dynamic workflows after PR #8 and any follow-up verification
-branch have merged. Start from updated `main` and create a fresh post-merge branch for
-runtime run/session/working-memory and scheduler/goal contracts.
+Use Fable 5 in Claude Code dynamic workflows after the scheduler/goal branch has merged.
+Start from updated `main` and create a fresh post-merge branch for full governor plus
+delivery/outbox contracts.
 
 First read:
 - .claude/rules/INDEX.md
@@ -326,6 +331,8 @@ not tightly coupled writes.
 
 Phases A/B/C and Phase D Waves 1-4a landed in PR #7. PR #8 added channel adapters,
 tool ACL/schemas/handler, hooks, auth minting/consent, and memory-skill lifecycle.
+PR #10 added runtime run/session/working-memory contracts. The scheduler/goal branch
+adds schedule and goal contracts.
 Before runtime expansion, update from `main` and run:
 
 ```bash
@@ -333,18 +340,16 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-If the current verification branch is conflicting or the baseline gate fails, stop and
-report the blocker. Do not continue runtime expansion on an unmergeable or red foundation.
+If the scheduler/goal branch is conflicting or the baseline gate fails, stop and report the
+blocker. Do not continue runtime expansion on an unmergeable or red foundation.
 
 Continue Phase D in this wave order, with a hard verify barrier after every wave:
 
-1. runtime run/session/working-memory contracts, reconciling Phase C's reduced FSM
-2. scheduler/goal contracts that consume the trigger, hook, tool, auth, and memory-skill contracts
-3. full delivery policy beyond the fetch_alert tracer path
-4. telemetry contracts
-5. public DTOs, OpenAPI emitter, and generated-client freshness
-6. scenario/property/mutation evidence lanes
-7. live/dogfood lanes after hermetic defaults are proven
+1. full governor plus delivery/outbox contracts beyond the fetch_alert tracer path
+2. telemetry contracts
+3. public DTOs, OpenAPI emitter, and generated-client freshness
+4. scenario/property/mutation evidence lanes
+5. live/dogfood lanes after hermetic defaults are proven
 
 For each wave:
 - name the owning ADRs and DeepWiki pages before writing

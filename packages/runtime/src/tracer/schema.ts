@@ -59,14 +59,18 @@ export function ensureSchema(sql: SqlStorage): void {
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS schedule (
-      id            TEXT PRIMARY KEY,
-      kind          TEXT NOT NULL,
-      occurrence_at INTEGER NOT NULL,
-      due_at        INTEGER NOT NULL,
-      status        TEXT NOT NULL,
-      attempts      INTEGER NOT NULL DEFAULT 0,
-      created_at    INTEGER NOT NULL,
-      updated_at    INTEGER NOT NULL
+      id                 TEXT PRIMARY KEY,
+      kind               TEXT NOT NULL,
+      occurrence_at      INTEGER NOT NULL,
+      due_at             INTEGER NOT NULL,
+      recurrence_json    TEXT,
+      payload_json       TEXT NOT NULL DEFAULT '{}',
+      status             TEXT NOT NULL,
+      attempts           INTEGER NOT NULL DEFAULT 0,
+      last_fired_at      INTEGER,
+      quarantined_until  INTEGER,
+      created_at         INTEGER NOT NULL,
+      updated_at         INTEGER NOT NULL
     );
   `);
 }

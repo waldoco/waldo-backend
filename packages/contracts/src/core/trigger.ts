@@ -4,6 +4,7 @@ export const triggerTypeSchema = z.enum([
   'brief',
   'fetch_alert',
   'patrol',
+  'pre_brief_sweep',
   'handoff_explore',
   'handoff_plan',
   'handoff_act',

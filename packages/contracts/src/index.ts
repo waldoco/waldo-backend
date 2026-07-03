@@ -33,6 +33,7 @@ export * from './runtime/delivery-policy';
 export * from './runtime/run';
 export * from './runtime/session';
 export * from './runtime/working-memory';
+export * from './runtime/goal';
 export * from './runtime/journal';
 export * from './runtime/outbox';
 export * from './runtime/class-state';
