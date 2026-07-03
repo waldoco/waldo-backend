@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AdapterResult } from '../core/error';
 import { idempotencyKeySchema } from '../runtime/outbox';
-import { waldoCardKindSchema, waldoCardSchema } from '../ui/card';
+import { waldoCardKindSchema, waldoCardSchema, type WaldoCardKind } from '../ui/card';
 
 // Single owner of channel literals (ADR-0012). 'discord', 'slack', and 'whatsapp' are
 // Phase-2 surfaces — the vocabulary is closed now so every downstream module types
@@ -94,14 +94,32 @@ export const CHANNEL_PERSONAS: Readonly<Partial<Record<ChannelName, ChannelPerso
   slack: SLACK_PERSONA,
 };
 
+function personaForChannel(channel: ChannelName): ChannelPersona | undefined {
+  return channel === 'in_app' ? IOS_PERSONA : CHANNEL_PERSONAS[channel];
+}
+
+export function channelPersonaAllowsCard(channel: ChannelName, kind: WaldoCardKind): boolean {
+  const persona = personaForChannel(channel);
+  return (
+    persona === undefined ||
+    persona.card_kinds_allowed === 'all' ||
+    persona.card_kinds_allowed.includes(kind)
+  );
+}
+
 // The sliced message a channel adapter delivers (ADR-0035). The idempotency key is the
 // repo-canonical outbox key, so redelivery collapses at the channel seam too.
-export const channelMessageSchema = z.strictObject({
-  channel: channelNameSchema,
-  text: z.string().min(1),
-  cards: z.array(waldoCardSchema),
-  idempotency_key: idempotencyKeySchema,
-});
+export const channelMessageSchema = z
+  .strictObject({
+    channel: channelNameSchema,
+    text: z.string().min(1),
+    cards: z.array(waldoCardSchema),
+    idempotency_key: idempotencyKeySchema,
+  })
+  .refine((m) => m.cards.every((card) => channelPersonaAllowsCard(m.channel, card.kind)), {
+    error: 'message card kind must be allowed by channel persona',
+    path: ['cards'],
+  });
 export type ChannelMessage = z.infer<typeof channelMessageSchema>;
 
 // Message-tree depth bound (ADR-0039): reply nesting inside one thread, distinct from the

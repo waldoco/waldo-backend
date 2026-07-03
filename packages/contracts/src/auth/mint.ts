@@ -13,6 +13,8 @@ export const MINT_ISSUER = 'waldo-do-mint';
 // that passes the pre-run check cannot expire inside one handler's ceiling.
 export const MINT_JWT_TTL_MIN = 60;
 export const MINT_REFRESH_MARGIN_MIN = 20;
+export const MINT_NBF_BACKDATE_SECONDS = 60;
+export const MINT_JWT_TTL_SECONDS = MINT_JWT_TTL_MIN * 60;
 
 // Uniform on every bootstrap/refresh failure — the mint EF is not a user-existence or
 // revocation oracle. A refresh 403 is terminal (degraded mode, no retry storm); the
@@ -41,7 +43,14 @@ export const mintClaimsSchema = z
     exp: z.int().nonnegative(),
     actor: z.literal('do-agent'),
   })
-  .refine((c) => c.exp > c.iat, { error: 'exp must be after iat', path: ['exp'] });
+  .refine((c) => c.exp === c.iat + MINT_JWT_TTL_SECONDS, {
+    error: 'exp must equal iat + 60 minutes',
+    path: ['exp'],
+  })
+  .refine((c) => c.nbf === c.iat - MINT_NBF_BACKDATE_SECONDS, {
+    error: 'nbf must equal iat - 60 seconds',
+    path: ['nbf'],
+  });
 export type MintClaims = z.infer<typeof mintClaimsSchema>;
 
 // ES256 third-party issuer — the ratified path: the EF signs, Supabase trusts a registered

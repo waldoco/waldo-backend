@@ -80,6 +80,18 @@ describe('mintClaims', () => {
     );
   });
 
+  it('rejects a token lifetime longer than the ADR-0066 60-minute TTL', () => {
+    expect(
+      mintClaimsSchema.safeParse({ ...baseClaims, exp: baseClaims.iat + 3_601 }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an nbf that is not the ADR-0066 60-second clock-skew backdate', () => {
+    expect(
+      mintClaimsSchema.safeParse({ ...baseClaims, nbf: baseClaims.iat - 30 }).success,
+    ).toBe(false);
+  });
+
   it('rejects a non-integer NumericDate', () => {
     expect(mintClaimsSchema.safeParse({ ...baseClaims, iat: 1_700_000_000.5 }).success).toBe(
       false,

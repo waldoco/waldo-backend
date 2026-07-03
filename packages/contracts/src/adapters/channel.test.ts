@@ -192,6 +192,26 @@ describe('channelMessage', () => {
   it('rejects empty text', () => {
     expect(channelMessageSchema.safeParse({ ...baseMessage, text: '' }).success).toBe(false);
   });
+
+  it('rejects a card disallowed by the target channel persona', () => {
+    expect(
+      channelMessageSchema.safeParse({
+        ...baseMessage,
+        channel: 'slack',
+        cards: [{ kind: 'fetch_card', card_id: 'fetch-01', data: { source_refs: ['crs-01'] } }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts an iOS message with a fetch card because the apns persona allows 'all'", () => {
+    expect(
+      channelMessageSchema.safeParse({
+        ...baseMessage,
+        channel: 'apns',
+        cards: [{ kind: 'fetch_card', card_id: 'fetch-01', data: { source_refs: ['crs-01'] } }],
+      }).success,
+    ).toBe(true);
+  });
 });
 
 describe('messageThreadBinding', () => {

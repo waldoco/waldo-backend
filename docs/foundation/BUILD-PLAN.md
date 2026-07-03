@@ -3,9 +3,8 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7 was squash-merged into `main` as the A/B/C + Phase D Waves 1-4a
-  foundation. Current WIP is the post-PR7 Phase D contract branch
-  `codex/phase-d-next-contracts`.
+- **Baseline:** PR #7 and PR #8 are merged into `main`. Current WIP is the PR #8
+  adversarial hardening branch `codex/pr8-adversarial-verification`.
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
 - **Canonical sources:** the accepted ADR corpus, the build bible
@@ -97,6 +96,9 @@ because it depends on both.
 - [x] **Post-PR7 contract wave** — `adapters/channel`, `tools/permissions`, `tools/handler`,
   `tools/schemas/{reads,writes,threading}`, `core/hooks`, `memory/skill`, `auth/mint`, and
   `auth/consent` are implemented as contracts with tests.
+- [x] **PR #8 adversarial hardening** — follow-up contract tests now pin exact mint JWT
+  timing, user-scoped active-consent lookup, and channel-message card filtering against
+  channel personas.
 - [ ] **Phase D remaining waves** — runtime run/session/working-memory, scheduler/goal
   contracts, full delivery beyond the tracer, telemetry, public DTO/OpenAPI/generated-client
   freshness, scenario/property/mutation lanes, and live/dogfood lanes.
@@ -152,13 +154,13 @@ post-review hardening commit. Do not use this historical section as the next-ses
 
 ## Current next step
 
-Before merging the post-PR7 contract branch, prove it with:
+Before runtime expansion, prove the current branch with:
 
 ```bash
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-After this branch lands, the next safe unit is runtime run/session/working-memory plus the
-scheduler/goal contracts that consume the hook/tool/auth/memory-skill contracts. Do not broaden
-delivery, telemetry, public DTOs, or generated-client work before that runtime seam exists.
+The next safe unit is runtime run/session/working-memory plus the scheduler/goal contracts
+that consume the hook/tool/auth/memory-skill contracts. Do not broaden delivery, telemetry,
+public DTOs, or generated-client work before that runtime seam exists.
