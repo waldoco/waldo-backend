@@ -90,9 +90,10 @@ export const CANARY_REGEX = /\b[a-f0-9]{16}\b/gi;
 //       checklist): body weight/mass, blood pressure incl. systolic/diastolic, and energy expenditure;
 //   (2) health data travels as STRUCTURED payloads — snake_case / kebab / camelCase keys, a unit glued
 //       to the key (hrv_ms, weightKg, systolicMmHg), and quoted numeric or BP-ratio values.
-// PRECISION: specific tokens match on any separator, but ambiguous short tokens (hr, bp, weight,
-// sleep) REQUIRE a family unit, so ordinary prose — a team's ticket count, a finance basis-points
-// delta, a graph edge weight, a retry backoff — is never redacted. Structural leakage (a value nested
+// PRECISION: specific tokens match on any separator; the ambiguous short tokens are gated so
+// whitespace prose is not redacted — hr/weight take a bare number on a colon/equals key but need a
+// unit on bare whitespace ("1 hr 30", "edge weight 10"); bp needs a ratio or mmHg (not "bp 3" basis
+// points); sleep needs a duration unit (not a "sleep 60" backoff). Structural leakage (a value nested
 // under an inner key, a word between key and number, CSV commas) and metrics outside these families
 // are the ADR-0074 §Move1.4 grader's job, not this deterministic floor. Single-source vocabulary: the
 // ADR-0074 DELIVER egress floor reuses these patterns rather than declaring a second copy.
@@ -104,6 +105,9 @@ const RAW_RATIO = String.raw`${QUOTE}\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?`;
 // Key/value separator: one colon, equals, or whitespace char, with an optional quote on either side
 // so a quoted key and a quoted value in a serialized payload are both caught, not only prose.
 const KV = String.raw`${QUOTE}\s*[:=\s]\s*${QUOTE}\s*`;
+// A STRUCTURED key/value separator — colon or equals only, no bare whitespace. A serialized field (a
+// colon/equals key carrying a number) is a health value even without a unit; bare-whitespace prose is not.
+const KV_KEY = String.raw`${QUOTE}\s*[:=]\s*${QUOTE}\s*`;
 // Units that also appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg, oxygen…Percent).
 const UNIT = String.raw`ms|millisec|bpm|beats|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?`;
 
@@ -119,6 +123,21 @@ const specific = (token: string): RegExp =>
 const ambiguous = (token: string, unit: string): RegExp =>
   new RegExp(
     String.raw`\b(?:${token})(?:[\s_-]?(?:${unit}))${KV}(?:${RAW_NUM})` +
+      `|` +
+      String.raw`\b(?:${token})${KV}(?:${RAW_NUM})\s*(?:${unit})\b`,
+    'gi',
+  );
+// KEYED-OR-UNIT (hr, weight): a bare number is a health value on a STRUCTURED (colon/equals) key —
+// the real wearable-payload shape — but on bare whitespace it needs a unit, so bare-whitespace prose
+// (a duration, a graph edge weight, an ML class weight) stays clear. Also matches a glued unit suffix
+// or a trailing unit. Art-9 fail-safe: a colon-keyed non-health team reference is over-redacted — a
+// rejected write is recoverable, a leaked body weight is not — so recall wins over that rare false
+// positive (a bare whitespace team reference still stays clear).
+const keyedOrUnit = (token: string, unit: string): RegExp =>
+  new RegExp(
+    String.raw`\b(?:${token})${KV_KEY}(?:${RAW_NUM})` +
+      `|` +
+      String.raw`\b(?:${token})(?:[\s_-]?(?:${unit}))${KV}(?:${RAW_NUM})` +
       `|` +
       String.raw`\b(?:${token})${KV}(?:${RAW_NUM})\s*(?:${unit})\b`,
     'gi',
@@ -141,8 +160,8 @@ export const RAW_SENSOR_PATTERNS: readonly RegExp[] = [
     String.raw`\bbp${KV}(?:${RAW_RATIO})` + `|` + String.raw`\bbp${KV}(?:${RAW_NUM})\s*mmhg\b`,
     'gi',
   ),
-  ambiguous(String.raw`hr`, String.raw`bpm|beats`),
-  ambiguous(String.raw`weight`, String.raw`kg|kgs|lb|lbs|pounds?`),
+  keyedOrUnit(String.raw`hr`, String.raw`bpm|beats`),
+  keyedOrUnit(String.raw`weight`, String.raw`kg|kgs|lb|lbs|pounds?`),
   ambiguous(
     String.raw`sleep|slept|rem[\s_-]?sleep|deep[\s_-]?sleep|time[\s_-]?asleep`,
     String.raw`hours?|hrs?|mins?|minutes?`,

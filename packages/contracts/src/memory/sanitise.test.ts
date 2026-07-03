@@ -260,12 +260,11 @@ describe('check 2 — health value lockout', () => {
     expect(corpus.filter((s) => matchCount(RAW_SENSOR_PATTERNS, s) === 0)).toEqual([]);
   });
 
-  // Precision: ambiguous short tokens (hr, bp, weight, sleep) must NOT redact ordinary prose carrying
-  // an unrelated number — a raw-sensor match REJECTS the write, so over-redaction corrupts legitimate
-  // memory. These are the false positives the adversarial sweep surfaced; each must stay clear.
-  it('does not false-positive on ambiguous tokens without a health unit', () => {
+  // Precision: a raw-sensor match REJECTS the write, so over-redaction corrupts legitimate memory.
+  // Whitespace prose carrying an unrelated number must stay clear (the adversarial-swept FP corpus):
+  // hr/weight need a unit on bare whitespace, bp needs a ratio/mmHg, sleep needs a duration unit.
+  it('does not false-positive on ambiguous tokens in whitespace prose', () => {
     const benign = [
-      'Ticket count for HR: 15',
       'the HR 2025 budget',
       'meeting in 1 hr 30',
       'edge weight 10 in the graph',
@@ -276,6 +275,17 @@ describe('check 2 — health value lockout', () => {
       'hr 8/5 coverage this week',
     ];
     expect(benign.filter((s) => matchCount(RAW_SENSOR_PATTERNS, s) > 0)).toEqual([]);
+  });
+
+  // Recall (Art-9 fail-safe, decided): a bare number on a STRUCTURED colon/equals key is a real
+  // wearable field and MUST be caught even for the ambiguous hr/weight tokens — a missed body weight
+  // is a silent leak, and PR#13/ADR-0024 caught these (their unit was optional). The accepted trade
+  // is that a colon-keyed non-health "HR: 15" is over-redacted (a rejected write is recoverable).
+  it('catches bare hr/weight on a structured (colon/equals) key', () => {
+    for (const s of ['hr: 62', 'weight: 82', 'hr=62', '{ "hr": 62 }', '"weight": 82']) {
+      expect(matchCount(RAW_SENSOR_PATTERNS, s)).toBeGreaterThanOrEqual(1);
+    }
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'HR: 15')).toBeGreaterThanOrEqual(1); // documented over-redaction
   });
 
   it('is a targeted lockout, not blanket number rejection (rejected option)', () => {
