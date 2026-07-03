@@ -3,8 +3,8 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7, PR #8, and PR #9 are merged into `main`. Current WIP is
-  `codex/runtime-run-session-working-memory`.
+- **Baseline:** PR #7, PR #8, PR #9, and PR #10 are merged into `main`. Current WIP is
+  `codex/scheduler-goal-contracts`.
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
 - **Canonical sources:** the accepted ADR corpus, the build bible
@@ -43,7 +43,7 @@ No publish machinery: the only emitted artifact is `packages/contracts/openapi/w
 
 ## Build order
 
-Landed foundation sequence:
+Foundation sequence so far:
 
 1. Root contract leaves: `core/error`, `core/trigger`, `model/roster`.
 2. Phase A: CI/conformance wall, SHA-pinned GitHub Actions, `pnpm verify`, and repo guards.
@@ -60,9 +60,13 @@ Landed foundation sequence:
    health, calendar, sheet, email, and doc.
 10. Post-PR7 Phase D contract wave: channel adapter contracts, tool union/ACL/schemas/handler,
    core hook contracts, memory-skill lifecycle contracts, and auth minting/consent contracts.
+11. PR #9 adversarial hardening: mint timing, user-scoped consent lookup, and channel-persona
+   card filtering.
+12. PR #10 runtime seam: run/session/working-memory contracts.
+13. Current branch: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
 
-Next dependency layers remain scheduler/runtime and public-surface work:
-`scheduler` -> `runtime/goal` -> `governor` -> full `delivery` -> `telemetry/*`
+Next dependency layers remain runtime and public-surface work:
+full `governor` -> full `delivery` -> `telemetry/*`
 -> public DTOs + `emit-openapi`.
 `core/trigger`'s `invocationContext` is deferred to the wave after `core/user` + `health/crs`
 because it depends on both.
@@ -103,7 +107,12 @@ because it depends on both.
   ADR-0033 fresh session trust envelope, and ADR-0057 carryover buckets are now represented
   in `packages/contracts/src/runtime/*` with valid/invalid tests. This is contract work only;
   it is not the full harness loop.
-- [ ] **Phase D remaining waves** — scheduler/goal contracts, full delivery beyond the tracer,
+- [x] **Scheduler/goal contracts** — ADR-0065 seven-kind schedule contracts,
+  `pre_brief_sweep` trigger/ACL/routing coverage, and ADR-0064 `runtime/goal`
+  contracts are represented with valid/invalid tests. The Phase C tracer now writes a
+  canonical one-shot `handoff` schedule row for its alarm path; this is compatibility with
+  the contract, not the Durable Object scheduler/runtime implementation.
+- [ ] **Phase D remaining waves** — full governor and delivery beyond the tracer,
   telemetry, public DTO/OpenAPI/generated-client freshness, scenario/property/mutation lanes,
   and live/dogfood lanes.
 
@@ -166,6 +175,6 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The next safe unit is scheduler/goal contracts that consume the run/session/working-memory,
-hook/tool/auth, and memory-skill contracts. Do not broaden delivery, telemetry, public DTOs,
-or generated-client work before that scheduler/goal seam exists.
+The next safe unit after scheduler/goal lands is full governor plus delivery/outbox contract
+expansion. Do not broaden telemetry, public DTOs, or generated-client work before those
+runtime gates are explicit and tested.

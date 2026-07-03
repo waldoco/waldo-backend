@@ -4,11 +4,12 @@ import { briefVariantSchema, canaryTokensSchema, triggerTypeSchema } from './tri
 const hex = (c: string): string => c.repeat(16).slice(0, 16);
 
 describe('triggerType', () => {
-  it('is exactly the eleven canonical triggers, in order', () => {
+  it('is exactly the twelve canonical triggers, in order', () => {
     expect(triggerTypeSchema.options).toEqual([
       'brief',
       'fetch_alert',
       'patrol',
+      'pre_brief_sweep',
       'handoff_explore',
       'handoff_plan',
       'handoff_act',

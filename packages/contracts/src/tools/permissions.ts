@@ -63,6 +63,18 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
   ],
   fetch_alert: ['get_crs', 'get_health', 'read_memory', 'propose_action', 'send_message'],
   patrol: ['get_crs', 'get_health', 'read_memory', 'search_connector', 'propose_action'],
+  pre_brief_sweep: [
+    'get_crs',
+    'get_health',
+    'query_calendar',
+    'get_communication',
+    'get_tasks',
+    'get_master_metrics',
+    'get_context',
+    'read_memory',
+    'search_episodes',
+    'search_connector',
+  ],
   handoff_explore: [
     'get_crs',
     'get_health',

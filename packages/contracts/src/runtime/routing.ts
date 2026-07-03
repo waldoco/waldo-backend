@@ -273,6 +273,12 @@ export const ROUTING_TABLE: Readonly<Record<TriggerType, ModelRoute>> = {
     floor: 'template',
   },
   patrol: { trigger: 'patrol', primary: step(ROSTER.primary), fallback: [], floor: 'skip' },
+  pre_brief_sweep: {
+    trigger: 'pre_brief_sweep',
+    primary: step(ROSTER.primary),
+    fallback: [],
+    floor: 'template',
+  },
   handoff_explore: {
     trigger: 'handoff_explore',
     primary: step(ROSTER.primary),

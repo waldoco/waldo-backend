@@ -1,4 +1,4 @@
-# Codex Review Handoff - Runtime Run/Session/Working-Memory Contracts
+# Codex Review Handoff - Scheduler/Goal Contracts
 
 > Claude builds; Codex audits adversarially. Treat reports from any authoring
 > workflow as leads, not proof. Re-run commands and inspect source before
@@ -7,9 +7,10 @@
 ## Current State
 
 - Repo: `waldo-backend`
-- Baseline: PR #7, PR #8, and PR #9 are merged into `main`.
-- Current branch: `codex/runtime-run-session-working-memory`
-- PR scope: contract-only runtime run/session/working-memory seam plus truth-only doc updates.
+- Baseline: PR #7, PR #8, PR #9, and PR #10 are merged into `main`.
+- Current branch: `codex/scheduler-goal-contracts`
+- PR scope: scheduler/goal contracts, `pre_brief_sweep` trigger/ACL/routing coverage, a minimal
+  Phase C tracer schedule-row compatibility patch, and truth-only doc updates.
 - Canon: accepted ADR corpus plus `waldo-brain/01-Waldo/waldo-harness-deepwiki/`
 - Current contract source: `packages/contracts`
 - Stale source: `@waldo/types` and old `waldo-types` package snippets
@@ -42,15 +43,18 @@ Foundation Phases A/B/C plus Phase D Waves 1-4a are built on `main`:
     core hooks, memory-skill lifecycle, auth minting, and consent contracts are on `main`.
 11. PR #9 follow-up verification: exact mint timing, user-scoped consent lookup, and
     channel-persona card filtering are merged to `main`.
-12. Current branch: full ADR-0054 run-state contract, ADR-0033 fresh session trust envelope,
-    and ADR-0057 working-memory carryover buckets are added as contract modules with
-    valid/invalid tests. This does not ship the full harness loop.
+12. PR #10: full ADR-0054 run-state contract, ADR-0033 fresh session trust envelope, and
+    ADR-0057 working-memory carryover buckets are merged to `main`.
+13. Current branch: ADR-0065 scheduler contracts, ADR-0064 goal contracts, and
+    `pre_brief_sweep` trigger/ACL/routing coverage are added with valid/invalid tests.
+    The Phase C tracer writes a canonical one-shot `handoff` schedule row for compatibility.
+    This does not ship the full harness loop or Durable Object scheduler runtime.
 
 Branch status to verify at handoff:
 
-- `codex/runtime-run-session-working-memory` should be based on current `origin/main`.
-- A new PR should contain only runtime run/session/working-memory contracts plus doc/handoff
-  updates.
+- `codex/scheduler-goal-contracts` should be based on current `origin/main`.
+- A new PR should contain only scheduler/goal contracts, trigger/ACL/routing coverage, the
+  tracer schedule-row compatibility patch, and doc/handoff updates.
 - Re-check GitHub status after every push before merging.
 
 ## Fresh Orientation
@@ -114,7 +118,7 @@ ship the full harness.
 Still missing before broad developer build-out:
 
 - full runtime implementation behind the run/session/working-memory contracts
-- full scheduler and seven-schedule multiplexer
+- full Durable Object scheduler runtime behind the seven-schedule contract
 - full delivery policy: counted budget paths, priority arbitration, recurrence,
   quarantine, and cross-run no-progress guards
 - telemetry contracts
@@ -129,6 +133,11 @@ Use accepted ADRs and DeepWiki pages, not this handoff alone.
 - ADR-0054: the reduced tracer FSM must be documented honestly. It maps into
   the full durable run journal but does not replace it.
 - ADR-0065: the only raw `setAlarm` call should remain the `alarm-slot` seam.
+  Contract rows must keep payloads to ids/cursors and keep `journal`/`handoff`
+  under the resumed run trigger rather than a scheduler-invented trigger.
+- ADR-0064: goals live in per-user DO SQLite, accept user-stated aspirations as
+  text, reject raw measured health fields, and are writable only through onboarding
+  or user-message authority in V1.
 - ADR-0068: DeliveryGate Reading A is the current build model. `fetch_alert` is
   budget-exempt, class-capped, cooldown-bound, and telemetry-counted; it must not
   touch daily push budget in the tracer.
@@ -165,14 +174,15 @@ Wave 3: routing/LLM contracts with fake providers only
 Wave 4a: UI cards/notifications plus health/calendar/sheet/email/doc adapters
 Post-PR7: channel adapters, tool ACL/schemas/handler, hooks, memory-skill, auth mint/consent
 PR #9: mint timing, user-scoped consent lookup, channel-persona card filtering
-Current branch: runtime run/session/working-memory contracts
+PR #10: runtime run/session/working-memory contracts
+Current branch: scheduler/goal contracts
 ```
 
 Next safe unit after this PR lands:
 
 ```text
-Fresh post-merge PR: scheduler/goal contracts before full delivery, telemetry, or public DTO
-expansion.
+Fresh post-merge PR: full governor plus delivery/outbox contracts before telemetry,
+public DTO, or generated-client expansion.
 ```
 
 Continuing criteria:

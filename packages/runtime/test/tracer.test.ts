@@ -5,6 +5,7 @@ import {
   runInDurableObject,
 } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { scheduleEntrySchema } from '@waldo/contracts';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -110,6 +111,42 @@ async function readDurable(stub: DurableObjectStub<TracerDO>): Promise<Durable> 
   });
 }
 
+async function readScheduleEntry(stub: DurableObjectStub<TracerDO>) {
+  return runInDurableObject(stub, (_instance, state) => {
+    const row = state.storage.sql
+      .exec<{
+        id: string;
+        kind: string;
+        occurrence_at: number;
+        due_at: number;
+        recurrence_json: string | null;
+        payload_json: string;
+        status: string;
+        attempts: number;
+        last_fired_at: number | null;
+        quarantined_until: number | null;
+        created_at: number;
+        updated_at: number;
+      }>('SELECT * FROM schedule LIMIT 1')
+      .toArray()[0];
+    if (row === undefined) return null;
+    return {
+      id: row.id,
+      kind: row.kind,
+      occurrence_at: row.occurrence_at,
+      due_at: row.due_at,
+      recurrence: row.recurrence_json === null ? null : JSON.parse(row.recurrence_json),
+      payload_refs: JSON.parse(row.payload_json),
+      status: row.status,
+      attempts: row.attempts,
+      last_fired_at: row.last_fired_at,
+      quarantined_until: row.quarantined_until,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  });
+}
+
 // The single, load-bearing exactly-once contract, asserted at the durable layer (not just the sink):
 // terminal DONE, the daily push budget never touched (fetch_alert is budget-exempt), the per-class
 // cap counter and the exempt-telemetry counter each incremented exactly once, and exactly one TOTAL
@@ -141,6 +178,25 @@ async function resume(stub: DurableObjectStub<TracerDO>) {
 }
 
 describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sink, exactly once', () => {
+  it('persists a canonical one-shot handoff schedule row for the tracer alarm', async () => {
+    const stub = freshStub();
+
+    const runId = await schedule(stub);
+    const entry = await readScheduleEntry(stub);
+
+    expect(scheduleEntrySchema.safeParse(entry).success).toBe(true);
+    expect(entry).toMatchObject({
+      id: `handoff:${runId}`,
+      kind: 'handoff',
+      recurrence: null,
+      payload_refs: { run_id: runId, cursor: 'tracer' },
+      status: 'armed',
+      attempts: 0,
+      last_fired_at: null,
+      quarantined_until: null,
+    });
+  });
+
   it('happy path: a scheduled alarm drives the run to DONE and the sink observes exactly one send', async () => {
     const sink = new FakeSink();
     const stub = freshStub();
