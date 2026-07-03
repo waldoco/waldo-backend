@@ -12,7 +12,11 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 const NAME = 'guard-health-leak';
-export const DISPOSITION = 'warn';
+// block: a raw-health finding fails the CI wall — an Art-9 leak into agent_logs / DO SQLite / R2 /
+// prompts / traces is a high-cost violation. The detectors are bounded (a health token paired with a
+// raw number in an assignment / label / template / log-sink position; tests, guards, and non-code
+// files are skipped), and the tree is clean, so the wall blocks without false positives.
+export const DISPOSITION = 'block';
 
 const REPO_ROOT = join(process.cwd());
 const DEFAULT_ROOTS = ['packages', 'scripts', '.github'];

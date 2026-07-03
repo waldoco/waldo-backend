@@ -195,9 +195,23 @@ describe('check 2 — health value lockout', () => {
     expect(matchCount(RAW_SENSOR_PATTERNS, 'slept 7.5 hours')).toBe(1);
   });
 
+  // Art-9 parity with guard-health-leak HEALTH_TOKENS (ADR-0024 §Consequences forward-compatible
+  // tightening). Failure caught: a runtime built behind the narrow four-family set leaks body
+  // weight / blood pressure / energy expenditure as free text into memory, prompts, R2, DO SQLite.
+  it('catches the broader Art-9 raw-value families (synthetic fixtures)', () => {
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'weight: 82 kg')).toBe(1);
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'blood pressure 140/90')).toBe(1);
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'systolic 138 diastolic 88')).toBe(1);
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'calorie burn 2300 kcal')).toBe(1);
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'active energy 850 kcal')).toBe(1);
+  });
+
   it('is a targeted lockout, not blanket number rejection (rejected option)', () => {
     expect(matchCount(RAW_SENSOR_PATTERNS, 'the meeting ran 42 minutes over')).toBe(0);
     expect(matchCount(RAW_SENSOR_PATTERNS, 'recovery looked compromised, rough night')).toBe(0);
+    // The new families stay targeted: a token without a paired raw value must not match.
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'the weight of the argument was clear')).toBe(0);
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'blood pressure was the theme of the talk')).toBe(0);
   });
 
   it('catches derived scores but never zone language', () => {

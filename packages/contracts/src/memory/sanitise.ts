@@ -82,11 +82,24 @@ export const CANARY_REGEX = /\b[a-f0-9]{16}\b/gi;
 // Check 2 — raw sensor readings never persist outside Supabase and never reach ANY sanitise
 // destination, internal ones included; they have no continuity exception (ADR-0024). Targeted
 // lockout, not blanket number rejection — that was a rejected option.
+//
+// ADR-0024's canonical §Check-2 block enumerates only the first four families, but the pinned Art-9
+// forbidden set is broader: guard-health-leak `HEALTH_TOKENS` and the security-checklist also forbid
+// body weight, blood pressure (incl. systolic/diastolic), and energy expenditure. Those are raw
+// physiological readings with the same no-exception lockout, so they belong here. Widening the set
+// is a forward-compatible tightening, explicitly sanctioned by ADR-0024 §Consequences; the ADR-0024
+// canonical block itself should be amended to match (cross-repo follow-up — FOUNDATION-HANDOVER §6.1).
+// This is the single-source health-value vocabulary; the ADR-0074 §Move1.4 DELIVER egress floor
+// reuses it rather than declaring a second copy.
 export const RAW_SENSOR_PATTERNS: readonly RegExp[] = [
   /\b(hrv|heart rate variability)[:\s]+(\d{1,3})\s*(ms|millisec)?\b/gi,
   /\b(hr|heart rate|resting hr|rhr)[:\s]+(\d{1,3})\s*(bpm)?\b/gi,
-  /\b(spo2|oxygen saturation)[:\s]+(\d{1,3})\s*%?\b/gi,
+  /\b(spo2|oxygen saturation|blood oxygen)[:\s]+(\d{1,3})\s*%?\b/gi,
   /\b(sleep|slept)[:\s]+(\d+(?:\.\d+)?)\s*(h|hours|hrs)\b/gi,
+  /\b(weight|body\s?weight)[:\s]+(\d{1,3}(?:\.\d+)?)\s*(kg|kgs|lb|lbs|pounds?)?\b/gi,
+  /\b(blood pressure|bp)[:\s]+(\d{2,3})\s*\/\s*(\d{2,3})\b/gi,
+  /\b(systolic|diastolic)[:\s]+(\d{2,3})\b/gi,
+  /\b(calorie burn|calories burned|active energy)[:\s]+(\d+(?:\.\d+)?)\s*(kcal|cal|calories)?\b/gi,
 ];
 
 // Derived CRS/Form/Recovery/Load scores stay raw on internal destinations because CRS is the
