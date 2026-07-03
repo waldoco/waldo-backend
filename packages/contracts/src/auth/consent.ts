@@ -62,15 +62,17 @@ export type ConsentWithdrawal = z.infer<typeof consentWithdrawalSchema>;
 // Deterministic form of the two ADR-0073-mandated checks: consent-before-first-health-write
 // (middleware) and the outbox pre-send re-check (ADR-0054 — a run started pre-withdrawal
 // cannot deliver post-withdrawal). Withdrawal transitions the record rather than deleting
-// it, so a granted record over the exact (class, source, purpose) triple is the whole rule.
+// it, so a granted record over the exact (user, class, source, purpose) tuple is the whole rule.
 export function hasActiveConsent(
   records: readonly ConsentRecord[],
+  userId: string,
   consentClass: ConsentClass,
   source: string,
   purpose: string,
 ): boolean {
   return records.some(
     (r) =>
+      r.user_id === userId &&
       r.consent_class === consentClass &&
       r.source === source &&
       r.purpose === purpose &&

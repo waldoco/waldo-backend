@@ -21,14 +21,14 @@ Current facts:
   root contracts, CI/conformance wall, Cloudflare Workers/Durable Object test
   substrate, the scheduled durable-execution tracer bullet, memory/CRS/prompt,
   routing/LLM, UI cards/notifications, and provider adapter contracts.
+- PR #8 is on `main`: channel adapters, tool union/ACL/schemas/handler,
+  core hooks, memory-skill lifecycle, auth minting, and consent contracts.
 - Phase C is still a tracer, not the full contract spine. It proves one
   scheduled path in workerd: `DO alarm -> Loop Governor -> run journal ->
   DeliveryGate -> outbox -> fake sink`, including crash/resume exactly-once.
-- The post-PR7 contract branch adds channel adapters, tool union/ACL/schemas/handler,
-  core hooks, memory-skill lifecycle, and auth minting/consent contracts. Once
-  that branch lands, the next work is runtime run/session/working-memory and
-  scheduler/goal contracts. Do not replay A/B/C or Waves 1-4a unless a regression
-  forces it.
+- The next runtime work is runtime run/session/working-memory and scheduler/goal
+  contracts. Do not replay A/B/C, Waves 1-4a, or the PR #8 contract spine unless
+  a regression forces it.
 - `@waldo/types` and legacy `waldo-types` references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.

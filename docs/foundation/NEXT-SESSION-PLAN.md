@@ -8,14 +8,14 @@ Phase D has independent research, review, attack, and contract-wave lanes. It is
 risky if it is allowed to write runtime code concurrently across shared files or
 continue after a failed wave barrier.
 
-Phases A/B/C and Phase D Waves 1-4a are complete on `main` via PR #7. The current
-post-PR7 contract branch adds channel adapters, tools, hooks, auth minting/consent,
-and memory-skill lifecycle contracts. The correct next move is not to replay the CI
-wall, runtime substrate, scheduled tracer, routing/LLM contracts, completed UI/provider
-adapter seams, or the post-PR7 contract wave once it has merged. The immediate gate is:
+Phases A/B/C and Phase D Waves 1-4a are complete on `main` via PR #7. PR #8 adds channel
+adapters, tools, hooks, auth minting/consent, and memory-skill lifecycle contracts. The
+correct next move is not to replay the CI wall, runtime substrate, scheduled tracer,
+routing/LLM contracts, completed UI/provider adapter seams, or the PR #8 contract spine.
+The immediate gate is:
 
 ```text
-make the post-PR7 contract branch reviewable
+make the PR #8 follow-up verification branch reviewable
 -> npx -y pnpm@10.34.4 verify
 -> git diff --check
 -> fresh post-merge branch for runtime run/session/working-memory
@@ -241,8 +241,8 @@ Done evidence:
 
 ## Phase D - Contract Spine Waves
 
-Resume runtime-adjacent contract waves only after the post-PR7 contract branch is
-mergeable/merged and the fresh gate passes.
+Resume runtime-adjacent contract waves only after PR #8 and any follow-up verification branch
+are mergeable/merged and the fresh gate passes.
 
 Current wave status:
 
@@ -251,9 +251,9 @@ Current wave status:
 - Done: Wave 3 routing/LLM contracts with fake-provider seams.
 - Done: Wave 4a UI card/notification contracts and provider adapter seams for
   health, calendar, sheet, email, and doc.
-- Done in the post-PR7 contract branch: channel adapters, tools/ACL/schemas/handler,
+- Done in PR #8: channel adapters, tools/ACL/schemas/handler,
   core hooks, auth minting/consent, and memory-skill lifecycle.
-- Remaining after this branch lands: runtime run/session/working-memory, scheduler/goal,
+- Remaining after the follow-up verification branch lands: runtime run/session/working-memory, scheduler/goal,
   delivery, telemetry, public/OpenAPI, scenario/property/mutation lanes, and live/dogfood lanes.
 
 Remaining wave order:
@@ -276,7 +276,7 @@ Per wave:
 - Barrier: `pnpm verify`, ADR drift review, and a focused security/privacy
   review.
 
-Recommended next safe unit after the post-PR7 contract branch lands:
+Recommended next safe unit after the PR #8 follow-up verification branch lands:
 
 ```text
 Fresh post-merge PR: runtime run/session/working-memory and scheduler/goal contracts,
@@ -307,8 +307,8 @@ After each major phase, generate a Codex adversarial-review handoff with:
 ```text
 ultracode
 
-Use Fable 5 in Claude Code dynamic workflows after the post-PR7 contract branch
-has merged. Start from updated `main` and create a fresh post-merge branch for
+Use Fable 5 in Claude Code dynamic workflows after PR #8 and any follow-up verification
+branch have merged. Start from updated `main` and create a fresh post-merge branch for
 runtime run/session/working-memory and scheduler/goal contracts.
 
 First read:
@@ -324,19 +324,17 @@ contract modules only. Keep runtime implementation single-writer. Keep one
 writer per shared contract surface. Parallelize reading/review/testing lanes,
 not tightly coupled writes.
 
-Phases A/B/C and Phase D Waves 1-4a are already landed in PR #7. The next contract
-branch added channel adapters, tool ACL/schemas/handler, hooks, auth minting/consent,
-and memory-skill lifecycle. First confirm that branch is merged or mergeable, update
-from `main`, and run:
+Phases A/B/C and Phase D Waves 1-4a landed in PR #7. PR #8 added channel adapters,
+tool ACL/schemas/handler, hooks, auth minting/consent, and memory-skill lifecycle.
+Before runtime expansion, update from `main` and run:
 
 ```bash
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-If the post-PR7 contract branch is still conflicting or the baseline gate fails,
-stop and report the blocker. Do not continue runtime expansion on an unmergeable
-or red foundation.
+If the current verification branch is conflicting or the baseline gate fails, stop and
+report the blocker. Do not continue runtime expansion on an unmergeable or red foundation.
 
 Continue Phase D in this wave order, with a hard verify barrier after every wave:
 
@@ -377,7 +375,7 @@ A strong Fable 5 session should complete Phase D only if each wave clears its
 barrier. If a blocker appears, the correct outcome is a precise stop reason, not
 partial work dressed up as completion. The highest-value outcome is:
 
-1. The post-PR7 contract branch is merged or explicitly reported as the blocker.
+1. PR #8 and any follow-up verification branch are merged or explicitly reported as the blocker.
 2. Remaining Phase D/runtime waves land in order with exact valid/invalid tests and source refs.
 3. OpenAPI and generated-client freshness are implemented before public/API work is called done.
 4. `npx -y pnpm@10.34.4 verify` and `git diff --check` pass after every wave and at the end.

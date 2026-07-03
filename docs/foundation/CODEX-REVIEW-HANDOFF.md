@@ -1,4 +1,4 @@
-# Codex Review Handoff - Post-PR7 Phase D Contract Spine
+# Codex Review Handoff - PR #8 Phase D Contract Spine
 
 > Claude builds; Codex audits adversarially. Treat reports from any authoring
 > workflow as leads, not proof. Re-run commands and inspect source before
@@ -7,9 +7,9 @@
 ## Current State
 
 - Repo: `waldo-backend`
-- Baseline: PR #7 was squash-merged into `main`.
-- Branch: `codex/phase-d-next-contracts`
-- PR: create from this branch after the local verification wall passes.
+- Baseline: PR #7 and PR #8 are merged into `main`.
+- Current verification branch: `codex/pr8-adversarial-verification`
+- PR scope: PR #8 adversarial hardening and truth-only doc updates.
 - Canon: accepted ADR corpus plus `waldo-brain/01-Waldo/waldo-harness-deepwiki/`
 - Current contract source: `packages/contracts`
 - Stale source: `@waldo/types` and old `waldo-types` package snippets
@@ -38,14 +38,15 @@ Foundation Phases A/B/C plus Phase D Waves 1-4a are built on `main`:
    seams only.
 9. Phase D Wave 4a: UI card/notification contracts and provider adapter seams are
    built for health, calendar, sheet, email, and doc.
-10. Post-PR7 Phase D contract wave: channel adapters, tool union/ACL/schemas/handler,
-    core hooks, memory-skill lifecycle, auth minting, and consent contracts are built
-    on this branch.
+10. PR #8 Phase D contract wave: channel adapters, tool union/ACL/schemas/handler,
+    core hooks, memory-skill lifecycle, auth minting, and consent contracts are on `main`.
+11. PR #8 follow-up verification: exact mint timing, user-scoped consent lookup, and
+    channel-persona card filtering are covered by adversarial contract tests on this branch.
 
 Branch status to verify at handoff:
 
-- `codex/phase-d-next-contracts` should be based on current `origin/main`.
-- A new PR should contain only the post-PR7 contract wave plus doc/handoff updates.
+- `codex/pr8-adversarial-verification` should be based on current `origin/main`.
+- A new PR should contain only PR #8 hardening plus doc/handoff updates.
 - Re-check GitHub status after every push before merging.
 
 ## Fresh Orientation
@@ -148,7 +149,7 @@ Block or flag immediately if you find:
 
 ## Phase D Recommendation To Challenge
 
-Do not broaden runtime implementation until this post-PR7 contract branch is
+Do not broaden runtime implementation until PR #8 and any follow-up verification branch are
 mergeable/merged and the fresh local gate passes on the pushed branch.
 
 Completed safe units:

@@ -162,37 +162,74 @@ describe('hasActiveConsent', () => {
 
   it('returns true for a granted matching (class, source, purpose) triple', () => {
     expect(
-      hasActiveConsent([granted], 'health_processing', 'whoop', 'daily_readiness_briefing'),
+      hasActiveConsent(
+        [granted],
+        'user-1',
+        'health_processing',
+        'whoop',
+        'daily_readiness_briefing',
+      ),
     ).toBe(true);
   });
 
   it('returns false after withdrawal (processing stops for that purpose)', () => {
     expect(
-      hasActiveConsent([withdrawn], 'health_processing', 'whoop', 'daily_readiness_briefing'),
+      hasActiveConsent(
+        [withdrawn],
+        'user-1',
+        'health_processing',
+        'whoop',
+        'daily_readiness_briefing',
+      ),
     ).toBe(false);
   });
 
   it('returns false for a different purpose (no cross-purpose leakage)', () => {
-    expect(hasActiveConsent([granted], 'health_processing', 'whoop', 'fetch_alerting')).toBe(
-      false,
-    );
+    expect(
+      hasActiveConsent([granted], 'user-1', 'health_processing', 'whoop', 'fetch_alerting'),
+    ).toBe(false);
   });
 
   it('returns false for a different source', () => {
     expect(
-      hasActiveConsent([granted], 'health_processing', 'oura', 'daily_readiness_briefing'),
+      hasActiveConsent(
+        [granted],
+        'user-1',
+        'health_processing',
+        'oura',
+        'daily_readiness_briefing',
+      ),
     ).toBe(false);
   });
 
   it('health-processing consent does not authorize telegram content', () => {
     expect(
-      hasActiveConsent([granted], 'telegram_content', 'whoop', 'daily_readiness_briefing'),
+      hasActiveConsent(
+        [granted],
+        'user-1',
+        'telegram_content',
+        'whoop',
+        'daily_readiness_briefing',
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false when only another user has granted the same source and purpose', () => {
+    const otherUserGrant = consentRecordSchema.parse({ ...baseGrant, user_id: 'user-2' });
+    expect(
+      hasActiveConsent(
+        [otherUserGrant],
+        'user-1',
+        'health_processing',
+        'whoop',
+        'daily_readiness_briefing',
+      ),
     ).toBe(false);
   });
 
   it('returns false on the empty record set', () => {
     expect(
-      hasActiveConsent([], 'health_processing', 'whoop', 'daily_readiness_briefing'),
+      hasActiveConsent([], 'user-1', 'health_processing', 'whoop', 'daily_readiness_briefing'),
     ).toBe(false);
   });
 });

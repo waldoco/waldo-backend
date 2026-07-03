@@ -1,15 +1,15 @@
 # Phase D Next Contract Audit
 
 Date: 2026-07-03
-Branch: `codex/phase-d-next-contracts`
-Baseline: PR #7 squash-merged into `main`
+Branch: `codex/pr8-adversarial-verification`
+Baseline: PR #7 and PR #8 merged into `main`
 
 ## Verdict
 
-Ready for PR after the verification wall passes on the final diff. This branch is a contract
-spine, not runtime expansion. It correctly adds typed seams for channel adapters, tools,
-hooks, auth minting/consent, and memory-skill lifecycle without live providers, production
-data, or broad runtime behavior.
+PR #8 is on `main`; this follow-up branch is a contract-hardening pass, not runtime
+expansion. It keeps the PR #8 typed seams for channel adapters, tools, hooks, auth
+minting/consent, and memory-skill lifecycle, and adds adversarial proofs for mint timing,
+user-scoped consent, and channel-persona card filtering.
 
 ## Source Set Checked
 
@@ -39,7 +39,8 @@ data, or broad runtime behavior.
 - `memory/skill`: skill curator lifecycle contract, provenance locks, trial thresholds,
   archive/stale states, and agent-authored trigger denylist.
 - `auth/mint` and `auth/consent`: contract-only minting/refresh shape, consent records,
-  withdrawal, per-purpose/per-source consent classes, and active-consent helper.
+  withdrawal, per-purpose/per-source consent classes, exact JWT timing, and user-scoped
+  active-consent helper.
 - `packages/contracts/src/index.ts`: exports the new contract modules from the package root.
 
 ## Engineering Audit
@@ -99,6 +100,12 @@ Attack questions checked:
 - Can the model write the facts hall? No. Mutating memory write schema excludes `facts`.
 - Can auth minting imply runtime readiness? No. Docs now state it is contract-only and still
   needs staging/JWKS/RLS runtime work.
+- Can a longer-lived minted token parse? No. `mintClaimsSchema` pins `exp = iat + 60 min`
+  and `nbf = iat - 60 s`.
+- Can another user's consent authorize the current user? No. `hasActiveConsent` checks the
+  full `(user, class, source, purpose)` tuple.
+- Can a work-channel message carry a persona-banned card? No. `channelMessageSchema` rejects
+  cards disallowed by the target channel persona.
 
 Residual risk:
 
@@ -136,7 +143,7 @@ Comparison:
 
 ## Next Step
 
-After this PR lands, the next branch should implement:
+After this verification branch lands, the next branch should implement:
 
 1. `runtime/run`, `runtime/session`, and `runtime/working-memory` contracts.
 2. Scheduler/goal contracts that consume the trigger, hook, tool, auth, and memory-skill seams.
