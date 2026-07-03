@@ -3,9 +3,25 @@
 Proves that real Workers/Durable-Object code executes inside the Workers runtime
 (workerd via Miniflare), not a Node approximation. This is Gate 5 (hermetic
 runtime) of the local-dev testing pipeline. It runs under
-`@cloudflare/vitest-pool-workers` and holds one test-only Durable Object
-(`RuntimeProbeDO`) exercising DO SQLite durability, the single alarm slot, and
-eviction survival. No product logic, no live services, no secrets.
+`@cloudflare/vitest-pool-workers`, exercising DO SQLite durability, the single
+alarm slot, and eviction survival. No product logic, no live services, no secrets.
+
+Durable Objects: `RuntimeProbeDO` (bare eviction-survival probe), `TracerDO` (the
+Phase-C scheduled durable-execution tracer), and `NotificationReceiverDO` (the
+cross-eviction exactly-once **delivery** substrate — see below).
+
+## Exactly-once delivery substrate
+
+`NotificationReceiverDO` is the durable, receiver-side write-once delivery ledger
+and the exactly-once *delivery* enforcement point (FOUNDATION-HANDOVER §6.3). It is
+the test stand-in for production's Supabase `notification_log` (`idempotency_key
+UNIQUE`, ADR-0054): a cross-store write-once mirror that lives **outside** the
+sending DO, so delivery-dedup authority never sits in the sender's store. Exactly-once
+delivery = at-least-once send with a stable idempotency key (`TracerDO`) + write-once
+dedup at the receiver. `test/exactly-once-delivery.test.ts` proves it across normal
+delivery, retry-after-transient-failure, crash-after-reservation, crash-after-send-
+before-ack, and duplicate-replay — reading the reconstructed **receiver** DO's SQLite
+after eviction, never an in-process counter.
 
 ## Confirmed `@cloudflare/vitest-pool-workers` pool limitations
 

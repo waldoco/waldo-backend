@@ -10,16 +10,21 @@ import { Journal } from './journal';
 import { Outbox } from './outbox';
 import { Store } from './store';
 import { Scheduler } from './scheduler';
-import { FakeSink } from './sink';
+import { ReceiverSink } from './sink';
 import { admit } from './governor';
 import { computeVerdict } from './gate';
 
 const KIND = 'fetch_alert' as const;
 
-// The three genuinely mid-flight points that need an in-handler crash: pre-commit of the GATED
-// transaction (#3), post-sink before the ack is recorded (#5), and post-ack before the handler
-// returns (#6). The natural committed boundaries (#1/#2/#4) need no fault code — evict and re-drive.
-type CrashPoint = 'pre_gate_commit' | 'post_sink_pre_ack' | 'post_ack_pre_return';
+// The genuinely mid-flight points that need an in-handler crash: pre-commit of the GATED transaction
+// (#3), the reserved-but-unsent window after GATED commits but before the provider is contacted,
+// post-sink before the ack is recorded (#5), and post-ack before the handler returns (#6). The natural
+// committed boundaries (#1/#2/#4) need no fault code — evict and re-drive.
+type CrashPoint =
+  | 'pre_gate_commit'
+  | 'post_gate_pre_sink'
+  | 'post_sink_pre_ack'
+  | 'post_ack_pre_return';
 
 // The DO that wakes on the alarm and drives the one path: DO alarm -> Loop Governor -> journal ->
 // DeliveryGate (one transactionSync) -> outbox -> fake sink, exactly once, resumable purely from
@@ -30,7 +35,7 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
   private readonly outbox: Outbox;
   private readonly store: Store;
   private readonly scheduler: Scheduler;
-  private readonly sink: FakeSink;
+  private readonly sink: ReceiverSink;
 
   // Crash-injection seam. Undefined in production; poked ONLY by tests via runInDurableObject before
   // the alarm is re-driven. This is the sole spot test-serving state touches the production handler.
@@ -44,7 +49,7 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     this.outbox = new Outbox(ctx.storage.sql, this.deps);
     this.store = new Store(ctx.storage.sql);
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, this.deps);
-    this.sink = new FakeSink();
+    this.sink = new ReceiverSink(env.NOTIFICATION_RECEIVER_DO, () => this.deps.now());
   }
 
   // Opens the run journal at RUN_OPENED and arms the one-shot alarm through the armAlarm seam.
@@ -75,7 +80,7 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
       await this.runGate(run);
     }
     if (this.journal.readState(run.run_id) === 'GATED') {
-      this.flushOutbox(run.run_id);
+      await this.flushOutbox(run.run_id, run.user_id);
     }
     if (this.journal.readState(run.run_id) === 'ACK_RECORDED') {
       this.finalize(run.run_id);
@@ -117,13 +122,21 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  // Post-commit flush. Reads the committed outbox row and delivers to the idempotent sink. The sink
-  // call is not a durable step until the ack lands: crash #5 (sent, ack not recorded) re-drives with
-  // the SAME idempotency key, so the sink returns the prior ack without a second delivery.
-  private flushOutbox(runId: string): void {
+  // Post-commit flush. Reads the committed outbox row and delivers to the receiver with the row's STABLE
+  // idempotency key. The send is at-least-once and not a durable step until the ack lands; exactly-once
+  // DELIVERY comes from the receiver's write-once dedup on that key, not from suppressing the re-send.
+  // Crash after the row is reserved but before the send (post_gate_pre_sink): nothing delivered, resume
+  // delivers once. Crash #5 (sent, ack not recorded): resume re-sends the SAME key, the receiver dedups,
+  // no second delivery. The key is read from the committed row, never recomputed, so it cannot drift.
+  private async flushOutbox(runId: string, userId: string): Promise<void> {
     const row = this.outbox.readRow(runId, KIND);
     if (row === null) throw new Error(`flushOutbox: no outbox row for ${runId}`);
-    this.sink.send({ idempotency_key: row.idempotency_key, payload: row.payload });
+
+    if (this.__crashAfter === 'post_gate_pre_sink') {
+      throw new Error('crash-injection:post_gate_pre_sink');
+    }
+
+    await this.sink.send(userId, { idempotency_key: row.idempotency_key, payload: row.payload });
 
     if (this.__crashAfter === 'post_sink_pre_ack') {
       throw new Error('crash-injection:post_sink_pre_ack');

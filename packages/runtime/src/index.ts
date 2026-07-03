@@ -3,6 +3,8 @@ import { armAlarm } from './scheduler/alarm-slot';
 
 export { TracerDO } from './tracer/tracer-do';
 import type { TracerDO } from './tracer/tracer-do';
+export { NotificationReceiverDO } from './tracer/receiver-do';
+import type { NotificationReceiverDO } from './tracer/receiver-do';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
 // and the test's `env` import (also Cloudflare.Env) see the DO bindings.
@@ -11,6 +13,7 @@ declare global {
     interface Env {
       RUNTIME_DO: DurableObjectNamespace<RuntimeProbeDO>;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
+      NOTIFICATION_RECEIVER_DO: DurableObjectNamespace<NotificationReceiverDO>;
     }
   }
 }
