@@ -83,23 +83,70 @@ export const CANARY_REGEX = /\b[a-f0-9]{16}\b/gi;
 // destination, internal ones included; they have no continuity exception (ADR-0024). Targeted
 // lockout, not blanket number rejection — that was a rejected option.
 //
-// ADR-0024's canonical §Check-2 block enumerates only the first four families, but the pinned Art-9
-// forbidden set is broader: guard-health-leak `HEALTH_TOKENS` and the security-checklist also forbid
-// body weight, blood pressure (incl. systolic/diastolic), and energy expenditure. Those are raw
-// physiological readings with the same no-exception lockout, so they belong here. Widening the set
-// is a forward-compatible tightening, explicitly sanctioned by ADR-0024 §Consequences; the ADR-0024
-// canonical block itself should be amended to match (cross-repo follow-up — FOUNDATION-HANDOVER §6.1).
-// This is the single-source health-value vocabulary; the ADR-0074 §Move1.4 DELIVER egress floor
-// reuses it rather than declaring a second copy.
+// ADR-0024's canonical §Check-2 block enumerates only four families in a prose shape. Two
+// forward-compatible tightenings (both sanctioned by ADR-0024 §Consequences; the canonical block
+// should be amended to match — cross-repo follow-up, FOUNDATION-HANDOVER §6.1):
+//   (1) the pinned Art-9 forbidden set is broader (guard-health-leak HEALTH_TOKENS + the security-
+//       checklist): body weight/mass, blood pressure incl. systolic/diastolic, and energy expenditure;
+//   (2) health data travels as STRUCTURED payloads — snake_case / kebab / camelCase keys, a unit glued
+//       to the key (hrv_ms, weightKg, systolicMmHg), and quoted numeric or BP-ratio values.
+// PRECISION: specific tokens match on any separator, but ambiguous short tokens (hr, bp, weight,
+// sleep) REQUIRE a family unit, so ordinary prose — a team's ticket count, a finance basis-points
+// delta, a graph edge weight, a retry backoff — is never redacted. Structural leakage (a value nested
+// under an inner key, a word between key and number, CSV commas) and metrics outside these families
+// are the ADR-0074 §Move1.4 grader's job, not this deterministic floor. Single-source vocabulary: the
+// ADR-0074 DELIVER egress floor reuses these patterns rather than declaring a second copy.
+const QUOTE = String.raw`["']?`;
+// The number tail, and (separately) a ratio tail (140/90) used only where a ratio is a real reading
+// (blood pressure) — never grafted onto a bare weight or count.
+const RAW_NUM = String.raw`${QUOTE}\s*\d+(?:\.\d+)?`;
+const RAW_RATIO = String.raw`${QUOTE}\s*\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?`;
+// Key/value separator: one colon, equals, or whitespace char, with an optional quote on either side
+// so a quoted key and a quoted value in a serialized payload are both caught, not only prose.
+const KV = String.raw`${QUOTE}\s*[:=\s]\s*${QUOTE}\s*`;
+// Units that also appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg, oxygen…Percent).
+const UNIT = String.raw`ms|millisec|bpm|beats|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?`;
+
+// SPECIFIC token: `\b(?:token)` anchors the WHOLE (possibly multi-word / snake_case) token so an
+// underscore inside `body_weight` cannot defeat it; an optional glued unit suffix follows, then the
+// separator and a number or ratio. These tokens are unambiguous enough to need no unit. `[\s_-]?`
+// under the case-insensitive flag also covers camelCase (`bloodPressure`) and the concatenated form.
+const specific = (token: string): RegExp =>
+  new RegExp(String.raw`\b(?:${token})(?:[\s_-]?(?:${UNIT}))?${KV}(?:${RAW_RATIO}|${RAW_NUM})`, 'gi');
+// AMBIGUOUS short token: a family unit is REQUIRED — glued as a key suffix or trailing the number —
+// so a bare short token plus an unrelated number (an HR-team count, a basis-points delta, an ML edge
+// weight, a backoff duration) never matches.
+const ambiguous = (token: string, unit: string): RegExp =>
+  new RegExp(
+    String.raw`\b(?:${token})(?:[\s_-]?(?:${unit}))${KV}(?:${RAW_NUM})` +
+      `|` +
+      String.raw`\b(?:${token})${KV}(?:${RAW_NUM})\s*(?:${unit})\b`,
+    'gi',
+  );
+
 export const RAW_SENSOR_PATTERNS: readonly RegExp[] = [
-  /\b(hrv|heart rate variability)[:\s]+(\d{1,3})\s*(ms|millisec)?\b/gi,
-  /\b(hr|heart rate|resting hr|rhr)[:\s]+(\d{1,3})\s*(bpm)?\b/gi,
-  /\b(spo2|oxygen saturation|blood oxygen)[:\s]+(\d{1,3})\s*%?\b/gi,
-  /\b(sleep|slept)[:\s]+(\d+(?:\.\d+)?)\s*(h|hours|hrs)\b/gi,
-  /\b(weight|body\s?weight)[:\s]+(\d{1,3}(?:\.\d+)?)\s*(kg|kgs|lb|lbs|pounds?)?\b/gi,
-  /\b(blood pressure|bp)[:\s]+(\d{2,3})\s*\/\s*(\d{2,3})\b/gi,
-  /\b(systolic|diastolic)[:\s]+(\d{2,3})\b/gi,
-  /\b(calorie burn|calories burned|active energy)[:\s]+(\d+(?:\.\d+)?)\s*(kcal|cal|calories)?\b/gi,
+  specific(String.raw`hrv|heart[\s_-]?rate[\s_-]?variability`),
+  specific(String.raw`resting[\s_-]?heart[\s_-]?rate|heart[\s_-]?rate|pulse`),
+  specific(String.raw`spo2|oxygen[\s_-]?saturation|blood[\s_-]?oxygen|o2[\s_-]?sat(?:uration)?`),
+  specific(String.raw`systolic|diastolic|body[\s_-]?weight|body[\s_-]?mass`),
+  specific(String.raw`calorie[\s_-]?burn|calories[\s_-]?burned|active[\s_-]?energy`),
+  specific(String.raw`sleep[\s_-]?(?:hours?|duration|mins?|minutes?)`),
+  // Blood pressure reads as a ratio (140/90) or a number with an mmHg unit; a bare `bp` plus an
+  // integer (finance basis points) must not match, so `bp` alone requires the ratio or the unit.
+  new RegExp(
+    String.raw`\b(?:blood[\s_-]?pressure|bp[\s_-]?sys(?:tolic)?|bp[\s_-]?dia(?:stolic)?|sys[\s_-]?\/[\s_-]?dia)${KV}(?:${RAW_RATIO}|${RAW_NUM})`,
+    'gi',
+  ),
+  new RegExp(
+    String.raw`\bbp${KV}(?:${RAW_RATIO})` + `|` + String.raw`\bbp${KV}(?:${RAW_NUM})\s*mmhg\b`,
+    'gi',
+  ),
+  ambiguous(String.raw`hr`, String.raw`bpm|beats`),
+  ambiguous(String.raw`weight`, String.raw`kg|kgs|lb|lbs|pounds?`),
+  ambiguous(
+    String.raw`sleep|slept|rem[\s_-]?sleep|deep[\s_-]?sleep|time[\s_-]?asleep`,
+    String.raw`hours?|hrs?|mins?|minutes?`,
+  ),
 ];
 
 // Derived CRS/Form/Recovery/Load scores stay raw on internal destinations because CRS is the

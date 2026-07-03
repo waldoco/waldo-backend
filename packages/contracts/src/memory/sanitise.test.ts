@@ -206,12 +206,87 @@ describe('check 2 — health value lockout', () => {
     expect(matchCount(RAW_SENSOR_PATTERNS, 'active energy 850 kcal')).toBe(1);
   });
 
+  // The structured/serialized bypass corpus: snake_case / kebab / camelCase keys, key-embedded
+  // units, and quoted numeric or BP-ratio values — the shape health data actually takes in JSON and
+  // object payloads. Failure caught: a serialized health field slips past the prose-shaped patterns
+  // into memory blocks, prompts, R2, or DO SQLite. `\b(?:...)` anchors the whole multi-word token so
+  // an underscore inside body_weight cannot defeat an inner \bweight\b.
+  it('catches structured/serialized raw-health payloads (aliases + quoted/ratio values)', () => {
+    const corpus = [
+      'body_weight: 82 kg',
+      'blood_pressure: 140/90',
+      'active_energy: 850 kcal',
+      'calorie_burn: 2300 kcal',
+      'blood-oxygen: 96%',
+      'sleep_hours: 7.5',
+      'hrv: "42"',
+      'spo2: "96"',
+      'bloodPressure: "140/90"',
+    ];
+    // The empty-array assertion surfaces the exact string(s) that bypassed on failure.
+    const bypassed = corpus.filter((s) => matchCount(RAW_SENSOR_PATTERNS, s) === 0);
+    expect(bypassed).toEqual([]);
+  });
+
+  // Quoted-key JSON form and the equals separator must also be caught, not just prose colons.
+  it('catches quoted-key and equals-separated serialized health fields', () => {
+    expect(matchCount(RAW_SENSOR_PATTERNS, '"hrv": 42')).toBeGreaterThanOrEqual(1);
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'heartRate=88')).toBeGreaterThanOrEqual(1);
+    expect(matchCount(RAW_SENSOR_PATTERNS, '"spo2":"96"')).toBeGreaterThanOrEqual(1);
+  });
+
+  // Key-embedded unit suffixes and HealthKit/wearable synonym keys — the dominant serialized shape
+  // (surfaced by the adversarial sweep). Failure caught: hrv_ms / weight_kg / systolicMmHg and the
+  // bodyMass / restingHeartRate / o2sat synonyms slip past family patterns that knew only the prose
+  // spelling. `\b(?:token)` anchors the whole token; a bounded optional unit suffix bridges to the key.
+  it('catches unit-suffixed keys and HealthKit synonym aliases', () => {
+    const corpus = [
+      'heartRateVariabilityMs: 42',
+      'restingHeartRateBpm: 48',
+      'oxygenSaturationPercent: 96',
+      'systolicMmHg: 140',
+      'weight_kg: 82',
+      'hr_bpm: 62',
+      'hrv_ms: 42',
+      'bodyMass: 82',
+      'bpSys: 140',
+      'bpDia: 90',
+      'remSleepMinutes: 90',
+      'restingHeartRate: 52',
+      'o2sat: 95',
+      'pulse: 72',
+      'sys/dia: 140/90',
+    ];
+    expect(corpus.filter((s) => matchCount(RAW_SENSOR_PATTERNS, s) === 0)).toEqual([]);
+  });
+
+  // Precision: ambiguous short tokens (hr, bp, weight, sleep) must NOT redact ordinary prose carrying
+  // an unrelated number — a raw-sensor match REJECTS the write, so over-redaction corrupts legitimate
+  // memory. These are the false positives the adversarial sweep surfaced; each must stay clear.
+  it('does not false-positive on ambiguous tokens without a health unit', () => {
+    const benign = [
+      'Ticket count for HR: 15',
+      'the HR 2025 budget',
+      'meeting in 1 hr 30',
+      'edge weight 10 in the graph',
+      'class weight 2 for the imbalanced set',
+      'ratio weight 3/4 in the blend',
+      'JWT expiry: sleep 60 then refresh',
+      'bp: 3 basis points move',
+      'hr 8/5 coverage this week',
+    ];
+    expect(benign.filter((s) => matchCount(RAW_SENSOR_PATTERNS, s) > 0)).toEqual([]);
+  });
+
   it('is a targeted lockout, not blanket number rejection (rejected option)', () => {
     expect(matchCount(RAW_SENSOR_PATTERNS, 'the meeting ran 42 minutes over')).toBe(0);
     expect(matchCount(RAW_SENSOR_PATTERNS, 'recovery looked compromised, rough night')).toBe(0);
     // The new families stay targeted: a token without a paired raw value must not match.
     expect(matchCount(RAW_SENSOR_PATTERNS, 'the weight of the argument was clear')).toBe(0);
     expect(matchCount(RAW_SENSOR_PATTERNS, 'blood pressure was the theme of the talk')).toBe(0);
+    // Zone-only prose (the sanctioned external form) must never trip the raw-sensor lockout.
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'recovery was solid, form energized today')).toBe(0);
+    expect(matchCount(RAW_SENSOR_PATTERNS, 'sleep_quality: good')).toBe(0);
   });
 
   it('catches derived scores but never zone language', () => {
