@@ -3,11 +3,13 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Branch:** `greenfield/harness-foundation` (off clean `main`).
+- **Baseline:** PR #7 was squash-merged into `main` as the A/B/C + Phase D Waves 1-4a
+  foundation. Current WIP is the post-PR7 Phase D contract branch
+  `codex/phase-d-next-contracts`.
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
-- **Canonical sources:** the accepted ADR corpus (`waldo-brain/agent-rules/adrs.json`, 73
-  accepted), the build bible (`WALDO_HARNESS_DEEPWIKI`), and the docs-grounded design spec
+- **Canonical sources:** the accepted ADR corpus, the build bible
+  (`waldo-brain/01-Waldo/waldo-harness-deepwiki/`), and the docs-grounded design spec
   produced by the `waldo-foundation-grounding` workflow (12 subsystem briefs + synthesis).
 
 ## Mandate
@@ -57,12 +59,11 @@ Landed foundation sequence:
 8. Phase D Wave 3: routing and LLM provider contracts with fake-provider seams only.
 9. Phase D Wave 4a: UI card/notification contracts and provider adapter seams for
    health, calendar, sheet, email, and doc.
+10. Post-PR7 Phase D contract wave: channel adapter contracts, tool union/ACL/schemas/handler,
+   core hook contracts, memory-skill lifecycle contracts, and auth minting/consent contracts.
 
-Next dependency layers remain Phase D contract-spine work:
-`adapters/channel`
--> `tools/permissions`,`schemas`,`handler`
--> `core/hooks` -> `memory/skill` -> `auth/mint`,`consent`
--> `runtime/run`,`session`,`working-memory` -> `scheduler` -> `runtime/goal`
+Next dependency layers remain runtime and public-surface work:
+`runtime/run`,`session`,`working-memory` -> `scheduler` -> `runtime/goal`
 -> `governor` -> full `delivery` -> `telemetry/*` -> public DTOs + `emit-openapi`.
 `core/trigger`'s `invocationContext` is deferred to the wave after `core/user` + `health/crs`
 because it depends on both.
@@ -91,11 +92,14 @@ because it depends on both.
   with fake-provider seams only; included in this PR branch.
 - [x] **Phase D Wave 4a UI/provider adapters** — `ui/card`, `ui/notification`, and
   provider adapter seams for health, calendar, sheet, email, and doc; included in this PR branch.
-- [x] **PR #7 mergeability** — GitHub currently reports PR #7 `OPEN`, non-draft, and `CLEAN`.
-  Re-run the local gate and GitHub mergeability check before merging.
-- [ ] **Phase D remaining waves** — channel adapters, tools/hooks, auth minting and
-  consent, memory-skill lifecycle, runtime run/session/working-memory, full delivery,
-  telemetry, and public DTO/OpenAPI/generated-client freshness.
+- [x] **PR #7 landed** — PR #7 was squash-merged into `main`; current branch starts from that
+  post-merge baseline.
+- [x] **Post-PR7 contract wave** — `adapters/channel`, `tools/permissions`, `tools/handler`,
+  `tools/schemas/{reads,writes,threading}`, `core/hooks`, `memory/skill`, `auth/mint`, and
+  `auth/consent` are implemented as contracts with tests.
+- [ ] **Phase D remaining waves** — runtime run/session/working-memory, scheduler/goal
+  contracts, full delivery beyond the tracer, telemetry, public DTO/OpenAPI/generated-client
+  freshness, scenario/property/mutation lanes, and live/dogfood lanes.
 
 ## Grounding flags & dispositions
 
@@ -118,7 +122,9 @@ Vocabulary (single-owner, enforced): `modelName`←roster, `channelName`←`adap
 
 ## Open downstream decisions / spikes (do not block the root)
 
-- **`search_tools` union A/B** (ADR-0034 vs the 29-tool union) — decide when building `tools/permissions`.
+- **`search_tools` union A/B** — resolved in the post-PR7 contract wave: `search_tools` is
+  the first-class 30th tool, granted only to lazy-discovery triggers and owned by
+  `tools/permissions`.
 - **ES256 mint `iss` must be a registered HTTPS issuer URL + JWKS cache-TTL** — needs a day-1
   staging spike (ADR-0066); gates the DO→Supabase data plane.
 - **Outbox exactly-once authority per kind** + idempotency hash (SHA-256 + canonical serialization) —
@@ -146,14 +152,13 @@ post-review hardening commit. Do not use this historical section as the next-ses
 
 ## Current next step
 
-Before merging PR #7, prove the pushed branch with:
+Before merging the post-PR7 contract branch, prove it with:
 
 ```bash
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-After PR #7 lands on `main`, start a fresh post-merge branch for the remaining Phase D contract
-spine. The next safe unit is channel adapters plus the already-planned tools/hooks/auth/memory-skill
-contracts, with exports, docs, and a fresh gate before review. Do not broaden runtime implementation
-before the relevant contract seam exists.
+After this branch lands, the next safe unit is runtime run/session/working-memory plus the
+scheduler/goal contracts that consume the hook/tool/auth/memory-skill contracts. Do not broaden
+delivery, telemetry, public DTOs, or generated-client work before that runtime seam exists.

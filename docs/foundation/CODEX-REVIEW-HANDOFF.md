@@ -1,4 +1,4 @@
-# Codex Review Handoff - PR #7 Foundation A/B/C + Phase D Waves 1-4a
+# Codex Review Handoff - Post-PR7 Phase D Contract Spine
 
 > Claude builds; Codex audits adversarially. Treat reports from any authoring
 > workflow as leads, not proof. Re-run commands and inspect source before
@@ -7,13 +7,14 @@
 ## Current State
 
 - Repo: `waldo-backend`
-- Branch: `greenfield/harness-foundation`
-- PR: `https://github.com/Pin4sf/waldo-backend/pull/7`
+- Baseline: PR #7 was squash-merged into `main`.
+- Branch: `codex/phase-d-next-contracts`
+- PR: create from this branch after the local verification wall passes.
 - Canon: accepted ADR corpus plus `waldo-brain/01-Waldo/waldo-harness-deepwiki/`
 - Current contract source: `packages/contracts`
 - Stale source: `@waldo/types` and old `waldo-types` package snippets
 
-Foundation Phases A/B/C are built:
+Foundation Phases A/B/C plus Phase D Waves 1-4a are built on `main`:
 
 1. Root contracts: `core/error`, `core/trigger`, `model/roster`.
 2. Phase A: CI/conformance wall with SHA-pinned GitHub Actions, `pnpm verify`,
@@ -37,13 +38,15 @@ Foundation Phases A/B/C are built:
    seams only.
 9. Phase D Wave 4a: UI card/notification contracts and provider adapter seams are
    built for health, calendar, sheet, email, and doc.
+10. Post-PR7 Phase D contract wave: channel adapters, tool union/ACL/schemas/handler,
+    core hooks, memory-skill lifecycle, auth minting, and consent contracts are built
+    on this branch.
 
 Branch status to verify at handoff:
 
-- `greenfield/harness-foundation` carries Phase D Waves 1-4a on top of
-  the A/B/C foundation.
-- GitHub should report PR #7 `OPEN`, non-draft, and `CLEAN`; re-check after
-  every push before merging.
+- `codex/phase-d-next-contracts` should be based on current `origin/main`.
+- A new PR should contain only the post-PR7 contract wave plus doc/handoff updates.
+- Re-check GitHub status after every push before merging.
 
 ## Fresh Orientation
 
@@ -52,13 +55,12 @@ Run these before forming a verdict:
 ```bash
 git status --short --branch
 git rev-parse HEAD
-gh pr view 7 --json state,mergeStateStatus,isDraft,headRefName,baseRefName,statusCheckRollup,url
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-Do not claim PR #7 is merge-ready if GitHub reports a dirty/conflicting merge
-state. Resolve that first, then re-run the gate.
+Do not claim this branch is merge-ready if GitHub reports a dirty/conflicting
+merge state. Resolve that first, then re-run the gate.
 
 ## What Exists Now
 
@@ -71,6 +73,8 @@ Contracts:
 - `packages/contracts/src/prompt/*`
 - `packages/contracts/src/ui/*`
 - `packages/contracts/src/adapters/*`
+- `packages/contracts/src/auth/*`
+- `packages/contracts/src/tools/*`
 - `packages/contracts/src/runtime/*`
 
 Runtime substrate and tracer:
@@ -95,6 +99,7 @@ Docs/runbooks:
 - `docs/foundation/BUILD-PLAN.md`
 - `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
 - `docs/foundation/NEXT-SESSION-PLAN.md`
+- `docs/foundation/PHASE-D-NEXT-AUDIT.md`
 
 ## What Is Only A Tracer
 
@@ -103,10 +108,6 @@ ship the full harness.
 
 Still missing before broad developer build-out:
 
-- channel adapter contracts
-- tools/hooks contracts
-- auth minting and consent contracts
-- memory-skill lifecycle contracts
 - full run/session/working-memory contracts
 - full scheduler and seven-schedule multiplexer
 - full delivery policy: counted budget paths, priority arbitration, recurrence,
@@ -147,8 +148,8 @@ Block or flag immediately if you find:
 
 ## Phase D Recommendation To Challenge
 
-Do not continue Phase D until PR #7 is mergeable/merged and the fresh local gate
-passes on the pushed branch.
+Do not broaden runtime implementation until this post-PR7 contract branch is
+mergeable/merged and the fresh local gate passes on the pushed branch.
 
 Completed safe units:
 
@@ -157,13 +158,14 @@ Wave 1: memory contracts from ADR-0046
 Wave 2: CRS/prompt contracts from ADR-0011/0028
 Wave 3: routing/LLM contracts with fake providers only
 Wave 4a: UI cards/notifications plus health/calendar/sheet/email/doc adapters
+Post-PR7: channel adapters, tool ACL/schemas/handler, hooks, memory-skill, auth mint/consent
 ```
 
-Next safe unit after PR #7 lands:
+Next safe unit after this PR lands:
 
 ```text
-Fresh post-merge PR: channel adapters, tools/hooks, auth minting/consent,
-and memory-skill lifecycle contracts before runtime expansion.
+Fresh post-merge PR: runtime run/session/working-memory and scheduler/goal contracts before
+full delivery, telemetry, or public DTO expansion.
 ```
 
 Continuing criteria:
@@ -178,7 +180,7 @@ Continuing criteria:
 
 ## Review Output Format
 
-1. Executive verdict: pass/block for PR #7 and pass/block for starting the next Phase D PR.
+1. Executive verdict: pass/block for this PR and pass/block for starting runtime expansion.
 2. Current foundation map: what exists, what is tracer-only, and which Phase D waves remain.
 3. Findings: severity-ranked with `file:line`.
 4. Testing/local-dev verdict.
