@@ -64,7 +64,7 @@ Foundation sequence so far:
 11. PR #9 adversarial hardening: mint timing, user-scoped consent lookup, and channel-persona
    card filtering.
 12. PR #10 runtime seam: run/session/working-memory contracts.
-13. Current branch: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
+13. PR #11: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
 
 Next dependency layers remain runtime and public-surface work:
 full `governor` -> full `delivery` -> `telemetry/*`
@@ -185,6 +185,6 @@ git diff --check
 The Loop Governor contract (SLICE-1) has landed. The next safe unit is SLICE-2 — the delivery-policy
 contract expansion (ADR-0068), contract-only. See `FOUNDATION-HANDOVER.md` §5 (the 3-slice split of
 "full governor plus delivery/outbox") and §9 (continuation prompt). Do not start the governor/
-delivery/outbox runtime (SLICE-3) until the HIGH sanitiser finding (§6.1) is fixed and a real
-cross-eviction DO test substrate proves exactly-once delivery. Do not broaden telemetry, public
-DTOs, or generated-client work before those runtime gates are explicit and tested.
+delivery/outbox runtime (SLICE-3) until PR #13 has merged, ADR-0049 taint-gate authority is decided,
+and a real cross-eviction DO test substrate proves exactly-once delivery. Do not broaden telemetry,
+public DTOs, or generated-client work before those runtime gates are explicit and tested.
