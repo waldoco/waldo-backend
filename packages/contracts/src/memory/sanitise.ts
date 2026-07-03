@@ -263,9 +263,22 @@ export const SANDBOX_SANITISE_FAILURE_TEXT = '[output sanitisation failed: <reas
 // ADR-0049: external-origin text (web, document, MCP, connector, calendar/email body) is
 // stamped tainted at the tool/adapter seam and stays tainted end-to-end. 'external' is the
 // only pinned taint; null = no external origin — one representation, composed by both this
-// stamp and the persisted inbox row (hall.ts).
-export const sourceTaintSchema = z.literal('external').nullable();
+// stamp and the persisted inbox row (hall.ts). This module is the single owner of the taint
+// vocabulary: the literal, the schema, and the detection primitive all live here, and every
+// consumer — the tool gate (tools/handler) and the trust-escalation refines (this file +
+// hall.ts) — routes through them, so a rename of the constant can never leave a stale
+// hard-coded literal behind.
+export const EXTERNAL_SOURCE_TAINT = 'external' as const;
+export const sourceTaintSchema = z.literal(EXTERNAL_SOURCE_TAINT).nullable();
 export type SourceTaint = z.infer<typeof sourceTaintSchema>;
+
+// External-taint DETECTION, not a gate decision: it answers only "did this value originate
+// outside Waldo's trust boundary?" The privileged-action gate (ADR-0049) is tool-scoped and
+// lives in tools/handler; external taint alone never blocks a tool — a tainted read is always
+// allowed, only a tainted privileged action is barred from direct execution.
+export function isExternalSourceTaint(taint: SourceTaint): boolean {
+  return taint === EXTERNAL_SOURCE_TAINT;
+}
 
 // Tainted content never escalates trust class (ADR-0049): whatever provenance the text
 // asserts, an external-tainted stamp lands 'inferred'. That also makes "always queues"
@@ -276,7 +289,7 @@ export const taintStampSchema = z
     source_trust: trustClassSchema,
     source_taint: sourceTaintSchema,
   })
-  .refine((stamp) => stamp.source_taint !== 'external' || stamp.source_trust === 'inferred', {
+  .refine((stamp) => !isExternalSourceTaint(stamp.source_taint) || stamp.source_trust === 'inferred', {
     error: 'tainted content never escalates trust class',
     path: ['source_trust'],
   });

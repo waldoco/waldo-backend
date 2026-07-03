@@ -12,7 +12,6 @@
 // non-canonical error code; a non-halting failure branch; the taint gate silently merged
 // into (or numbered among) the six PreToolUse slots before the dispatcher decision.
 import { describe, expect, it } from 'vitest';
-import { sourceTaintSchema } from '../memory/sanitise';
 import { ROSTER } from '../model/roster';
 import {
   AUTONOMY_GATE,
@@ -25,7 +24,6 @@ import {
   POST_TOOL_USE_PRIORITIES,
   PRE_TOOL_USE_PRIORITIES,
   TAINT_PRIVILEGED_ACTION_GATE,
-  taintGateTrips,
 } from './hooks';
 
 const basePreLLM = { event: 'PreLLMCall', messages: [], model: ROSTER.primary } as const;
@@ -263,12 +261,5 @@ describe('the two privileged-action gates — separate, merger open', () => {
     expect(hookGateSchema.safeParse({ name: 'gate', events: [], priority: null }).success).toBe(
       false,
     );
-  });
-});
-
-describe('taintGateTrips', () => {
-  it('trips exactly on the sanitise-owned external taint', () => {
-    expect(taintGateTrips(sourceTaintSchema.parse('external'))).toBe(true);
-    expect(taintGateTrips(sourceTaintSchema.parse(null))).toBe(false);
   });
 });

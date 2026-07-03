@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { errorCodeSchema } from './error';
-import type { SourceTaint } from '../memory/sanitise';
 import { modelNameSchema } from '../model/roster';
 
 // ADR-0032's title bills 7 middleware hooks; its own typed body carries these 9 — the
@@ -145,21 +144,20 @@ export const AUTONOMY_GATE: HookGate = {
 };
 
 // ADR-0049 accepted amendment: a privileged action (execute_action, external send_message,
-// update_memory/Scribe writes, connector writes) whose arguments derive from external-
-// tainted content routes through propose_action (human confirm) or blocks — enforced in
-// code-owned hooks, never prompt text. This is an ADDITIONAL Pre/PostToolUse gate,
-// deliberately NOT one of the six numbered PreToolUse priorities. OPEN, not decided in a
-// contract: its slot in the numbered order, and whether it merges with the autonomy gate
-// into one privileged-action gate — the dispatcher build decides; this contract ships the
-// two gates separate.
+// update_memory/Scribe writes, connector writes, MCP writes, message/thread mutations) whose
+// arguments derive from external-tainted content routes through propose_action (human confirm)
+// or blocks — enforced in code-owned hooks, never prompt text. This is an ADDITIONAL
+// Pre/PostToolUse gate, deliberately NOT one of the six numbered PreToolUse priorities. OPEN,
+// not decided in a contract: its slot in the numbered order, and whether it merges with the
+// autonomy gate into one privileged-action gate — the dispatcher build decides; this contract
+// ships the two gates separate.
+//
+// This is the gate's REGISTRATION SLOT only. Its decision law is single-owned and lives
+// elsewhere, so no competing authority is defined here: the tool-scoped block decision is
+// taintGateBlocksDirectExecution (tools/handler), and the external-taint primitive it composes
+// is isExternalSourceTaint (memory/sanitise). External taint alone never blocks a tool.
 export const TAINT_PRIVILEGED_ACTION_GATE: HookGate = {
   name: 'taint_privileged_action_gate',
   events: ['PreToolUse', 'PostToolUse'],
   priority: null,
 };
-
-// The trip condition of the taint gate, typed by the single-owner memory/sanitise taint
-// vocabulary (ADR-0049): 'external' trips, null (no external origin) passes.
-export function taintGateTrips(taint: SourceTaint): boolean {
-  return taint === 'external';
-}
