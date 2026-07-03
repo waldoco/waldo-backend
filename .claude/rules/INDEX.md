@@ -1,108 +1,69 @@
-# waldo-backend — Rule Index
+# waldo-backend - Rule Index
 
-Universal rules are mirrored from `waldo-brain` (canonical source, see [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md)). They live locally in `.claude/rules/` and are mirrored verbatim with banner SHA — do not edit locally.
+This repo mirrors the six universal Waldo rule files from
+`waldo-brain/.claude/rules/`. In cloud sessions, read the mirrored local files in
+this directory. Do not depend on a sibling `waldo-brain` checkout being present.
 
-**Core philosophy: every line of code earns its place.** No 1000-line features. Only the most optimised and best possible lines a thoughtful reviewer would ship.
+## Hard Rules - Read First, In Order
 
-## Universal rules (read first, in order)
+| # | File | What it governs |
+|---|---|---|
+| 0 | `posture.md` | Role, truthfulness, scope control, verification, destructive actions. |
+| 1 | `mental-model.md` | Problem-first, product-first, first-principles, science loop, systems loop, every-line-earned discipline. |
+| 2 | `language.md` | Architecture vocabulary: Module, Interface, Contract, Capability Manifest, Seam, Adapter, Drift, Conformance Rule. |
+| 3 | `hey-109-workflow.md` | Multi-agent coordination, Claude/Codex split, Agent-Ready bar, review loop. |
+| 4 | `work-modes.md` | Engineering, writing, strategy, ideation, evangelism mode discipline. |
+| 5 | `security-checklist.md` | Always-check security invariants, conditional checks, health-data overlay. |
 
-0. **[`posture.md`](posture.md)** — **READ FIRST. Always.** Senior-peer posture · priorities (correctness > bravery > momentum > politeness) · truthfulness contract (`[inference]` / `[blocked]` / no fake success) · verification · destructive actions · communication. RFC2119 keywords apply across rule files.
-1. **[`mental-model.md`](mental-model.md)** — The 6 non-negotiable disciplines: Problem-first · Product-first · First-principles · Test-heavy + thorough QA · NO AI SLOP · Architecture-first. Includes the "no cross-references to tickets / PRs / dates / names in code" rule.
-2. **[`language.md`](language.md)** — Architecture vocabulary: Module · Interface · Implementation · Depth · Seam · Adapter · Leverage · Locality. Use these terms verbatim in PR reviews, ADRs, and ticket bodies.
-3. **[`hey-109-workflow.md`](hey-109-workflow.md)** — Multi-agent coordination (waldo-backend = mostly Codex cluster; Claude owns Supabase schema HEY-9, CRS engine HEY-102, memory/Scribe/recall, GDPR runbook HEY-101). Cluster split · Linear labels · lifecycle · Agent-Ready bar (10 items) · fix-pass-then-verify loop.
-4. **[`work-modes.md`](work-modes.md)** — Five surfaces (engineering · writing · strategy · ideation · evangelism). Posture constant, vocabulary shifts. Trigger modes (`council` · `X vs Y` · `be creative` · `pre-mortem` · `red-team` · `steel-man`). Writing block — AI-tells to avoid, voice rules.
-5. **[`security-checklist.md`](security-checklist.md)** — Universal security baseline. 5 Always-Check invariants every change. Conditional checks (DB queries · auth · API endpoints · CI/CD · K8s · IaC · LLM code · shell scripts · frontend · containers). Severity matrix. Health-data overlay for Waldo's GDPR Art-9 surface.
+## Stable Operating Discipline
 
-## Specific ADRs by area
+This index is a stable rule entrypoint, not a branch guide, phase-progress log,
+or handoff document. Do not infer current implementation status from this file.
+For current work, inspect the active PR, git state, and the task-specific docs
+named by the user or latest handoff.
 
-| Working on... | Required ADRs |
-|---|---|
-| Agent runtime (DO) | 0002, 0033, 0034, 0037 |
-| Memory architecture | 0005, 0006, 0007, 0024, 0031, 0037 |
-| LLM routing | 0003, 0004, 0035 |
-| Tool ACL + skills | 0008, 0021, 0022, 0023, 0028 |
-| Triggers | 0014, 0015, 0017, 0020, 0042 |
-| Adjustment / autonomy | 0018, 0019 |
-| Channels | 0012, 0035 (Telegram + APNs) |
-| Threading | 0014, 0039 |
-| Pricing + budget | 0009, 0016 |
-| Verification + evolution | 0030, 0036, 0038 |
-| Security gates | 0024, 0032, 0033 |
-| Calendar adapter | 0040, 0042 |
-| Voice memo | 0041 |
-| CRS algorithm | 0011 |
-| Episode log + pattern_id | 0037 |
-| Durable agent execution (run journal + outbox) | 0054 |
-| GDPR deletion runbook | 0055 |
-| DO SQLite compaction + lifecycle | 0056 |
-| Working-memory carryover buckets | 0057 |
-| Supabase production readiness | 0058 · 0059 · 0060 · 0061 · 0062 |
-| **Canonical rules mirroring (this file's pattern)** | **0063** |
+Every agent should carry the same engineering loop:
 
-ADRs themselves live in `waldo-brain/01-Waldo/Architecture Decision Records (ADR)/`. They are decision documents (append-only), not rule files. The cross-repo reference is intentional — ADRs are versioned in waldo-brain, the team's single decision log. If you cloned only this repo, browse ADRs at https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo.
+1. **Conceive** the problem: user outcome, system constraint, and acceptance bar.
+2. **Design** the seam: the smallest contract that hides the right complexity.
+3. **Implement** a tracer bullet: a production-quality vertical slice through the
+   riskiest path, not a disposable demo.
+4. **Operate** it: verify with the repo gate, name residual risk, and preserve a
+   rollback path.
 
-## Repo-specific NEVER list
+Prefer deep modules: small interface, large hidden implementation, high leverage,
+and high locality. A shallow module that only forwards work should either deepen,
+merge into its caller, or wait until a second real adapter makes the seam useful.
 
-See the `## NEVER` section in [`CLAUDE.md`](../../CLAUDE.md) — this is the canonical NEVER list for waldo-backend. Not a cross-repo concern.
+Keep DRY and orthogonal ownership: one owner for each vocabulary, policy constant,
+contract shape, and runtime side effect. If two files must change for one concept,
+consider whether the concept belongs behind a deeper module.
 
-Highlights:
-- Health values **NEVER** in `agent_logs`, DO SQLite, or R2.
-- Append-only on 10 audit tables — UPDATE/DELETE blocked via `AuditedDB` wrapper (HEY-11).
-- JWT validation on every EF first 10 lines via `_shared/auth.ts`.
-- RLS `auth.uid() = user_id` on every Postgres table.
-- Tool ACL enforcement per trigger via `enforceACL()` — see ADR-0008.
-- LLM provider calls routed through `LLMProvider` adapter + CF AI Gateway — never direct.
-- Service-role key never outside `build-intelligence` + audit writes.
+## Required Commands
 
-## Egress allowlist (`safeFetch` enforcement)
+Use pinned pnpm for the merge gate:
 
-Currently allowed outbound hosts:
-- `api.anthropic.com`
-- `api.openai.com` (Whisper API — HEY-67)
-- `api.telegram.org`
-- `api.open-meteo.com`
-- `gateway.ai.cloudflare.com` (AI Gateway)
-- `<your-supabase-project-id>.supabase.co`
-- `accounts.google.com` + `oauth2.googleapis.com` (Calendar OAuth — HEY-64)
-- `www.googleapis.com` (Calendar API)
+```bash
+npx -y pnpm@10.34.4 verify
+git diff --check
+```
 
-Adding a new host requires:
-1. A code change to `_shared/safeFetch.ts`
-2. PR review by Shivansh
-3. An ADR if the new integration is structural (Phase-2-onwards)
+`pnpm verify` is valid only when the shell's active pnpm is `10.34.4`. For
+docs-only work, `git diff --check` is the minimum gate; run the full verify gate
+when the docs change commands, rules, handoffs, CI behavior, or any code-adjacent
+claim.
 
-## Skills active for this repo
+## Cloud / Ultracode Discipline
 
-- `/session-bus` — **MANDATORY at session start AND end.** Cross-session bus, see ADR-0043.
-- `/grill-me` — before any new design decision lands as ADR
-- `/grill-with-docs` — when extending an existing ADR
-- `/diagnose` — for any recurring bug (RCA discipline)
-- `/tdd` — golden test FIRST for every tool handler
-- `/zoom-out` — when a single-ticket fix risks cross-cutting impact
+Claude Code cloud sessions only see committed repo files. Before launching a
+cloud ultracode workflow, push the branch and ensure this `.claude/rules/`
+mirror is committed.
 
-## Phase-specific review agents
+Repo-required skills live under `.claude/skills/`. This repo does not use a
+separate `.agents/` directory; the agent roster is declared in `AGENTS.md`.
 
-See `AGENTS.md` for the full agent roster. For Sprint 1-2:
-- **`security-reviewer`** — every PR that touches auth, RLS, JWT, secrets, egress, hooks, scribe
-- **`health-data-reviewer`** — every PR that touches CRS engine, baselines, health-data flow
-- **`workflow-mapper`** — BEFORE writing any new trigger / agent loop logic
-- **`crs-validator`** — every PR that touches CRS algorithm
-
-## Pre-commit checks (skill-driven, not hook-blocked)
-
-We rejected blocking pre-commit hooks. Hooks add friction; skills + review agents add discipline. Checks below run via skills / agents / CI — not as commit blockers.
-
-- `pnpm typecheck` runs in CI; agent runs it before PR
-- `pnpm test` runs in CI; `/tdd` skill enforces test-first locally
-- Health-value lockout enforced by Scribe sanitiser (ADR-0024) at runtime, by `security-reviewer` agent at PR time
-- `--no-verify` is forbidden by `CLAUDE.md` NEVER list (agent self-policed)
-- Conventional commit prefix + `HEY-NN` reference checked by `/diagnose` if a PR title looks off
-
-## Things NOT in scope for this repo
-
-- Mobile UI code (belongs in waldo-app)
-- iOS Swift modules (belongs in waldo-app)
-- Android Kotlin modules (belongs in waldo-app)
-- Marketing site (belongs in waldo-web, deferred)
-- Type definitions consumed by 2+ repos (belongs in waldo-types)
-- Research docs / ADRs themselves (belong in waldo-brain)
+Dynamic workflows are useful for parallel research, review, attack, and
+independent module waves. They are risky for uncontrolled write-heavy work.
+Use judge panels and adversarial reviewers in parallel. Keep runtime code
+single-writer unless the files are disjoint and the wave has an explicit
+barrier, owner, merge order, and fresh verification gate.

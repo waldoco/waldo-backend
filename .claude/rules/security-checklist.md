@@ -1,10 +1,11 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/security-checklist.md @ e09f89f49985 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/security-checklist.md @ 0688c22f440a -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Security Checklist — Universal
 
-> **Canonical source:** `waldo-brain/.claude/rules/security-checklist.md` @ `e09f89f49985`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/security-checklist.md`.
+> Mirrored verbatim into the three code repos. Edit canonical only; remirror downstream.
 
 > RFC2119 keywords (**MUST**, **SHOULD**, **MAY**, etc.) apply per [`posture.md`](posture.md).
 
@@ -46,16 +47,46 @@ Apply when the described pattern is present in the change:
 | **Error responses** | **[MUST]** Generic to clients. **[REDLINE]** Stack traces, SQL, file paths, internal IPs in client responses. |
 | **Outbound HTTP with user input** | **[MUST]** Allowlist hosts; block internal/metadata IPs (10.x, 172.16-31.x, 192.168.x, 169.254.169.254, localhost). |
 | **Logging code** | **[REDLINE]** Never log tokens, cookies, secrets, Authorization headers, full request/response bodies, raw health values (HRV, HR, SpO2, sleep hours, weight, BP). **[SHOULD]** Include contextual identifiers (user, request ID) in structured logs for audit. |
+| **Metrics / traces / observability** | **[MUST]** Metric labels are bounded and low-cardinality. **[REDLINE]** Raw health values, prompt text, request IDs, run IDs, trace IDs, user IDs, file paths, URLs, SQL, table names, payload hashes, IPs, or hostnames in metric labels. Put high-cardinality detail in logs/traces after redaction, not labels. |
+| **Error handling** | **[MUST]** Preserve cause/chain for internal debugging and return generic client errors. **[MUST]** Re-raise by default unless the failure is explicitly noncritical. **[REDLINE]** `catch {}` / bare suppressions without logging and justification. |
 | **Dependency changes** | **[MUST]** Block CRITICAL/HIGH CVEs; flag MEDIUM. Check for typosquatting (new package, low downloads, similar name). Verify lockfile matches manifest. |
 | **`.env` files** | **[MUST]** In `.gitignore`. `.env.example` carries placeholders only. Block real secrets at PR time. |
+| **Env var changes** | **[MUST]** New env vars documented in `.env.example` / deploy docs. **[MUST]** Removed or renamed env vars get a deprecation note or startup warning where practical. **[REDLINE]** Silent rename that makes production fall back to insecure defaults. |
 | **CI/CD workflows** | **[MUST]** Pin actions to SHA. Minimum permissions. **[REDLINE]** PR metadata interpolated in `run:` blocks; `pull_request_target` with secrets + PR checkout; `write-all` permissions. |
 | **Helm/K8s manifests** (where applicable — backend infra) | **[MUST]** `runAsNonRoot`, `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, `drop: ["ALL"]`. Least-privilege RBAC. **[REDLINE]** Secrets in `values.yaml`; `privileged: true`; `latest` tags. |
 | **Shell scripts** | **[MUST]** `set -euo pipefail`. Quote variables. `mktemp` + cleanup trap. **[REDLINE]** `eval` with user input; `curl ... \| bash`; secrets in CLI args. |
 | **Frontend code (waldo-app)** | **[REDLINE]** `dangerouslySetInnerHTML` / `v-html` / `innerHTML` with user-controlled data. **[MUST]** No tokens/secrets in `AsyncStorage` / `MMKV` / plain SQLite — SQLCipher only for health data. **[MUST]** Validate redirect targets against allowlist (prevent open redirects). **[MUST]** Sanitise rich text with a vetted library before rendering. **[SHOULD]** No source maps in production. **[SHOULD]** No PII, internal IDs, or debug data in client state/URLs. **[SHOULD]** `rel="noopener noreferrer"` on external links with `target="_blank"`. |
 | **IaC (Terraform/Cloudflare config)** | **[MUST]** No public buckets. Encrypt at rest. Least-privilege IAM (no `Action:"*"`). **[SHOULD]** Minimise `0.0.0.0/0` ingress. |
 | **AI/LLM code** | **[MUST]** No raw user input in system/privileged prompts — clear delimiters between instructions and user content. **[MUST]** Mask PII/secrets/health-values before sending to any LLM (Scribe sanitiser — ADR-0024). **[MUST]** Sanitise model output before rendering in UI (XSS risk). **[MUST]** Do not use LLM output for auth/authz decisions. **[MUST]** Do not send customer data to external LLMs without explicit consent + DPA. **[REDLINE]** Passing LLM output directly to `eval`, SQL, shell commands, or `innerHTML` — leads to code injection / command injection / SQLi / XSS. **[SHOULD]** Validate/filter model outputs before downstream use. **[SHOULD]** Log categories of data sent to LLMs (not raw content). **[SHOULD]** Rate-limit LLM API calls to prevent abuse + cost overrun. |
+| **Agent tools / MCP tools** | **[MUST]** Tool inputs validated with schemas and least privilege. **[MUST]** Search/read before create/update/delete to prevent duplicates or wrong target mutation. **[MUST]** Present pagination/count context for search results. **[SHOULD]** Prefer OAuth/short-lived tokens over long-lived API keys. **[SHOULD]** Feature-flag high-risk tools (write, query, delete, execute). |
+| **Shared contracts** | **[MUST]** No removed, renamed, or retyped exported schema/API/event/tool fields without migration plan, downstream validation, and rollback. **[MUST]** New fields are backwards-compatible with defaults or optional handling. |
 | **Docker / containers** | **[MUST]** Non-root user. Pin base image versions. **[REDLINE]** Secrets in build layers; `privileged: true`. |
 | **Code references / imports** | **[MUST]** All code in approved GitHub org (Pin4sf for Waldo). Flag personal repos or non-org imports. |
+
+---
+
+## Conformance gate expectations
+
+Security rules that can be checked deterministically **SHOULD** graduate from prose to conformance checks in `agent-rules` or repo-local CI.
+
+Use this lifecycle:
+
+1. **Specify** the rule in markdown or ADR.
+2. **Warn** with a deterministic check while false positives are measured.
+3. **Block** once the check is stable and the cost of violation is high.
+4. **Suppress** only with local justification and owner-visible audit.
+
+No rule is silently `off`. If a rule is too noisy, it stays `warn` with examples and a cleanup plan.
+
+High-value conformance candidates:
+
+- Secret scanning and credentials-in-logs scanning.
+- Unpinned external GitHub Actions.
+- Missing auth/rate-limit/input validation on new endpoints.
+- Raw health values in logs, traces, eval fixtures, prompts, or client storage.
+- Contract drift in `@pin4sf/waldo-types` schemas and agent tool outputs.
+- High-cardinality metric labels.
+- Swallowed exceptions and client-visible internal errors.
 
 ---
 

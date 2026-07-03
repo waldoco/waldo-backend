@@ -1,16 +1,56 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/mental-model.md @ e09f89f49985 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/mental-model.md @ 0688c22f440a -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Mental Model — Non-Negotiable Across All 4 Repos
 
-> **Canonical source:** `waldo-brain/.claude/rules/mental-model.md` @ `e09f89f49985`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/mental-model.md`.
+> Mirrored verbatim into `waldo-types/.claude/rules/mental-model.md`, `waldo-backend/.claude/rules/mental-model.md`, and `waldo-app/.claude/rules/mental-model.md` once those PRs land. Edit canonical only; remirror downstream.
 
 > RFC2119 keywords (**MUST**, **SHOULD**, **MAY**, etc.) apply per [`posture.md`](posture.md).
 
 Source of truth for HOW we think when solving any problem. These 6 disciplines override any individual rule file when they conflict. Read this AFTER `posture.md` and BEFORE any repo-local rule.
 
 **The spine:** define the problem before the solution (#1), get the system architecture right before writing code (#6), and let no almost-right AI-generated code through review (#4). More time on WHAT to build than HOW — a clean, well-scoped problem becomes a working PR.
+
+## Operating overlays — always on
+
+The six disciplines below are the base layer. These overlays apply across all six:
+
+### Science loop
+
+For any non-trivial claim, fix, strategy, or architecture choice:
+
+1. Start with plural hypotheses, not a favorite answer.
+2. Name the falsifier for the leading hypothesis.
+3. Seek disconfirming evidence first.
+4. Pre-commit the action threshold: what evidence is enough to proceed, and what evidence forces a different path.
+
+This is the practical form of first-principles thinking. It prevents confident explanations that cannot survive contact with source, tests, or production constraints.
+
+### Systems loop
+
+For recurring bugs, reliability issues, agent-collaboration failures, product drift, or cross-repo coupling, reason through four layers before prescribing a fix:
+
+```
+event -> pattern -> structure -> mental model
+```
+
+- **Event:** what happened this time?
+- **Pattern:** where has this repeated or where will it repeat?
+- **Structure:** what rule, incentive, interface, ownership split, queue, dependency, or missing check makes the pattern likely?
+- **Mental model:** what belief caused the structure to seem acceptable?
+
+You **MUST** name the leverage point before fixing. If the fix only changes the event layer, call it a mitigation and open or propose the structural fix separately.
+
+### AI-native operating loop
+
+The repo should teach agents through inspectable surfaces, not memory or vibes:
+
+- **Capability manifest before source diving:** when a repo exposes a generated manifest of public surfaces, read it before spelunking implementation.
+- **Impact analysis before merge:** name downstream contracts, repos, user flows, data stores, security/privacy surfaces, and tests affected by the change.
+- **Conformance before opinion:** when a rule can be checked deterministically, prefer a rule runner, hook, test, or SARIF finding over prose-only review.
+- **Contract safety before convenience:** shared schemas, tool outputs, event shapes, and exported types are public contracts. Treat drift as a breaking change until proven otherwise.
 
 ---
 
@@ -284,6 +324,9 @@ This is the **core philosophy of NO AI SLOP**. We do not need a thousand lines f
 2. **Locate the state.** Which store is the system-of-record for this data? One writer, one truth — never duplicate authority. Raw health values live in Supabase, never in DO SQLite or R2.
 3. **Draw the boundary it crosses.** Through an adapter/port, or reaching into a provider directly? Core logic never references a provider directly.
 4. **Check it against the locked ADRs** for that area before coding. If the feature implies a new service, a new state location, or a new ownership boundary — that is an ADR, not a commit. Stop and write it.
+5. **Read the capability manifest** for the repo if one exists. If it does not exist yet, manually name the touched public surfaces before editing.
+6. **Name the impact surface:** contracts, persistence, privacy/security, agent tools, user-visible behavior, downstream repos, docs, and tests.
+7. **Protect public contracts:** never remove, rename, or retype shared fields without an explicit migration plan. Additive fields need defaults or backwards-compatible handling.
 
 ### Hard NEVER
 
@@ -291,6 +334,7 @@ This is the **core philosophy of NO AI SLOP**. We do not need a thousand lines f
 - Never invent a new service / boundary without an ADR.
 - Never let a feature blur which store owns which data.
 - Never reach past an adapter into a provider because it's faster right now.
+- Never treat a shared type, tool schema, event shape, API response, or database row shape as "internal" once another repo or agent depends on it.
 
 ### When to invoke
 

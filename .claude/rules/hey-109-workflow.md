@@ -1,10 +1,11 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/hey-109-workflow.md @ e09f89f49985 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/hey-109-workflow.md @ 0688c22f440a -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # HEY-109 Multi-Agent Workflow
 
-> **Canonical source:** `waldo-brain/.claude/rules/hey-109-workflow.md` @ `e09f89f49985`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/hey-109-workflow.md`.
+> Mirrored verbatim into `waldo-types/.claude/rules/hey-109-workflow.md`, `waldo-backend/.claude/rules/hey-109-workflow.md`, and `waldo-app/.claude/rules/hey-109-workflow.md` once those PRs land. Edit canonical only; remirror downstream.
 
 > RFC2119 keywords (**MUST**, **SHOULD**, **MAY**, etc.) apply per [`posture.md`](posture.md).
 
@@ -96,9 +97,9 @@ These compose with `agent:X` and `review:Y`. There is no `agent:human` — `read
 
 ---
 
-## Agent-Ready Bar — 10 Items
+## Agent-Ready Bar — 11 Items
 
-Promote a ticket to `ready-for-agent` **only if all 10** are present in the body:
+Promote a ticket to `ready-for-agent` **only if all 11** are present in the body:
 
 1. **Source-of-truth links** — overview section + linked ADR(s)
 2. **Module · Interface (the worker implements) · Implementation hidden · Seam / adapters** — using the vocabulary from `language.md`
@@ -109,11 +110,51 @@ Promote a ticket to `ready-for-agent` **only if all 10** are present in the body
 7. **Reversibility / rollback note** — what happens if this ships broken
 8. **Security / privacy constraints** — even if "none new"; explicit confirmation
 9. **Out-of-scope section** — what this ticket does NOT cover
-10. **No open founder / legal / product question** — if any: `needs-info`, not `ready-for-agent`
+10. **Impact surface + systems check** — downstream repos/contracts/data stores/user flows/tests named; if recurring/systemic, include `event -> pattern -> structure -> mental model`, otherwise write "not systemic"
+11. **No open founder / legal / product question** — if any: `needs-info`, not `ready-for-agent`
 
 Missing any one → label is `needs-info` or `ready-for-human`, never `ready-for-agent`.
 
 This bar is non-negotiable. It is the moat against AI slop on AFK-loop grabs.
+
+---
+
+## AI-Native Review Protocol
+
+Use `@waldo-review` in PRs or Linear comments when a change needs the full AI-native review loop. Free-form intent after the trigger is allowed; the reviewer parses intent from the comment and the touched files.
+
+### Required review dimensions
+
+Every `@waldo-review` pass checks:
+
+1. **Security and privacy:** no credential, health-data, auth, logging, egress, or prompt-injection regression.
+2. **Contract safety:** no removed, renamed, or retyped shared contracts without migration and downstream validation.
+3. **Determinism:** agent loops, schedulers, replayable workflows, and tests isolate time, randomness, network, DB, and LLM calls behind seams.
+4. **Test quality:** golden acceptance test, non-vacuous assertions, edge cases, and required cross-repo tests.
+5. **Impact analysis:** affected repos, docs, ADRs, data stores, migrations, user flows, and rollback path named.
+6. **Conformance:** deterministic rule findings classified as `block`, `warn`, or `suppressed` with justification.
+
+### Guardrails
+
+The following findings **block** merge:
+
+- P0/P1 security or privacy issue.
+- Contract drift without migration plan and downstream validation.
+- Non-determinism inside replayable or trace-asserted agent paths.
+- New public API/tool/schema without tests.
+- Secret exposure or raw health value exposure.
+- Required CI or validation command failing for an in-branch reason.
+
+### Auto-fix limits
+
+- Auto-fix loops are allowed only for patch-scope issues: typo, import, formatting, simple test fixture, narrow validation bug.
+- Maximum three auto-fix cycles per review.
+- Design, migration, contract, security, privacy, and architecture findings require a human-visible decision. Do not let a subagent silently decide them.
+- The author independently verifies every fix-pass using source inspection plus validation commands. A subagent's claim is not proof.
+
+### Challenge and override
+
+If the author disagrees with a review finding, they may challenge it with evidence: file/line, command output, test, ADR, or source link. A reviewer may withdraw a finding when evidence refutes it. Overrides of blocking findings require explicit human approval and an audit note in the PR or Linear ticket.
 
 ---
 
@@ -123,6 +164,7 @@ This bar is non-negotiable. It is the moat against AI slop on AFK-loop grabs.
 - Branch name: `hey-NN-<slug>` (Linear auto-detects).
 - PR title includes `HEY-NN`. PR description includes `Closes HEY-NN`.
 - Commits use the convention `<scope>: <what> (why: <reason>)` — see repo `CLAUDE.md` for the `<scope>` taxonomy per repo.
+- PR description includes an **Impact Surface** section for meaningful code or rules changes: contracts, data stores, agent tools, privacy/security, user-visible behavior, downstream repos, docs, and rollback.
 - Independent reviewer (the *other* cluster) posts P0 verdict on the PR. Reviewer **MUST NOT** edit the body — comment only.
 - Author iterates fix-pass cycles via background subagents.
 - Author independently verifies each fix-pass:

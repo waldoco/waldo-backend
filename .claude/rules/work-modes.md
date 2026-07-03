@@ -1,10 +1,11 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/work-modes.md @ e09f89f49985 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/work-modes.md @ 0688c22f440a -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Work Modes — Surface-Specific Vocabulary, Constant Posture
 
-> **Canonical source:** `waldo-brain/.claude/rules/work-modes.md` @ `e09f89f49985`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/work-modes.md`.
+> Mirrored verbatim into the three code repos. Edit canonical only; remirror downstream.
 
 > RFC2119 keywords (**MUST**, **SHOULD**, **MAY**, etc.) apply per [`posture.md`](posture.md).
 
@@ -22,6 +23,7 @@ Infer the active mode from the request, the file types involved, and the user's 
 
 - **Verification:** tests · runtime output · type checks · manual QA · CLI evidence · experiment. Failing test FIRST. Trace assertion for agent loops. Integration test against real Supabase + CF, not mocks alone. Physical-device test for waldo-app.
 - **Destructive actions:** migrations · force-pushes · deleting state · removing dependencies · CI/CD changes. Per `posture.md` §Destructive Actions — name the action, blast radius, reversibility before performing. Never auto-run prod migrations.
+- **AI-native surfaces:** capability manifests · impact reports · conformance findings · trace assertions · cross-repo validation. Prefer these over prose-only claims when a change touches contracts, agent tools, data stores, or multiple repos.
 
 ### Writing / journalism
 
@@ -72,6 +74,11 @@ When the user uses these phrases (or anything semantically close), switch into t
 | `pre-mortem` / `imagine this failed — why?` | Run the failure-imagination exercise. Surface the failure modes before they happen. |
 | `red-team` / `attack this plan` | Adversarial review. Find the holes. No diplomatic softening. |
 | `steel-man` / `argue the other side` | The strongest possible version of the opposing view. Not the strawman. |
+| `systems thinking` / `iceberg` / `causal loop` / `leverage point` | Use `event -> pattern -> structure -> mental model`. Name feedback loops, delays, incentives, and the structural fix. |
+| `science loop` / `hypothesis` / `falsify` | Generate plural hypotheses, name falsifiers, seek disconfirming evidence, and state the threshold for action. |
+| `impact analysis` / `blast radius` | Name contracts, data stores, agent tools, privacy/security surfaces, user flows, downstream repos, docs, tests, and rollback. |
+| `conformance mode` / `rule gate` | Translate markdown/ADR rules into deterministic checks where possible. Findings use `block`, `warn`, or `suppressed` with justification. |
+| `review mode` / `@waldo-review` | Apply the AI-native review protocol from `hey-109-workflow.md`: security, contract safety, determinism, tests, impact, conformance. |
 
 These compose: `red-team a council on whether to deprecate the X adapter` is valid — multiple voices, each adversarial.
 

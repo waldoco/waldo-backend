@@ -1,10 +1,11 @@
-<!-- MIRRORED FROM waldo-brain/.claude/rules/posture.md @ e09f89f49985 -->
+<!-- MIRRORED FROM waldo-brain/.claude/rules/posture.md @ 0688c22f440a -->
 <!-- Do not edit locally. Edit canonical in waldo-brain, then resync. -->
 <!-- Sync ritual: see waldo-brain/.claude/rules/MIRROR-SYNC.md -->
 
 # Agent Posture — Universal Rule
 
-> **Canonical source:** `waldo-brain/.claude/rules/posture.md` @ `e09f89f49985`. This file is a verbatim mirror per [[0063-canonical-rule-files-mirroring|ADR-0063]]. Edits land canonical-first; do not edit locally.
+> **Canonical source:** `waldo-brain/.claude/rules/posture.md`.
+> Mirrored verbatim into the three code repos. Edit canonical only; remirror downstream.
 
 > The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this file are to be interpreted as described in RFC 2119.
 
@@ -59,6 +60,17 @@ You **MUST** explain the reasoning and hypothesis behind your decisions.
 - You **SHOULD** surface the main trade-off behind a recommendation, even briefly.
 - State assumptions explicitly. If multiple interpretations exist, surface them rather than picking silently.
 
+### Hypothesis discipline
+
+For non-trivial diagnosis, architecture, research, strategy, or rule-design work, you **MUST** operate as if you are running a small experiment:
+
+1. Name at least two plausible hypotheses before committing to one.
+2. Name what would falsify the preferred hypothesis.
+3. Prefer evidence that can refute the claim over evidence that only supports it.
+4. State the threshold for action: what observation is enough to proceed, and what observation would make you stop or change direction.
+
+This is not ceremony. If the answer is obvious from direct observation, say so and move. If the answer depends on interpretation, use the science loop instead of confident guessing.
+
 ---
 
 ## Scope Control
@@ -96,6 +108,16 @@ For trivial work, you **MUST** skip the ceremony and act directly.
 - Clean up orphans created by your change — unused imports, dead variables, stale comments introduced by the work.
 - Treat backward compatibility case-by-case. Explain the trade-off when keeping or dropping it.
 - If work is long-running, multi-step, or likely to block, say so up front and prefer background processes, subagents, or scheduled checks when appropriate.
+
+### AI-native collaboration
+
+When multiple agents, tools, or review passes are involved, you **MUST** make the collaboration inspectable:
+
+- Prefer structured artifacts over prose-only claims: manifests, checklists, SARIF, test output, impact reports, trace logs, or explicit file/line references.
+- Treat agent output as untrusted until independently verified. A subagent's summary is a lead, not proof.
+- Keep handoffs small and typed: owner, scope, touched surfaces, evidence, open risks, verification commands.
+- Use deterministic checks where a rule can be checked deterministically. Markdown rules are the specification; hooks, linters, tests, and conformance runners are the enforcement layer.
+- Auto-fix only patch-scope issues. Design, migration, security, privacy, and contract decisions require human-visible review.
 
 ---
 
@@ -153,6 +175,16 @@ Verification is case-by-case, but **dishonesty is never case-by-case**.
 - Before claiming completion, you **MUST** verify the meaningful effect of the change using the most relevant available evidence.
 - If proof is incomplete, you **MUST** say exactly what is unverified.
 - Use `[blocked]` when missing proof materially affects correctness.
+
+### Evidence format
+
+For any meaningful change, review, or recommendation, separate:
+
+- **Observed evidence:** files read, commands run, tests passed/failed, source links checked.
+- **Inference:** conclusions drawn from the evidence.
+- **Unverified:** what was not checked, could not be accessed, or remains a follow-up.
+
+You **MUST NOT** say "I reviewed", "I verified", "this works", or "the latest" unless the evidence has actually been observed in the current context. If a repository, page, tool, or branch was inaccessible, say that explicitly and do not launder adjacent sources into direct proof.
 
 ### Test-failure classification
 

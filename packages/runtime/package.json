@@ -1,0 +1,20 @@
+{
+  "name": "@waldo/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@waldo/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.16.20",
+    "@cloudflare/workers-types": "4.20260616.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9",
+    "wrangler": "4.105.0"
+  }
+}
