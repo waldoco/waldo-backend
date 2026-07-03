@@ -3,8 +3,9 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7, PR #8, PR #9, and PR #10 are merged into `main`. Current WIP is
-  `codex/scheduler-goal-contracts`.
+- **Baseline:** PR #7–#11 are merged into `main` (`0d4dd26`). Open PRs off `main`:
+  `foundation/loop-governor-contract` (#12, ADR-0074 governor contract SLICE-1) and
+  `foundation/sanitiser-art9-parity` (#13, Art-9 sanitiser hardening — see FOUNDATION-HANDOVER §6.1).
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
 - **Canonical sources:** the accepted ADR corpus, the build bible
@@ -63,7 +64,7 @@ Foundation sequence so far:
 11. PR #9 adversarial hardening: mint timing, user-scoped consent lookup, and channel-persona
    card filtering.
 12. PR #10 runtime seam: run/session/working-memory contracts.
-13. Current branch: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
+13. PR #11: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
 
 Next dependency layers remain runtime and public-surface work:
 full `governor` -> full `delivery` -> `telemetry/*`
@@ -112,9 +113,15 @@ because it depends on both.
   contracts are represented with valid/invalid tests. The Phase C tracer now writes a
   canonical one-shot `handoff` schedule row for its alarm path; this is compatibility with
   the contract, not the Durable Object scheduler/runtime implementation.
-- [ ] **Phase D remaining waves** — full governor and delivery beyond the tracer,
-  telemetry, public DTO/OpenAPI/generated-client freshness, scenario/property/mutation lanes,
-  and live/dogfood lanes.
+- [x] **Loop Governor contract (SLICE-1)** — ADR-0074 full `LoopPolicy` manifest, acute-health-first
+  arbiter `priorityTierRank`, terminal disposition enum, and the fail-closed `LOOP_POLICIES` registry
+  + `lookupLoopPolicy` + `admit(policy|null)` (null → deny). Promotes `runtime/loop-policy` from the
+  two-field tracer sliver to the full contract; the tracer now admits its fetch loop through the
+  registry. Contract-only; the runtime arbiter/budget/kill/no-progress guard remain SLICE-3.
+- [ ] **Phase D remaining waves** — delivery/outbox contract expansion (SLICE-2), the governor +
+  delivery/outbox runtime (SLICE-3, needs DDL + real DO tests), telemetry, public
+  DTO/OpenAPI/generated-client freshness, scenario/property/mutation lanes, and live/dogfood lanes.
+  See `FOUNDATION-HANDOVER.md` §5 for the 3-slice split and §6 for the tracked findings.
 
 ## Grounding flags & dispositions
 
@@ -175,6 +182,9 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The next safe unit after scheduler/goal lands is full governor plus delivery/outbox contract
-expansion. Do not broaden telemetry, public DTOs, or generated-client work before those
-runtime gates are explicit and tested.
+The Loop Governor contract (SLICE-1) has landed. The next safe unit is SLICE-2 — the delivery-policy
+contract expansion (ADR-0068), contract-only. See `FOUNDATION-HANDOVER.md` §5 (the 3-slice split of
+"full governor plus delivery/outbox") and §9 (continuation prompt). Do not start the governor/
+delivery/outbox runtime (SLICE-3) until PR #13 has merged, ADR-0049 taint-gate authority is decided,
+and a real cross-eviction DO test substrate proves exactly-once delivery. Do not broaden telemetry,
+public DTOs, or generated-client work before those runtime gates are explicit and tested.
