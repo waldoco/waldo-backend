@@ -15,7 +15,7 @@
 - **Baseline is green.** `pnpm verify` on `main@0d4dd26`: 1070 contract tests + 18 workerd tests + 8 guards, clean tree.
 - **The contract spine is safe to build *contracts* against.** Every persisted/egress DTO is a strict Zod object; field-shaped raw-health injection is structurally unrepresentable and pinned by ~9 test files.
 - **The runtime is essentially unbuilt.** Only the Phase-C scheduled tracer executes; the full harness loop, the DO scheduler multiplexer, the delivery flusher, and the sanitiser runtime do not exist. Do not read "contracts shipped" as "runtime built."
-- **Three pre-existing findings must be tracked before the runtime lands** (§6). One is **HIGH** (Art-9): the canonical Scribe sanitiser vocabulary is narrower than the project's own forbidden-health set. None is introduced by this PR; none blocks a contract-only PR.
+- **Three pre-existing findings surfaced (§6), none introduced by this PR, none blocking a contract-only PR.** The **HIGH** (Art-9) Scribe-sanitiser-vocabulary finding is **RESOLVED in PR #13** (widened to structured payloads on a precision model + guard flipped to block). Two **MEDIUM** remain open: the ADR-0049 taint-gate authority (§6.2, needs a founder call) and exactly-once *delivery* (§6.3, SLICE-3).
 - **This PR (SLICE-1)** widens the Loop Governor from a two-field sliver to the full ADR-0074 manifest + arbiter precedence + fail-closed admission registry. Contract-only + a minimal tracer-compat patch. No DDL, no runtime, no new provider surface.
 
 **When can other agents start building runtime logic?** Not yet, and not uniformly:
@@ -56,7 +56,7 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | Routing + model policy | 0069 | partial-contract | ✅ | ✅ | Roster + routing rows present; shadow-eval + cost/escalation telemetry deferred. |
 | **Loop Governor** | **0074** | **contract-only¹** | ❌ | ✅ | **This PR (SLICE-1)** ships the full manifest + arbiter + fail-closed registry. Runtime arbiter comparator, per-run budget/kill enforcement, dedup, no-progress guard (`loop_progress` table) → **SLICE-3**. |
 | Tools / ACL / auth | 0008/0032/0033 | contract-only | ✅ | ⚠️ | ACL map + mint + consent solid. Taint→privileged-action gate ships two unreconciled functions; authority "OPEN, not decided" (finding §6.2). |
-| Memory + Scribe sanitiser | 0024/0046 | contract-only | ❌ | ⚠️ | Contracts complete + consistent. `sanitise()` runtime absent; **raw-sensor vocabulary narrower than Art-9 set** (finding §6.1). |
+| Memory + Scribe sanitiser | 0024/0046 | contract-only | ❌ | ✅ | Contracts complete + consistent. Raw-sensor vocabulary widened to full Art-9 + structured payloads + precision, guard now blocks (§6.1 fixed, PR #13). `sanitise()` runtime still absent. |
 | Contract SoT + tracer boundary | 0029 | built | ✅ | ✅ | Barrel exports + tracer clearly labelled + no HTTP path reaches `TracerDO` (404). Point-in-time safe; re-check when a product route lands. |
 
 ¹ Was `tracer-only` at audit time; this PR promotes it to `contract-only` (full manifest, no runtime).
@@ -89,7 +89,7 @@ The critic confirmed MUST-SPLIT. Verified against ADR text: the manifest (11 fie
 | **SLICE-2 (next, contract-only)** | Delivery-policy expansion: grow `pushClassSchema` `fetch_alert`-literal → 10-member enum; add `deliveryPolicyRowSchema` + `DELIVERY_POLICY` + `TRIGGER_PUSH_CLASSES` + tier caps; widen `admissionSchema` → `channels[]`/`collapse_id`/`hold_until`. Encode the **correct** invariant "every agent-reachable exempt class carries a non-null cap" (NOT the stale `agent_invocable ∩ exempt = ∅` set). | No | No |
 | **SLICE-3 (later, runtime)** | Durable outbox/journal DDL (PK = idempotency key, `status`/`attempts`/`next_retry_at`, `held_candidates` + `loop_progress` tables, Supabase `notification_log` UNIQUE mirror); run-FSM re-expansion; scheduler multiplexer; async retried flush; governor budget/kill/no-progress runtime. | **Yes** | **Yes — real `@cloudflare/vitest-pool-workers` cross-eviction; exactly-once *delivery* cannot be certified without them** |
 
-Deferred from SLICE-1 into SLICE-3 (no caller in a contract-only PR): the arbiter comparator (`compareLoopAdmission`), within-run dedup (`dedupInput`), and the cross-run no-progress guard (`isStuck`) — all consume runtime tool-execution data / the `loop_progress` table. The ADR-0074 §Move1.4 DELIVER Art-9 egress floor is deferred to the sanitiser-parity PR (§6.1) so the health-value vocabulary is single-sourced rather than a third hand-rolled copy.
+Deferred from SLICE-1 into SLICE-3 (no caller in a contract-only PR): the arbiter comparator (`compareLoopAdmission`), within-run dedup (`dedupInput`), and the cross-run no-progress guard (`isStuck`) — all consume runtime tool-execution data / the `loop_progress` table. The ADR-0074 §Move1.4 DELIVER egress floor stays deferred (it is runtime); it will reuse the now-single-sourced `RAW_SENSOR_PATTERNS` (widened in PR #13, §6.1) rather than declaring a third hand-rolled copy.
 
 After the seam: telemetry contracts → public DTOs + OpenAPI emitter + generated-client freshness → scenario/property/mutation lanes → live/dogfood lanes.
 
@@ -99,12 +99,10 @@ After the seam: telemetry contracts → public DTOs + OpenAPI emitter + generate
 
 All three are pre-existing on `main`, latent (no runtime executes them today), and outside this PR's diff. Per posture, they are logged for dedicated follow-ups, not fixed as a side effect of a governor PR.
 
-### 6.1 [HIGH · Art-9] Scribe sanitiser vocabulary is narrower than the forbidden-health set
-- **Where:** `packages/contracts/src/memory/sanitise.ts:85-90` (`RAW_SENSOR_PATTERNS`), header `:4-8` (declares the regex set IS the spec).
-- **What:** `RAW_SENSOR_PATTERNS` covers only HRV / HR / SpO2 / sleep. The project's own `guard-health-leak.mjs` `HEALTH_TOKENS` (`:35-42`) enumerates a superset — weight, body_weight, blood_pressure, systolic, diastolic, calorie_burn, active_energy — as forbidden. So free-text "weight: 82 kg" / "blood pressure 140/90" would be neither rejected (internal destinations) nor redacted (external) by a runtime built faithfully behind the pinned vocabulary. Empirically confirmed against the live regexes.
-- **Compensating control is inert:** `guard-health-leak.mjs` `DISPOSITION='warn'` (`:15`) exits 0 on findings (`:182`), and it scans source, not runtime data.
-- **Fix (own PR, before any sanitiser runtime):** extend `RAW_SENSOR_PATTERNS` to Art-9 parity with `HEALTH_TOKENS`; single-source that vocabulary so the ADR-0074 §Move1.4 governor egress floor consumes the same set; flip the guard `warn`→`block` after false-positive measurement.
-- **Severity HIGH not CRITICAL:** no runtime exists (no data leaks today), and the field-level DTO wall blocks the structured vector.
+### 6.1 [HIGH · Art-9] Scribe sanitiser vocabulary — RESOLVED in PR #13 (`foundation/sanitiser-art9-parity`, open → main)
+- **Was:** `RAW_SENSOR_PATTERNS` covered only HRV / HR / SpO2 / sleep in a prose shape — narrower than the project's own `guard-health-leak.mjs` `HEALTH_TOKENS` superset (weight, blood pressure incl. systolic/diastolic, calorie burn, active energy) — and it missed the shape health data actually takes: structured payloads with snake_case / kebab / camelCase keys, unit-suffixed keys (`hrv_ms`, `weight_kg`, `systolicMmHg`), and quoted numeric / BP-ratio values. The compensating guard was `warn`/exit-0.
+- **Fixed (PR #13):** `RAW_SENSOR_PATTERNS` rebuilt on a specific/ambiguous model — specific tokens match on any separator with an optional glued unit suffix; ambiguous short tokens (hr/bp/weight/sleep) REQUIRE a family unit, so ordinary prose (an HR-team count, a basis-points delta, a graph edge weight) is not over-redacted (a raw-sensor match rejects the write). `guard-health-leak` flipped `warn`→`block` + gained unit-suffix tolerance; `guards-selftest` proves quoted/snake/camel/unit-suffix leaks fail CI and zone prose passes. Derived via a 4-agent adversarial sweep + deterministic verification (36 catch / 16 reject, zero false positives), mutation-proven non-vacuous.
+- **Remaining (cross-repo follow-up):** amend ADR-0024's canonical §Check-2 block in `waldo-brain` to match the widened set. **Residual** (deterministic-floor limits — the ADR-0074 §Move1.4 grader's job, not this floor): a value nested under an inner key (`hrv: { quantity: 42 }`), a word between key and number (`hrv: approx 42`), CSV commas, and health metrics outside these families (glucose / bmi / temperature / vo2max / respiratory rate) — the latter is the metric-vocabulary curation the ADR-0024 amendment should settle.
 
 ### 6.2 [MEDIUM] ADR-0049 taint→privileged-action gate ships two unreconciled authorities
 - **Where:** `packages/contracts/src/core/hooks.ts:155-159` (gate slot `priority: null`, "OPEN, not decided"), `tools/handler.ts:70-72` (`taintGateBlocksDirectExecution`, tool-scoped) vs `hooks.ts:163` (`taintGateTrips`, tool-agnostic). `PRIVILEGED_ACTION_TOOLS` omits `delete_message`/`restore_message`/`archive_thread`/`update_thread_topics`/`call_mcp_tool`.
@@ -144,7 +142,7 @@ Everything else the skeptics probed returned **safe**: mint forgery, consent esc
 - [ ] No secrets in code/config/logs/CI; no live provider keys or production data in default gates.
 - [ ] No raw health values (HRV, HR, SpO2, sleep, **weight, BP, systolic/diastolic, calorie, active-energy**) in DO SQLite, logs, prompts, traces, R2, or committed fixtures — synthetic only.
 - [ ] Persisted/egress DTOs are `z.strictObject`; raw physiological *fields* structurally unrepresentable (assert `.success === false`).
-- [ ] Free-text content bound for a health sink is covered by the sanitiser vocabulary (see finding §6.1 until fixed).
+- [ ] Free-text content bound for a health sink is covered by the sanitiser vocabulary (§6.1 — widened to structured payloads in PR #13; nested-object / word-interposed values remain the ADR-0074 grader's job).
 - [ ] Auth/ACL claims backed by real verification; taint-gated tools route through `propose_action` or block (see §6.2).
 - [ ] GitHub Actions SHA-pinned; `pnpm install --frozen-lockfile`; release-age gate active; no `eval`/shell-from-untrusted/unsafe-deserialization.
 - [ ] Idempotency: exactly-once proven at the durable layer for any new side-effecting runtime (see §6.3).
@@ -178,19 +176,20 @@ Pick ONE of these, single-writer, contract-only unless noted, tests-first, its o
    exempt class carries a non-null cap" (NOT the stale ∅ invariant). Exact valid/invalid + golden
    trace tests. No DDL.
 
-2. HIGH health fix (ADR-0024), contract-only — own PR. Extend RAW_SENSOR_PATTERNS to Art-9 parity
-   with guard-health-leak HEALTH_TOKENS (weight/BP/systolic/diastolic/calorie/active-energy);
-   single-source that vocabulary so the ADR-0074 governor egress floor reuses it; flip
-   guard-health-leak DISPOSITION warn->block after measuring false positives. Add per-family
-   valid/invalid tests. (Finding §6.1 — do this before any sanitiser runtime.)
+2. DONE in PR #13 — HIGH Art-9 sanitiser hardening: RAW_SENSOR_PATTERNS widened to structured
+   payloads (unit-suffixed / snake / camel keys, quoted + BP-ratio values) on a specific/ambiguous
+   precision model; guard-health-leak warn->block + unit-suffix tolerance; adversarial-swept +
+   mutation-proven. Remaining sliver: amend ADR-0024's canonical §Check-2 block in waldo-brain
+   (cross-repo). (Finding §6.1.)
 
 3. ADR-0049 taint-gate reconciliation (ADR-0049/0032) — own PR + a founder call on the authority
    (add omitted tools to PRIVILEGED_ACTION_TOOLS | collapse to taintGateTrips | per-handler
    autonomy_gated). Hostile-fixture test. (Finding §6.2 — needs human-visible decision.)
 
 Do NOT: start the DO runtime (SLICE-3, delivery flusher, scheduler multiplexer, sanitiser runtime,
-full run-FSM) until (a) §6.1 is fixed, (b) a cross-eviction @cloudflare/vitest-pool-workers
-substrate proves exactly-once DELIVERY (not just enqueue), (c) §6.2 authority is decided. Do NOT
+full run-FSM) until (a) PR #13 (§6.1 sanitiser hardening) has merged, (b) a cross-eviction
+@cloudflare/vitest-pool-workers substrate proves exactly-once DELIVERY (not just enqueue), (c) §6.2
+authority is decided. Do NOT
 broaden into telemetry, public DTOs, OpenAPI, or generated clients in the same PR as a contract seam.
 
 Use dynamic workflows for research/review/attack/disjoint modules only; keep runtime + shared

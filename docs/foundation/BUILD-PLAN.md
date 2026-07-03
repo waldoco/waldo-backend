@@ -3,8 +3,9 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7, PR #8, PR #9, and PR #10 are merged into `main`. Current WIP is
-  `codex/scheduler-goal-contracts`.
+- **Baseline:** PR #7–#11 are merged into `main` (`0d4dd26`). Open PRs off `main`:
+  `foundation/loop-governor-contract` (#12, ADR-0074 governor contract SLICE-1) and
+  `foundation/sanitiser-art9-parity` (#13, Art-9 sanitiser hardening — see FOUNDATION-HANDOVER §6.1).
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
 - **Canonical sources:** the accepted ADR corpus, the build bible
