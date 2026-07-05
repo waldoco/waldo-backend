@@ -16,17 +16,22 @@ export function computeVerdict(
   classState: ClassState,
   policy: FetchAlertPolicy,
 ): Admission {
-  const { count, last_sent_at } = classState.fetch_alert;
+  const { count, last_sent_at } = classState.fetch_alert ?? { count: 0, last_sent_at: null };
   const underCap = count < policy.daily_cap;
   const cooldownElapsed =
     last_sent_at === null || candidate.now - last_sent_at >= policy.cooldown_min * MS_PER_MINUTE;
 
   return {
     verdict: underCap && cooldownElapsed ? 'send' : 'hold',
+    hold_until: underCap && cooldownElapsed ? undefined : candidate.now + policy.cooldown_min * MS_PER_MINUTE,
+    channels: ['apns'],
+    collapse_id: 'stack',
+    budget_charged: false,
     stamped: {
       push_class: policy.push_class,
       is_standalone: false,
       budget_exempt: policy.budget_exempt,
+      expires_at: null,
     },
   };
 }
