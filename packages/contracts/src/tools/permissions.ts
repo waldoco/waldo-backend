@@ -142,6 +142,21 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_action',
     'send_message',
   ],
+  // ADR-0065 moves pre-Brief sweep out of Patrol. It precomputes Brief context but does not
+  // deliver, so it keeps the Brief read/context shape without send_message.
+  pre_brief_sweep: [
+    'get_crs',
+    'get_health',
+    'query_calendar',
+    'get_communication',
+    'get_tasks',
+    'get_master_metrics',
+    'get_context',
+    'read_memory',
+    'search_episodes',
+    'search_connector',
+    'propose_action',
+  ],
 };
 
 // ADR-0034 lazy discovery: on the verbose triggers the prompt builder loads only the

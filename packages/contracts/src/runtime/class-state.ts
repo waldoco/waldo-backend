@@ -1,23 +1,23 @@
 import { z } from 'zod';
+import { pushClassSchema } from './delivery-policy';
 
-// Per-class cap counter (cap 3/day) + last-send timestamp for the 2h cooldown.
-export const classStateSchema = z.strictObject({
-  fetch_alert: z.strictObject({
-    count: z.int().nonnegative(),
-    last_sent_at: z.int().nonnegative().nullable(),
-  }),
+export const deliveryClassCounterSchema = z.strictObject({
+  count: z.int().nonnegative(),
+  last_sent_at: z.int().nonnegative().nullable(),
 });
+export type DeliveryClassCounter = z.infer<typeof deliveryClassCounterSchema>;
+
+export const classStateSchema = z.partialRecord(pushClassSchema, deliveryClassCounterSchema);
 export type ClassState = z.infer<typeof classStateSchema>;
 
-// Present for Phase-D reconciliation. fetch_alert is budget-exempt: the gate never reads or
-// writes sends_total. Non-exempt classes will decrement against this in Phase D.
 export const dailyPushBudgetSchema = z.strictObject({
+  local_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   sends_total: z.int().nonnegative(),
+  exempt_sends: z.int().nonnegative().default(0),
+  class_state: classStateSchema.default({}),
 });
 export type DailyPushBudget = z.infer<typeof dailyPushBudgetSchema>;
 
-// Audit / WIS / push-pressure counter. Exempt sends bypass the daily budget but are still
-// counted here so an exempt class cannot silently escape observability.
 export const exemptTelemetrySchema = z.strictObject({
   exempt_sends: z.int().nonnegative(),
 });

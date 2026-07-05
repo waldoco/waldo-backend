@@ -4,7 +4,7 @@ import { briefVariantSchema, canaryTokensSchema, triggerTypeSchema } from './tri
 const hex = (c: string): string => c.repeat(16).slice(0, 16);
 
 describe('triggerType', () => {
-  it('is exactly the eleven canonical triggers, in order', () => {
+  it('is exactly the twelve canonical triggers, in order', () => {
     expect(triggerTypeSchema.options).toEqual([
       'brief',
       'fetch_alert',
@@ -17,6 +17,7 @@ describe('triggerType', () => {
       'user_message',
       'dreaming_mode',
       'pre_activity_spot',
+      'pre_brief_sweep',
     ]);
   });
 

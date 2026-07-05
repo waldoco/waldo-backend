@@ -12,6 +12,7 @@ export const triggerTypeSchema = z.enum([
   'user_message',
   'dreaming_mode',
   'pre_activity_spot',
+  'pre_brief_sweep',
 ]);
 export type TriggerType = z.infer<typeof triggerTypeSchema>;
 

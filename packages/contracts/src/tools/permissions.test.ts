@@ -14,7 +14,8 @@
 // the full surface; pre_activity_spot always carries send_message (ADR-0042); search_tools
 // args bounds + default. Failure modes caught: a tool leaking into a forbidden trigger's
 // ACL, a retired tool name resurfacing, blast-radius widening of brief, lazy discovery
-// drifting beyond the two verbose triggers, an unbounded search_tools query or limit.
+// drifting beyond the two verbose triggers, an unbounded search_tools query or limit, and
+// pre_brief_sweep gaining delivery authority.
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { triggerTypeSchema } from '../core/trigger';
@@ -77,7 +78,7 @@ describe('toolName', () => {
 });
 
 describe('TOOL_PERMISSIONS', () => {
-  it('covers all 11 triggers and every entry is a canonical tool name', () => {
+  it('covers all 12 triggers and every entry is a canonical tool name', () => {
     expect(Object.keys(TOOL_PERMISSIONS).sort()).toEqual([...triggerTypeSchema.options].sort());
     for (const trigger of triggerTypeSchema.options) {
       expect(z.array(toolNameSchema).safeParse(TOOL_PERMISSIONS[trigger]).success).toBe(true);
@@ -177,6 +178,19 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_action',
         'send_message',
       ],
+      pre_brief_sweep: [
+        'get_crs',
+        'get_health',
+        'query_calendar',
+        'get_communication',
+        'get_tasks',
+        'get_master_metrics',
+        'get_context',
+        'read_memory',
+        'search_episodes',
+        'search_connector',
+        'propose_action',
+      ],
     });
   });
 
@@ -221,6 +235,12 @@ describe('TOOL_PERMISSIONS', () => {
 
   it("always grants pre_activity_spot 'send_message' — a Spot is never silent (ADR-0042)", () => {
     expect(TOOL_PERMISSIONS.pre_activity_spot).toContain('send_message');
+  });
+
+  it('keeps pre_brief_sweep context-only: no delivery, action execution, or code execution', () => {
+    expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('send_message');
+    expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('execute_action');
+    expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('execute_code');
   });
 });
 

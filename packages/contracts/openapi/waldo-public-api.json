@@ -1,0 +1,147 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Waldo Public API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/engagement-events": {
+      "post": {
+        "operationId": "createEngagementEvent",
+        "summary": "Record a redacted engagement event",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicEngagementEventRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicEngagementEventResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PublicEngagementEventRequest": {
+        "type": "object",
+        "properties": {
+          "push_class": {
+            "type": "string",
+            "enum": [
+              "brief",
+              "fetch_alert",
+              "adjustment",
+              "pre_activity_spot",
+              "constellation_first",
+              "constellation_update",
+              "spot_digest",
+              "intervention_knock",
+              "sync_error",
+              "system_consent"
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "apns",
+              "telegram",
+              "in_app"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "delivered",
+              "opened",
+              "reply",
+              "callback_tap",
+              "thumbs_up",
+              "thumbs_down",
+              "mute",
+              "disable"
+            ]
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "run_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "push_class",
+          "channel",
+          "kind",
+          "occurred_at"
+        ],
+        "additionalProperties": false
+      },
+      "PublicEngagementEventResponse": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "additionalProperties": false
+      },
+      "PublicError": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
