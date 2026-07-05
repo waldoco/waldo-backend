@@ -9,9 +9,9 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "verify:node": "pnpm --filter '@waldo/contracts' test",
-    "verify:workers": "pnpm --filter '@waldo/runtime' test",
-    "verify:guards": "for f in scripts/guards/*.mjs; do node \"$f\" || exit 1; done",
+    "verify:node": "pnpm --filter @waldo/contracts test",
+    "verify:workers": "pnpm --filter @waldo/runtime test",
+    "verify:guards": "node scripts/guards/run-all.mjs",
     "verify": "node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:workers && pnpm verify:guards"
   }
 }
