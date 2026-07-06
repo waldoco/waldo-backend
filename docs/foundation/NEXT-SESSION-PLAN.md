@@ -1,388 +1,155 @@
-# Next-Session Runbook - Phase D Contract Spine
+# Next Session Plan - Harness Runtime Grilling And Build Planning
 
-## Verdict
+Status: active entrypoint for the next Waldo backend grilling/planning session.
+Date: 2026-07-06.
+Baseline: current `main` after Phase D contract-spine completion and the agent operating workflow docs.
 
-Use Fable 5 in Claude Code dynamic workflows for a phase-gated Phase D run, not
-as an autonomous "finish the foundation" mode. It is useful for Waldo because
-Phase D has independent research, review, attack, and contract-wave lanes. It is
-risky if it is allowed to write runtime code concurrently across shared files or
-continue after a failed wave barrier.
+This replaces the old Phase D contract-spine runbook. The contract spine is ready enough for runtime work; the next session should grill the runtime plan, assign async pillars, and then start with the first durable runtime slice.
 
-Phases A/B/C and Phase D Waves 1-4a are complete on `main` via PR #7. PR #8 adds channel
-adapters, tools, hooks, auth minting/consent, and memory-skill lifecycle contracts. PR #10
-adds runtime run/session/working-memory contracts. The
-correct next move is not to replay the CI wall, runtime substrate, scheduled tracer,
-routing/LLM contracts, completed UI/provider adapter seams, the PR #8 contract spine, or
-the PR #10 runtime contract seam.
-The immediate gate is:
+## Start Here
 
-```text
-make the scheduler/goal branch reviewable
--> npx -y pnpm@10.34.4 verify
--> git diff --check
--> fresh post-merge branch for full governor plus delivery/outbox contracts
-```
-
-Codex remains the external adversarial audit lane after a phase or commit.
-Ultracode is a Claude Code dynamic workflow mode. Do not describe it as "Codex
-Ultracode."
-
-## Sources to Load Before Coding
-
-Read these in order:
+Read in this order:
 
 1. `.claude/rules/INDEX.md`
-2. `docs/foundation/BUILD-PLAN.md`
-3. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-4. This file
-5. Waldo Brain DeepWiki pages relevant to the selected Phase D wave
-6. Accepted ADRs for the selected wave. For the first memory wave, include
-   ADR-0046 plus the storage/runtime ADRs it crosses. For runtime reconciliation,
-   include ADR-0054, ADR-0065, ADR-0068, ADR-0074, and ADR-0029.
+2. `README.md`
+3. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
+4. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
+5. `docs/foundation/FOUNDATION-HANDOVER.md`
+6. `docs/foundation/BUILD-PLAN.md`
+7. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
+8. The Waldo Brain source files listed in the runtime build plan for the seam being grilled.
 
-Cloud Claude Code sessions clone only committed repo files. They do not
-automatically receive a sibling `waldo-brain` checkout. If the cloud session
-cannot read Waldo Brain directly, copy the required DeepWiki/ADR extracts into
-committed foundation docs before launching the workflow.
-
-## Verified External Constraints (2026-07-01)
-
-Claude Code dynamic workflows:
-
-- Trigger with the word `ultracode` or `/effort ultracode`.
-- Ultracode combines high reasoning effort with automatic workflow
-  orchestration. It can spend more time and tokens than a normal session.
-- A workflow is a generated script that orchestrates agents. The script runtime
-  itself has no filesystem or shell access; the agents it launches do.
-- Inspect the generated plan and raw script before approval.
-- Once approved, the workflow cannot stop for mid-run user input.
-- Subagents inherit the session tool allowlist and can edit files.
-- The documented limits are 16 concurrent agents and 1,000 total agents.
-- Run a small slice before letting a large workflow continue.
-- Agent teams are best used for parallel exploration, review, and design
-  comparison. Keep most teams around 3 to 5 agents unless the work is
-  mechanically independent.
-- Pre-allow only safe commands needed for the phase, such as `rg`, `git diff`,
-  `pnpm install`, `pnpm -r typecheck`, `pnpm -r test`, and `pnpm verify`.
-  Do not pre-allow deploy, production secret, or live-provider commands.
-
-Claude Code web/cloud:
-
-- Cloud sessions run in fresh Anthropic-managed VMs from committed repository
-  state.
-- User-level local files are not available unless committed or explicitly
-  provided.
-- There is no dedicated secrets store yet. Do not put production secrets in the
-  cloud environment for this foundation work.
-- Package installs done inside one session do not automatically carry to other
-  sessions unless encoded in setup.
-- Keep setup under about 5 minutes; the VM is Ubuntu and supports Node, pnpm,
-  git, rg, tmux, and Docker.
-- Expected resource envelope is modest: roughly 4 vCPU, 16 GB RAM, and 30 GB
-  disk.
-- Use Claude Code worktree isolation for parallel cloud sessions. Base them
-  from the pushed branch, not from uncommitted local state.
-
-Cloudflare runtime testing:
-
-- `@cloudflare/vitest-pool-workers` runs Vitest tests inside the Workers
-  runtime, backed by Miniflare/workerd.
-- Cloudflare's Durable Object testing example uses
-  `vitest@^4.1.0` with `@cloudflare/vitest-pool-workers`.
-- Workers-runtime tests can access helpers such as `runInDurableObject`,
-  `runDurableObjectAlarm`, and `evictDurableObject`.
-- Storage is isolated per test file. Design tests accordingly.
-- Known limitations exist around coverage, dynamic imports, WebSockets, and
-  resource cleanup. Await storage promises and consume response bodies.
-
-## External Harness Signals
-
-These are sanity checks, not authority over Waldo's ADRs.
-
-- Cloudflare Agents SDK uses Workers-native tests with
-  `@cloudflare/vitest-pool-workers`, repo-wide checks, affected test runs,
-  `wrangler.jsonc`, strict Workers conventions, and a coverage matrix tying
-  features to evidence.
-- Hermes uses a single CI-parity wrapper (`scripts/run_tests.sh`), manual
-  smoke checks (`hermes doctor`, `hermes chat`), cross-platform footgun checks,
-  and explicit security protections around shell use, cron prompt injection,
-  skill installation, and code execution.
-- Pi uses `npm run check` plus `./test.sh` as the PR bar, skips LLM-dependent
-  tests without keys, pins direct dependencies, uses a release-age policy, and
-  release-smokes packed installs before tagging. Pi also states that its default
-  process has no built-in permission sandbox, which is not acceptable for
-  Waldo's health-data runtime.
-- OpenHands-style benchmark infrastructure separates local Docker workspaces
-  from remote scalable workspaces and records structured logs of tool calls,
-  messages, errors, and final run status.
-
-Waldo should adopt the discipline, not the shape: one command wall, hermetic
-runtime tests, isolated scenario/eval workspaces, structured trace artifacts,
-and human/CI gates around agent-generated changes.
-
-## Cloud Session Preflight
-
-Before launching the Fable 5 dynamic workflow:
-
-1. Push the current post-PR7 branch if the cloud session will work from the remote.
-2. Commit the mirrored `.claude/rules/` files from Waldo Brain.
-3. Confirm the cloud session is on Node 22 and the package manager from
-   `package.json`.
-4. Run setup:
-
-```bash
-corepack enable
-corepack prepare pnpm@10.34.4 --activate
-pnpm install --frozen-lockfile
-```
-
-5. Run the baseline:
+Then run the baseline gate before planning claims or edits:
 
 ```bash
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-6. Do not provide production Supabase, Cloudflare, Anthropic, OpenAI, or Google
-   secrets. This phase should use fakes and hermetic runtime tests.
+## Current Truth
 
-## Workflow Approval Checklist
+- The Waldo Brain architecture is no longer an open research problem for V1. It calls for a per-user Cloudflare Durable Object running a resumable, journaled, deterministically governed agent loop.
+- The backend contract spine is broad and real: contracts exist for runtime run/session/schedule/goal/outbox/policy, tools, memory, prompt, model routing, adapters, public DTO/OpenAPI, telemetry, and evidence lanes.
+- The backend runtime is still mostly skeletal. The only executing harness path is the scheduled `fetch_alert` tracer.
+- The next work is runtime proof, not more contract expansion.
+- Split work by runtime seam, not by product pillar. Brief, Fetch, Spots, and Chat all converge on the same DO loop, journal, scheduler, dispatcher, memory, and delivery files.
 
-Before approving any generated dynamic workflow, reject it if it:
+## Grilling Questions
 
-- Skips the local rule index, foundation docs, DeepWiki, or accepted ADRs.
-- Plans parallel writes to the same files or tightly coupled modules.
-- Replays Phase A/B/C instead of starting the selected Phase D wave.
-- Uses live providers, production data, or production secrets.
-- Calls external LLMs in default tests.
-- Touches unrelated legacy code, stashed work, or old Codex spine branches.
-- Bypasses the release-age policy, `tsc`, Vitest, or runtime Workers tests.
-- Produces implementation without an adversarial review/attack lane.
-- Leaves the cloud session without a committed artifact or clear stop reason.
+Use `/grill-with-docs`, `/waldo-isa-run-contract`, and `/codebase-design` against these questions before implementation:
 
-## Historical Phase A - CI and Conformance Wall
+1. What exact invariant must the first runtime PR prove?
+2. Which files are single-writer for that PR?
+3. Which accepted ADR owns the behavior?
+4. What must be tested in `@cloudflare/vitest-pool-workers`, not only in Node?
+5. What must stay out of scope so the first PR stays reviewable?
+6. Which parallel lanes are safe because they do not write the same runtime files?
+7. What would make the plan unsafe for Art-9 health data, auth, memory, or delivery?
 
-Status: landed. Do not replay unless a regression forces it.
+## Exact Next Slice
 
-Built:
+Start with **SLICE-3a: durable DeliveryGate/outbox proof**.
 
-- Add `pnpm verify` as the single local wall.
-- Add `verify.yml` with pinned GitHub Actions SHAs and minimal permissions.
-- Keep `pnpm install --frozen-lockfile`, `pnpm -r typecheck`, and
-  `pnpm -r test` in the wall.
-- Enforce the package release-age gate.
-- Add static guards for stale `@waldo/types`, stale model IDs, health/PII leak
-  patterns, `--passWithNoTests`, and direct `setAlarm` outside the scheduler
-  abstraction.
-- Add ADR-status lint against accepted ADR metadata where practical.
+Goal:
 
-Done evidence:
+- Build the production run-journal/outbox seam far enough to prove side-effect idempotency.
+- Add the DO SQLite state needed for outbox status, attempts, next retry, ack, held candidates, daily push budget, and the notification-log mirror seam where applicable.
+- Prove crash after sink send but before ack does not double-deliver.
+- Use real `@cloudflare/vitest-pool-workers` eviction/resume tests.
 
-- `pnpm verify` passes.
-- At least one intentional violation was proven to fail each new guard.
-- The phase ends with a short Codex-review handoff note.
+Out of scope for SLICE-3a:
 
-## Historical Phase B - Cloudflare Runtime Test Substrate
+- Full scheduler multiplexer.
+- Full Loop Governor enforcement.
+- Dispatcher/tool runtime.
+- Scribe memory runtime.
+- Real LLM provider calls.
+- Live APNs/Telegram/provider credentials.
+- Live chat transport and app feed implementation.
 
-Status: landed. Do not replay unless a regression forces it.
-
-Built:
-
-- Add `@cloudflare/vitest-pool-workers`.
-- Add `wrangler.jsonc` with Durable Object binding and
-  `new_sqlite_classes`.
-- Add a minimal test-only Durable Object.
-- Add one Workers-runtime test that:
-  - obtains a Durable Object stub,
-  - writes/reads state in DO SQLite,
-  - drives `alarm()` with `runDurableObjectAlarm`,
-  - evicts with `evictDurableObject`,
-  - proves state survives eviction.
-
-Done evidence:
-
-- The runtime test runs in `@cloudflare/vitest-pool-workers`, not plain Node.
-- The test is wired into `pnpm verify`.
-- Known Cloudflare pool limitations are documented in the test README or file
-  header.
-
-## Historical Phase C - Scheduled Tracer Bullet
-
-Status: landed and post-review hardened. Do not replay unless a regression forces it.
-
-Minimum slice:
-
-- Run-journal FSM from ADR-0054.
-- Schedule entry and alarm multiplexer from ADR-0065.
-- Loop Governor admission from ADR-0074.
-- DeliveryGate current block from ADR-0068.
-- Transactional outbox with fake channel sink.
-- Only the contracts required for this scheduled path.
-
-Build discipline:
-
-- Use a judge-panel workflow for design synthesis.
-- Use a single implementation writer for the runtime slice.
-- Use parallel adversarial agents only for review, failure hunting, and test
-  design.
-
-Simulation discipline:
-
-- For each committed run-journal state, evict the Durable Object and re-drive
-  `alarm()`.
-- Assert resume-from-committed.
-- Assert outbox delivery fires exactly once.
-- Fuzz idempotency keys and trigger variants.
-- Include null, hostile, concurrent, and degraded cases.
-
-Done evidence:
-
-- `DO alarm -> Governor -> run journal -> DeliveryGate -> outbox` works in the
-  Workers runtime test substrate.
-- Crash/resume and exactly-once behavior are tested before broad contract waves.
-
-## Phase D - Contract Spine Waves
-
-Resume runtime-adjacent contract waves only after PR #8 and any follow-up verification branch
-are mergeable/merged and the fresh gate passes.
-
-Current wave status:
-
-- Done: Wave 1 memory contracts.
-- Done: Wave 2 CRS/prompt contracts.
-- Done: Wave 3 routing/LLM contracts with fake-provider seams.
-- Done: Wave 4a UI card/notification contracts and provider adapter seams for
-  health, calendar, sheet, email, and doc.
-- Done in PR #8: channel adapters, tools/ACL/schemas/handler,
-  core hooks, auth minting/consent, and memory-skill lifecycle.
-- Done in PR #10: runtime run/session/working-memory contracts.
-- Current scheduler/goal branch: ADR-0065 schedule contracts, ADR-0064 goal contracts,
-  `pre_brief_sweep` trigger/ACL/routing coverage, and a minimal Phase C tracer
-  schedule-row compatibility patch.
-- Remaining after the scheduler/goal branch lands: full governor/delivery, telemetry,
-  public/OpenAPI, scenario/property/mutation lanes, and live/dogfood lanes.
-
-Remaining wave order:
+First PR shape:
 
 ```text
-full governor
--> delivery/outbox
--> telemetry
--> public/OpenAPI
--> scenario/property/mutation/live lanes
+runtime: prove durable outbox exactly-once delivery
 ```
 
-Per wave:
+Acceptance:
 
-- Authors may work in parallel only on disjoint files.
-- Every module names its owning ADR.
-- Runtime boundaries use schemas, not type-only helpers.
-- Each module gets positive, negative, and mutation-style tests.
-- Barrier: `pnpm verify`, ADR drift review, and a focused security/privacy
-  review.
+- Failing test first for post-send/pre-ack crash.
+- Durable ack/idempotency state prevents duplicate side effects.
+- Fake sink does not hide the proof; the runtime interface itself names the idempotency contract.
+- `npx -y pnpm@10.34.4 verify` and `git diff --check` pass.
 
-Recommended next safe unit after the scheduler/goal branch lands:
+## Async Pillars
+
+| Pillar | Can start? | Main owner | Notes |
+| --- | --- | --- | --- |
+| Run Journal + Outbox | Now | Codex/runtime | Critical path. Single-writer. |
+| DeliveryGate Runtime | After outbox transaction shape | Codex/runtime | Budget, cooldown, held candidates, GATED step. |
+| Scheduler Multiplexer | Design now, runtime after outbox | Codex/scheduler | Alarm pop, recurrence, retry, quarantine, liveness. |
+| Loop Governor Runtime | Comparator tests now | Codex/policy runtime | Integration waits on run loop and loop-progress rows. |
+| Dispatcher + Hooks + ACL + Sanitiser | Isolated tests now | Codex/security runtime | Integration waits on invocation/run skeleton. |
+| Context + Memory + Prompt Hydration | Fake-backed design now | Claude memory/context + Codex integration | Keep raw health out of DO/R2/prompts/logs. |
+| LLMProvider + Routing + Eval | Now | Codex/eval | Fake-first provider and route tests are low collision. |
+| Channels + App Surfaces | Fake sinks now | Codex/channel + app team | Production delivery waits on outbox. Live chat/feed need decision. |
+| Auth/Data Plane/Adapters | Now | Claude/Supabase + Codex adapters | ADR-0066 ES256 Supabase issuer spike is a parallel blocker. |
+| Observability/Conformance | Now | Codex/infra | Trace event shape, scenario artifacts, replay/eval scaffolding. |
+
+## Coordination Rules
+
+Every lane must declare this before work starts:
 
 ```text
-Fresh post-merge PR: full governor plus delivery/outbox contracts, with exports,
-docs, and fresh gates before telemetry or public API expansion.
+Owner:
+Pillar:
+Source ADR/docs:
+Files owned:
+Files explicitly out of scope:
+Invariant:
+Tests:
+Merge dependency:
 ```
 
-Done criteria:
+Single-writer surfaces:
 
-- exact Zod schemas and exported types for the selected contract seams
-- valid and invalid tests that would fail on enum, field, or trust-order drift
-- no raw health values, live providers, production data, or public DTO derivation from internals
-- source refs named in tests or docs
-- `npx -y pnpm@10.34.4 verify` and `git diff --check` green
+- `packages/runtime/src/*`
+- `packages/contracts/src/runtime/*`
+- `packages/contracts/src/tools/*`
+- `packages/contracts/src/memory/sanitise.ts`
+- `packages/contracts/src/core/trigger.ts`
+- `packages/contracts/src/model/roster.ts`
+- `packages/contracts/src/index.ts`
+- Foundation truth docs when updating status.
 
-## Phase E - External Audit
+Safe parallel lanes:
 
-After each major phase, generate a Codex adversarial-review handoff with:
+- Read-only source rechecks.
+- Adversarial review.
+- Fixture/eval/scenario scaffolding.
+- Fake LLM routing tests.
+- Fake channel sink tests.
+- Supabase ES256 staging spike.
+- Live-chat/feed spike notes, without production implementation.
 
-- File list and line references.
-- Commands run and exact results.
-- Source docs/ADRs used.
-- Known test gaps.
-- Mutation or intentional-break evidence.
-- Any Cloudflare runtime limitations that still affect confidence.
+## Week Plan
 
-## Ready Prompt for Fable 5 Claude Code
+Week 1:
 
-```text
-ultracode
+1. Assign a single writer to SLICE-3a.
+2. Run ADR-0066 ES256 Supabase issuer spike in parallel.
+3. Start fake-first LLM routing/eval lane.
+4. Start fake channel sink and Telegram ingress gate tests.
+5. Start trace/conformance artifact scaffold.
+6. Start pure Loop Governor comparator tests only if they avoid shared runtime writes.
 
-Use Fable 5 in Claude Code dynamic workflows after the scheduler/goal branch has merged.
-Start from updated `main` and create a fresh post-merge branch for full governor plus
-delivery/outbox contracts.
+Week 2:
 
-First read:
-- .claude/rules/INDEX.md
-- docs/foundation/BUILD-PLAN.md
-- docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md
-- docs/foundation/NEXT-SESSION-PLAN.md
-- docs/foundation/CODEX-REVIEW-HANDOFF.md
-- required Waldo Brain DeepWiki pages and accepted ADRs for each Phase D wave
+1. Integrate DeliveryGate runtime onto the durable journal/outbox seam.
+2. Wire Loop Governor runtime enforcement.
+3. Wire dispatcher/hooks/sanitiser around the invocation skeleton.
+4. Begin scheduler multiplexer once run identity and retry semantics are stable.
+5. Keep memory/context fake-backed until the runtime loop can consume it safely.
 
-Use dynamic workflows for research, review, attack, and independent disjoint
-contract modules only. Keep runtime implementation single-writer. Keep one
-writer per shared contract surface. Parallelize reading/review/testing lanes,
-not tightly coupled writes.
+## Archived Docs
 
-Phases A/B/C and Phase D Waves 1-4a landed in PR #7. PR #8 added channel adapters,
-tool ACL/schemas/handler, hooks, auth minting/consent, and memory-skill lifecycle.
-PR #10 added runtime run/session/working-memory contracts. The scheduler/goal branch
-adds schedule and goal contracts.
-Before runtime expansion, update from `main` and run:
-
-```bash
-npx -y pnpm@10.34.4 verify
-git diff --check
-```
-
-If the scheduler/goal branch is conflicting or the baseline gate fails, stop and report the
-blocker. Do not continue runtime expansion on an unmergeable or red foundation.
-
-Continue Phase D in this wave order, with a hard verify barrier after every wave:
-
-1. full governor plus delivery/outbox contracts beyond the fetch_alert tracer path
-2. telemetry contracts
-3. public DTOs, OpenAPI emitter, and generated-client freshness
-4. scenario/property/mutation evidence lanes
-5. live/dogfood lanes after hermetic defaults are proven
-
-For each wave:
-- name the owning ADRs and DeepWiki pages before writing
-- use exact Zod schemas and exported types
-- add valid and invalid tests that fail on enum, field, ordering, trust, ACL, or budget drift
-- keep live providers, production data, production secrets, and raw health values out of default tests
-- do not derive public DTOs with .pick()/.omit() from internal schemas
-- run `npx -y pnpm@10.34.4 verify` and `git diff --check`
-- stop if a wave fails after three focused fix attempts or exposes an ADR conflict
-
-Before running the workflow, show the phase plan and raw script for approval.
-Reject your own plan if it writes shared runtime files in parallel, uses live
-secrets/providers, skips the ADRs, skips pnpm verify, broadens runtime before
-contracts exist, or lacks an adversarial review lane.
-
-After Phase D, report:
-- files changed,
-- commands run,
-- intentional failures that proved the guards/tests,
-- OpenAPI/generated-client freshness evidence,
-- residual risks,
-- exact next phase recommendation.
-```
-
-## Next-Session Success Criteria
-
-A strong Fable 5 session should complete Phase D only if each wave clears its
-barrier. If a blocker appears, the correct outcome is a precise stop reason, not
-partial work dressed up as completion. The highest-value outcome is:
-
-1. PR #8 and any follow-up verification branch are merged or explicitly reported as the blocker.
-2. Remaining Phase D/runtime waves land in order with exact valid/invalid tests and source refs.
-3. OpenAPI and generated-client freshness are implemented before public/API work is called done.
-4. `npx -y pnpm@10.34.4 verify` and `git diff --check` pass after every wave and at the end.
-5. Residual target-only gates are named honestly: scenario artifacts, property tests, and mutation
-   unless implemented in the Phase D run.
+Historical Phase A/B/D handoffs and old Codex review notes are under `docs/foundation/archive/`. They are useful for archaeology, not current planning. Do not use them as the active next-session plan.

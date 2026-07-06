@@ -1,5 +1,9 @@
 # Agentic Harness Discipline Audit
 
+Historical note: this audit explains why the backend builder workflow was imported and repaired.
+For the active runtime build plan, use `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` and
+`docs/foundation/NEXT-SESSION-PLAN.md`.
+
 Verified on 2026-07-06 from local checkouts:
 
 - `waldo-backend` at `f77b29b` on `main`.

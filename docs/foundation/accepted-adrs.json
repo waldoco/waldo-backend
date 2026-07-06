@@ -1,7 +1,7 @@
 [
   {
     "_note": "Snapshot of waldo-brain ADR status index. Read-only single-source-of-truth for guard-adr-status.mjs during CI. Do not hand-edit ADR statuses here; resync from source.",
-    "_resyncSource": "/Users/shivansh.fulper/Github/personal/waldo-brain/agent-rules/adrs.json",
+    "_resyncSource": "https://github.com/Pin4sf/waldo-brain/blob/main/agent-rules/adrs.json",
     "_snapshot": true
   },
   {

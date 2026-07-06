@@ -1,6 +1,6 @@
 # waldo-backend — Claude Code Instructions
 
-## Current Foundation Status (2026-07-03)
+## Current Foundation Status (2026-07-06)
 
 The legacy guidance below is kept for repo background, but current foundation
 work is governed by the local rule index, foundation docs, accepted ADRs, and
@@ -12,8 +12,9 @@ Before any implementation:
 2. Read `docs/foundation/BUILD-PLAN.md`.
 3. Read `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
 4. Read `docs/foundation/NEXT-SESSION-PLAN.md`.
-5. Read `docs/foundation/AGENT-OPERATING-WORKFLOW.md`.
-6. Read the relevant Waldo Brain DeepWiki pages and accepted ADRs.
+5. Read `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`.
+6. Read `docs/foundation/AGENT-OPERATING-WORKFLOW.md`.
+7. Read the relevant Waldo Brain source pages and accepted ADRs.
 
 Current facts:
 
@@ -22,14 +23,18 @@ Current facts:
   root contracts, CI/conformance wall, Cloudflare Workers/Durable Object test
   substrate, the scheduled durable-execution tracer bullet, memory/CRS/prompt,
   routing/LLM, UI cards/notifications, and provider adapter contracts.
-- PR #8 is on `main`: channel adapters, tool union/ACL/schemas/handler,
-  core hooks, memory-skill lifecycle, auth minting, and consent contracts.
-- Phase C is still a tracer, not the full contract spine. It proves one
+- PR #8-#17 are on `main`: channel/tools/hooks/auth contracts, runtime
+  run/session/working-memory, scheduler/goal, Loop Governor contract, Art-9
+  sanitiser hardening, taint-gate authority, DeliveryGate policy, engagement,
+  OpenAPI/public DTOs, and evidence contracts.
+- PR #18 is on `main`: agent operating workflow, README, builder skills, and
+  stale-reference guard.
+- Phase C is still a tracer, not the full harness runtime. It proves one
   scheduled path in workerd: `DO alarm -> Loop Governor -> run journal ->
-  DeliveryGate -> outbox -> fake sink`, including crash/resume exactly-once.
-- The next runtime work is runtime run/session/working-memory and scheduler/goal
-  contracts. Do not replay A/B/C, Waves 1-4a, or the PR #8 contract spine unless
-  a regression forces it.
+  DeliveryGate -> outbox -> fake sink`, including crash/resume for that tracer.
+- The next runtime work is SLICE-3a: durable DeliveryGate/outbox exactly-once
+  proof. Do not replay A/B/C or Phase D contract waves unless a regression
+  forces it.
 - Retired external contract package references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
@@ -98,16 +103,16 @@ wrangler durable-objects:list
 
 ## Triage labels (Matt Pocock state machine)
 
-Same set as the other repos (P0-P3 · ready-for-agent/human · type:* · repo:*). See `waldo-brain/01-Waldo/repo-bootstraps/README.md`.
+Same set as the other repos (P0-P3 · ready-for-agent/human · type:* · repo:*). See [waldo-brain/01-Waldo/repo-bootstraps/README.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/repo-bootstraps/README.md).
 
 ## Domain docs (waldo-brain)
 
-- **`waldo-brain/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md`** — build plan
-- **`waldo-brain/01-Waldo/Architecture Decision Records (ADR)/`** — 42 ADRs
-- **`waldo-brain/04-Agent-Harness/`** — agent runtime master notes
-- **`waldo-brain/03-References/ADL/`** — research grounding (Hermes, Cursor, MemPalace, Cognee, agentic-stack, Fowler SPDD, squad, federated learning)
-- **`waldo-brain/05-Team/suyash/app-task-flows/`** — UX flow specs (read these BEFORE building any tool that affects user-facing surface)
-- **Soul files (immutable)** — `waldo-brain/01-Waldo/agent/SOUL_*.md`. NEVER edit at runtime. Git PR + review only.
+- **[01-Waldo/planning/WALDO_V1_MASTER_PLAN.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md)** — build plan
+- **[01-Waldo/Architecture Decision Records (ADR)](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29)** — accepted ADRs
+- **[04-Agent-Harness](https://github.com/Pin4sf/waldo-brain/tree/main/04-Agent-Harness)** — agent runtime master notes
+- **[03-References/ADL](https://github.com/Pin4sf/waldo-brain/tree/main/03-References/ADL)** — research grounding (Hermes, Cursor, MemPalace, Cognee, agentic-stack, Fowler SPDD, squad, federated learning)
+- **[05-Team/suyash/app-task-flows](https://github.com/Pin4sf/waldo-brain/tree/main/05-Team/suyash/app-task-flows)** — UX flow specs (read these BEFORE building any tool that affects user-facing surface)
+- **Soul files (immutable)** — [01-Waldo/agent](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/agent). NEVER edit at runtime. Git PR + review only.
 
 Critical ADRs for this repo:
 - ADR-0002 Agent in CF DO, health in Supabase
@@ -159,13 +164,13 @@ See `.claude/rules/INDEX.md`. Highlights:
 
 ## Mental model (the 5 non-negotiable disciplines)
 
-Before any work, read **`waldo-brain/.claude/rules/mental-model.md`**. Summary:
+Before any work, read **[waldo-brain/.claude/rules/mental-model.md](https://github.com/Pin4sf/waldo-brain/blob/main/.claude/rules/mental-model.md)**. Summary:
 
 1. **Problem-first** — find ROOT CAUSE at system + library level. Never patch symptoms. `/diagnose`.
 2. **Product-first** — every line traces to a JTBD. If you can't name the user problem, delete it. `/grill-me`.
 3. **First-principles** — decompose every claim. Cite primary sources. `/grill-with-docs`.
 4. **Test-heavy + thorough QA** — E2E is the only truth. 40/40/20 inverted pyramid. 5-step adversarial QA per feature. `/tdd` + `qa-breaker`.
-5. **NO AI SLOP** — every line earns its place. Slop = correct-but-bad: verbose where tight wins, generic where specific is needed, hedged where opinion was asked, format-drift, unrequested disclaimers, junk that fills context windows for the next session. Each line of code answers: WHY is it here, is it solving the requested purpose, is it the real fix not a patch, would a thoughtful reviewer ship it without changes. Delete anything that fails the test. See `waldo-brain/.claude/rules/mental-model.md` §5.
+5. **NO AI SLOP** — every line earns its place. Slop = correct-but-bad: verbose where tight wins, generic where specific is needed, hedged where opinion was asked, format-drift, unrequested disclaimers, junk that fills context windows for the next session. Each line of code answers: WHY is it here, is it solving the requested purpose, is it the real fix not a patch, would a thoughtful reviewer ship it without changes. Delete anything that fails the test. See [mental-model.md §5](https://github.com/Pin4sf/waldo-brain/blob/main/.claude/rules/mental-model.md).
 
 ## Build → Break → Fix philosophy (for THIS repo)
 
@@ -187,11 +192,11 @@ Before any work, read **`waldo-brain/.claude/rules/mental-model.md`**. Summary:
 When in doubt, in order:
 1. The Linear ticket description (it links the ADR)
 2. The ADR (it links research + grounding docs)
-3. `WALDO_V1_MASTER_PLAN.md` for cross-cutting context
+3. [WALDO_V1_MASTER_PLAN.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md) for cross-cutting context
 4. The ADR's "Grounded in" references
 
 Anything in `Docs/archive/` is superseded.
 
 ## Cross-session bus
 
-**[MUST]** Invoke `/session-bus` at session START and END. Reads/writes Linear `State — waldo-backend` doc + Linear Session Log issue + `waldo-brain/04-Sessions/handoffs/waldo-backend/`. See ADR-0043. This is how Shivansh, Pranav, Aachi avoid divergence across machines.
+**[MUST]** Invoke `/session-bus` at session START and END. Reads/writes Linear `State — waldo-backend` doc + Linear Session Log issue + [waldo-brain/04-Sessions/handoffs/waldo-backend](https://github.com/Pin4sf/waldo-brain/tree/main/04-Sessions/handoffs/waldo-backend). See ADR-0043. This is how Shivansh, Pranav, Aachi avoid divergence across machines.

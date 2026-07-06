@@ -1,18 +1,18 @@
-# Waldo Backend — Foundation Handover
+# Waldo Backend - Foundation Handover
 
-> Final foundation audit + contract-spine handover for the Waldo agent harness, refreshed after
-> the Phase-D contract-spine completion branch. This is the document the next builder — agent
-> or human — reads first. It states exactly what is built, what is contract-only, what is tracer-only,
-> what is unbuilt, which surfaces are safe to build against, and which must stay single-writer.
+> Final foundation audit + contract-spine handover for the Waldo agent harness. This is the
+> durable map of what is built, what is contract-only, what is tracer-only, what is unbuilt,
+> which surfaces are safe to build against, and which must stay single-writer.
 >
-> Baseline branch: current `main` after PR #14 (`f77b29b`).
-> This branch completes the remaining Phase-D contract spine on top of that baseline.
+> Current as of 2026-07-06: Phase D contract spine and agent operating workflow are merged
+> to `main`. Use `NEXT-SESSION-PLAN.md` and `HARNESS-RUNTIME-BUILD-PLAN.md` for the next
+> active grilling/planning session.
 
 ---
 
 ## 1. Executive verdict
 
-- **The backend contract spine is ready for runtime build after this branch merges.** ADR-0068
+- **The backend contract spine is ready for runtime build.** ADR-0068
   delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence
   lanes, ADR-0074 loop policy helpers, PR #13 Art-9 hardening, and PR #14 taint-gate authority are
   represented in `packages/contracts` with tests/guards.
@@ -20,12 +20,12 @@
 - **Three historical findings are resolved or moved to runtime proof.** The **HIGH** Art-9
   Scribe-sanitiser finding is resolved in PR #13; the **MEDIUM** ADR-0049 taint-gate authority is
   resolved in PR #14; exactly-once *delivery* remains the first runtime proof obligation (§6.3).
-- **This branch is contract-only plus tracer compatibility.** No production DDL, no full
+- **Current main is contract-only plus tracer compatibility.** No production DDL, no full
   DeliveryGate, no scheduler multiplexer, no dispatcher, and no provider surface are implemented.
 
-**When can other agents start building runtime logic?** After this branch merges: yes, but start
-with SLICE-3 runtime tests. The first runtime PR must prove durable exactly-once *delivery* across
-real `@cloudflare/vitest-pool-workers` eviction/resume. The Phase-C fake sink is not proof.
+**When can other agents start building runtime logic?** Now, but start with SLICE-3a runtime
+tests. The first runtime PR must prove durable exactly-once *delivery* across real
+`@cloudflare/vitest-pool-workers` eviction/resume. The Phase-C fake sink is not proof.
 
 ---
 
@@ -33,8 +33,10 @@ real `@cloudflare/vitest-pool-workers` eviction/resume. The Phase-C fake sink is
 
 **Primary (read directly, in-context):**
 - `CLAUDE.md`, `AGENTS.md`, `.claude/rules/INDEX.md`
-- `docs/foundation/`: `BUILD-PLAN.md`, `NEXT-SESSION-PLAN.md`, `PHASE-D-NEXT-AUDIT.md`, `CODEX-REVIEW-HANDOFF.md`, `LOCAL-DEV-TESTING-PIPELINE.md`, `accepted-adrs.json`
-- ADR primary text: `waldo-brain/01-Waldo/Architecture Decision Records (ADR)/0074-loop-governor.md` (the seam being built)
+- `docs/foundation/`: `BUILD-PLAN.md`, `NEXT-SESSION-PLAN.md`,
+  `HARNESS-RUNTIME-BUILD-PLAN.md`, `AGENT-OPERATING-WORKFLOW.md`,
+  `LOCAL-DEV-TESTING-PIPELINE.md`, `accepted-adrs.json`
+- ADR primary text: [0074-loop-governor.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0074-loop-governor.md) (the seam being built)
 - Contract source: `packages/contracts/src/index.ts`, `runtime/{loop-policy,delivery-policy,outbox,schedule}.ts`, `core/trigger.ts`, `memory/sanitise.ts`
 - Runtime source: `packages/runtime/src/tracer/{governor,gate,tracer-do}.ts`, `test/tracer.test.ts`
 - Conformance: `scripts/guards/guard-health-leak.mjs`, root `package.json`
@@ -63,7 +65,7 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | Engagement telemetry | 0070 | contract-only | ✅ | ✅ | `EngagementEvent`, four launch metric families, Telegram reply/callback open proxy, and low-cardinality label guard. Runtime writes + analytics mirrors are unbuilt. |
 | Public DTO/OpenAPI | 0029 | contract-only | ✅ | ✅ | Independent public engagement DTOs plus committed OpenAPI JSON/SHA sentinel. App generated-client refresh is downstream of this backend artifact. |
 | Evidence lanes | testing | contract-only | ✅ | ✅ | Scenario/property/mutation/live-dogfood evidence run shape; no scenario runner yet. |
-| Tools / ACL / auth | 0008/0032/0033 | contract-only | ✅ | ✅ | ACL map + mint + consent solid. Taint→privileged-action gate authority **RESOLVED** (`foundation/taint-gate-authority`, §6.2): single authority `taintGateBlocksDirectExecution` (external ∧ privileged), `PRIVILEGED_ACTION_TOOLS` widened 9→15, primitive single-owned in `memory/sanitise`. Runtime dispatcher wiring still deferred to the SLICE-3 wave. |
+| Tools / ACL / auth | 0008/0032/0033 | contract-only | ✅ | ✅ | ACL map + mint + consent solid. Taint→privileged-action gate authority **RESOLVED** in PR #14 (§6.2): single authority `taintGateBlocksDirectExecution` (external ∧ privileged), `PRIVILEGED_ACTION_TOOLS` widened 9→15, primitive single-owned in `memory/sanitise`. Runtime dispatcher wiring still deferred to the SLICE-3 wave. |
 | Memory + Scribe sanitiser | 0024/0046 | contract-only | ❌ | ✅ | Contracts complete + consistent. Raw-sensor vocabulary widened to full Art-9 + structured payloads + precision, guard now blocks (§6.1 fixed, PR #13). `sanitise()` runtime still absent. |
 | Contract SoT + tracer boundary | 0029 | built | ✅ | ✅ | Barrel exports + tracer clearly labelled + no HTTP path reaches `TracerDO` (404). Point-in-time safe; re-check when a product route lands. |
 
@@ -86,7 +88,7 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | #12 | ADR-0074 Loop Governor contract (SLICE-1): full LoopPolicy manifest, arbiter precedence, disposition, fail-closed `LOOP_POLICIES` registry + `lookupLoopPolicy` + `admit(policy\|null)`; minimal tracer-compat patch |
 | #13 | Art-9 Scribe raw-sensor lockout widened to current security checklist coverage; health leak guard blocks |
 | #14 | ADR-0049 taint-gate authority reconciled; privileged action set widened 9→15 |
-| **This branch** | **Phase-D contract closure on current main: ADR-0068 delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence lanes, and ADR-0074 helper contracts; preserves PR #13/#14 safety fixes** |
+| **#17** | **Phase-D contract closure: ADR-0068 delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence lanes, and ADR-0074 helper contracts; preserves PR #13/#14 safety fixes** |
 
 ---
 
@@ -111,17 +113,17 @@ code consumes the public endpoint. That is not a blocker for backend runtime imp
 
 ## 6. Security / adversarial findings (pre-existing; flagged, not fixed here)
 
-All three are pre-existing on `main`, latent (no runtime executes them today), and outside this PR's diff. Per posture, they are logged for dedicated follow-ups, not fixed as a side effect of a governor PR.
+All three were identified during the foundation audit. Two have since been fixed in contract PRs; the remaining exactly-once delivery proof is the first runtime harness slice.
 
-### 6.1 [HIGH · Art-9] Scribe sanitiser vocabulary — RESOLVED in PR #13 (`foundation/sanitiser-art9-parity`, open → main)
+### 6.1 [HIGH · Art-9] Scribe sanitiser vocabulary — RESOLVED in PR #13
 - **Was:** `RAW_SENSOR_PATTERNS` covered only HRV / HR / SpO2 / sleep in a prose shape — narrower than the project's own `guard-health-leak.mjs` `HEALTH_TOKENS` superset (weight, blood pressure incl. systolic/diastolic, calorie burn, active energy) — and it missed the shape health data actually takes: structured payloads with snake_case / kebab / camelCase keys, unit-suffixed keys (`hrv_ms`, `weight_kg`, `systolicMmHg`), and quoted numeric / BP-ratio values. The compensating guard was `warn`/exit-0.
 - **Fixed (PR #13):** `RAW_SENSOR_PATTERNS` rebuilt with unit-suffix + quoted-value + BP-ratio coverage and a precision model — specific tokens (hrv/spo2/systolic/blood pressure/body weight/…) match on any separator; **hr/weight take a bare number on a colon/equals key** (the real wearable-field shape) but need a unit on bare whitespace; bp needs a ratio or mmHg; sleep needs a duration unit — so whitespace prose (a duration, a graph edge weight, a basis-points delta, a backoff) is not over-redacted. **Art-9 fail-safe trade:** a colon-keyed non-health token (e.g. an HR-team count) is over-redacted rather than risk a missed reading — a rejected write is recoverable, a leaked body weight is not. `guard-health-leak` flipped `warn`→`block` + gained unit-suffix tolerance; `guards-selftest` proves quoted/snake/camel/unit-suffix leaks fail CI and zone prose passes. Derived via a 4-agent adversarial sweep + deterministic node verification; the bare-colon-key recall regression from the first cut was caught in review and fixed. Mutation-proven non-vacuous.
 - **Remaining (cross-repo follow-up):** amend ADR-0024's canonical §Check-2 block in `waldo-brain` to match the widened set. **Residual** (deterministic-floor limits — the ADR-0074 §Move1.4 grader's job, not this floor): a value nested under an inner key (`hrv: { quantity: 42 }`), a word between key and number (`hrv: approx 42`), CSV commas, and health metrics outside these families (glucose / bmi / temperature / vo2max / respiratory rate) — the latter is the metric-vocabulary curation the ADR-0024 amendment should settle.
 
-### 6.2 [MEDIUM · Art-9/injection] ADR-0049 taint→privileged-action gate authority — RESOLVED on `foundation/taint-gate-authority` (open → main)
+### 6.2 [MEDIUM · Art-9/injection] ADR-0049 taint→privileged-action gate authority — RESOLVED in PR #14
 - **Was:** two unreconciled authorities — `tools/handler.ts` `taintGateBlocksDirectExecution` (tool-scoped, correct shape, but its list omitted `call_mcp_tool`/`create_thread`/`delete_message`/`restore_message`/`archive_thread`/`update_thread_topics`) vs `core/hooks.ts` `taintGateTrips` (tool-agnostic — would over-block reads). A dispatcher wiring the tool-scoped gate would let external-tainted content drive message/thread mutation + MCP writes without routing through `propose_action`, contradicting ADR-0049's own verification text.
 - **Fixed:** the founder call (conservative single authority) landed. `taintGateBlocksDirectExecution` is now the **single** gate authority (`external ∧ privileged`); `PRIVILEGED_ACTION_TOOLS` widened 9→15 to cover every direct external mutation/send/MCP-write/thread-message mutation (in tool-union order); `propose_action` (human-confirm route) and `execute_code` (ADR-0050 zero-ACL, pinned by a coupling guard) stay excluded. The external-taint primitive relocated to `memory/sanitise` (`EXTERNAL_SOURCE_TAINT` + `isExternalSourceTaint`) as the single vocabulary owner — the three trust/laundering refines route through it, so a constant rename cannot fail open — and `taintGateTrips` was removed. Hostile fixtures for every newly-covered tool + tainted-read-allowed paths; mutation-proven non-vacuous. The `TAINT_PRIVILEGED_ACTION_GATE` registration slot (still `priority: null`) remains for the dispatcher to place.
-- **Remaining (runtime, deferred — the SLICE-3 dispatcher wave, NOT this contract PR):** the dispatcher must call `taintGateBlocksDirectExecution` at PreToolUse around every privileged dispatch, resolve the open slot ordering / merge-with-autonomy-gate question, and thread taint provenance from tool-result → privileged-action arguments end-to-end. The contract half is proven; the security guarantee is real only once that wiring lands and is itself tested.
+- **Remaining (runtime, deferred — the SLICE-3 dispatcher wave):** the dispatcher must call `taintGateBlocksDirectExecution` at PreToolUse around every privileged dispatch, resolve the open slot ordering / merge-with-autonomy-gate question, and thread taint provenance from tool-result → privileged-action arguments end-to-end. The contract half is proven; the security guarantee is real only once that wiring lands and is itself tested.
 
 ### 6.3 [MEDIUM] Exactly-once *delivery* is unproven (enqueue is airtight)
 - **Where:** `packages/runtime/src/tracer/tracer-do.ts:123-126` (`flushOutbox` calls `sink.send()` with no `ack_recorded` guard); `sink.ts:9-14` (sink contract imposes no dedupe duty; the only dedupe is a process-local `Map` in the fake).
@@ -168,23 +170,26 @@ Everything else the skeptics probed returned **safe**: mint forgery, consent esc
 ```text
 ultracode
 
-Continue the Waldo backend foundation from updated `main` after the Phase-D contract-spine
-completion branch merges. Read first:
+Continue the Waldo backend harness runtime from updated `main`. Read first:
 - .claude/rules/INDEX.md
+- README.md
+- docs/foundation/AGENT-OPERATING-WORKFLOW.md
+- docs/foundation/NEXT-SESSION-PLAN.md
+- docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md
 - docs/foundation/BUILD-PLAN.md
 - docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md
-- docs/foundation/FOUNDATION-HANDOVER.md   (this file — §5 runtime slice, §6 findings, §7 single-writer)
+- docs/foundation/FOUNDATION-HANDOVER.md
 - primary ADR markdown for the touched seam under
-  waldo-brain/01-Waldo/Architecture Decision Records (ADR)/  (read the .md, not only DeepWiki)
-- waldo-brain/01-Waldo/waldo-harness-deepwiki/delivery-governor.html
-- waldo-brain/01-Waldo/waldo-harness-deepwiki/conformance-build.html
+  [01-Waldo/Architecture Decision Records (ADR)](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29) (read the .md, not only DeepWiki)
+- [01-Waldo/waldo-harness-deepwiki/delivery-governor.html](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/waldo-harness-deepwiki/delivery-governor.html)
+- [01-Waldo/waldo-harness-deepwiki/conformance-build.html](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/waldo-harness-deepwiki/conformance-build.html)
 
 Baseline gate before any code:
   pnpm verify            # (pnpm 10.34.4 on PATH; or npx -y pnpm@10.34.4 verify)
   git diff --check
 If red or the branch is unmergeable, stop and report the blocker.
 
-Pick ONE runtime slice, single-writer, tests-first, its own small PR:
+Grill the plan first, then pick ONE runtime slice, single-writer, tests-first, its own small PR:
 
 1. SLICE-3a — durable DeliveryGate/outbox proof. Add the DO SQLite state needed for
    `daily_push_budget`, `held_candidates`, outbox retry state, and the notification-log mirror seam.
@@ -199,9 +204,9 @@ Pick ONE runtime slice, single-writer, tests-first, its own small PR:
    thread external taint from tool result to privileged args, and put the sanitiser runtime at the
    memory/prompt/egress boundaries using the single `RAW_SENSOR_PATTERNS` owner.
 
-The contract closure is done: do not reopen delivery-policy/public DTO/telemetry/evidence contracts
-unless an ADR mismatch is found. App generated-client refresh is downstream of the committed OpenAPI
-artifact and can run in parallel with backend runtime work.
+The contract closure is done: do not reopen delivery-policy/public DTO/telemetry/evidence
+contracts unless an accepted ADR mismatch is found. App generated-client refresh is downstream
+of the committed OpenAPI artifact and can run in parallel with backend runtime work.
 
 Use dynamic workflows for research/review/attack/disjoint modules only; keep runtime + shared
 contract files single-writer. Report: files changed, commands + exact results, intentional-break

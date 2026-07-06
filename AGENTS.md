@@ -13,7 +13,7 @@
 
 Mirrored from canonical source in `waldo-brain` per [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md). Do not edit locally.
 
-The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. For the full contributor loop, skill status, plugin boundaries, and verification wall, read [`docs/foundation/AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md).
+The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. For the full contributor loop, skill status, plugin boundaries, and verification wall, read [`docs/foundation/AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). For the current harness runtime build, start from [`docs/foundation/NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md) and [`docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`](docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md).
 
 ---
 
