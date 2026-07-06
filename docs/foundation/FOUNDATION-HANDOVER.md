@@ -1,26 +1,31 @@
 # Waldo Backend — Foundation Handover
 
-> Final foundation audit + contract-spine handover for the Waldo agent harness, produced after
-> PR #11 (scheduler/goal contracts) merged to `main`. This is the document the next builder — agent
+> Final foundation audit + contract-spine handover for the Waldo agent harness, refreshed after
+> the Phase-D contract-spine completion branch. This is the document the next builder — agent
 > or human — reads first. It states exactly what is built, what is contract-only, what is tracer-only,
 > what is unbuilt, which surfaces are safe to build against, and which must stay single-writer.
 >
-> Baseline commit audited: `0d4dd26` (`Add scheduler and goal contracts (#11)`).
-> This handover PR adds the ADR-0074 Loop Governor contract (SLICE-1 of the governor/delivery/outbox seam).
+> Baseline branch: current `main` after PR #14 (`f77b29b`).
+> This branch completes the remaining Phase-D contract spine on top of that baseline.
 
 ---
 
 ## 1. Executive verdict
 
-- **Baseline is green.** `pnpm verify` on `main@0d4dd26`: 1070 contract tests + 18 workerd tests + 8 guards, clean tree.
-- **The contract spine is safe to build *contracts* against.** Every persisted/egress DTO is a strict Zod object; field-shaped raw-health injection is structurally unrepresentable and pinned by ~9 test files.
+- **The backend contract spine is ready for runtime build after this branch merges.** ADR-0068
+  delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence
+  lanes, ADR-0074 loop policy helpers, PR #13 Art-9 hardening, and PR #14 taint-gate authority are
+  represented in `packages/contracts` with tests/guards.
 - **The runtime is essentially unbuilt.** Only the Phase-C scheduled tracer executes; the full harness loop, the DO scheduler multiplexer, the delivery flusher, and the sanitiser runtime do not exist. Do not read "contracts shipped" as "runtime built."
-- **Three pre-existing findings surfaced (§6), none introduced by this PR, none blocking a contract-only PR.** The **HIGH** (Art-9) Scribe-sanitiser-vocabulary finding is **RESOLVED in PR #13** (widened to structured payloads on a precision model + guard flipped to block). The **MEDIUM** ADR-0049 taint-gate authority is **RESOLVED** on `foundation/taint-gate-authority` (single authority `taintGateBlocksDirectExecution`; external-taint primitive relocated to `memory/sanitise`; `PRIVILEGED_ACTION_TOOLS` widened 9→15). One **MEDIUM** remains open: exactly-once *delivery* (§6.3, SLICE-3).
-- **This PR (SLICE-1)** widens the Loop Governor from a two-field sliver to the full ADR-0074 manifest + arbiter precedence + fail-closed admission registry. Contract-only + a minimal tracer-compat patch. No DDL, no runtime, no new provider surface.
+- **Three historical findings are resolved or moved to runtime proof.** The **HIGH** Art-9
+  Scribe-sanitiser finding is resolved in PR #13; the **MEDIUM** ADR-0049 taint-gate authority is
+  resolved in PR #14; exactly-once *delivery* remains the first runtime proof obligation (§6.3).
+- **This branch is contract-only plus tracer compatibility.** No production DDL, no full
+  DeliveryGate, no scheduler multiplexer, no dispatcher, and no provider surface are implemented.
 
-**When can other agents start building runtime logic?** Not yet, and not uniformly:
-- **Contract waves** (SLICE-2 delivery-policy, telemetry, public DTO) — start now, single-writer per file (§7).
-- **Runtime waves** (delivery flusher, scheduler multiplexer, sanitiser runtime, full run-FSM) — gated on a DO-runtime test substrate proving exactly-once *delivery* across real cross-instance eviction (today only an in-process fake sink corroborates it). The other two former gates are cleared: the HIGH sanitiser finding (PR #13) and the ADR-0049 taint-gate authority (`foundation/taint-gate-authority`).
+**When can other agents start building runtime logic?** After this branch merges: yes, but start
+with SLICE-3 runtime tests. The first runtime PR must prove durable exactly-once *delivery* across
+real `@cloudflare/vitest-pool-workers` eviction/resume. The Phase-C fake sink is not proof.
 
 ---
 
@@ -52,9 +57,12 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | Working memory | 0057 | contract-only | ❌ | ✅ | Bucket shapes + caps pinned; threading-through-tool-calls + compaction-survival re-attach are runtime behavioral invariants, absent. |
 | Persistent goals | 0064 | contract-only | ✅ | ✅ | `GoalRecord` shape complete + raw-health-rejecting. DO SQLite state home, onboarding/user-message write authority — unbuilt. |
 | DO alarm multiplexer + schedule | 0065 | partial-contract | ❌ | ✅ | `ScheduleEntry`/`ScheduleKind` + `armAlarm` seam built. Multiplexer, recurrence advancement, fleet liveness, quarantine runtime — unbuilt. |
-| Delivery-policy table | 0068 | partial-contract | ❌ | ⚠️ | `fetch_alert`-literal slice; verdict `send\|hold\|degrade\|drop` ✓, exempt-cap invariant ✓. Needs 10-member push-class enum, `DeliveryPolicyRow`, tier budget, held-candidates, widened Admission → **SLICE-2**. |
+| Delivery-policy table | 0068 | contract-only | ❌ | ✅ | Current-decision table complete: 10 push classes, `DELIVERY_POLICY`, tier caps, trigger bindings, sub-kind-aware adjustment caps, `DeliveryCandidate`, `Admission`, held candidates, and stamp consistency. Runtime `DeliveryGate`, DDL, and transaction proof remain SLICE-3. |
 | Routing + model policy | 0069 | partial-contract | ✅ | ✅ | Roster + routing rows present; shadow-eval + cost/escalation telemetry deferred. |
 | **Loop Governor** | **0074** | **contract-only¹** | ❌ | ✅ | **This PR (SLICE-1)** ships the full manifest + arbiter + fail-closed registry. Runtime arbiter comparator, per-run budget/kill enforcement, dedup, no-progress guard (`loop_progress` table) → **SLICE-3**. |
+| Engagement telemetry | 0070 | contract-only | ✅ | ✅ | `EngagementEvent`, four launch metric families, Telegram reply/callback open proxy, and low-cardinality label guard. Runtime writes + analytics mirrors are unbuilt. |
+| Public DTO/OpenAPI | 0029 | contract-only | ✅ | ✅ | Independent public engagement DTOs plus committed OpenAPI JSON/SHA sentinel. App generated-client refresh is downstream of this backend artifact. |
+| Evidence lanes | testing | contract-only | ✅ | ✅ | Scenario/property/mutation/live-dogfood evidence run shape; no scenario runner yet. |
 | Tools / ACL / auth | 0008/0032/0033 | contract-only | ✅ | ✅ | ACL map + mint + consent solid. Taint→privileged-action gate authority **RESOLVED** (`foundation/taint-gate-authority`, §6.2): single authority `taintGateBlocksDirectExecution` (external ∧ privileged), `PRIVILEGED_ACTION_TOOLS` widened 9→15, primitive single-owned in `memory/sanitise`. Runtime dispatcher wiring still deferred to the SLICE-3 wave. |
 | Memory + Scribe sanitiser | 0024/0046 | contract-only | ❌ | ✅ | Contracts complete + consistent. Raw-sensor vocabulary widened to full Art-9 + structured payloads + precision, guard now blocks (§6.1 fixed, PR #13). `sanitise()` runtime still absent. |
 | Contract SoT + tracer boundary | 0029 | built | ✅ | ✅ | Barrel exports + tracer clearly labelled + no HTTP path reaches `TracerDO` (404). Point-in-time safe; re-check when a product route lands. |
@@ -75,23 +83,29 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | #9 | Adversarial hardening: mint JWT timing, user-scoped consent lookup, channel-persona card filtering |
 | #10 | Runtime run/session/working-memory contracts (ADR-0054/0033/0057) |
 | #11 | Scheduler/goal contracts (ADR-0065/0064), `pre_brief_sweep` trigger/ACL/routing coverage, tracer schedule-row compat patch |
-| **This PR** | **ADR-0074 Loop Governor contract (SLICE-1): full LoopPolicy manifest, arbiter precedence, disposition, fail-closed `LOOP_POLICIES` registry + `lookupLoopPolicy` + `admit(policy\|null)`; minimal tracer-compat patch** |
+| #12 | ADR-0074 Loop Governor contract (SLICE-1): full LoopPolicy manifest, arbiter precedence, disposition, fail-closed `LOOP_POLICIES` registry + `lookupLoopPolicy` + `admit(policy\|null)`; minimal tracer-compat patch |
+| #13 | Art-9 Scribe raw-sensor lockout widened to current security checklist coverage; health leak guard blocks |
+| #14 | ADR-0049 taint-gate authority reconciled; privileged action set widened 9→15 |
+| **This branch** | **Phase-D contract closure on current main: ADR-0068 delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence lanes, and ADR-0074 helper contracts; preserves PR #13/#14 safety fixes** |
 
 ---
 
-## 5. Remaining steps — the governor/delivery/outbox seam is 3 PRs, not 1
+## 5. Remaining steps — contract closure is done; runtime is next
 
-The critic confirmed MUST-SPLIT. Verified against ADR text: the manifest (11 fields + `loop_progress` table), the delivery table (10-member enum + rows + budget + held-candidates), and the durable outbox (PK change + retry lifecycle + cross-store mirror) each touch a different surface. Fusing them = the giant diff to avoid.
+The critic confirmed MUST-SPLIT. Verified against ADR and DeepWiki text: the manifest, delivery
+table, public/telemetry contracts, and durable runtime each touch a different surface. The contract
+pieces are now represented; the next work is runtime implementation, not another contract slice.
 
 | Slice | Scope | DDL? | Runtime tests? |
 |---|---|---|---|
-| **SLICE-1 (this PR)** | Loop Governor contract — manifest, arbiter `priorityTierRank`, disposition, `LOOP_POLICIES` registry, fail-closed `admit`. **Breaking** shape-change to `loopPolicySchema` (removed `admit`, added 10 required fields) — safe only because contained: grep-verified the sole in-repo consumer is the `@waldo/runtime` tracer (patched here), it is not in the public OpenAPI surface, and no downstream repo depends on it. + tracer-compat. | No | No (contract-only; tracer behavior unchanged) |
-| **SLICE-2 (next, contract-only)** | Delivery-policy expansion: grow `pushClassSchema` `fetch_alert`-literal → 10-member enum; add `deliveryPolicyRowSchema` + `DELIVERY_POLICY` + `TRIGGER_PUSH_CLASSES` + tier caps; widen `admissionSchema` → `channels[]`/`collapse_id`/`hold_until`. Encode the **correct** invariant "every agent-reachable exempt class carries a non-null cap" (NOT the stale `agent_invocable ∩ exempt = ∅` set). | No | No |
-| **SLICE-3 (later, runtime)** | Durable outbox/journal DDL (PK = idempotency key, `status`/`attempts`/`next_retry_at`, `held_candidates` + `loop_progress` tables, Supabase `notification_log` UNIQUE mirror); run-FSM re-expansion; scheduler multiplexer; async retried flush; governor budget/kill/no-progress runtime. | **Yes** | **Yes — real `@cloudflare/vitest-pool-workers` cross-eviction; exactly-once *delivery* cannot be certified without them** |
+| **SLICE-1** | Loop Governor contract — manifest, arbiter `priorityTierRank`, disposition, `LOOP_POLICIES` registry, fail-closed `admit`, plus helper contracts. | No | Contract tests only |
+| **SLICE-2** | Delivery-policy contract — 10-class `DELIVERY_POLICY`, tier caps, trigger bindings, admission/held candidates, sub-kind caps, stamp consistency. | No | Contract tests only |
+| **SLICE-3 (next)** | Durable outbox/journal DDL (PK = idempotency key, `status`/`attempts`/`next_retry_at`, `held_candidates` + `loop_progress` tables, Supabase `notification_log` UNIQUE mirror); run-FSM re-expansion; scheduler multiplexer; async retried flush; governor budget/kill/no-progress runtime; dispatcher taint gate; sanitiser runtime. | **Yes** | **Yes — real `@cloudflare/vitest-pool-workers` cross-eviction; exactly-once *delivery* cannot be certified without them** |
 
 Deferred from SLICE-1 into SLICE-3 (no caller in a contract-only PR): the arbiter comparator (`compareLoopAdmission`), within-run dedup (`dedupInput`), and the cross-run no-progress guard (`isStuck`) — all consume runtime tool-execution data / the `loop_progress` table. The ADR-0074 §Move1.4 DELIVER egress floor stays deferred (it is runtime); it will reuse the now-single-sourced `RAW_SENSOR_PATTERNS` (widened in PR #13, §6.1) rather than declaring a third hand-rolled copy.
 
-After the seam: telemetry contracts → public DTOs + OpenAPI emitter + generated-client freshness → scenario/property/mutation lanes → live/dogfood lanes.
+Downstream app work: generate/refresh app clients from the committed OpenAPI artifact before app
+code consumes the public endpoint. That is not a blocker for backend runtime implementation.
 
 ---
 
@@ -154,44 +168,40 @@ Everything else the skeptics probed returned **safe**: mint forgery, consent esc
 ```text
 ultracode
 
-Continue the Waldo backend foundation from updated `main` after the Loop Governor contract
-(SLICE-1) merges. Read first:
+Continue the Waldo backend foundation from updated `main` after the Phase-D contract-spine
+completion branch merges. Read first:
 - .claude/rules/INDEX.md
 - docs/foundation/BUILD-PLAN.md
 - docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md
-- docs/foundation/FOUNDATION-HANDOVER.md   (this file — §5 slices, §6 findings, §7 single-writer)
+- docs/foundation/FOUNDATION-HANDOVER.md   (this file — §5 runtime slice, §6 findings, §7 single-writer)
 - primary ADR markdown for the touched seam under
   waldo-brain/01-Waldo/Architecture Decision Records (ADR)/  (read the .md, not only DeepWiki)
+- waldo-brain/01-Waldo/waldo-harness-deepwiki/delivery-governor.html
+- waldo-brain/01-Waldo/waldo-harness-deepwiki/conformance-build.html
 
 Baseline gate before any code:
   pnpm verify            # (pnpm 10.34.4 on PATH; or npx -y pnpm@10.34.4 verify)
   git diff --check
 If red or the branch is unmergeable, stop and report the blocker.
 
-Pick ONE of these, single-writer, contract-only unless noted, tests-first, its own small PR:
+Pick ONE runtime slice, single-writer, tests-first, its own small PR:
 
-1. SLICE-2 — delivery-policy expansion (ADR-0068), contract-only. Grow pushClassSchema to the
-   10-member enum; add deliveryPolicyRowSchema + DELIVERY_POLICY + TRIGGER_PUSH_CLASSES + tier
-   caps; widen admissionSchema (channels[]/collapse_id/hold_until); encode "every agent-reachable
-   exempt class carries a non-null cap" (NOT the stale ∅ invariant). Exact valid/invalid + golden
-   trace tests. No DDL.
+1. SLICE-3a — durable DeliveryGate/outbox proof. Add the DO SQLite state needed for
+   `daily_push_budget`, `held_candidates`, outbox retry state, and the notification-log mirror seam.
+   Prove with real `@cloudflare/vitest-pool-workers` cross-eviction tests that post-send/pre-ack
+   crash resume does not double-deliver. Exactly-once delivery, not just enqueue, is the gate.
 
-2. DONE in PR #13 — HIGH Art-9 sanitiser hardening: RAW_SENSOR_PATTERNS widened to structured
-   payloads (unit-suffixed / snake / camel keys, quoted + BP-ratio values) on a specific/ambiguous
-   precision model; guard-health-leak warn->block + unit-suffix tolerance; adversarial-swept +
-   mutation-proven. Remaining sliver: amend ADR-0024's canonical §Check-2 block in waldo-brain
-   (cross-repo). (Finding §6.1.)
+2. SLICE-3b — Loop Governor runtime enforcement. Consume the existing ADR-0074 contracts:
+   comparator, per-run token/iteration/subagent bounds, kill flags, within-run dedup, no-progress
+   rows, and outbound Art-9 floor. Do not invent new governor verdict enums.
 
-3. DONE on `foundation/taint-gate-authority` — ADR-0049 taint-gate authority reconciled (conservative
-   single authority): `taintGateBlocksDirectExecution` is the sole gate (external ∧ privileged),
-   `PRIVILEGED_ACTION_TOOLS` widened 9→15, external-taint primitive relocated to `memory/sanitise`
-   (`isExternalSourceTaint`), `taintGateTrips` removed. Hostile fixtures + mutation-proven. (Finding §6.2.)
+3. SLICE-3c — dispatcher/sanitiser wiring. Wire `taintGateBlocksDirectExecution` at PreToolUse,
+   thread external taint from tool result to privileged args, and put the sanitiser runtime at the
+   memory/prompt/egress boundaries using the single `RAW_SENSOR_PATTERNS` owner.
 
-Do NOT: start the DO runtime (SLICE-3, delivery flusher, scheduler multiplexer, sanitiser runtime,
-full run-FSM) until a cross-eviction @cloudflare/vitest-pool-workers substrate proves exactly-once
-DELIVERY (not just enqueue). The other two former gates are cleared: PR #13 (§6.1 sanitiser
-hardening) and §6.2 taint-gate authority (DONE on foundation/taint-gate-authority). Do NOT
-broaden into telemetry, public DTOs, OpenAPI, or generated clients in the same PR as a contract seam.
+The contract closure is done: do not reopen delivery-policy/public DTO/telemetry/evidence contracts
+unless an ADR mismatch is found. App generated-client refresh is downstream of the committed OpenAPI
+artifact and can run in parallel with backend runtime work.
 
 Use dynamic workflows for research/review/attack/disjoint modules only; keep runtime + shared
 contract files single-writer. Report: files changed, commands + exact results, intentional-break

@@ -1,8 +1,11 @@
 import { z } from 'zod';
 import { channelNameSchema } from '../adapters/channel';
-import { triggerTypeSchema } from '../core/trigger';
-import type { TriggerType } from '../core/trigger';
+import { triggerTypeSchema, type TriggerType } from '../core/trigger';
 
+// ADR-0068: one typed delivery-policy table is the single representation of every proactive send:
+// class x channel x budget x standalone x quiet-hours x priority x cooldown. The 2026-06-27
+// current-decision block supersedes the older body text: fetch_alert is exempt-but-counted,
+// defer_next_day is deleted, and proposed adjustments are capped separately from executed ones.
 export const deliveryVerdictSchema = z.enum(['send', 'hold', 'degrade', 'drop']);
 export type DeliveryVerdict = z.infer<typeof deliveryVerdictSchema>;
 
@@ -20,217 +23,204 @@ export const pushClassSchema = z.enum([
 ]);
 export type PushClass = z.infer<typeof pushClassSchema>;
 
+export const quietHoursRuleSchema = z.enum([
+  'hold',
+  'drop',
+  'bypass_high_confidence',
+  'hold_while_pending',
+]);
+export type QuietHoursRule = z.infer<typeof quietHoursRuleSchema>;
+
+export const budgetClassSchema = z.enum(['counted', 'exempt']);
+export type BudgetClass = z.infer<typeof budgetClassSchema>;
+
 export const cooldownScopeSchema = z.enum(['class', 'event']);
 export type CooldownScope = z.infer<typeof cooldownScopeSchema>;
 
-export const quietHoursRuleSchema = z.enum(['allow', 'hold', 'drop', 'fetch_confidence_bypass']);
-export type QuietHoursRule = z.infer<typeof quietHoursRuleSchema>;
+export const adjustmentSubKindSchema = z.enum(['proposed', 'executed']);
+export type AdjustmentSubKind = z.infer<typeof adjustmentSubKindSchema>;
+
+export const subCapSchema = z.strictObject({
+  daily_cap: z.int().positive().nullable(),
+  cooldown_min: z.int().positive().nullable(),
+});
+export type SubCap = z.infer<typeof subCapSchema>;
 
 export const deliveryPolicyRowSchema = z
   .strictObject({
-    push_class: pushClassSchema,
-    agent_invocable: z.boolean(),
-    budget_exempt: z.boolean(),
-    counts_apns_budget: z.boolean(),
-    is_standalone: z.boolean(),
     apns: z.boolean(),
     telegram: z.boolean(),
-    in_app: z.boolean(),
+    feed: z.boolean(),
+    budget: budgetClassSchema,
+    exempt_after_h: z.int().positive().nullable(),
+    is_standalone: z.boolean(),
     quiet_hours: quietHoursRuleSchema,
-    collapse_id: z.string().min(1).nullable(),
-    class_cap_per_day: z.int().positive().nullable(),
+    priority: z.int().min(1).max(7).nullable(),
+    daily_cap: z.int().positive().nullable(),
     cooldown_min: z.int().positive().nullable(),
     cooldown_scope: cooldownScopeSchema,
-    exempt_after_h: z.int().positive().nullable(),
+    agent_invocable: z.boolean(),
+    sub_caps: z.strictObject({ proposed: subCapSchema, executed: subCapSchema }).nullable(),
   })
-  .refine((row) => !row.budget_exempt || !row.counts_apns_budget, {
-    error: 'budget-exempt classes do not decrement the daily APNs budget',
-    path: ['counts_apns_budget'],
-  })
-  .refine(
-    (row) => row.class_cap_per_day !== null || row.cooldown_min !== null || row.push_class === 'system_consent',
-    {
-      error: 'delivery classes need a cap or cooldown unless legally required',
-      path: ['class_cap_per_day'],
-    },
-  );
+  .refine((row) => row.sub_caps === null || row.sub_caps.proposed.daily_cap !== null, {
+    error: "a sub-capped class must cap its 'proposed' sub-kind",
+    path: ['sub_caps', 'proposed', 'daily_cap'],
+  });
 export type DeliveryPolicyRow = z.infer<typeof deliveryPolicyRowSchema>;
-
-export const fetchAlertPolicySchema = z.strictObject({
-  push_class: z.literal('fetch_alert'),
-  budget_exempt: z.literal(true),
-  daily_cap: z.int().positive(),
-  cooldown_min: z.int().positive(),
-});
-export type FetchAlertPolicy = z.infer<typeof fetchAlertPolicySchema>;
-
-export const FETCH_ALERT_POLICY: FetchAlertPolicy = {
-  push_class: 'fetch_alert',
-  budget_exempt: true,
-  daily_cap: 3,
-  cooldown_min: 120,
-};
 
 export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
   brief: {
-    push_class: 'brief',
-    agent_invocable: true,
-    budget_exempt: false,
-    counts_apns_budget: false,
-    is_standalone: false,
     apns: false,
     telegram: true,
-    in_app: true,
+    feed: true,
+    budget: 'counted',
+    exempt_after_h: null,
+    is_standalone: false,
     quiet_hours: 'drop',
-    collapse_id: null,
-    class_cap_per_day: 3,
+    priority: null,
+    daily_cap: 3,
     cooldown_min: null,
     cooldown_scope: 'class',
-    exempt_after_h: null,
+    agent_invocable: true,
+    sub_caps: null,
   },
   fetch_alert: {
-    push_class: 'fetch_alert',
-    agent_invocable: true,
-    budget_exempt: true,
-    counts_apns_budget: false,
-    is_standalone: false,
     apns: true,
     telegram: true,
-    in_app: true,
-    quiet_hours: 'fetch_confidence_bypass',
-    collapse_id: 'stack',
-    class_cap_per_day: FETCH_ALERT_POLICY.daily_cap,
-    cooldown_min: FETCH_ALERT_POLICY.cooldown_min,
-    cooldown_scope: 'class',
+    feed: true,
+    budget: 'exempt',
     exempt_after_h: null,
+    is_standalone: false,
+    quiet_hours: 'bypass_high_confidence',
+    priority: 1,
+    daily_cap: 3,
+    cooldown_min: 120,
+    cooldown_scope: 'class',
+    agent_invocable: true,
+    sub_caps: null,
   },
   adjustment: {
-    push_class: 'adjustment',
-    agent_invocable: true,
-    budget_exempt: false,
-    counts_apns_budget: true,
-    is_standalone: false,
     apns: true,
     telegram: true,
-    in_app: true,
-    quiet_hours: 'hold',
-    collapse_id: 'stack',
-    class_cap_per_day: 3,
-    cooldown_min: 60,
-    cooldown_scope: 'class',
+    feed: true,
+    budget: 'counted',
     exempt_after_h: null,
+    is_standalone: false,
+    quiet_hours: 'hold',
+    priority: 2,
+    daily_cap: null,
+    cooldown_min: null,
+    cooldown_scope: 'class',
+    agent_invocable: true,
+    sub_caps: {
+      proposed: { daily_cap: 3, cooldown_min: 60 },
+      executed: { daily_cap: null, cooldown_min: null },
+    },
   },
   pre_activity_spot: {
-    push_class: 'pre_activity_spot',
-    agent_invocable: true,
-    budget_exempt: false,
-    counts_apns_budget: true,
-    is_standalone: false,
     apns: true,
     telegram: true,
-    in_app: true,
+    feed: true,
+    budget: 'counted',
+    exempt_after_h: null,
+    is_standalone: false,
     quiet_hours: 'hold',
-    collapse_id: 'stack',
-    class_cap_per_day: 2,
+    priority: 3,
+    daily_cap: 2,
     cooldown_min: 60,
     cooldown_scope: 'event',
-    exempt_after_h: null,
+    agent_invocable: true,
+    sub_caps: null,
   },
   constellation_first: {
-    push_class: 'constellation_first',
-    agent_invocable: false,
-    budget_exempt: true,
-    counts_apns_budget: false,
-    is_standalone: true,
     apns: true,
     telegram: true,
-    in_app: true,
-    quiet_hours: 'hold',
-    collapse_id: 'evt:{constellation_id}',
-    class_cap_per_day: 1,
-    cooldown_min: null,
-    cooldown_scope: 'event',
+    feed: true,
+    budget: 'exempt',
     exempt_after_h: null,
+    is_standalone: true,
+    quiet_hours: 'hold',
+    priority: null,
+    daily_cap: 1,
+    cooldown_min: null,
+    cooldown_scope: 'class',
+    agent_invocable: false,
+    sub_caps: null,
   },
   constellation_update: {
-    push_class: 'constellation_update',
-    agent_invocable: false,
-    budget_exempt: false,
-    counts_apns_budget: true,
-    is_standalone: false,
     apns: true,
     telegram: true,
-    in_app: true,
+    feed: true,
+    budget: 'counted',
+    exempt_after_h: null,
+    is_standalone: false,
     quiet_hours: 'hold',
-    collapse_id: 'stack',
-    class_cap_per_day: 1,
+    priority: 5,
+    daily_cap: 1,
     cooldown_min: null,
     cooldown_scope: 'class',
-    exempt_after_h: null,
+    agent_invocable: false,
+    sub_caps: null,
   },
   spot_digest: {
-    push_class: 'spot_digest',
-    agent_invocable: false,
-    budget_exempt: false,
-    counts_apns_budget: true,
-    is_standalone: false,
     apns: true,
     telegram: true,
-    in_app: true,
+    feed: true,
+    budget: 'counted',
+    exempt_after_h: null,
+    is_standalone: false,
     quiet_hours: 'drop',
-    collapse_id: 'stack',
-    class_cap_per_day: 1,
+    priority: 6,
+    daily_cap: 1,
     cooldown_min: null,
     cooldown_scope: 'class',
-    exempt_after_h: null,
+    agent_invocable: false,
+    sub_caps: null,
   },
   intervention_knock: {
-    push_class: 'intervention_knock',
-    agent_invocable: false,
-    budget_exempt: true,
-    counts_apns_budget: false,
-    is_standalone: true,
     apns: true,
     telegram: true,
-    in_app: false,
-    quiet_hours: 'hold',
-    collapse_id: 'evt:{intervention_id}',
-    class_cap_per_day: 2,
-    cooldown_min: null,
-    cooldown_scope: 'event',
+    feed: false,
+    budget: 'exempt',
     exempt_after_h: null,
+    is_standalone: true,
+    quiet_hours: 'hold_while_pending',
+    priority: null,
+    daily_cap: 2,
+    cooldown_min: null,
+    cooldown_scope: 'class',
+    agent_invocable: false,
+    sub_caps: null,
   },
   sync_error: {
-    push_class: 'sync_error',
-    agent_invocable: false,
-    budget_exempt: false,
-    counts_apns_budget: true,
-    is_standalone: true,
     apns: true,
     telegram: false,
-    in_app: true,
+    feed: true,
+    budget: 'counted',
+    exempt_after_h: 6,
+    is_standalone: true,
     quiet_hours: 'hold',
-    collapse_id: 'evt:{connector}',
-    class_cap_per_day: 1,
+    priority: 7,
+    daily_cap: null,
     cooldown_min: 1_440,
     cooldown_scope: 'event',
-    exempt_after_h: 6,
+    agent_invocable: false,
+    sub_caps: null,
   },
   system_consent: {
-    push_class: 'system_consent',
-    agent_invocable: false,
-    budget_exempt: true,
-    counts_apns_budget: false,
-    is_standalone: true,
     apns: true,
     telegram: false,
-    in_app: true,
-    quiet_hours: 'hold',
-    collapse_id: 'evt:{notice_id}',
-    class_cap_per_day: null,
-    cooldown_min: null,
-    cooldown_scope: 'event',
+    feed: true,
+    budget: 'exempt',
     exempt_after_h: null,
+    is_standalone: true,
+    quiet_hours: 'hold',
+    priority: null,
+    daily_cap: null,
+    cooldown_min: null,
+    cooldown_scope: 'class',
+    agent_invocable: false,
+    sub_caps: null,
   },
 };
 
@@ -247,15 +237,39 @@ export const TRIGGER_PUSH_CLASSES: Readonly<Record<TriggerType, readonly PushCla
   brief: ['brief'],
   fetch_alert: ['fetch_alert'],
   patrol: [],
-  handoff_explore: [],
-  handoff_plan: ['adjustment'],
-  handoff_act: ['adjustment'],
-  handoff_replan: ['adjustment'],
-  intervention: [],
-  user_message: ['adjustment'],
-  dreaming_mode: [],
-  pre_activity_spot: ['pre_activity_spot'],
   pre_brief_sweep: [],
+  handoff_explore: [],
+  handoff_plan: [],
+  handoff_act: ['adjustment'],
+  handoff_replan: [],
+  intervention: [],
+  user_message: [],
+  dreaming_mode: [],
+  pre_activity_spot: ['pre_activity_spot', 'adjustment'],
+};
+
+export function agentReachableExemptHasCap(row: DeliveryPolicyRow): boolean {
+  return !(row.agent_invocable && row.budget === 'exempt') || (row.daily_cap !== null && row.daily_cap > 0);
+}
+
+function requirePositive(value: number | null, field: string): number {
+  if (value === null) throw new Error(`fetch_alert policy missing ${field}`);
+  return value;
+}
+
+export const fetchAlertPolicySchema = z.strictObject({
+  push_class: z.literal('fetch_alert'),
+  budget_exempt: z.literal(true),
+  daily_cap: z.int().positive(),
+  cooldown_min: z.int().positive(),
+});
+export type FetchAlertPolicy = z.infer<typeof fetchAlertPolicySchema>;
+
+export const FETCH_ALERT_POLICY: FetchAlertPolicy = {
+  push_class: 'fetch_alert',
+  budget_exempt: true,
+  daily_cap: requirePositive(DELIVERY_POLICY.fetch_alert.daily_cap, 'daily_cap'),
+  cooldown_min: requirePositive(DELIVERY_POLICY.fetch_alert.cooldown_min, 'cooldown_min'),
 };
 
 export const deliveryCandidateSchema = z.strictObject({
@@ -288,21 +302,25 @@ export const admissionSchema = z
   .refine((a) => a.verdict !== 'hold' || a.hold_until !== undefined, {
     error: 'held admissions must name hold_until',
     path: ['hold_until'],
-  });
+  })
+  .refine(
+    (a) =>
+      a.stamped.budget_exempt === (DELIVERY_POLICY[a.stamped.push_class].budget === 'exempt') &&
+      a.stamped.is_standalone === DELIVERY_POLICY[a.stamped.push_class].is_standalone,
+    { error: 'admission stamp must match its class policy row' },
+  );
 export type Admission = z.infer<typeof admissionSchema>;
 
-export const heldCandidateSchema = z.strictObject({
-  event_id: z.string().min(1),
-  push_class: pushClassSchema,
-  candidate: deliveryCandidateSchema,
-  hold_until: z.int().nonnegative(),
-  expires_at: z.int().nonnegative().nullable(),
-});
+export const heldCandidateSchema = z
+  .strictObject({
+    event_id: z.string().min(1),
+    push_class: pushClassSchema,
+    candidate: deliveryCandidateSchema,
+    hold_until: z.int().nonnegative(),
+    expires_at: z.int().nonnegative().nullable(),
+  })
+  .refine((held) => held.push_class === held.candidate.push_class, {
+    error: 'held candidate class must match the frozen candidate',
+    path: ['push_class'],
+  });
 export type HeldCandidate = z.infer<typeof heldCandidateSchema>;
-
-// Current ADR-0068 rule: every agent-reachable exempt class is still class-capped. This
-// preserves fetch_alert as both agent-invocable and budget-exempt without making it unbounded.
-export function agentReachableExemptHasCap(policy: FetchAlertPolicy | DeliveryPolicyRow): boolean {
-  const cap = 'daily_cap' in policy ? policy.daily_cap : policy.class_cap_per_day;
-  return policy.budget_exempt && cap !== null && cap > 0;
-}

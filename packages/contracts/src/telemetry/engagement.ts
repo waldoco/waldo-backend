@@ -34,23 +34,21 @@ export const launchEngagementMetricSchema = z.enum([
 ]);
 export type LaunchEngagementMetric = z.infer<typeof launchEngagementMetricSchema>;
 
+const forbiddenMetricLabelKeyPatterns: readonly RegExp[] = [
+  /(^|_)user(_?id)?($|_)/,
+  /(^|_)(run|trace|request|span|session|message|thread|payload)(_)?(id|hash)($|_)/,
+  /(^|_)(sql|query|table|raw_health|content|body|text|file|path|url|uri|ip|hostname|host)($|_)/,
+];
+
+function metricLabelKeyIsAllowed(key: string): boolean {
+  const normalised = key.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return !forbiddenMetricLabelKeyPatterns.some((pattern) => pattern.test(normalised));
+}
+
 export const lowCardinalityMetricLabelSchema = z
   .record(z.string().min(1), z.string().min(1))
   .refine(
-    (labels) =>
-      Object.keys(labels).every(
-        (key) =>
-          ![
-            'user_id',
-            'run_id',
-            'trace_id',
-            'payload_hash',
-            'sql',
-            'table',
-            'raw_health',
-            'content',
-          ].includes(key),
-      ),
+    (labels) => Object.keys(labels).every(metricLabelKeyIsAllowed),
     { error: 'metric labels must not carry identifiers, content, SQL, table names, or raw health values' },
   );
 export type LowCardinalityMetricLabel = z.infer<typeof lowCardinalityMetricLabelSchema>;

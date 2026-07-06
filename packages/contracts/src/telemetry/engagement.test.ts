@@ -71,5 +71,10 @@ describe('engagement telemetry', () => {
     expect(lowCardinalityMetricLabelSchema.safeParse({ user_id: 'user-1' }).success).toBe(false);
     expect(lowCardinalityMetricLabelSchema.safeParse({ run_id: 'run-1' }).success).toBe(false);
     expect(lowCardinalityMetricLabelSchema.safeParse({ raw_health: 'hrv' }).success).toBe(false);
+    expect(lowCardinalityMetricLabelSchema.safeParse({ request_id: 'req-1' }).success).toBe(false);
+    expect(lowCardinalityMetricLabelSchema.safeParse({ table_name: 'engagement_events' }).success).toBe(false);
+    expect(lowCardinalityMetricLabelSchema.safeParse({ sql_query: 'select 1' }).success).toBe(false);
+    expect(lowCardinalityMetricLabelSchema.safeParse({ ip: '127.0.0.1' }).success).toBe(false);
+    expect(lowCardinalityMetricLabelSchema.safeParse({ hostname: 'worker-1' }).success).toBe(false);
   });
 });

@@ -1,10 +1,14 @@
+// Owning ADR: ADR-0068. The implementation-facing current-decision block supersedes the
+// pre-ratification body: fetch is exempt-but-counted, defer_next_day is deleted, adjustment
+// proposed/executed caps are sub-kind-aware, and proactive trigger bindings are not tool ACLs.
 import { describe, expect, it } from 'vitest';
+import { channelNameSchema } from '../adapters/channel';
+import { triggerTypeSchema } from '../core/trigger';
 import {
   admissionSchema,
   agentReachableExemptHasCap,
   DAILY_PUSH_BUDGET,
   DELIVERY_POLICY,
-  deliveryBudgetTierSchema,
   deliveryCandidateSchema,
   deliveryPolicyRowSchema,
   deliveryVerdictSchema,
@@ -13,9 +17,7 @@ import {
   heldCandidateSchema,
   pushClassSchema,
   TRIGGER_PUSH_CLASSES,
-  triggerPushClassesSchema,
 } from './delivery-policy';
-import { triggerTypeSchema } from '../core/trigger';
 
 describe('deliveryVerdict', () => {
   it('is exactly the four ratified verdicts, with no defer_next_day', () => {
@@ -24,8 +26,8 @@ describe('deliveryVerdict', () => {
   });
 });
 
-describe('pushClass', () => {
-  it('pins the ADR-0068 proactive classes in order', () => {
+describe('pushClass enum', () => {
+  it('pins the ten ADR-0068 push classes in table order', () => {
     expect(pushClassSchema.options).toEqual([
       'brief',
       'fetch_alert',
@@ -41,6 +43,42 @@ describe('pushClass', () => {
   });
 });
 
+describe('deliveryPolicyRow shape', () => {
+  const fetch = DELIVERY_POLICY.fetch_alert;
+
+  it('accepts a canonical row and rejects unknown keys', () => {
+    expect(deliveryPolicyRowSchema.safeParse(fetch).success).toBe(true);
+    expect(deliveryPolicyRowSchema.safeParse({ ...fetch, push_class: 'fetch_alert' }).success).toBe(
+      false,
+    );
+  });
+
+  it('pins budget, quiet-hours, priority, and cooldown vocabularies', () => {
+    expect(deliveryPolicyRowSchema.safeParse({ ...fetch, budget: 'free' }).success).toBe(false);
+    expect(deliveryPolicyRowSchema.safeParse({ ...fetch, quiet_hours: 'allow' }).success).toBe(
+      false,
+    );
+    expect(deliveryPolicyRowSchema.safeParse({ ...fetch, priority: 8 }).success).toBe(false);
+    expect(deliveryPolicyRowSchema.safeParse({ ...fetch, cooldown_scope: 'daily' }).success).toBe(
+      false,
+    );
+  });
+
+  it("requires proposed adjustment sub-caps to stay bounded", () => {
+    const adjustment = DELIVERY_POLICY.adjustment;
+    expect(adjustment.sub_caps).not.toBeNull();
+    expect(
+      deliveryPolicyRowSchema.safeParse({
+        ...adjustment,
+        sub_caps: {
+          proposed: { daily_cap: null, cooldown_min: 60 },
+          executed: adjustment.sub_caps?.executed,
+        },
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('DELIVERY_POLICY', () => {
   it('covers every push class exactly once and every row parses', () => {
     expect(Object.keys(DELIVERY_POLICY).sort()).toEqual([...pushClassSchema.options].sort());
@@ -49,70 +87,116 @@ describe('DELIVERY_POLICY', () => {
     }
   });
 
-  it('pins fetch_alert as exempt-but-class-capped and telemetry-counted', () => {
-    expect(fetchAlertPolicySchema.safeParse(FETCH_ALERT_POLICY).success).toBe(true);
-    expect(DELIVERY_POLICY.fetch_alert.budget_exempt).toBe(true);
-    expect(DELIVERY_POLICY.fetch_alert.counts_apns_budget).toBe(false);
-    expect(DELIVERY_POLICY.fetch_alert.class_cap_per_day).toBe(3);
-    expect(DELIVERY_POLICY.fetch_alert.cooldown_min).toBe(120);
+  it('pins fetch_alert as exempt-but-counted with its own cap and cooldown', () => {
+    expect(DELIVERY_POLICY.fetch_alert).toEqual({
+      apns: true,
+      telegram: true,
+      feed: true,
+      budget: 'exempt',
+      exempt_after_h: null,
+      is_standalone: false,
+      quiet_hours: 'bypass_high_confidence',
+      priority: 1,
+      daily_cap: 3,
+      cooldown_min: 120,
+      cooldown_scope: 'class',
+      agent_invocable: true,
+      sub_caps: null,
+    });
     expect(agentReachableExemptHasCap(DELIVERY_POLICY.fetch_alert)).toBe(true);
   });
 
-  it('pins brief as never-APNs, while pre_activity_spot counts against budget', () => {
+  it('pins brief as never-APNs and counted without decrementing APNs spend', () => {
     expect(DELIVERY_POLICY.brief.apns).toBe(false);
-    expect(DELIVERY_POLICY.brief.counts_apns_budget).toBe(false);
-    expect(DELIVERY_POLICY.pre_activity_spot.apns).toBe(true);
-    expect(DELIVERY_POLICY.pre_activity_spot.counts_apns_budget).toBe(true);
+    expect(DELIVERY_POLICY.brief.budget).toBe('counted');
+    expect(DELIVERY_POLICY.brief.priority).toBeNull();
+    expect(DELIVERY_POLICY.brief.daily_cap).toBe(3);
   });
 
-  it('keeps system classes out of agent invocation', () => {
-    for (const cls of [
-      'constellation_first',
-      'constellation_update',
-      'spot_digest',
-      'intervention_knock',
-      'sync_error',
-      'system_consent',
-    ] as const) {
-      expect(DELIVERY_POLICY[cls].agent_invocable).toBe(false);
-    }
+  it('models adjustment sub-kinds: proposed capped, executed uncapped', () => {
+    expect(DELIVERY_POLICY.adjustment.daily_cap).toBeNull();
+    expect(DELIVERY_POLICY.adjustment.sub_caps).toEqual({
+      proposed: { daily_cap: 3, cooldown_min: 60 },
+      executed: { daily_cap: null, cooldown_min: null },
+    });
   });
 
-  it('rejects an exempt row that tries to decrement the counted APNs budget', () => {
-    expect(
-      deliveryPolicyRowSchema.safeParse({
-        ...DELIVERY_POLICY.fetch_alert,
-        counts_apns_budget: true,
-      }).success,
-    ).toBe(false);
+  it('keeps system_consent exempt with no cap because it is not agent-invocable', () => {
+    expect(DELIVERY_POLICY.system_consent.budget).toBe('exempt');
+    expect(DELIVERY_POLICY.system_consent.daily_cap).toBeNull();
+    expect(DELIVERY_POLICY.system_consent.agent_invocable).toBe(false);
+    expect(agentReachableExemptHasCap(DELIVERY_POLICY.system_consent)).toBe(true);
+  });
+
+  it('carries sync_error escalation as row data', () => {
+    expect(DELIVERY_POLICY.sync_error.budget).toBe('counted');
+    expect(DELIVERY_POLICY.sync_error.exempt_after_h).toBe(6);
+    expect(DELIVERY_POLICY.sync_error.cooldown_scope).toBe('event');
   });
 });
 
-describe('daily push budget', () => {
-  it('pins Pro to 3 and Pro Max to 5, with no free delivery tier', () => {
-    expect(deliveryBudgetTierSchema.options).toEqual(['pro', 'pro_max']);
-    expect(DAILY_PUSH_BUDGET).toEqual({ pro: 3, pro_max: 5 });
+describe('cooldown_scope', () => {
+  it('keeps exactly pre_activity_spot and sync_error event-scoped', () => {
+    const eventScoped = pushClassSchema.options.filter(
+      (pushClass) => DELIVERY_POLICY[pushClass].cooldown_scope === 'event',
+    );
+    expect(eventScoped.sort()).toEqual(['pre_activity_spot', 'sync_error']);
+  });
+});
+
+describe('block rule — every agent-reachable exempt class has a positive cap', () => {
+  it('holds across the whole table', () => {
+    for (const row of Object.values(DELIVERY_POLICY)) {
+      expect(agentReachableExemptHasCap(row)).toBe(true);
+    }
+  });
+
+  it('would reject an agent-reachable exempt row with no cap', () => {
+    expect(agentReachableExemptHasCap({ ...DELIVERY_POLICY.fetch_alert, daily_cap: null })).toBe(
+      false,
+    );
   });
 });
 
 describe('TRIGGER_PUSH_CLASSES', () => {
-  it('covers every trigger and parses', () => {
+  it('covers every trigger type', () => {
     expect(Object.keys(TRIGGER_PUSH_CLASSES).sort()).toEqual([...triggerTypeSchema.options].sort());
-    expect(triggerPushClassesSchema.safeParse(TRIGGER_PUSH_CLASSES).success).toBe(true);
   });
 
-  it('binds agent-invocable classes to live triggers and excludes system classes', () => {
-    expect(TRIGGER_PUSH_CLASSES.fetch_alert).toEqual(['fetch_alert']);
-    expect(TRIGGER_PUSH_CLASSES.brief).toEqual(['brief']);
-    expect(TRIGGER_PUSH_CLASSES.pre_activity_spot).toEqual(['pre_activity_spot']);
-    expect(TRIGGER_PUSH_CLASSES.user_message).toEqual(['adjustment']);
-    expect(Object.values(TRIGGER_PUSH_CLASSES).flat()).not.toContain('intervention_knock');
-    expect(Object.values(TRIGGER_PUSH_CLASSES).flat()).not.toContain('system_consent');
+  it('binds only agent-invocable classes and no system classes', () => {
+    for (const pushClass of Object.values(TRIGGER_PUSH_CLASSES).flat()) {
+      expect(DELIVERY_POLICY[pushClass].agent_invocable).toBe(true);
+    }
+  });
+
+  it('treats user_message as reactive, outside the proactive delivery gate', () => {
+    expect(TRIGGER_PUSH_CLASSES.user_message).toEqual([]);
+  });
+
+  it('binds adjustment only to proactive adjustment emitters', () => {
+    expect(TRIGGER_PUSH_CLASSES.handoff_act).toEqual(['adjustment']);
+    expect(TRIGGER_PUSH_CLASSES.pre_activity_spot).toEqual(['pre_activity_spot', 'adjustment']);
+  });
+});
+
+describe('tier caps', () => {
+  it('pins Pro to 3 and Pro Max to 5, with no fetch-reservation constant', () => {
+    expect(DAILY_PUSH_BUDGET).toEqual({ pro: 3, pro_max: 5 });
+    expect(DAILY_PUSH_BUDGET).not.toHaveProperty('fetch_reserved');
+  });
+});
+
+describe('FETCH_ALERT_POLICY tracer sliver', () => {
+  it('is valid and does not drift from DELIVERY_POLICY.fetch_alert', () => {
+    expect(fetchAlertPolicySchema.safeParse(FETCH_ALERT_POLICY).success).toBe(true);
+    expect(FETCH_ALERT_POLICY.budget_exempt).toBe(DELIVERY_POLICY.fetch_alert.budget === 'exempt');
+    expect(FETCH_ALERT_POLICY.daily_cap).toBe(DELIVERY_POLICY.fetch_alert.daily_cap);
+    expect(FETCH_ALERT_POLICY.cooldown_min).toBe(DELIVERY_POLICY.fetch_alert.cooldown_min);
   });
 });
 
 describe('deliveryCandidate', () => {
-  it('accepts a trigger-owned candidate with optional confidence and expiry', () => {
+  it('accepts the gate-owned candidate envelope and rejects content', () => {
     expect(
       deliveryCandidateSchema.safeParse({
         push_class: 'fetch_alert',
@@ -122,17 +206,6 @@ describe('deliveryCandidate', () => {
         expires_at: 2_000,
       }).success,
     ).toBe(true);
-  });
-
-  it('rejects invalid confidence and extra content', () => {
-    expect(
-      deliveryCandidateSchema.safeParse({
-        push_class: 'fetch_alert',
-        trigger: 'fetch_alert',
-        event_id: 'fetch-1',
-        confidence: 1.5,
-      }).success,
-    ).toBe(false);
     expect(
       deliveryCandidateSchema.safeParse({
         push_class: 'fetch_alert',
@@ -162,7 +235,7 @@ describe('admission', () => {
     ).toBe(true);
   });
 
-  it('rejects budget charge on an exempt class', () => {
+  it('rejects budget charge on an exempt class and stamp lies', () => {
     expect(
       admissionSchema.safeParse({
         verdict: 'send',
@@ -172,9 +245,19 @@ describe('admission', () => {
         stamped: { push_class: 'fetch_alert', is_standalone: false, budget_exempt: true },
       }).success,
     ).toBe(false);
+    expect(
+      admissionSchema.safeParse({
+        verdict: 'send',
+        channels: ['apns'],
+        collapse_id: 'stack',
+        budget_charged: false,
+        stamped: { push_class: 'fetch_alert', is_standalone: false, budget_exempt: false },
+      }).success,
+    ).toBe(false);
   });
 
-  it('requires hold_until for held admissions', () => {
+  it('requires hold_until for held admissions and valid channel names', () => {
+    expect(channelNameSchema.safeParse('in_app').success).toBe(true);
     expect(
       admissionSchema.safeParse({
         verdict: 'hold',
@@ -203,5 +286,21 @@ describe('heldCandidate', () => {
         expires_at: 2_000,
       }).success,
     ).toBe(true);
+  });
+
+  it('rejects a held row whose class disagrees with its frozen candidate', () => {
+    expect(
+      heldCandidateSchema.safeParse({
+        event_id: 'spot-1',
+        push_class: 'adjustment',
+        candidate: {
+          push_class: 'pre_activity_spot',
+          trigger: 'pre_activity_spot',
+          event_id: 'spot-1',
+        },
+        hold_until: 1_500,
+        expires_at: null,
+      }).success,
+    ).toBe(false);
   });
 });
