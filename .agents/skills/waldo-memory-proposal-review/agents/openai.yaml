@@ -1,0 +1,4 @@
+interface:
+  display_name: "Waldo Memory Proposal Review"
+  short_description: "Review persistent memory changes safely."
+  default_prompt: "Use $waldo-memory-proposal-review to evaluate this proposed Waldo memory or goal update."

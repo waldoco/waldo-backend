@@ -1,0 +1,4 @@
+interface:
+  display_name: "Waldo ISA Run Contract"
+  short_description: "Define done as verifiable run criteria."
+  default_prompt: "Use $waldo-isa-run-contract to turn this request into a verifiable Waldo run contract."

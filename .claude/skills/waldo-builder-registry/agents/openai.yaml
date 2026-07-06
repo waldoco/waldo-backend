@@ -1,0 +1,4 @@
+interface:
+  display_name: "Waldo Builder Registry"
+  short_description: "Create source-backed Waldo skill registry entries."
+  default_prompt: "Use $waldo-builder-registry to turn these sources into registry-backed Waldo builder skills."
