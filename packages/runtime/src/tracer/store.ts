@@ -46,7 +46,7 @@ export class Store {
         userId,
       )
       .toArray();
-    return { sends_total: rows[0]?.sends_total ?? 0 };
+    return { sends_total: rows[0]?.sends_total ?? 0, exempt_sends: 0, class_state: {} };
   }
 
   readExemptTelemetry(userId: string): ExemptTelemetry {

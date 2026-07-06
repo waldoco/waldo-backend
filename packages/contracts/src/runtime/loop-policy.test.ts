@@ -5,10 +5,16 @@ import {
   admit,
   autonomyLevelSchema,
   killFlagScopeSchema,
+  isNoProgress,
   loopDispositionSchema,
+  loopInvocationSchema,
+  loopKillFlagSchema,
   loopPolicySchema,
+  loopProgressRowSchema,
+  loopToolObservationSchema,
   loopTypeSchema,
   lookupLoopPolicy,
+  outboundTextPassesArt9Floor,
   priorityTierRank,
   priorityTierSchema,
   socketResidencySchema,
@@ -198,5 +204,114 @@ describe('fail-closed admission', () => {
   it('denies an unregistered / open-decision loop (chat) fail-closed', () => {
     expect(lookupLoopPolicy('chat')).toBeNull();
     expect(admit(lookupLoopPolicy('chat'))).toBe('deny');
+  });
+});
+
+describe('loop progress no-progress guard', () => {
+  it('accepts bounded progress counters and rejects impossible counts', () => {
+    expect(
+      loopProgressRowSchema.safeParse({
+        loop_name: 'patrol',
+        occurrence_id: 'occ-1',
+        call_count: 10,
+        unique_param_hashes: 2,
+        successes: 1,
+        updated_at: 1_000,
+      }).success,
+    ).toBe(true);
+    expect(
+      loopProgressRowSchema.safeParse({
+        loop_name: 'patrol',
+        occurrence_id: 'occ-1',
+        call_count: 1,
+        unique_param_hashes: 2,
+        successes: 0,
+        updated_at: 1_000,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('requires low diversity and low success before declaring no progress', () => {
+    const stuck = {
+      loop_name: 'patrol',
+      occurrence_id: 'occ-1',
+      call_count: 10,
+      unique_param_hashes: 1,
+      successes: 0,
+      updated_at: 1_000,
+    };
+    expect(isNoProgress(stuck, 0.2, 0.2)).toBe(true);
+    expect(isNoProgress({ ...stuck, successes: 8 }, 0.2, 0.2)).toBe(false);
+    expect(isNoProgress({ ...stuck, unique_param_hashes: 8 }, 0.2, 0.2)).toBe(false);
+  });
+});
+
+describe('loop tool observation and kill flag', () => {
+  const hash = 'a'.repeat(64);
+
+  it('accepts SHA-256 observation hashes', () => {
+    expect(
+      loopToolObservationSchema.safeParse({
+        tool_name: 'read_memory',
+        canonical_params_hash: hash,
+        result_hash: hash,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects bad hashes and unknown tools', () => {
+    expect(
+      loopToolObservationSchema.safeParse({
+        tool_name: 'read_memory',
+        canonical_params_hash: 'x',
+        result_hash: hash,
+      }).success,
+    ).toBe(false);
+    expect(
+      loopToolObservationSchema.safeParse({
+        tool_name: 'made_up_tool',
+        canonical_params_hash: hash,
+        result_hash: hash,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts loop and global kill flags', () => {
+    expect(
+      loopKillFlagSchema.safeParse({
+        scope: 'global',
+        loop_name: null,
+        active: true,
+        updated_at: 1_000,
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('outbound Art-9 floor', () => {
+  it('blocks current-main raw health value families before external delivery', () => {
+    expect(outboundTextPassesArt9Floor('HRV 42 and slept 5.5h')).toBe(false);
+    expect(outboundTextPassesArt9Floor('heart rate: 110 bpm')).toBe(false);
+    expect(outboundTextPassesArt9Floor('body_weight: "82"')).toBe(false);
+    expect(outboundTextPassesArt9Floor('blood pressure 140/90')).toBe(false);
+    expect(outboundTextPassesArt9Floor('active_energy_kcal: 450')).toBe(false);
+  });
+
+  it('allows zone-word summaries', () => {
+    expect(outboundTextPassesArt9Floor('Recovery looks compromised; keep the morning quiet.')).toBe(
+      true,
+    );
+  });
+});
+
+describe('loopInvocation', () => {
+  it('binds loop execution to an existing trigger and occurrence id', () => {
+    expect(
+      loopInvocationSchema.safeParse({
+        trigger: 'fetch_alert',
+        loop_name: 'fetch-loop',
+        occurrence_id: 'occ-1',
+      }).success,
+    ).toBe(true);
   });
 });

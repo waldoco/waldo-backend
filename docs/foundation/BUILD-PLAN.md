@@ -3,9 +3,10 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7–#11 are merged into `main` (`0d4dd26`). Open PRs off `main`:
-  `foundation/loop-governor-contract` (#12, ADR-0074 governor contract SLICE-1) and
-  `foundation/sanitiser-art9-parity` (#13, Art-9 sanitiser hardening — see FOUNDATION-HANDOVER §6.1).
+- **Baseline:** PR #7–#14 are merged into `main` (`f77b29b`). This branch completes the
+  remaining Phase-D contract spine on top of that baseline: ADR-0068 delivery policy, ADR-0070
+  engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence lanes, and ADR-0074 helper
+  contracts while preserving the PR #13 Art-9 wall and PR #14 taint-gate authority.
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
 - **Canonical sources:** the accepted ADR corpus, the build bible
@@ -66,9 +67,10 @@ Foundation sequence so far:
 12. PR #10 runtime seam: run/session/working-memory contracts.
 13. PR #11: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
 
-Next dependency layers remain runtime and public-surface work:
-full `governor` -> full `delivery` -> `telemetry/*`
--> public DTOs + `emit-openapi`.
+Next dependency layer is runtime work:
+full `governor` -> full `delivery`/outbox -> scheduler multiplexer -> dispatcher/sanitiser wiring.
+Public DTO/OpenAPI and engagement/evidence contracts are now present; app generated-client refresh is
+a downstream app-surface task against the committed OpenAPI artifact.
 `core/trigger`'s `invocationContext` is deferred to the wave after `core/user` + `health/crs`
 because it depends on both.
 
@@ -118,10 +120,21 @@ because it depends on both.
   + `lookupLoopPolicy` + `admit(policy|null)` (null → deny). Promotes `runtime/loop-policy` from the
   two-field tracer sliver to the full contract; the tracer now admits its fetch loop through the
   registry. Contract-only; the runtime arbiter/budget/kill/no-progress guard remain SLICE-3.
-- [ ] **Phase D remaining waves** — delivery/outbox contract expansion (SLICE-2), the governor +
-  delivery/outbox runtime (SLICE-3, needs DDL + real DO tests), telemetry, public
-  DTO/OpenAPI/generated-client freshness, scenario/property/mutation lanes, and live/dogfood lanes.
-  See `FOUNDATION-HANDOVER.md` §5 for the 3-slice split and §6 for the tracked findings.
+- [x] **Delivery-policy contract (SLICE-2)** — ADR-0068 current-decision table: ten push classes,
+  `DELIVERY_POLICY`, tier caps, trigger bindings, `DeliveryCandidate`, `Admission`, held candidates,
+  sub-kind-aware adjustment caps, and the current invariant that every agent-reachable exempt class
+  carries a positive cap. Contract-only; no DDL or DeliveryGate runtime.
+- [x] **Engagement telemetry contracts** — ADR-0070 `EngagementEvent`, four launch metric families,
+  Telegram reply/callback open proxy, and redacted low-cardinality label validation.
+- [x] **Public DTO/OpenAPI artifact** — ADR-0029 public engagement DTOs are independently declared in
+  `src/public/`; `packages/contracts/openapi/waldo-public-api.json` and its SHA-256 sentinel are
+  freshness-checked from the source builder.
+- [x] **Evidence lanes** — scenario/property/mutation/live-dogfood evidence contracts with hermetic
+  defaults and explicit live-provider opt-in.
+- [ ] **Runtime implementation waves** — governor comparator/budget/kill/no-progress enforcement,
+  DeliveryGate + durable outbox flusher, `held_candidates` + `loop_progress` DDL, scheduler
+  multiplexer, dispatcher taint-gate wiring, sanitiser runtime, and full run-FSM wiring. These need
+  real `@cloudflare/vitest-pool-workers` tests, including cross-eviction exactly-once delivery.
 
 ## Grounding flags & dispositions
 
@@ -182,9 +195,9 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The Loop Governor contract (SLICE-1) has landed. The next safe unit is SLICE-2 — the delivery-policy
-contract expansion (ADR-0068), contract-only. See `FOUNDATION-HANDOVER.md` §5 (the 3-slice split of
-"full governor plus delivery/outbox") and §9 (continuation prompt). Do not start the governor/
-delivery/outbox runtime (SLICE-3) until PR #13 has merged, ADR-0049 taint-gate authority is decided,
-and a real cross-eviction DO test substrate proves exactly-once delivery. Do not broaden telemetry,
-public DTOs, or generated-client work before those runtime gates are explicit and tested.
+The Phase-D contract spine is now ready for runtime implementation once this branch is merged. The
+next safe unit is SLICE-3 runtime work: DeliveryGate/outbox exactly-once at the durable layer, loop
+governor runtime enforcement, scheduler multiplexer, dispatcher taint-gate wiring, sanitiser runtime,
+and full run-FSM wiring. Start with a failing `@cloudflare/vitest-pool-workers` test that proves
+cross-eviction exactly-once *delivery*, not just enqueue. Keep each runtime seam single-writer and
+do not treat the Phase-C fake sink as proof for production delivery.

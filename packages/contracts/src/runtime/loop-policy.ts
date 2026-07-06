@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { triggerTypeSchema } from '../core/trigger';
+import { RAW_SENSOR_PATTERNS } from '../memory/sanitise';
+import { toolNameSchema } from '../tools/permissions';
 
 // ADR-0074 Loop Governor — the deterministic cross-loop governance seam. This contract pins the
 // LoopPolicy manifest (the single per-loop record the Governor reads), the acute-health-first
@@ -204,3 +207,62 @@ export function lookupLoopPolicy(loopType: LoopType): LoopPolicy | null {
 export function admit(policy: LoopPolicy | null): GovernorVerdict {
   return policy === null ? 'deny' : 'admit';
 }
+
+export const loopProgressRowSchema = z
+  .strictObject({
+    loop_name: z.string().min(1),
+    occurrence_id: z.string().min(1),
+    call_count: z.int().nonnegative(),
+    unique_param_hashes: z.int().nonnegative(),
+    successes: z.int().nonnegative(),
+    updated_at: z.int().nonnegative(),
+  })
+  .refine((r) => r.unique_param_hashes <= r.call_count, {
+    error: 'unique_param_hashes cannot exceed call_count',
+    path: ['unique_param_hashes'],
+  })
+  .refine((r) => r.successes <= r.call_count, {
+    error: 'successes cannot exceed call_count',
+    path: ['successes'],
+  });
+export type LoopProgressRow = z.infer<typeof loopProgressRowSchema>;
+
+export function isNoProgress(
+  row: LoopProgressRow,
+  diversityThreshold: number,
+  successThreshold: number,
+): boolean {
+  if (row.call_count === 0) return false;
+  const paramDiversity = row.unique_param_hashes / row.call_count;
+  const successRate = row.successes / row.call_count;
+  return paramDiversity <= diversityThreshold && successRate <= successThreshold;
+}
+
+export const loopToolObservationSchema = z.strictObject({
+  tool_name: toolNameSchema,
+  canonical_params_hash: z.string().regex(/^[0-9a-f]{64}$/),
+  result_hash: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type LoopToolObservation = z.infer<typeof loopToolObservationSchema>;
+
+export const loopKillFlagSchema = z.strictObject({
+  scope: killFlagScopeSchema,
+  loop_name: z.string().min(1).nullable(),
+  active: z.boolean(),
+  updated_at: z.int().nonnegative(),
+});
+export type LoopKillFlag = z.infer<typeof loopKillFlagSchema>;
+
+export function outboundTextPassesArt9Floor(text: string): boolean {
+  return !RAW_SENSOR_PATTERNS.some((pattern) => {
+    pattern.lastIndex = 0;
+    return pattern.test(text);
+  });
+}
+
+export const loopInvocationSchema = z.strictObject({
+  trigger: triggerTypeSchema,
+  loop_name: z.string().min(1),
+  occurrence_id: z.string().min(1),
+});
+export type LoopInvocation = z.infer<typeof loopInvocationSchema>;
