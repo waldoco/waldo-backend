@@ -1,0 +1,4 @@
+interface:
+  display_name: "Current Ideal Gap"
+  short_description: "Turn goals into verifiable steps."
+  default_prompt: "Use $current-ideal-gap to turn this vague goal into checkable steps."

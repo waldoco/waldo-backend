@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thinking Mode Router"
+  short_description: "Pick the right reasoning mode."
+  default_prompt: "Use $thinking-mode-router to choose the right thinking mode before answering this."

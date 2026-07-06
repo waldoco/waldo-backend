@@ -1,0 +1,4 @@
+interface:
+  display_name: "Compound Learning Capture"
+  short_description: "Save lessons agents should reuse."
+  default_prompt: "Use $compound-learning-capture to capture the reusable lesson from this work."

@@ -12,7 +12,8 @@ Before any implementation:
 2. Read `docs/foundation/BUILD-PLAN.md`.
 3. Read `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
 4. Read `docs/foundation/NEXT-SESSION-PLAN.md`.
-5. Read the relevant Waldo Brain DeepWiki pages and accepted ADRs.
+5. Read `docs/foundation/AGENT-OPERATING-WORKFLOW.md`.
+6. Read the relevant Waldo Brain DeepWiki pages and accepted ADRs.
 
 Current facts:
 
@@ -29,7 +30,7 @@ Current facts:
 - The next runtime work is runtime run/session/working-memory and scheduler/goal
   contracts. Do not replay A/B/C, Waves 1-4a, or the PR #8 contract spine unless
   a regression forces it.
-- `@waldo/types` and legacy `waldo-types` references are stale for this branch.
+- Retired external contract package references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
 - ADR-0068 current block owns DeliveryGate: no `defer_next_day`; `fetch_alert`
@@ -59,7 +60,7 @@ No mobile code. No marketing site. Just data + agent.
 - `@anthropic-ai/sdk` for Claude calls (Haiku 4.5 default, Sonnet 4.6 for ~5%)
 - `@google/genai` + Workers AI for Gemma 4 27B/9B
 - grammY for Telegram (ADR-0012)
-- `@waldo/types` from private npm (HEY-7 + HEY-63)
+- Local workspace contracts in `packages/contracts`
 - OpenTelemetry SDK (OTLP export to CF AI Gateway)
 - Node 22 LTS for local dev (`tsx`)
 
@@ -82,7 +83,8 @@ wrangler tail --env staging            # live logs
 wrangler durable-objects:list
 
 # Eval
-pnpm eval                              # 30-case golden test set
+# No pnpm eval script exists in this checkout yet.
+# Use /run-eval to probe the eval gate, record the gap, and run verify.
 ```
 
 ## Issue tracker
@@ -109,7 +111,7 @@ Same set as the other repos (P0-P3 · ready-for-agent/human · type:* · repo:*)
 
 Critical ADRs for this repo:
 - ADR-0002 Agent in CF DO, health in Supabase
-- ADR-0003 Gemma 4 27B primary
+- ADR-0003 Historical initial model-routing context; ADR-0069 owns the current model roster
 - ADR-0004 CF AI Gateway single LLM gateway
 - ADR-0005 5 typed memory halls
 - ADR-0006 Scribe inbox-merge
