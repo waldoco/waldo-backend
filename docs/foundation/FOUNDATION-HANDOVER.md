@@ -189,18 +189,21 @@ Baseline gate before any code:
   git diff --check
 If red or the branch is unmergeable, stop and report the blocker.
 
-Grill the plan first, then pick ONE runtime slice, single-writer, tests-first, its own small PR:
+Grill the plan first, then pick ONE runtime slice, single-writer, tests-first, its own small PR.
+Slice names follow the Linear board (2026-07-06 restructure): SLICE-3a exactly-once proof ·
+SLICE-3b tracer journal/outbox promotion · SLICE-3c DeliveryGate runtime · SLICE-4 Loop Governor ·
+SLICE-5 scheduler/alarm multiplexer.
 
 1. SLICE-3a — durable DeliveryGate/outbox proof. Add the DO SQLite state needed for
    `daily_push_budget`, `held_candidates`, outbox retry state, and the notification-log mirror seam.
    Prove with real `@cloudflare/vitest-pool-workers` cross-eviction tests that post-send/pre-ack
    crash resume does not double-deliver. Exactly-once delivery, not just enqueue, is the gate.
 
-2. SLICE-3b — Loop Governor runtime enforcement. Consume the existing ADR-0074 contracts:
+2. SLICE-4 — Loop Governor runtime enforcement. Consume the existing ADR-0074 contracts:
    comparator, per-run token/iteration/subagent bounds, kill flags, within-run dedup, no-progress
    rows, and outbound Art-9 floor. Do not invent new governor verdict enums.
 
-3. SLICE-3c — dispatcher/sanitiser wiring. Wire `taintGateBlocksDirectExecution` at PreToolUse,
+3. Dispatcher/sanitiser wiring (Phase 4 wave). Wire `taintGateBlocksDirectExecution` at PreToolUse,
    thread external taint from tool result to privileged args, and put the sanitiser runtime at the
    memory/prompt/egress boundaries using the single `RAW_SENSOR_PATTERNS` owner.
 
