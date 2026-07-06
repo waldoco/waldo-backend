@@ -14,8 +14,10 @@ Before coding, read:
 1. [AGENTS.md](AGENTS.md) for repo-specific agent orchestration.
 2. [CLAUDE.md](CLAUDE.md) for current foundation status and backend rules.
 3. [Agent Operating Workflow](docs/foundation/AGENT-OPERATING-WORKFLOW.md) for the session loop, skill map, plugin boundaries, and verification wall.
-4. `.claude/rules/INDEX.md` plus the relevant foundation docs and accepted ADRs.
-5. The relevant Waldo Brain pages for the seam you are touching.
+4. [Next Session Plan](docs/foundation/NEXT-SESSION-PLAN.md) for the current harness grilling/planning entrypoint.
+5. [Harness Runtime Build Plan](docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md) for the source-backed async pillar map.
+6. `.claude/rules/INDEX.md` plus the relevant foundation docs and accepted ADRs.
+7. The relevant Waldo Brain pages for the seam you are touching.
 
 ## Operating Loop
 

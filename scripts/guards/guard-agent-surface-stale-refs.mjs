@@ -72,6 +72,10 @@ const roots = [
   '.agents/skills',
   'AGENTS.md',
   'CLAUDE.md',
+  'docs/foundation/NEXT-SESSION-PLAN.md',
+  'docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md',
+  'docs/foundation/FOUNDATION-HANDOVER.md',
+  'docs/foundation/BUILD-PLAN.md',
   'docs/foundation/AGENT-OPERATING-WORKFLOW.md',
 ];
 

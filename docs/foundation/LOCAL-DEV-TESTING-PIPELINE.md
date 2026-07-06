@@ -23,7 +23,7 @@ Before changing harness code, read only the source set needed for the change:
 
 - `docs/foundation/BUILD-PLAN.md`
 - this file
-- the relevant DeepWiki page under `waldo-brain/01-Waldo/waldo-harness-deepwiki/`
+- the relevant DeepWiki page under [waldo-harness-deepwiki](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/waldo-harness-deepwiki)
 - the accepted ADRs that own the touched seam
 - the touched package/module code
 

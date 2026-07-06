@@ -1,8 +1,9 @@
 # waldo-backend - Rule Index
 
 This repo mirrors the six universal Waldo rule files from
-`waldo-brain/.claude/rules/`. In cloud sessions, read the mirrored local files in
-this directory. Do not depend on a sibling `waldo-brain` checkout being present.
+[waldo-brain/.claude/rules](https://github.com/Pin4sf/waldo-brain/tree/main/.claude/rules).
+In cloud sessions, read the mirrored local files in this directory. Do not depend
+on a sibling `waldo-brain` checkout being present.
 
 ## Hard Rules - Read First, In Order
 
@@ -59,8 +60,9 @@ Claude Code cloud sessions only see committed repo files. Before launching a
 cloud ultracode workflow, push the branch and ensure this `.claude/rules/`
 mirror is committed.
 
-Repo-required skills live under `.claude/skills/`. This repo does not use a
-separate `.agents/` directory; the agent roster is declared in `AGENTS.md`.
+Repo-required skills live under `.claude/skills/`. `.agents/skills/` may exist
+as a compatibility mirror for local agent loaders; it is not a second source of
+truth. The agent roster is declared in `AGENTS.md`.
 
 Dynamic workflows are useful for parallel research, review, attack, and
 independent module waves. They are risky for uncontrolled write-heavy work.

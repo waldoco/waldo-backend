@@ -3,15 +3,16 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7–#14 are merged into `main` (`f77b29b`). This branch completes the
-  remaining Phase-D contract spine on top of that baseline: ADR-0068 delivery policy, ADR-0070
-  engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence lanes, and ADR-0074 helper
-  contracts while preserving the PR #13 Art-9 wall and PR #14 taint-gate authority.
+- **Baseline:** PR #7-#18 are merged into `main`. The Phase-D contract spine is complete:
+  ADR-0068 delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI
+  freshness, evidence lanes, ADR-0074 helpers, PR #13 Art-9 wall, PR #14 taint-gate
+  authority, and the agent operating workflow docs/skills are present.
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
-- **Canonical sources:** the accepted ADR corpus, the build bible
-  (`waldo-brain/01-Waldo/waldo-harness-deepwiki/`), and the docs-grounded design spec
-  produced by the `waldo-foundation-grounding` workflow (12 subsystem briefs + synthesis).
+- **Canonical sources:** the [accepted ADR corpus](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29),
+  the [harness DeepWiki build bible](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/waldo-harness-deepwiki),
+  and the docs-grounded design spec produced by the `waldo-foundation-grounding`
+  workflow (12 subsystem briefs + synthesis).
 
 ## Mandate
 
@@ -67,12 +68,11 @@ Foundation sequence so far:
 12. PR #10 runtime seam: run/session/working-memory contracts.
 13. PR #11: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
 
-Next dependency layer is runtime work:
-full `governor` -> full `delivery`/outbox -> scheduler multiplexer -> dispatcher/sanitiser wiring.
-Public DTO/OpenAPI and engagement/evidence contracts are now present; app generated-client refresh is
-a downstream app-surface task against the committed OpenAPI artifact.
-`core/trigger`'s `invocationContext` is deferred to the wave after `core/user` + `health/crs`
-because it depends on both.
+Next dependency layer is runtime work, beginning with durable outbox proof:
+run journal/outbox -> DeliveryGate runtime -> Loop Governor enforcement -> scheduler
+multiplexer -> dispatcher/sanitiser wiring -> context/model/channel integration. Public
+DTO/OpenAPI and engagement/evidence contracts are present; app generated-client refresh is a
+downstream app-surface task against the committed OpenAPI artifact.
 
 ## Status
 
@@ -93,12 +93,12 @@ because it depends on both.
 - [x] **Phase D Wave 1 memory contracts** — `memory/pattern-id`, `trust`, `sanitise`, `hall`,
   `episode`, and `recall`; committed locally in `03b5d49`.
 - [x] **Phase D Wave 2 CRS/prompt contracts** — `health/crs`, `prompt/skill`,
-  `prompt/narrative`, and `prompt/reasons`; included in this PR branch.
+  `prompt/narrative`, and `prompt/reasons`; landed in PR #7.
 - [x] **Phase D Wave 3 routing/LLM contracts** — `runtime/routing` and `adapters/llm`,
-  with fake-provider seams only; included in this PR branch.
+  with fake-provider seams only; landed in PR #7.
 - [x] **Phase D Wave 4a UI/provider adapters** — `ui/card`, `ui/notification`, and
-  provider adapter seams for health, calendar, sheet, email, and doc; included in this PR branch.
-- [x] **PR #7 landed** — PR #7 was squash-merged into `main`; current branch starts from that
+  provider adapter seams for health, calendar, sheet, email, and doc; landed in PR #7.
+- [x] **PR #7 landed** — PR #7 was squash-merged into `main`; later work starts from that
   post-merge baseline.
 - [x] **Post-PR7 contract wave** — `adapters/channel`, `tools/permissions`, `tools/handler`,
   `tools/schemas/{reads,writes,threading}`, `core/hooks`, `memory/skill`, `auth/mint`, and
@@ -188,16 +188,16 @@ post-review hardening commit. Do not use this historical section as the next-ses
 
 ## Current next step
 
-Before runtime expansion, prove the current branch with:
+Before runtime expansion, prove the working tree with:
 
 ```bash
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The Phase-D contract spine is now ready for runtime implementation once this branch is merged. The
-next safe unit is SLICE-3 runtime work: DeliveryGate/outbox exactly-once at the durable layer, loop
-governor runtime enforcement, scheduler multiplexer, dispatcher taint-gate wiring, sanitiser runtime,
-and full run-FSM wiring. Start with a failing `@cloudflare/vitest-pool-workers` test that proves
-cross-eviction exactly-once *delivery*, not just enqueue. Keep each runtime seam single-writer and
-do not treat the Phase-C fake sink as proof for production delivery.
+The Phase-D contract spine is ready for runtime implementation. The next safe unit is
+**SLICE-3a: durable DeliveryGate/outbox proof**. Start with a failing
+`@cloudflare/vitest-pool-workers` test that proves cross-eviction exactly-once *delivery*,
+not just enqueue. Keep scheduler, full governor enforcement, dispatcher, Scribe runtime,
+model routing, and channel integrations out of that first PR. Use
+`docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async pillar map.
