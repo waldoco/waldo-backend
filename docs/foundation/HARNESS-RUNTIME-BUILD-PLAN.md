@@ -1,7 +1,7 @@
 # Harness Runtime Build Plan
 
 Status: active planning source for the next Waldo backend runtime build.
-Date: 2026-07-06.
+Date: 2026-07-07.
 Purpose: convert Waldo Brain's final harness architecture and the backend contract-spine audit into an assignable runtime build plan.
 
 ## Source Map
@@ -78,12 +78,14 @@ Built:
 - Contract spine across core, runtime, tools, memory, prompt, model, adapters, auth, telemetry, public DTO/OpenAPI, and evidence lanes.
 - Workers/DO test substrate with `@cloudflare/vitest-pool-workers`.
 - One scheduled `fetch_alert` tracer path proving `DO alarm -> Governor -> journal -> DeliveryGate -> outbox -> fake sink -> DONE`.
+- SLICE-3a/HEY-120 durable outbox proof: crash after sink send and before local ack resumes across DO eviction without duplicate physical delivery, with an explicit idempotent sink contract.
 - Static guard wall and pinned verification command.
 
 Not built:
 
 - Full run FSM runtime.
-- Durable multi-kind DeliveryGate/outbox flusher.
+- Promoted runtime journal/outbox interface beyond the tracer (`startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, `flushOutbox`).
+- Durable multi-kind DeliveryGate/outbox flusher and retry exhaustion policy.
 - Scheduler multiplexer.
 - Loop Governor runtime enforcement.
 - Dispatcher/tool runtime.
@@ -112,13 +114,13 @@ Split by runtime seam, not product feature. Product features should wait until t
 | 9 | Auth/Data Plane/Adapters | ES256 Supabase issuer, `db.forUser`, Vault OAuth, provider adapters. | Now | RLS cross-tenant tests, token expiry, no service-role in DO. | High in migrations/EFs |
 | 10 | Observability/Conformance | Trace event shape, scenario artifacts, replay/eval scaffolding. | Now | Scenario replay, property seeds, mutation reports, redaction checks. | Low |
 
-## First Slice
+## Completed First Slice
 
-Build **SLICE-3a: durable DeliveryGate/outbox proof**.
+**SLICE-3a/HEY-120: durable DeliveryGate/outbox proof** landed in PR #21.
 
-The first PR should prove exactly-once delivery at the durable layer, not only exactly-once enqueue and not only process-local fake-sink dedupe.
+The PR proved exactly-once delivery at the durable layer, not only exactly-once enqueue and not only process-local fake-sink dedupe.
 
-Required test:
+Proof covered:
 
 - Start a run.
 - Commit the outbox intent.
@@ -128,8 +130,30 @@ Required test:
 - Resume.
 - Assert the side effect is not delivered twice.
 - Assert durable state records the ack/retry outcome.
+- Assert the sink declares idempotency by key and the fake cannot hide re-key bugs.
 
-The implementation may still use fake sinks, but the fake must enforce the same idempotency contract expected from real APNs/Telegram/feed sinks. The proof cannot rely on a module-scope map hiding duplicate sends.
+Remaining after SLICE-3a: multi-kind outbox, retry exhaustion policy, notification-log mirror, and the runtime-facing journal/outbox interface.
+
+## Next Slice
+
+Build **SLICE-3b/HEY-121: promote tracer run journal/outbox into runtime interface**.
+
+The next PR should extract the tracer-proven behavior into a narrow runtime module without adopting scheduler, dispatcher, Scribe, real LLMs, live channels, or app-feed code.
+
+Required first failing test:
+
+- Drive a run through the promoted runtime interface, not directly through tracer internals.
+- Evict/reconstruct the Durable Object between committed transitions.
+- Resume through `resumeRun`/`tickRun`.
+- Assert terminal state and outbox state converge exactly as the tracer proof did.
+- Assert malformed durable outbox/journal rows fail closed at the read seam.
+- Assert `sinkRequestSchema`/`sinkAckSchema` are enforced at egress/ack and an ack with the wrong idempotency key is rejected before mutation.
+
+Review carry-forward from PR #21:
+
+- Promote only production-shaped journal/outbox code; leave crash knobs and tracer fixture helpers in tests.
+- Sanitize or normalize persisted `last_error` before real provider sinks exist.
+- Keep the sink idempotency contract explicit at the wiring seam.
 
 ## Parallel Assignment Packet
 
@@ -149,12 +173,13 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before coding SLICE-3a, grill these decisions:
+Before coding SLICE-3b, grill these decisions:
 
-1. What is the minimal production outbox row shape: `status`, `attempts`, `next_retry_at`, `acked_at`, `sink_ack`, `last_error`, `idempotency_key`?
-2. Does the notification-log mirror belong in SLICE-3a or the next DeliveryGate PR?
-3. What exactly is the sink contract: native idempotency required, synthetic key required, or both?
-4. Which operations are inside the same DO SQLite transaction as the `GATED` transition?
-5. What state transition follows "sent but ack not recorded" on retry?
-6. How do we test a non-idempotent sink to prove the runtime rejects it or wraps it?
-7. Which tracer code should be promoted, and which tracer code should be left as test-only scaffolding?
+1. What is the smallest production runtime interface that hides DO SQLite rows without hiding failure evidence?
+2. Which table/row schemas must be parsed at durable read seams versus trusted only at write seams?
+3. Should `runs`, `journal`, and `outbox` live in one runtime module now or split only after a second caller appears?
+4. What is the exact transaction boundary for `tickRun` when it enqueues an outbox intent?
+5. What state does `resumeRun` return for `sent_unacked`, corrupt rows, terminal rows, and duplicate alarms?
+6. How do we keep `last_error` useful for debugging without preserving raw provider payloads or health/user content?
+7. Which tracer code should be promoted, and which tracer code should remain test-only scaffolding?
+8. Which files are single-writer for HEY-121, and which fake-eval/channel tasks can run in parallel without touching them?

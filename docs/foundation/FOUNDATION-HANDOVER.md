@@ -4,9 +4,9 @@
 > durable map of what is built, what is contract-only, what is tracer-only, what is unbuilt,
 > which surfaces are safe to build against, and which must stay single-writer.
 >
-> Current as of 2026-07-06: Phase D contract spine and agent operating workflow are merged
-> to `main`. Use `NEXT-SESSION-PLAN.md` and `HARNESS-RUNTIME-BUILD-PLAN.md` for the next
-> active grilling/planning session.
+> Current as of 2026-07-07: Phase D contract spine, agent operating workflow, runtime
+> planning docs, and SLICE-3a/HEY-120 are merged to `main`. Use `NEXT-SESSION-PLAN.md`
+> and `HARNESS-RUNTIME-BUILD-PLAN.md` for the next active SLICE-3b session.
 
 ---
 
@@ -90,6 +90,10 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | #13 | Art-9 Scribe raw-sensor lockout widened to current security checklist coverage; health leak guard blocks |
 | #14 | ADR-0049 taint-gate authority reconciled; privileged action set widened 9→15 |
 | **#17** | **Phase-D contract closure: ADR-0068 delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence lanes, and ADR-0074 helper contracts; preserves PR #13/#14 safety fixes** |
+| #18 | Agent operating workflow, README updates, builder skills, and stale-reference guard |
+| #19 | Runtime build planning entrypoint and harness-runtime build plan |
+| #20 | Linear-aligned slice names in the continuation prompt |
+| **#21** | **SLICE-3a/HEY-120 durable outbox exactly-once delivery proof under real Workers/DO eviction** |
 
 ---
 
@@ -195,16 +199,20 @@ Slice names follow the Linear board (2026-07-06 restructure): SLICE-3a exactly-o
 SLICE-3b tracer journal/outbox promotion · SLICE-3c DeliveryGate runtime · SLICE-4 Loop Governor ·
 SLICE-5 scheduler/alarm multiplexer.
 
-1. SLICE-3a — durable DeliveryGate/outbox proof. Add the DO SQLite state needed for
-   `daily_push_budget`, `held_candidates`, outbox retry state, and the notification-log mirror seam.
-   Prove with real `@cloudflare/vitest-pool-workers` cross-eviction tests that post-send/pre-ack
-   crash resume does not double-deliver. Exactly-once delivery, not just enqueue, is the gate.
+1. SLICE-3b — promote tracer journal/outbox into the runtime interface. Preserve the SLICE-3a
+   proof while introducing `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
+   Enforce outbox row parsing at durable read seams and sink request/ack parsing at delivery seams.
+   Reject mismatched ack keys before mutation. Keep crash knobs and fixture helpers test-only unless
+   deliberately promoted.
 
-2. SLICE-4 — Loop Governor runtime enforcement. Consume the existing ADR-0074 contracts:
+2. SLICE-3c — DeliveryGate runtime. Move from proof state into budgets, cooldowns, held
+   candidates, and the notification-log mirror seam once SLICE-3b stabilizes the runtime interface.
+
+3. SLICE-4 — Loop Governor runtime enforcement. Consume the existing ADR-0074 contracts:
    comparator, per-run token/iteration/subagent bounds, kill flags, within-run dedup, no-progress
    rows, and outbound Art-9 floor. Do not invent new governor verdict enums.
 
-3. Dispatcher/sanitiser wiring (Phase 4 wave). Wire `taintGateBlocksDirectExecution` at PreToolUse,
+4. Dispatcher/sanitiser wiring (Phase 4 wave). Wire `taintGateBlocksDirectExecution` at PreToolUse,
    thread external taint from tool result to privileged args, and put the sanitiser runtime at the
    memory/prompt/egress boundaries using the single `RAW_SENSOR_PATTERNS` owner.
 
