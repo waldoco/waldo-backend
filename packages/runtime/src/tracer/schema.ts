@@ -16,6 +16,10 @@ export function ensureSchema(sql: SqlStorage): void {
     );
   `);
 
+  // status/attempts/next_retry_at/acked_at/last_error carry the durable delivery state
+  // (outboxRowSchema): the send attempt is marked BEFORE the sink is reached and the ack is
+  // recorded after it, so a crash between the two resumes as an in-doubt row instead of
+  // guessing whether the send happened.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS outbox (
       outbox_id       TEXT PRIMARY KEY,
@@ -23,7 +27,11 @@ export function ensureSchema(sql: SqlStorage): void {
       kind            TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
       payload         TEXT NOT NULL,
-      ack_recorded    INTEGER NOT NULL DEFAULT 0,
+      status          TEXT NOT NULL DEFAULT 'pending',
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      next_retry_at   INTEGER,
+      acked_at        INTEGER,
+      last_error      TEXT,
       created_at      INTEGER NOT NULL,
       UNIQUE(idempotency_key),
       UNIQUE(run_id, kind)
@@ -54,6 +62,21 @@ export function ensureSchema(sql: SqlStorage): void {
     CREATE TABLE IF NOT EXISTS daily_push_budget (
       user_id     TEXT PRIMARY KEY,
       sends_total INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
+  // Freeze store for 'hold' verdicts (heldCandidateSchema shape, one frozen candidate per
+  // event). The DeliveryGate runtime owns all reads and writes; the tracer path never
+  // touches it.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS held_candidates (
+      user_id        TEXT NOT NULL,
+      event_id       TEXT NOT NULL,
+      push_class     TEXT NOT NULL,
+      candidate_json TEXT NOT NULL,
+      hold_until     INTEGER NOT NULL,
+      expires_at     INTEGER,
+      PRIMARY KEY (user_id, event_id)
     );
   `);
 

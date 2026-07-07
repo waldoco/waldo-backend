@@ -37,7 +37,11 @@ function freshStub() {
   return env.TRACER_DO.get(id);
 }
 
-type CrashPoint = 'pre_gate_commit' | 'post_sink_pre_ack' | 'post_ack_pre_return';
+type CrashPoint =
+  | 'pre_gate_commit'
+  | 'post_attempt_pre_send'
+  | 'post_sink_pre_ack'
+  | 'post_ack_pre_return';
 
 // The crash-injection seam: poke the single in-handler crash-point field on the live instance, then
 // let the caller drive the alarm so the guarded throw fires. Undefined in production; set only here.
@@ -276,24 +280,22 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
     expectExactlyOnce(await readDurable(stub), sink);
   });
 
-  it('#4 crash after outbox insert / GATED committed: resume reads the verdict, skips the gate', async () => {
+  it('#4 crash after the attempt marker, before the send: resume reads the verdict, skips the gate', async () => {
     const sink = new FakeSink();
     const stub = freshStub();
 
     await schedule(stub);
-    // The handler couples the GATED commit and the sink send in one invocation, so the "GATED
-    // committed, sink not yet called" boundary is isolated by committing the gate (via the flush-time
-    // crash) and then erasing the delivery the sink recorded — modelling a crash BEFORE the sink call.
-    await poke(stub, 'post_sink_pre_ack');
-    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('post_sink_pre_ack');
-    sink.reset(); // as if the sink had never been called on the crashed attempt
+    // The attempt marker commits BEFORE the sink is reached, so this crash point isolates the
+    // "gate committed, sink not yet called" boundary directly — no sink involvement at all.
+    await poke(stub, 'post_attempt_pre_send');
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('post_attempt_pre_send');
 
-    const atGated = await readDurable(stub);
-    expect(atGated.state).toBe('GATED');
-    expect(atGated.verdict).toBe('send');
-    expect(atGated.classCount).toBe(1);
-    expect(atGated.exemptSends).toBe(1);
-    expect(atGated.outboxRows).toBe(1);
+    const atMarked = await readDurable(stub);
+    expect(atMarked.state).toBe('SINK_SENT');
+    expect(atMarked.verdict).toBe('send');
+    expect(atMarked.classCount).toBe(1);
+    expect(atMarked.exemptSends).toBe(1);
+    expect(atMarked.outboxRows).toBe(1);
     expect(sink.observedDeliveries()).toBe(0);
 
     await evictDurableObject(stub);
@@ -316,9 +318,9 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('post_sink_pre_ack');
     expect(sink.observedDeliveries()).toBe(1);
 
-    const atGated = await readDurable(stub);
-    expect(atGated.state).toBe('GATED');
-    expect(atGated.outboxRows).toBe(1);
+    const inDoubt = await readDurable(stub);
+    expect(inDoubt.state).toBe('SINK_SENT');
+    expect(inDoubt.outboxRows).toBe(1);
 
     await evictDurableObject(stub);
 
@@ -439,8 +441,9 @@ describe('TracerDO red proofs: the durable-layer assertions are load-bearing, no
     await expect(
       runInDurableObject(stub, (_i, state) => {
         state.storage.sql.exec(
-          `INSERT INTO outbox (outbox_id, run_id, kind, idempotency_key, payload, ack_recorded, created_at)
-             VALUES (?, ?, ?, ?, ?, 0, ?)`,
+          `INSERT INTO outbox (outbox_id, run_id, kind, idempotency_key, payload,
+                               status, attempts, next_retry_at, acked_at, last_error, created_at)
+             VALUES (?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, NULL, ?)`,
           'forced-second-id',
           d.runId,
           KIND,

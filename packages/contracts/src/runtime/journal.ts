@@ -4,7 +4,9 @@ import { deliveryVerdictSchema } from './delivery-policy';
 // Reduced tracer FSM. Full ADR-0054 FSM is
 // PENDING -> CONTEXT_BUILT -> LLM_CALLED -> TOOLS_DONE -> GATED -> DELIVERED -> DONE.
 // The tracer does no LLM/tool work, so CONTEXT_BUILT/LLM_CALLED/TOOLS_DONE collapse into
-// GOVERNOR_ADMITTED, and DELIVERED expands into SINK_SENT + ACK_RECORDED. Phase D re-expands.
+// GOVERNOR_ADMITTED, and DELIVERED expands into SINK_SENT + ACK_RECORDED. SINK_SENT means
+// "a send attempt is durably marked" (committed BEFORE the sink is reached), not "delivery
+// confirmed" — the run is in-doubt until ACK_RECORDED commits the sink ack.
 export const runStateSchema = z.enum([
   'RUN_OPENED',
   'GOVERNOR_ADMITTED',

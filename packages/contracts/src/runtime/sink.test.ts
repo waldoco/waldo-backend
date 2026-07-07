@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sinkAckSchema, sinkRequestSchema } from './sink';
+import { assertIdempotentSink, sinkAckSchema, sinkRequestSchema } from './sink';
 
 const key = 'b'.repeat(64);
 
@@ -28,5 +28,20 @@ describe('sinkAck', () => {
   it('accepts an accepted:true ack and rejects accepted:false', () => {
     expect(sinkAckSchema.safeParse({ idempotency_key: key, accepted: true }).success).toBe(true);
     expect(sinkAckSchema.safeParse({ idempotency_key: key, accepted: false }).success).toBe(false);
+  });
+});
+
+describe('assertIdempotentSink', () => {
+  const send = () => ({ idempotency_key: key, accepted: true as const });
+
+  it('accepts a sink that declares idempotency on the key', () => {
+    expect(() => assertIdempotentSink({ idempotentOnKey: true, send })).not.toThrow();
+  });
+
+  it('rejects a sink without the declaration or with a non-literal one', () => {
+    expect(() => assertIdempotentSink({ send })).toThrow(/must declare idempotency/);
+    expect(() => assertIdempotentSink({ idempotentOnKey: 'yes', send })).toThrow(
+      /must declare idempotency/,
+    );
   });
 });

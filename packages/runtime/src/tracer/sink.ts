@@ -1,16 +1,35 @@
-import type { SinkAck, SinkRequest } from '@waldo/contracts';
+import type { DeliverySink, SinkAck, SinkRequest } from '@waldo/contracts';
 
-// Module-scope so a DO instance reconstructed after eviction still observes prior deliveries
-// within the same test process — that is what lets crash #5 (sent, ack not yet recorded) prove
-// the re-driven resume re-sends the SAME key and gets the prior ack without a second delivery.
+// Module-scoped so the fake models the EXTERNAL service's own persistence: APNs/Telegram
+// keep their receipt state when a DO instance dies, so it must survive eviction within the
+// test process. This store is deliberately NOT the exactly-once proof — the tests assert
+// the runtime's behavior through sendAttempts/keys and the durable outbox columns;
+// `deliveries` only corroborates that a declared-idempotent sink collapses a same-key
+// re-send to one physical delivery.
 const acks = new Map<string, SinkAck>();
 let deliveries = 0;
+let sendAttempts = 0;
+const keys: string[] = [];
+let failNext: string | null = null;
 
-// In-memory stand-in for APNs/Telegram. Idempotent on idempotency_key: a repeat key returns the
-// prior ack WITHOUT recording a second delivery. This dedupe is deliberately NOT the exactly-once
-// proof — the durable-layer outbox/journal/counter assertions are; the sink count only corroborates.
-export class FakeSink {
+// In-memory stand-in for APNs/Telegram, satisfying the DeliverySink idempotency duty:
+// a repeat key returns the prior ack WITHOUT recording a second delivery.
+export class FakeSink implements DeliverySink {
+  readonly idempotentOnKey = true;
+
+  // Arms a one-shot send failure, modelling a sink outage on the next attempt.
+  static failNextSend(message: string): void {
+    failNext = message;
+  }
+
   send(req: SinkRequest): SinkAck {
+    sendAttempts += 1;
+    keys.push(req.idempotency_key);
+    if (failNext !== null) {
+      const message = failNext;
+      failNext = null;
+      throw new Error(message);
+    }
     const prior = acks.get(req.idempotency_key);
     if (prior) return prior;
     const ack: SinkAck = { idempotency_key: req.idempotency_key, accepted: true };
@@ -23,8 +42,21 @@ export class FakeSink {
     return deliveries;
   }
 
+  // Every send call, including same-key repeats and failed attempts — the runtime-side
+  // at-least-once/at-most-once assertions read this, not the deduped delivery count.
+  observedSendAttempts(): number {
+    return sendAttempts;
+  }
+
+  observedKeys(): readonly string[] {
+    return keys;
+  }
+
   reset(): void {
     acks.clear();
     deliveries = 0;
+    sendAttempts = 0;
+    keys.length = 0;
+    failNext = null;
   }
 }

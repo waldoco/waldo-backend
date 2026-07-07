@@ -15,13 +15,49 @@ export const opaquePayloadSchema = z
   });
 export type OpaquePayload = z.infer<typeof opaquePayloadSchema>;
 
-export const outboxRowSchema = z.strictObject({
+// Durable delivery state. 'pending' = intent committed in the GATED transaction, sink never
+// attempted. 'sent_unacked' = a send attempt is durably marked but no ack is recorded — the
+// in-doubt window; a resume re-sends the SAME idempotency key and relies on the sink's
+// declared idempotency (see sink.ts) to collapse the repeat. 'acked' = the ack is durable;
+// the row must never reach a sink again.
+export const outboxStatusSchema = z.enum(['pending', 'sent_unacked', 'acked']);
+export type OutboxStatus = z.infer<typeof outboxStatusSchema>;
+
+const intentShape = {
   run_id: z.string().min(1),
   kind: z.literal('fetch_alert'),
   idempotency_key: idempotencyKeySchema,
   payload: opaquePayloadSchema,
   created_at: z.int().nonnegative(),
-});
+} as const;
+
+// The intent committed atomically with the DeliveryGate verdict: identity + key + payload,
+// before any send attempt exists. Delivery state (status/attempts/ack) is runtime-owned and
+// lives only on the full row.
+export const outboxIntentSchema = z.strictObject(intentShape);
+export type OutboxIntent = z.infer<typeof outboxIntentSchema>;
+
+export const outboxRowSchema = z
+  .strictObject({
+    ...intentShape,
+    status: outboxStatusSchema,
+    attempts: z.int().nonnegative(),
+    next_retry_at: z.int().nonnegative().nullable(),
+    acked_at: z.int().nonnegative().nullable(),
+    last_error: z.string().min(1).nullable(),
+  })
+  .refine((row) => (row.status === 'pending') === (row.attempts === 0), {
+    error: 'attempts is zero before the first send attempt and positive from then on',
+    path: ['attempts'],
+  })
+  .refine((row) => (row.status === 'acked') === (row.acked_at !== null), {
+    error: 'acked_at is recorded exactly when the row is acked',
+    path: ['acked_at'],
+  })
+  .refine((row) => (row.status === 'sent_unacked') === (row.next_retry_at !== null), {
+    error: 'exactly the in-doubt (sent_unacked) row carries a next_retry_at stamp',
+    path: ['next_retry_at'],
+  });
 export type OutboxRow = z.infer<typeof outboxRowSchema>;
 
 export const deliverySchema = z.strictObject({

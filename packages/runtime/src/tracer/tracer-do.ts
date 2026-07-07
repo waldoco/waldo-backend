@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { JournalRow } from '@waldo/contracts';
 import {
   FETCH_ALERT_POLICY,
+  assertIdempotentSink,
   canonicalDeliverySerialization,
 } from '@waldo/contracts';
 import { productionDeps, type Deps } from '../seams/deps';
@@ -16,13 +17,18 @@ import { computeVerdict } from './gate';
 
 const KIND = 'fetch_alert' as const;
 
-// The three genuinely mid-flight points that need an in-handler crash: pre-commit of the GATED
-// transaction (#3), post-sink before the ack is recorded (#5), and post-ack before the handler
-// returns (#6). The natural committed boundaries (#1/#2/#4) need no fault code — evict and re-drive.
-type CrashPoint = 'pre_gate_commit' | 'post_sink_pre_ack' | 'post_ack_pre_return';
+// The four genuinely mid-flight points that need an in-handler crash: pre-commit of the GATED
+// transaction (#3), post-attempt-marker before the sink is reached (#4), post-sink before the
+// ack is recorded (#5), and post-ack before the handler returns (#6). The natural committed
+// boundaries (#1/#2) need no fault code — evict and re-drive.
+type CrashPoint =
+  | 'pre_gate_commit'
+  | 'post_attempt_pre_send'
+  | 'post_sink_pre_ack'
+  | 'post_ack_pre_return';
 
 // The DO that wakes on the alarm and drives the one path: DO alarm -> Loop Governor -> journal ->
-// DeliveryGate (one transactionSync) -> outbox -> fake sink, exactly once, resumable purely from
+// DeliveryGate (one transactionSync) -> outbox -> sink, exactly once, resumable purely from
 // committed DO SQLite. Eviction wipes every in-memory field; alarm() reconstructs from SQLite alone.
 export class TracerDO extends DurableObject<Cloudflare.Env> {
   private readonly deps: Deps;
@@ -45,6 +51,9 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     this.store = new Store(ctx.storage.sql);
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, this.deps);
     this.sink = new FakeSink();
+    // The wiring seam refuses a sink that does not declare the idempotency duty — the
+    // in-doubt resume re-sends the same key and is only safe against a declared sink.
+    assertIdempotentSink(this.sink);
   }
 
   // Opens the run journal at RUN_OPENED and arms the one-shot alarm through the armAlarm seam.
@@ -64,6 +73,8 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
   // has not yet passed its committed boundary, so a fresh start (RUN_OPENED) runs every step while a
   // resume enters at its committed state and runs only the remainder. GATED and later never recompute
   // the verdict — it is read from the journal row. The step order mirrors runStateTransitions.
+  // GATED and SINK_SENT both enter flush(): the first marks its attempt and advances, the
+  // second is the in-doubt resume that re-marks and re-sends the same idempotency key.
   override async alarm(): Promise<void> {
     const run = this.journal.findOpenRun();
     if (run === null) return;
@@ -74,8 +85,9 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     if (this.journal.readState(run.run_id) === 'GOVERNOR_ADMITTED') {
       await this.runGate(run);
     }
-    if (this.journal.readState(run.run_id) === 'GATED') {
-      this.flushOutbox(run.run_id);
+    const flushable = this.journal.readState(run.run_id);
+    if (flushable === 'GATED' || flushable === 'SINK_SENT') {
+      this.flush(run.run_id);
     }
     if (this.journal.readState(run.run_id) === 'ACK_RECORDED') {
       this.finalize(run.run_id);
@@ -117,21 +129,48 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
-  // Post-commit flush. Reads the committed outbox row and delivers to the idempotent sink. The sink
-  // call is not a durable step until the ack lands: crash #5 (sent, ack not recorded) re-drives with
-  // the SAME idempotency key, so the sink returns the prior ack without a second delivery.
-  private flushOutbox(runId: string): void {
+  // The flush step, entered fresh (GATED) or as an in-doubt resume (SINK_SENT). The send
+  // attempt commits durably BEFORE the sink is reached and the ack commits after it, so a
+  // crash between the two resumes here and re-sends the SAME idempotency key — at-least-once
+  // from the runtime, collapsed to one physical delivery by the sink's declared idempotency.
+  private flush(runId: string): void {
     const row = this.outbox.readRow(runId, KIND);
-    if (row === null) throw new Error(`flushOutbox: no outbox row for ${runId}`);
-    this.sink.send({ idempotency_key: row.idempotency_key, payload: row.payload });
+    if (row === null) throw new Error(`flush: no outbox row for ${runId}`);
+
+    // The exactly-once floor: a durably acked row must never reach a sink again, whatever
+    // the journal claims. Unreachable via the FSM (ack + ACK_RECORDED commit atomically);
+    // load-bearing against a partial-write or forged-state bug, and red-proof tested.
+    if (row.status === 'acked') {
+      this.ctx.storage.transactionSync(() => this.journal.advance(runId, 'ACK_RECORDED'));
+      return;
+    }
+
+    this.ctx.storage.transactionSync(() => {
+      this.outbox.markSendAttempt(runId, KIND, this.deps.now());
+      if (this.journal.readState(runId) === 'GATED') {
+        this.journal.advance(runId, 'SINK_SENT');
+      }
+    });
+
+    if (this.__crashAfter === 'post_attempt_pre_send') {
+      throw new Error('crash-injection:post_attempt_pre_send');
+    }
+
+    try {
+      this.sink.send({ idempotency_key: row.idempotency_key, payload: row.payload });
+    } catch (err) {
+      // Record the failure durably, then re-raise: the next wake re-drives this in-doubt
+      // row. The payload is contract-guarded opaque, so the message cannot carry health values.
+      this.outbox.recordSendError(runId, KIND, err instanceof Error ? err.message : String(err));
+      throw err;
+    }
 
     if (this.__crashAfter === 'post_sink_pre_ack') {
       throw new Error('crash-injection:post_sink_pre_ack');
     }
 
     this.ctx.storage.transactionSync(() => {
-      this.journal.advance(runId, 'SINK_SENT');
-      this.outbox.markAcked(runId, KIND);
+      this.outbox.markAcked(runId, KIND, this.deps.now());
       this.journal.advance(runId, 'ACK_RECORDED');
     });
   }

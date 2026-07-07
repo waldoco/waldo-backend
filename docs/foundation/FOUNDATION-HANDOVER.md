@@ -17,15 +17,16 @@
   lanes, ADR-0074 loop policy helpers, PR #13 Art-9 hardening, and PR #14 taint-gate authority are
   represented in `packages/contracts` with tests/guards.
 - **The runtime is essentially unbuilt.** Only the Phase-C scheduled tracer executes; the full harness loop, the DO scheduler multiplexer, the delivery flusher, and the sanitiser runtime do not exist. Do not read "contracts shipped" as "runtime built."
-- **Three historical findings are resolved or moved to runtime proof.** The **HIGH** Art-9
-  Scribe-sanitiser finding is resolved in PR #13; the **MEDIUM** ADR-0049 taint-gate authority is
-  resolved in PR #14; exactly-once *delivery* remains the first runtime proof obligation (§6.3).
+- **All three historical findings are resolved.** The **HIGH** Art-9 Scribe-sanitiser finding is
+  resolved in PR #13; the **MEDIUM** ADR-0049 taint-gate authority is resolved in PR #14;
+  exactly-once *delivery* is proven at the durable layer by SLICE-3a (§6.3).
 - **Current main is contract-only plus tracer compatibility.** No production DDL, no full
   DeliveryGate, no scheduler multiplexer, no dispatcher, and no provider surface are implemented.
 
-**When can other agents start building runtime logic?** Now, but start with SLICE-3a runtime
-tests. The first runtime PR must prove durable exactly-once *delivery* across real
-`@cloudflare/vitest-pool-workers` eviction/resume. The Phase-C fake sink is not proof.
+**When can other agents start building runtime logic?** Now. SLICE-3a landed the durable
+exactly-once *delivery* proof under real `@cloudflare/vitest-pool-workers` eviction/resume
+(`packages/runtime/test/outbox-delivery.test.ts`); the next runtime unit is SLICE-3b — promote
+the tracer journal/outbox into the runtime interface.
 
 ---
 
@@ -54,7 +55,7 @@ Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime
 | Module | ADR | Status | SW | Safe | Gap to full ADR |
 |---|---|---|---|---|---|
 | Run journal + FSM | 0054 | partial-contract | ✅ | ✅ | Full 8-state FSM (`run.ts`) is shape-only, **zero runtime consumers**. Tracer uses a distinct reduced 7-state FSM (`journal.ts`). `runs` table, tick/resume, watchdog on `next_expected_wake`, retry on `attempts` — unbuilt. |
-| Transactional outbox + sink | 0054 | tracer-only | ✅ | ⚠️ | Single-kind `fetch_alert` slice. Exactly-once *enqueue* airtight (UNIQUE constraints); exactly-once *delivery* **unproven** (finding §6.3). Needs multi-kind, status/attempts/next_retry_at, cross-store `notification_log` mirror. |
+| Transactional outbox + sink | 0054 | tracer-only | ✅ | ✅ | Single-kind `fetch_alert` slice. Exactly-once *enqueue* airtight (UNIQUE constraints); exactly-once *delivery* **proven** at the durable layer (§6.3 resolved): status/attempts/next_retry_at/acked_at/last_error columns, attempt-marker-before-send, declared-idempotent sink contract. Needs multi-kind, retry exhaustion policy, cross-store `notification_log` mirror. |
 | Session trust reset | 0033 | contract-only | ✅ | ✅ | Reset envelope pinned; the `session_reset` OnInvocationStart hook (priority 400) + the resume-rebuild obligation are runtime, unwired. |
 | Working memory | 0057 | contract-only | ❌ | ✅ | Bucket shapes + caps pinned; threading-through-tool-calls + compaction-survival re-attach are runtime behavioral invariants, absent. |
 | Persistent goals | 0064 | contract-only | ✅ | ✅ | `GoalRecord` shape complete + raw-health-rejecting. DO SQLite state home, onboarding/user-message write authority — unbuilt. |
@@ -113,7 +114,7 @@ code consumes the public endpoint. That is not a blocker for backend runtime imp
 
 ## 6. Security / adversarial findings (pre-existing; flagged, not fixed here)
 
-All three were identified during the foundation audit. Two have since been fixed in contract PRs; the remaining exactly-once delivery proof is the first runtime harness slice.
+All three were identified during the foundation audit and have since been fixed: two in contract PRs, the third by the SLICE-3a runtime proof.
 
 ### 6.1 [HIGH · Art-9] Scribe sanitiser vocabulary — RESOLVED in PR #13
 - **Was:** `RAW_SENSOR_PATTERNS` covered only HRV / HR / SpO2 / sleep in a prose shape — narrower than the project's own `guard-health-leak.mjs` `HEALTH_TOKENS` superset (weight, blood pressure incl. systolic/diastolic, calorie burn, active energy) — and it missed the shape health data actually takes: structured payloads with snake_case / kebab / camelCase keys, unit-suffixed keys (`hrv_ms`, `weight_kg`, `systolicMmHg`), and quoted numeric / BP-ratio values. The compensating guard was `warn`/exit-0.
@@ -125,10 +126,10 @@ All three were identified during the foundation audit. Two have since been fixed
 - **Fixed:** the founder call (conservative single authority) landed. `taintGateBlocksDirectExecution` is now the **single** gate authority (`external ∧ privileged`); `PRIVILEGED_ACTION_TOOLS` widened 9→15 to cover every direct external mutation/send/MCP-write/thread-message mutation (in tool-union order); `propose_action` (human-confirm route) and `execute_code` (ADR-0050 zero-ACL, pinned by a coupling guard) stay excluded. The external-taint primitive relocated to `memory/sanitise` (`EXTERNAL_SOURCE_TAINT` + `isExternalSourceTaint`) as the single vocabulary owner — the three trust/laundering refines route through it, so a constant rename cannot fail open — and `taintGateTrips` was removed. Hostile fixtures for every newly-covered tool + tainted-read-allowed paths; mutation-proven non-vacuous. The `TAINT_PRIVILEGED_ACTION_GATE` registration slot (still `priority: null`) remains for the dispatcher to place.
 - **Remaining (runtime, deferred — the SLICE-3 dispatcher wave):** the dispatcher must call `taintGateBlocksDirectExecution` at PreToolUse around every privileged dispatch, resolve the open slot ordering / merge-with-autonomy-gate question, and thread taint provenance from tool-result → privileged-action arguments end-to-end. The contract half is proven; the security guarantee is real only once that wiring lands and is itself tested.
 
-### 6.3 [MEDIUM] Exactly-once *delivery* is unproven (enqueue is airtight)
-- **Where:** `packages/runtime/src/tracer/tracer-do.ts:123-126` (`flushOutbox` calls `sink.send()` with no `ack_recorded` guard); `sink.ts:9-14` (sink contract imposes no dedupe duty; the only dedupe is a process-local `Map` in the fake).
-- **What:** on crash #5 (post-send, pre-ack) a resume re-sends; today only the in-process `FakeSink` `Map` hides it. A real cross-instance DO reconstruction, or any compliant sink that ignores the idempotency key, double-delivers. The code itself concedes the sink dedupe "is deliberately NOT the exactly-once proof."
-- **Fix:** SLICE-3 — add an `ack_recorded` guard before re-send, make the sink contract impose idempotency, and prove it under real cross-eviction Workers tests + the `notification_log` cross-store mirror.
+### 6.3 [MEDIUM] Exactly-once *delivery* — RESOLVED in SLICE-3a
+- **Was:** `flushOutbox` called `sink.send()` with no durable ack guard, and the sink contract imposed no dedupe duty — the only dedupe was a process-local `Map` in the fake. On crash #5 (post-send, pre-ack) a real cross-instance DO reconstruction, or any sink that ignored the idempotency key, double-delivered.
+- **Fixed (SLICE-3a):** exactly-once decomposed into its two provable halves. (1) Runtime: the send attempt commits durably *before* the sink is reached (`status='sent_unacked'`, `attempts`, `next_retry_at`) and the ack commits after it (`acked_at`); an acked row never re-sends (guard in `flush`), and an in-doubt resume re-sends the *same* idempotency key. (2) Sink: `DeliverySink` declares idempotency-by-key in its type and `assertIdempotentSink` refuses undeclared sinks at the wiring seam. Proven in `outbox-delivery.test.ts` under real cross-eviction: attempt counts and key identity asserted separately from the deduped delivery count, so the fake cannot hide a re-send or re-key bug. Mutation-proven non-vacuous (guard removal, marker removal, retry re-key each fail the suite).
+- **Remaining (later slices):** multi-kind outbox, retry exhaustion policy, and the Supabase `notification_log` UNIQUE mirror (cross-store half of the invariant; lands with the Supabase DDL re-land).
 
 Everything else the skeptics probed returned **safe**: mint forgery, consent escalation, `pre_brief_sweep` send/execute/mutate (read/precompute-only ACL), goals storing health values, scheduler payload smuggling, tracer-mistaken-for-runtime, and supply-chain/eval/injection. Note several "safe" verdicts are safe-**by-shape**, not safe-**by-enforcement** (the runtime that would enforce them is deferred) — re-run the relevant skeptic when each runtime lands.
 
