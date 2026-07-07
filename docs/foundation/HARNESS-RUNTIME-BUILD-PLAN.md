@@ -79,7 +79,7 @@ Built:
 - Workers/DO test substrate with `@cloudflare/vitest-pool-workers`.
 - One scheduled `fetch_alert` tracer path proving `DO alarm -> Governor -> journal -> DeliveryGate -> outbox -> fake sink -> DONE`.
 - SLICE-3a/HEY-120 durable outbox proof: crash after sink send and before local ack resumes across DO eviction without duplicate physical delivery, with an explicit idempotent sink contract.
-- Draft PR #23 / SLICE-3b/HEY-121 promotes journal/outbox behavior into `RunJournalOutbox` with
+- SLICE-3b/HEY-121 landed in PR #23 at `f47127f`: journal/outbox behavior is promoted into `RunJournalOutbox` with
   `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
 - Static guard wall and pinned verification command.
 
@@ -133,14 +133,13 @@ Proof covered:
 - Assert durable state records the ack/retry outcome.
 - Assert the sink declares idempotency by key and the fake cannot hide re-key bugs.
 
-**SLICE-3b/HEY-121: promoted journal/outbox runtime interface** is pending in draft PR #23 on
-branch `codex/hey-121-runtime-journal-outbox-interface`.
+**SLICE-3b/HEY-121: promoted journal/outbox runtime interface** landed in PR #23 at `f47127f`.
 
-The branch promotes the tracer-proven behavior behind `RunJournalOutbox`, preserves the SLICE-3a
+The slice promoted the tracer-proven behavior behind `RunJournalOutbox`, preserves the SLICE-3a
 exactly-once delivery proof, adds Workers tests for the promoted interface across eviction, and
 enforces durable row parsing plus sink request/ack parsing at the runtime seam.
 
-Remaining after PR #23 merges: DeliveryGate runtime state, multi-kind outbox, retry exhaustion
+Remaining after PR #23: DeliveryGate runtime state, multi-kind outbox, retry exhaustion
 policy, notification-log mirror, full FSM expansion, scheduler multiplexer, Loop Governor runtime,
 dispatcher, Scribe runtime, and live provider/channel integration.
 

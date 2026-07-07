@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { JournalRow, OutboxRow } from '@waldo/contracts';
 import {
   type EnqueueOutboxInput,
+  type ReleaseHeldInput,
   RunJournalOutbox,
   type RunJournalOutboxCrashPoint,
   type StartRunInput,
@@ -30,7 +31,7 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     super(ctx, env);
     const deps = productionDeps();
     const sink = new FakeSink();
-    ensureSchema(ctx.storage.sql);
+    ensureSchema(ctx.storage);
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, deps);
     this.runtime = new RunJournalOutbox(ctx.storage, deps, sink, {
       crashPoint: () => this.__crashAfter,
@@ -58,6 +59,10 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
 
   async enqueueOutbox(input: EnqueueOutboxInput): Promise<OutboxRow> {
     return this.runtime.enqueueOutbox(input);
+  }
+
+  async releaseHeld(input: ReleaseHeldInput): Promise<string | null> {
+    return this.runtime.releaseHeld(input);
   }
 
   flushOutbox(runId: string, kind: typeof KIND = KIND): void {

@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { channelNameSchema } from '../adapters/channel';
 import { triggerTypeSchema, type TriggerType } from '../core/trigger';
+export { pushClassSchema, type PushClass } from './push-class';
+import { pushClassSchema, type PushClass } from './push-class';
 
 // ADR-0068: one typed delivery-policy table is the single representation of every proactive send:
 // class x channel x budget x standalone x quiet-hours x priority x cooldown. The 2026-06-27
@@ -9,19 +11,14 @@ import { triggerTypeSchema, type TriggerType } from '../core/trigger';
 export const deliveryVerdictSchema = z.enum(['send', 'hold', 'degrade', 'drop']);
 export type DeliveryVerdict = z.infer<typeof deliveryVerdictSchema>;
 
-export const pushClassSchema = z.enum([
-  'brief',
-  'fetch_alert',
-  'adjustment',
-  'pre_activity_spot',
-  'constellation_first',
-  'constellation_update',
-  'spot_digest',
-  'intervention_knock',
-  'sync_error',
-  'system_consent',
+export const deliveryGateReasonSchema = z.enum([
+  'candidate_expired',
+  'class_cap_exhausted',
+  'cooldown_active',
+  'budget_cap_exhausted',
+  'once_ever_already_sent',
 ]);
-export type PushClass = z.infer<typeof pushClassSchema>;
+export type DeliveryGateReason = z.infer<typeof deliveryGateReasonSchema>;
 
 export const quietHoursRuleSchema = z.enum([
   'hold',
@@ -278,12 +275,23 @@ export const deliveryCandidateSchema = z.strictObject({
   event_id: z.string().min(1),
   confidence: z.number().min(0).max(1).optional(),
   expires_at: z.int().nonnegative().nullable().optional(),
-});
+  sub_kind: adjustmentSubKindSchema.optional(),
+}).refine(
+  (candidate) =>
+    candidate.push_class === 'adjustment'
+      ? candidate.sub_kind !== undefined
+      : candidate.sub_kind === undefined,
+  {
+    error: 'sub_kind is required only for adjustment candidates',
+    path: ['sub_kind'],
+  },
+);
 export type DeliveryCandidate = z.infer<typeof deliveryCandidateSchema>;
 
 export const admissionSchema = z
   .strictObject({
     verdict: deliveryVerdictSchema,
+    reason: deliveryGateReasonSchema.nullable(),
     hold_until: z.int().nonnegative().nullable().optional(),
     channels: z.array(channelNameSchema),
     collapse_id: z.string().min(1).nullable(),
@@ -302,6 +310,10 @@ export const admissionSchema = z
   .refine((a) => a.verdict !== 'hold' || a.hold_until !== undefined, {
     error: 'held admissions must name hold_until',
     path: ['hold_until'],
+  })
+  .refine((a) => (a.verdict === 'send') === (a.reason === null), {
+    error: 'non-send admissions must carry a gate reason, sends must not',
+    path: ['reason'],
   })
   .refine(
     (a) =>

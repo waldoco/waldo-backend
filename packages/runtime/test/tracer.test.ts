@@ -21,6 +21,10 @@ function futureOccurrence(): number {
   return Date.now() + 3_600_000;
 }
 
+function utcLocalDate(at: number): string {
+  return new Date(at).toISOString().slice(0, 10);
+}
+
 // The FakeSink counter/ack map is module-scoped so an evicted-then-rebuilt DO still observes prior
 // deliveries within one process. That same global state leaks across tests, so reset it per test —
 // otherwise observedDeliveries() accumulates and the exactly-once corroboration goes vacuous.
@@ -68,14 +72,23 @@ async function readDurable(stub: DurableObjectStub<TracerDO>): Promise<Durable> 
   return runInDurableObject(stub, (_instance, state) => {
     const sql = state.storage.sql;
     const run = sql
-      .exec<{ run_id: string; state: string; verdict: string | null }>(
-        'SELECT run_id, state, verdict FROM journal LIMIT 1',
+      .exec<{
+        run_id: string;
+        state: string;
+        verdict: string | null;
+        occurrence_at: number;
+      }>(
+        'SELECT run_id, state, verdict, occurrence_at FROM journal LIMIT 1',
       )
       .toArray()[0];
+    const localDate = run === undefined ? '' : utcLocalDate(run.occurrence_at);
     const cls = sql
       .exec<{ count: number; last_sent_at: number | null }>(
-        'SELECT count, last_sent_at FROM class_state WHERE user_id = ? AND push_class = ?',
+        `SELECT count, last_sent_at
+           FROM class_state
+          WHERE user_id = ? AND local_date = ? AND push_class = ?`,
         USER,
+        localDate,
         KIND,
       )
       .toArray()[0];
@@ -88,8 +101,9 @@ async function readDurable(stub: DurableObjectStub<TracerDO>): Promise<Durable> 
       .toArray()[0];
     const budget = sql
       .exec<{ sends_total: number }>(
-        'SELECT sends_total FROM daily_push_budget WHERE user_id = ?',
+        'SELECT sends_total FROM daily_push_budget WHERE user_id = ? AND local_date = ?',
         USER,
+        localDate,
       )
       .toArray()[0];
     const runId = run?.run_id ?? '';
@@ -468,14 +482,18 @@ describe('TracerDO red proofs: the durable-layer assertions are load-bearing, no
     // Simulate a buggy resume that re-runs the gate's class-state increment. The count === 1 assertion
     // must then FAIL (reads 2), proving it catches durable double-processing, not just sink dupes.
     await runInDurableObject(stub, (_i, state) => {
+      const run = state.storage.sql
+        .exec<{ occurrence_at: number }>('SELECT occurrence_at FROM journal LIMIT 1')
+        .one();
       state.storage.sql.exec(
-        `INSERT INTO class_state (user_id, push_class, count, last_sent_at)
-           VALUES (?, ?, 1, ?)
-         ON CONFLICT(user_id, push_class)
+        `INSERT INTO class_state (user_id, local_date, push_class, count, last_sent_at)
+           VALUES (?, ?, ?, 1, ?)
+         ON CONFLICT(user_id, local_date, push_class)
            DO UPDATE SET count = count + 1`,
         USER,
+        utcLocalDate(run.occurrence_at),
         KIND,
-        futureOccurrence(),
+        run.occurrence_at,
       );
     });
 

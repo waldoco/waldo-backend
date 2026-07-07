@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { pushClassSchema } from './push-class';
 
 // 64-char lower-hex SHA-256 digest. Upper-case and wrong-length values are rejected so the
 // key is a single canonical representation across the UNIQUE(idempotency_key) constraint.
@@ -29,7 +30,7 @@ export type OutboxLastError = z.infer<typeof outboxLastErrorSchema>;
 
 const intentShape = {
   run_id: z.string().min(1),
-  kind: z.literal('fetch_alert'),
+  kind: pushClassSchema,
   idempotency_key: idempotencyKeySchema,
   payload: opaquePayloadSchema,
   created_at: z.int().nonnegative(),
@@ -66,7 +67,7 @@ export type OutboxRow = z.infer<typeof outboxRowSchema>;
 
 export const deliverySchema = z.strictObject({
   run_id: z.string().min(1),
-  kind: z.literal('fetch_alert'),
+  kind: pushClassSchema,
   payload: opaquePayloadSchema,
 });
 export type Delivery = z.infer<typeof deliverySchema>;

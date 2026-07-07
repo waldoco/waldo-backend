@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { pushClassSchema } from './delivery-policy';
+import { pushClassSchema } from './push-class';
 
 export const deliveryClassCounterSchema = z.strictObject({
   count: z.int().nonnegative(),

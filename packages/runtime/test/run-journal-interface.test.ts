@@ -26,6 +26,10 @@ function futureOccurrence(): number {
   return Date.now() + 3_600_000;
 }
 
+function utcLocalDate(at: number): string {
+  return new Date(at).toISOString().slice(0, 10);
+}
+
 beforeEach(() => {
   new FakeSink().reset();
 });
@@ -212,11 +216,12 @@ describe('promoted run journal/outbox runtime interface', () => {
   it('fails closed without outbox when the gate verdict is not send', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
+    const sentAt = futureOccurrence();
 
     const sentRun = await runtime.startRun({
       userId: USER,
       trigger: KIND,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: sentAt,
     });
     await tick(runtime, sentRun);
     expect(sink.observedSendAttempts()).toBe(1);
@@ -225,9 +230,10 @@ describe('promoted run journal/outbox runtime interface', () => {
     const heldRun = await runtime.startRun({
       userId: USER,
       trigger: KIND,
-      occurrenceAt: futureOccurrence(),
+      occurrenceAt: sentAt + 60_000,
     });
     await tick(runtime, heldRun);
+    const sentLocalDate = utcLocalDate(sentAt);
 
     const heldState = await runInDurableObject(runtime, (_instance, state) => {
       const journalState = state.storage.sql
@@ -238,8 +244,11 @@ describe('promoted run journal/outbox runtime interface', () => {
         .one().n;
       const classState = state.storage.sql
         .exec<{ count: number }>(
-          "SELECT count FROM class_state WHERE user_id = ? AND push_class = 'fetch_alert'",
+          `SELECT count
+             FROM class_state
+            WHERE user_id = ? AND local_date = ? AND push_class = 'fetch_alert'`,
           USER,
+          sentLocalDate,
         )
         .one().count;
       const exemptSends = state.storage.sql
@@ -290,7 +299,7 @@ describe('promoted run journal/outbox runtime interface', () => {
     });
     await runInDurableObject(runtime, (_instance, state) => {
       state.storage.sql.exec(
-        "UPDATE journal SET trigger = 'brief' WHERE run_id = ?",
+        "UPDATE journal SET trigger = 'user said HRV 42' WHERE run_id = ?",
         wrongTriggerRun,
       );
     });
@@ -417,7 +426,7 @@ describe('promoted run journal/outbox runtime interface', () => {
       runInDurableObject(runtime, async (instance) =>
         (instance as TracerDO).enqueueOutbox({ ...intent, verdict: 'hold' } as never),
       ),
-    ).rejects.toThrow(/send verdict/i);
+    ).rejects.toThrow(/send or degrade verdict/i);
     const afterHeldVerdict = await runInDurableObject(runtime, (_instance, state) => {
       const journalState = state.storage.sql
         .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)

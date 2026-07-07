@@ -74,7 +74,15 @@ describe('outboxRow', () => {
   });
 
   it('rejects the wrong kind', () => {
-    expect(outboxRowSchema.safeParse({ ...pendingRow, kind: 'brief' }).success).toBe(false);
+    expect(outboxRowSchema.safeParse({ ...pendingRow, kind: 'user said HRV 42' }).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts known push classes beyond fetch_alert', () => {
+    expect(outboxRowSchema.safeParse({ ...pendingRow, kind: 'pre_activity_spot' }).success).toBe(
+      true,
+    );
   });
 
   it('rejects a bare numeric (physiological-looking) payload', () => {

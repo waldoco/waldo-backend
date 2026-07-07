@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { deliveryVerdictSchema } from './delivery-policy';
+import { triggerTypeSchema } from '../core/trigger';
+import { deliveryGateReasonSchema, deliveryVerdictSchema } from './delivery-policy';
 
 // Reduced tracer FSM. Full ADR-0054 FSM is
 // PENDING -> CONTEXT_BUILT -> LLM_CALLED -> TOOLS_DONE -> GATED -> DELIVERED -> DONE.
@@ -45,9 +46,10 @@ export const journalRowSchema = z
   .strictObject({
     run_id: z.string().min(1),
     user_id: z.string().min(1),
-    trigger: z.literal('fetch_alert'),
+    trigger: triggerTypeSchema,
     state: runStateSchema,
     verdict: deliveryVerdictSchema.nullable(),
+    gate_reason: deliveryGateReasonSchema.nullable(),
     occurrence_at: z.int().nonnegative(),
     created_at: z.int().nonnegative(),
     updated_at: z.int().nonnegative(),
@@ -59,5 +61,17 @@ export const journalRowSchema = z
   .refine((row) => !VERDICT_FORBIDDEN.has(row.state) || row.verdict === null, {
     error: 'verdict is absent before GATED',
     path: ['verdict'],
+  })
+  .refine((row) => row.verdict !== null || row.gate_reason === null, {
+    error: 'gate_reason requires a verdict',
+    path: ['gate_reason'],
+  })
+  .refine((row) => row.verdict !== 'send' || row.gate_reason === null, {
+    error: 'send verdicts must not carry a gate reason',
+    path: ['gate_reason'],
+  })
+  .refine((row) => row.verdict === null || row.verdict === 'send' || row.gate_reason !== null, {
+    error: 'non-send verdicts must carry a gate reason',
+    path: ['gate_reason'],
   });
 export type JournalRow = z.infer<typeof journalRowSchema>;

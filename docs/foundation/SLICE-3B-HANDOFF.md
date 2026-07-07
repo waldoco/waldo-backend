@@ -1,11 +1,11 @@
-# Draft SLICE-3b -> SLICE-3c Handoff
+# SLICE-3b -> SLICE-3c Handoff
 
 Date: 2026-07-07.
 Branch: `codex/hey-121-runtime-journal-outbox-interface`.
 Linear: [HEY-121](https://linear.app/heywaldo/issue/HEY-121/harness-slice-3b-promote-tracer-run-journaloutbox-into-runtime).
-Status: draft for PR #23; use as the SLICE-3c handoff after merge.
+Status: merged in PR #23 at `f47127f`; use as the SLICE-3c source handoff.
 
-## What PR #23 Builds
+## What PR #23 Built
 
 - Promoted the tracer journal/outbox proof into `RunJournalOutbox`, a narrow runtime module with
   `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
