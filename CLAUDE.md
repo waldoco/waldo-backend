@@ -1,6 +1,6 @@
 # waldo-backend — Claude Code Instructions
 
-## Current Foundation Status (2026-07-06)
+## Current Foundation Status (2026-07-07)
 
 The legacy guidance below is kept for repo background, but current foundation
 work is governed by the local rule index, foundation docs, accepted ADRs, and
@@ -27,13 +27,17 @@ Current facts:
   run/session/working-memory, scheduler/goal, Loop Governor contract, Art-9
   sanitiser hardening, taint-gate authority, DeliveryGate policy, engagement,
   OpenAPI/public DTOs, and evidence contracts.
-- PR #18 is on `main`: agent operating workflow, README, builder skills, and
-  stale-reference guard.
+- PR #18-#20 are on `main`: agent operating workflow, runtime session planning,
+  Linear-aligned slice names, README, builder skills, and stale-reference guard.
+- PR #21 is on `main`: SLICE-3a/HEY-120 proves durable outbox exactly-once
+  delivery under real Workers/Durable Object eviction and crash/resume tests.
 - Phase C is still a tracer, not the full harness runtime. It proves one
   scheduled path in workerd: `DO alarm -> Loop Governor -> run journal ->
   DeliveryGate -> outbox -> fake sink`, including crash/resume for that tracer.
-- The next runtime work is SLICE-3a: durable DeliveryGate/outbox exactly-once
-  proof. Do not replay A/B/C or Phase D contract waves unless a regression
+- The next runtime work is SLICE-3b/HEY-121: promote the tracer-proven run
+  journal/outbox behavior into the narrow runtime interface (`startRun`,
+  `tickRun`, `resumeRun`, `enqueueOutbox`, `flushOutbox`). Do not replay A/B/C,
+  Phase D contract waves, or the completed SLICE-3a proof unless a regression
   forces it.
 - Retired external contract package references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.

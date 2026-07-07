@@ -3,10 +3,11 @@
 Living record of the greenfield contract-first rewrite. This is the document the auditing
 reviewer (Codex) reads to check what was built, why, and against which source of truth.
 
-- **Baseline:** PR #7-#18 are merged into `main`. The Phase-D contract spine is complete:
+- **Baseline:** PR #7-#21 are merged into `main`. The Phase-D contract spine is complete:
   ADR-0068 delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI
   freshness, evidence lanes, ADR-0074 helpers, PR #13 Art-9 wall, PR #14 taint-gate
-  authority, and the agent operating workflow docs/skills are present.
+  authority, the agent operating workflow docs/skills are present, and PR #21 proved the
+  first durable outbox delivery invariant.
 - **Collaboration model:** Claude authors the build (parallelized via grounding/build/verify
   workflows); Codex audits + adversarially tests the result against this plan and the ADRs.
 - **Canonical sources:** the [accepted ADR corpus](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29),
@@ -68,11 +69,11 @@ Foundation sequence so far:
 12. PR #10 runtime seam: run/session/working-memory contracts.
 13. PR #11: scheduler/goal contracts plus `pre_brief_sweep` trigger/ACL/routing coverage.
 
-Next dependency layer is runtime work, beginning with durable outbox proof:
-run journal/outbox -> DeliveryGate runtime -> Loop Governor enforcement -> scheduler
-multiplexer -> dispatcher/sanitiser wiring -> context/model/channel integration. Public
-DTO/OpenAPI and engagement/evidence contracts are present; app generated-client refresh is a
-downstream app-surface task against the committed OpenAPI artifact.
+Next dependency layer is runtime work, continuing from the completed durable outbox proof:
+runtime journal/outbox interface -> DeliveryGate runtime -> Loop Governor enforcement ->
+scheduler multiplexer -> dispatcher/sanitiser wiring -> context/model/channel integration.
+Public DTO/OpenAPI and engagement/evidence contracts are present; app generated-client refresh is
+a downstream app-surface task against the committed OpenAPI artifact.
 
 ## Status
 
@@ -131,10 +132,16 @@ downstream app-surface task against the committed OpenAPI artifact.
   freshness-checked from the source builder.
 - [x] **Evidence lanes** — scenario/property/mutation/live-dogfood evidence contracts with hermetic
   defaults and explicit live-provider opt-in.
+- [x] **SLICE-3a durable outbox proof (HEY-120 / PR #21)** — the tracer outbox now has durable
+  send-attempt/ack state, an explicit idempotent sink contract, and a real
+  `@cloudflare/vitest-pool-workers` cross-eviction test proving crash-after-send-before-ack resume
+  does not duplicate physical delivery.
 - [ ] **Runtime implementation waves** — governor comparator/budget/kill/no-progress enforcement,
-  DeliveryGate + durable outbox flusher, `held_candidates` + `loop_progress` DDL, scheduler
-  multiplexer, dispatcher taint-gate wiring, sanitiser runtime, and full run-FSM wiring. These need
-  real `@cloudflare/vitest-pool-workers` tests, including cross-eviction exactly-once delivery.
+  promoted journal/outbox interface, DeliveryGate + durable multi-kind outbox flusher,
+  `held_candidates` + `loop_progress` DDL, scheduler multiplexer, dispatcher taint-gate wiring,
+  sanitiser runtime, and full run-FSM wiring. These need real
+  `@cloudflare/vitest-pool-workers` tests wherever DO SQLite, alarms, eviction, or crash/resume
+  define the invariant.
 
 ## Grounding flags & dispositions
 
@@ -195,9 +202,10 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The Phase-D contract spine is ready for runtime implementation. The next safe unit is
-**SLICE-3a: durable DeliveryGate/outbox proof**. Start with a failing
-`@cloudflare/vitest-pool-workers` test that proves cross-eviction exactly-once *delivery*,
-not just enqueue. Keep scheduler, full governor enforcement, dispatcher, Scribe runtime,
-model routing, and channel integrations out of that first PR. Use
+The Phase-D contract spine is ready for runtime implementation and SLICE-3a is complete.
+The next safe unit is **SLICE-3b/HEY-121: promote tracer run journal/outbox into the runtime
+interface**. Start with a failing `@cloudflare/vitest-pool-workers` test that drives the promoted
+interface across eviction/resume while preserving the SLICE-3a exactly-once delivery proof. Keep
+scheduler, full governor enforcement, dispatcher, Scribe runtime, model routing, DeliveryGate
+budgets/cooldowns, and live channel integrations out of that PR. Use
 `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async pillar map.
