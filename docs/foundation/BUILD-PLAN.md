@@ -136,10 +136,13 @@ a downstream app-surface task against the committed OpenAPI artifact.
   send-attempt/ack state, an explicit idempotent sink contract, and a real
   `@cloudflare/vitest-pool-workers` cross-eviction test proving crash-after-send-before-ack resume
   does not duplicate physical delivery.
+- [ ] **SLICE-3b promoted journal/outbox interface (HEY-121 / PR #23)** — draft PR #23 promotes the
+  tracer proof behind `RunJournalOutbox` with `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`,
+  and `flushOutbox`, plus read-seam parsing and ack-key enforcement. Mark complete only after merge.
 - [ ] **Runtime implementation waves** — governor comparator/budget/kill/no-progress enforcement,
-  promoted journal/outbox interface, DeliveryGate + durable multi-kind outbox flusher,
-  `held_candidates` + `loop_progress` DDL, scheduler multiplexer, dispatcher taint-gate wiring,
-  sanitiser runtime, and full run-FSM wiring. These need real
+  DeliveryGate + durable multi-kind outbox flusher, `held_candidates` + `loop_progress` DDL,
+  scheduler multiplexer, dispatcher taint-gate wiring, sanitiser runtime, and full run-FSM wiring.
+  These need real
   `@cloudflare/vitest-pool-workers` tests wherever DO SQLite, alarms, eviction, or crash/resume
   define the invariant.
 
@@ -202,10 +205,10 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The Phase-D contract spine is ready for runtime implementation and SLICE-3a is complete.
-The next safe unit is **SLICE-3b/HEY-121: promote tracer run journal/outbox into the runtime
-interface**. Start with a failing `@cloudflare/vitest-pool-workers` test that drives the promoted
-interface across eviction/resume while preserving the SLICE-3a exactly-once delivery proof. Keep
-scheduler, full governor enforcement, dispatcher, Scribe runtime, model routing, DeliveryGate
-budgets/cooldowns, and live channel integrations out of that PR. Use
+The Phase-D contract spine is ready for runtime implementation. SLICE-3a is complete, and SLICE-3b
+is pending in PR #23. After PR #23 merges, the next safe unit is **SLICE-3c/HEY-124: promote
+DeliveryGate runtime state onto the journal/outbox interface**. Start with a failing test that proves
+gate state commits atomically with the promoted `enqueueOutbox` boundary while preserving the
+SLICE-3a/3b exactly-once delivery proof. Keep scheduler, full governor enforcement, dispatcher,
+Scribe runtime, model routing beyond the gate, and live channel integrations out of that PR. Use
 `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async pillar map.

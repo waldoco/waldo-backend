@@ -5,6 +5,7 @@ import {
   outboxRowSchema,
 } from './outbox';
 
+// ADR-0054: outbox payloads are opaque synthetic references, never raw health values or free text.
 const key = 'a'.repeat(64);
 
 const baseIntent = {
@@ -29,6 +30,11 @@ const inDoubtRow = {
   status: 'sent_unacked' as const,
   attempts: 1,
   next_retry_at: 2_000,
+};
+
+const failedSendRow = {
+  ...inDoubtRow,
+  last_error: 'send_failed',
 };
 
 const ackedRow = {
@@ -74,6 +80,31 @@ describe('outboxRow', () => {
   it('rejects a bare numeric (physiological-looking) payload', () => {
     expect(outboxRowSchema.safeParse({ ...pendingRow, payload: '42' }).success).toBe(false);
     expect(outboxRowSchema.safeParse({ ...pendingRow, payload: '58.5' }).success).toBe(false);
+  });
+
+  it('rejects free-text payloads instead of treating them as opaque references', () => {
+    expect(outboxRowSchema.safeParse({ ...pendingRow, payload: 'free form text' }).success).toBe(
+      false,
+    );
+    expect(outboxRowSchema.safeParse({ ...pendingRow, payload: 'name@example.test' }).success).toBe(
+      false,
+    );
+  });
+
+  it('accepts only the bounded send failure marker in last_error', () => {
+    expect(outboxRowSchema.safeParse(failedSendRow).success).toBe(true);
+    expect(
+      outboxRowSchema.safeParse({ ...failedSendRow, last_error: 'provider said HRV 42' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects caller-less reference prefixes until a real sink owns them', () => {
+    expect(
+      outboxRowSchema.safeParse({ ...pendingRow, payload: 'delivery-ref-01' }).success,
+    ).toBe(false);
+    expect(outboxRowSchema.safeParse({ ...pendingRow, payload: 'outbox-ref-01' }).success).toBe(
+      false,
+    );
   });
 
   it('rejects a pending row that claims a send attempt', () => {

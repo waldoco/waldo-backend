@@ -1,5 +1,9 @@
 import type { DeliveryVerdict, JournalRow, RunState } from '@waldo/contracts';
-import { deliveryVerdictSchema, runStateSchema, runStateTransitions } from '@waldo/contracts';
+import {
+  journalRowSchema,
+  runStateSchema,
+  runStateTransitions,
+} from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
 
 type JournalSqlRow = {
@@ -13,19 +17,17 @@ type JournalSqlRow = {
   updated_at: number;
 };
 
-// Field parses, not journalRowSchema.parse: inside the GATED transaction the row transiently
-// carries a verdict while still GOVERNOR_ADMITTED, which the row schema's refine forbids.
 function toRow(r: JournalSqlRow): JournalRow {
-  return {
+  return journalRowSchema.parse({
     run_id: r.run_id,
     user_id: r.user_id,
     trigger: r.trigger,
-    state: runStateSchema.parse(r.state),
-    verdict: r.verdict === null ? null : deliveryVerdictSchema.parse(r.verdict),
+    state: r.state,
+    verdict: r.verdict,
     occurrence_at: r.occurrence_at,
     created_at: r.created_at,
     updated_at: r.updated_at,
-  };
+  });
 }
 
 // Journal writer/reader over DO SQLite enforcing the reduced FSM. All reads are SQLite-only
@@ -64,8 +66,13 @@ export class Journal {
     return row ? toRow(row) : null;
   }
 
+  // State-only parse for transition checks inside trusted write paths. Callers that may drive
+  // side effects must first perform a full read() parse.
   readState(runId: string): RunState | null {
-    return this.read(runId)?.state ?? null;
+    const row = this.sql
+      .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+      .toArray()[0];
+    return row ? runStateSchema.parse(row.state) : null;
   }
 
   // A run is open while it has not reached a terminal state (DONE/FAILED). Exactly one open run

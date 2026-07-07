@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { assertIdempotentSink, sinkAckSchema, sinkRequestSchema } from './sink';
 
+// ADR-0054: sink egress accepts only idempotent requests with opaque, non-health payloads.
 const key = 'b'.repeat(64);
 
 describe('sinkRequest', () => {
@@ -14,6 +15,18 @@ describe('sinkRequest', () => {
     expect(sinkRequestSchema.safeParse({ idempotency_key: key, payload: '72' }).success).toBe(
       false,
     );
+  });
+
+  it('rejects free-text payloads', () => {
+    expect(
+      sinkRequestSchema.safeParse({ idempotency_key: key, payload: 'free form text' }).success,
+    ).toBe(false);
+  });
+
+  it('rejects speculative reference prefixes without a runtime owner', () => {
+    expect(
+      sinkRequestSchema.safeParse({ idempotency_key: key, payload: 'delivery-ref-01' }).success,
+    ).toBe(false);
   });
 
   it('rejects a malformed key', () => {

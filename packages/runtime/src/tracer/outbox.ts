@@ -1,5 +1,5 @@
 import type { OutboxIntent, OutboxRow } from '@waldo/contracts';
-import { outboxStatusSchema } from '@waldo/contracts';
+import { outboxRowSchema } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
 
 // Fixed in-doubt retry delay. Backoff and exhaustion policy belong to the DeliveryGate
@@ -20,21 +20,19 @@ type OutboxSqlRow = {
   created_at: number;
 };
 
-// Status parses at the read seam so corrupt durable state fails loudly instead of silently
-// re-sending — the same discipline as the journal's state parse.
 function toRow(r: OutboxSqlRow): OutboxRow {
-  return {
+  return outboxRowSchema.parse({
     run_id: r.run_id,
-    kind: r.kind as 'fetch_alert',
+    kind: r.kind,
     idempotency_key: r.idempotency_key,
     payload: r.payload,
-    status: outboxStatusSchema.parse(r.status),
+    status: r.status,
     attempts: r.attempts,
     next_retry_at: r.next_retry_at,
     acked_at: r.acked_at,
     last_error: r.last_error,
     created_at: r.created_at,
-  };
+  });
 }
 
 // Outbox over DO SQLite. UNIQUE(run_id, kind) and UNIQUE(idempotency_key) enforce exactly-once
@@ -96,22 +94,34 @@ export class Outbox {
     );
   }
 
-  // last_error survives the ack as an audit of the prior failed attempt.
-  markAcked(runId: string, kind: 'fetch_alert', now: number): void {
+  markAcked(
+    runId: string,
+    kind: 'fetch_alert',
+    idempotencyKey: string,
+    now: number,
+  ): void {
+    const row = this.readRow(runId, kind);
+    if (row === null) throw new Error(`markAcked: no outbox row for ${runId}`);
+    if (row.idempotency_key !== idempotencyKey) {
+      throw new Error('markAcked: idempotency key mismatch');
+    }
     this.sql.exec(
       `UPDATE outbox
           SET status = 'acked', acked_at = ?, next_retry_at = NULL
-        WHERE run_id = ? AND kind = ?`,
+        WHERE run_id = ? AND kind = ? AND idempotency_key = ?`,
       now,
       runId,
       kind,
+      idempotencyKey,
     );
   }
 
-  recordSendError(runId: string, kind: 'fetch_alert', message: string): void {
+  recordSendError(runId: string, kind: 'fetch_alert'): void {
+    // Keep durable failure evidence as a constant marker; provider exception text may contain
+    // user data and belongs only in the thrown error/trace, not in DO SQLite.
     this.sql.exec(
       'UPDATE outbox SET last_error = ? WHERE run_id = ? AND kind = ?',
-      message,
+      'send_failed',
       runId,
       kind,
     );

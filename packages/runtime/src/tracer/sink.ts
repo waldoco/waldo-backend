@@ -11,6 +11,8 @@ let deliveries = 0;
 let sendAttempts = 0;
 const keys: string[] = [];
 let failNext: string | null = null;
+let invalidAckNext = false;
+let wrongAckKeyNext: string | null = null;
 
 // In-memory stand-in for APNs/Telegram, satisfying the DeliverySink idempotency duty:
 // a repeat key returns the prior ack WITHOUT recording a second delivery.
@@ -20,6 +22,14 @@ export class FakeSink implements DeliverySink {
   // Arms a one-shot send failure, modelling a sink outage on the next attempt.
   static failNextSend(message: string): void {
     failNext = message;
+  }
+
+  static returnInvalidAckOnce(): void {
+    invalidAckNext = true;
+  }
+
+  static returnWrongAckKeyOnce(idempotencyKey: string): void {
+    wrongAckKeyNext = idempotencyKey;
   }
 
   send(req: SinkRequest): SinkAck {
@@ -32,6 +42,18 @@ export class FakeSink implements DeliverySink {
     }
     const prior = acks.get(req.idempotency_key);
     if (prior) return prior;
+    if (invalidAckNext) {
+      invalidAckNext = false;
+      deliveries += 1;
+      return { idempotency_key: req.idempotency_key, accepted: false } as unknown as SinkAck;
+    }
+    if (wrongAckKeyNext !== null) {
+      const ack: SinkAck = { idempotency_key: wrongAckKeyNext, accepted: true };
+      wrongAckKeyNext = null;
+      acks.set(req.idempotency_key, ack);
+      deliveries += 1;
+      return ack;
+    }
     const ack: SinkAck = { idempotency_key: req.idempotency_key, accepted: true };
     acks.set(req.idempotency_key, ack);
     deliveries += 1;
@@ -58,5 +80,7 @@ export class FakeSink implements DeliverySink {
     sendAttempts = 0;
     keys.length = 0;
     failNext = null;
+    invalidAckNext = false;
+    wrongAckKeyNext = null;
   }
 }

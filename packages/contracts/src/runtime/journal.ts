@@ -28,27 +28,36 @@ export const runStateTransitions: Readonly<Record<RunState, readonly RunState[]>
   FAILED: [],
 };
 
-// A verdict is only durable once the GATED transaction commits, so it is null before GATED.
-const VERDICT_BEARING: ReadonlySet<RunState> = new Set<RunState>([
+// A verdict is durable from the GATED transaction onward. FAILED can happen before or after
+// that point, so it may carry no verdict or the verdict that was already committed.
+const VERDICT_REQUIRED: ReadonlySet<RunState> = new Set<RunState>([
   'GATED',
   'SINK_SENT',
   'ACK_RECORDED',
   'DONE',
+]);
+const VERDICT_FORBIDDEN: ReadonlySet<RunState> = new Set<RunState>([
+  'RUN_OPENED',
+  'GOVERNOR_ADMITTED',
 ]);
 
 export const journalRowSchema = z
   .strictObject({
     run_id: z.string().min(1),
     user_id: z.string().min(1),
-    trigger: z.string().min(1),
+    trigger: z.literal('fetch_alert'),
     state: runStateSchema,
     verdict: deliveryVerdictSchema.nullable(),
     occurrence_at: z.int().nonnegative(),
     created_at: z.int().nonnegative(),
     updated_at: z.int().nonnegative(),
   })
-  .refine((row) => row.verdict === null || VERDICT_BEARING.has(row.state), {
-    error: 'verdict may only be set once the run has reached GATED or later',
+  .refine((row) => !VERDICT_REQUIRED.has(row.state) || row.verdict !== null, {
+    error: 'verdict is present from GATED through DONE',
+    path: ['verdict'],
+  })
+  .refine((row) => !VERDICT_FORBIDDEN.has(row.state) || row.verdict === null, {
+    error: 'verdict is absent before GATED',
     path: ['verdict'],
   });
 export type JournalRow = z.infer<typeof journalRowSchema>;

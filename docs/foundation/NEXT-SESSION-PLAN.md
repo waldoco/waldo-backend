@@ -1,10 +1,14 @@
-# Next Session Plan - Harness Runtime SLICE-3b Build
+# Next Session Plan - Harness Runtime SLICE-3c Build
 
-Status: active entrypoint for the next Waldo backend grilling/planning session.
+Status: draft entrypoint for the next Waldo backend grilling/planning session after SLICE-3b merges.
 Date: 2026-07-07.
-Baseline: current `main` after PR #21 (`dadc50d`) merged SLICE-3a/HEY-120.
+Baseline: SLICE-3a/HEY-120 merged in PR #21, and SLICE-3b/HEY-121 is pending in PR #23 on branch
+`codex/hey-121-runtime-journal-outbox-interface`.
 
-This replaces the old SLICE-3a planning entrypoint. The contract spine is ready enough for runtime work and SLICE-3a proved durable outbox delivery; the next session should grill the runtime interface seam, assign safe parallel lanes, and then start SLICE-3b.
+After PR #23 merges, this replaces the SLICE-3b planning entrypoint. The contract spine is ready
+enough for runtime work, SLICE-3a proved durable outbox delivery, and PR #23 proposes to promote
+that proof into a narrow runtime interface. The next session should grill DeliveryGate runtime state,
+assign safe parallel lanes, and then start SLICE-3c.
 
 ## Start Here
 
@@ -14,10 +18,11 @@ Read in this order:
 2. `README.md`
 3. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
 4. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
-5. `docs/foundation/FOUNDATION-HANDOVER.md`
-6. `docs/foundation/BUILD-PLAN.md`
-7. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-8. The Waldo Brain source files listed in the runtime build plan for the seam being grilled.
+5. `docs/foundation/SLICE-3B-HANDOFF.md`
+6. `docs/foundation/FOUNDATION-HANDOVER.md`
+7. `docs/foundation/BUILD-PLAN.md`
+8. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
+9. The Waldo Brain source files listed in the runtime build plan for the seam being grilled.
 
 Then run the baseline gate before planning claims or edits:
 
@@ -30,9 +35,10 @@ git diff --check
 
 - The Waldo Brain architecture is no longer an open research problem for V1. It calls for a per-user Cloudflare Durable Object running a resumable, journaled, deterministically governed agent loop.
 - The backend contract spine is broad and real: contracts exist for runtime run/session/schedule/goal/outbox/policy, tools, memory, prompt, model routing, adapters, public DTO/OpenAPI, telemetry, and evidence lanes.
-- The backend runtime is still mostly skeletal. The only executing harness path is the scheduled `fetch_alert` tracer, now with a durable exactly-once outbox proof.
+- The backend runtime is still mostly skeletal. The only executing harness path is the scheduled `fetch_alert` tracer; PR #23 proposes to back it with a promoted run-journal/outbox interface.
 - SLICE-3a/HEY-120 is complete: PR #21 proved crash-after-send-before-ack resume without duplicate physical delivery in real `@cloudflare/vitest-pool-workers` tests.
-- The next work is runtime interface promotion, not more contract expansion and not full product wiring.
+- SLICE-3b/HEY-121 is pending in PR #23: `RunJournalOutbox` exposes `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`, with durable read parsing and ack-key enforcement.
+- After PR #23 merges, the next work is DeliveryGate runtime promotion, not more contract expansion and not full product wiring.
 - Split work by runtime seam, not by product pillar. Brief, Fetch, Spots, and Chat all converge on the same DO loop, journal, scheduler, dispatcher, memory, and delivery files.
 
 ## Grilling Questions
@@ -49,17 +55,20 @@ Use `/grill-with-docs`, `/waldo-isa-run-contract`, and `/codebase-design` agains
 
 ## Exact Next Slice
 
-Start with **SLICE-3b/HEY-121: promote tracer run journal/outbox into the runtime interface**.
+Start with **SLICE-3c/HEY-124: DeliveryGate runtime on the promoted journal/outbox seam**.
 
 Goal:
 
-- Promote the tracer-proven journal/outbox behavior behind a narrow runtime-facing interface: `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
-- Preserve the SLICE-3a invariant: external side effects leave only through idempotent outbox rows and resume converges from committed DO SQLite state.
-- Parse/enforce contract DTOs at the durable read and delivery seams: outbox rows on read, sink requests before send, sink acks before commit, and ack key must match the row key.
-- Keep trace/crash controls as test scaffolding unless a piece is explicitly promoted into a production runtime interface.
-- Use real `@cloudflare/vitest-pool-workers` tests for eviction, duplicate alarm, corrupt journal/outbox read, and post-send/pre-ack resume behavior.
+- Move from the tracer's proof-shaped gate into a runtime DeliveryGate seam for budgets, cooldowns,
+  held candidates, and class policy state.
+- Preserve the SLICE-3b invariant: the gate may commit an outbox intent only through the promoted
+  journal/outbox interface, and flush may reach a sink only from parsed committed DO SQLite state.
+- Use ADR-0068 contracts as the source of truth; do not invent new delivery verdict enums.
+- Keep scheduler, dispatcher, Scribe, real LLMs, live channels, and app feed code out of SLICE-3c.
+- Use real `@cloudflare/vitest-pool-workers` tests for any DO SQLite transaction, eviction, retry,
+  or alarm behavior.
 
-Out of scope for SLICE-3b:
+Out of scope for SLICE-3c:
 
 - Full scheduler multiplexer.
 - Full Loop Governor enforcement.
@@ -68,29 +77,31 @@ Out of scope for SLICE-3b:
 - Real LLM provider calls.
 - Live APNs/Telegram/provider credentials.
 - Live chat transport and app feed implementation.
-- DeliveryGate budgets/cooldowns/held-candidate runtime beyond what the existing tracer proof needs.
+- Live provider credentials and cross-store `notification_log` mirroring unless the slice explicitly
+  narrows to that seam.
 
 First PR shape:
 
 ```text
-runtime: promote journal/outbox interface
+runtime: promote delivery gate runtime
 ```
 
 Acceptance:
 
-- Failing Workers/DO test first for a runtime-interface resume path that currently only the tracer owns.
-- One committed state transition per DO SQLite transaction.
-- Existing SLICE-3a crash/resume and exactly-once delivery tests still pass.
-- Malformed durable rows fail closed at the read seam; a mismatched ack key is rejected before state mutation.
-- Runtime interface does not import scheduler, dispatcher, Scribe, real LLM, live channel credentials, or app feed code.
+- Failing test first for a DeliveryGate runtime path that consumes the promoted journal/outbox seam.
+- Gate verdict, class-state accounting, held/drop/degrade behavior, and outbox intent commit match
+  ADR-0068 contracts.
+- Existing SLICE-3a and SLICE-3b crash/resume and exactly-once delivery tests still pass.
+- Runtime gate code does not import scheduler, dispatcher, Scribe, real LLM, live channel
+  credentials, or app feed code.
 - `npx -y pnpm@10.34.4 verify` and `git diff --check` pass.
 
 ## Async Pillars
 
 | Pillar | Can start? | Main owner | Notes |
 | --- | --- | --- | --- |
-| Run Journal + Outbox | Now | Codex/runtime | Current slice: HEY-121/SLICE-3b. Single-writer. |
-| DeliveryGate Runtime | After SLICE-3b interface shape | Codex/runtime | HEY-124/SLICE-3c: budget, cooldown, held candidates, GATED step. |
+| Run Journal + Outbox | Pending PR #23 | Codex/runtime | Preserve; expand only if SLICE-3c exposes a real gap after merge. |
+| DeliveryGate Runtime | After PR #23 merges | Codex/runtime | HEY-124/SLICE-3c: budget, cooldown, held candidates, GATED step. |
 | Scheduler Multiplexer | Design now, runtime after outbox | Codex/scheduler | Alarm pop, recurrence, retry, quarantine, liveness. |
 | Loop Governor Runtime | Comparator tests now | Codex/policy runtime | Integration waits on run loop and loop-progress rows. |
 | Dispatcher + Hooks + ACL + Sanitiser | Isolated tests now | Codex/security runtime | Integration waits on invocation/run skeleton. |
@@ -140,17 +151,17 @@ Safe parallel lanes:
 
 Week 1:
 
-1. Assign a single writer to HEY-121/SLICE-3b.
-2. Preserve the SLICE-3a proof while extracting the journal/outbox runtime interface.
+1. Assign a single writer to HEY-124/SLICE-3c.
+2. After PR #23 merges, preserve the SLICE-3a/3b proof while extracting DeliveryGate runtime state.
 3. Run ADR-0066 ES256 Supabase issuer spike in parallel.
 4. Start fake-first LLM routing/eval lane only if it avoids runtime files.
 5. Start fake channel sink and Telegram ingress gate tests only against contracts/fakes.
-6. Start trace/conformance artifact scaffold; do not take over runtime trace files from the SLICE-3b writer.
+6. Start trace/conformance artifact scaffold; do not take over DeliveryGate runtime files from the SLICE-3c writer.
 7. Start pure Loop Governor comparator tests only if they avoid shared runtime writes.
 
 Week 2:
 
-1. Integrate DeliveryGate runtime onto the promoted durable journal/outbox seam.
+1. Finish DeliveryGate runtime or split the remaining policy state into the next slice.
 2. Wire Loop Governor runtime enforcement.
 3. Wire dispatcher/hooks/sanitiser around the invocation skeleton.
 4. Begin scheduler multiplexer once run identity and retry semantics are stable.
