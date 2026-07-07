@@ -5,7 +5,7 @@
 > which surfaces are safe to build against, and which must stay single-writer.
 >
 > Current as of 2026-07-07: Phase D contract spine, agent operating workflow, runtime
-> planning docs, SLICE-3a/HEY-120, and draft PR #23 / SLICE-3b/HEY-121 are represented in the
+> planning docs, SLICE-3a/HEY-120, and SLICE-3b/HEY-121 (PR #23, `f47127f`) are represented in the
 > runtime build branch. Use `NEXT-SESSION-PLAN.md`, `SLICE-3B-HANDOFF.md`, and
 > `HARNESS-RUNTIME-BUILD-PLAN.md` for the next active SLICE-3c session.
 
@@ -24,11 +24,11 @@
 - **Current main is contract-only plus tracer compatibility.** No production DDL, no full
   DeliveryGate, no scheduler multiplexer, no dispatcher, and no provider surface are implemented.
 
-**When can other agents start building runtime logic?** After PR #23 merges for work that depends on
-the promoted journal/outbox seam. SLICE-3a landed the durable
+**When can other agents start building runtime logic?** Work that depends on
+the promoted journal/outbox seam is now unblocked by PR #23. SLICE-3a landed the durable
 exactly-once *delivery* proof under real `@cloudflare/vitest-pool-workers` eviction/resume
-(`packages/runtime/test/outbox-delivery.test.ts`), and PR #23 proposes to promote that proof into
-`RunJournalOutbox`. The next runtime unit after merge is SLICE-3c — DeliveryGate runtime state on
+(`packages/runtime/test/outbox-delivery.test.ts`), and PR #23 promoted that proof into
+`RunJournalOutbox`. The current runtime unit is SLICE-3c — DeliveryGate runtime state on
 top of the promoted journal/outbox interface.
 
 ---

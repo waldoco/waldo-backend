@@ -136,9 +136,9 @@ a downstream app-surface task against the committed OpenAPI artifact.
   send-attempt/ack state, an explicit idempotent sink contract, and a real
   `@cloudflare/vitest-pool-workers` cross-eviction test proving crash-after-send-before-ack resume
   does not duplicate physical delivery.
-- [ ] **SLICE-3b promoted journal/outbox interface (HEY-121 / PR #23)** — draft PR #23 promotes the
+- [x] **SLICE-3b promoted journal/outbox interface (HEY-121 / PR #23)** — PR #23 landed at `f47127f` and promotes the
   tracer proof behind `RunJournalOutbox` with `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`,
-  and `flushOutbox`, plus read-seam parsing and ack-key enforcement. Mark complete only after merge.
+  and `flushOutbox`, plus read-seam parsing and ack-key enforcement.
 - [ ] **Runtime implementation waves** — governor comparator/budget/kill/no-progress enforcement,
   DeliveryGate + durable multi-kind outbox flusher, `held_candidates` + `loop_progress` DDL,
   scheduler multiplexer, dispatcher taint-gate wiring, sanitiser runtime, and full run-FSM wiring.
@@ -205,8 +205,8 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The Phase-D contract spine is ready for runtime implementation. SLICE-3a is complete, and SLICE-3b
-is pending in PR #23. After PR #23 merges, the next safe unit is **SLICE-3c/HEY-124: promote
+The Phase-D contract spine is ready for runtime implementation. SLICE-3a and SLICE-3b are complete.
+The current safe unit is **SLICE-3c/HEY-124: promote
 DeliveryGate runtime state onto the journal/outbox interface**. Start with a failing test that proves
 gate state commits atomically with the promoted `enqueueOutbox` boundary while preserving the
 SLICE-3a/3b exactly-once delivery proof. Keep scheduler, full governor enforcement, dispatcher,

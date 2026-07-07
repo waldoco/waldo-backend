@@ -6,6 +6,7 @@ const baseRow = {
   run_id: 'run-1',
   user_id: 'user-1',
   trigger: 'fetch_alert',
+  gate_reason: null,
   occurrence_at: 1_000,
   created_at: 1_000,
   updated_at: 1_000,
@@ -53,15 +54,7 @@ describe('journalRow', () => {
     ).toBe(true);
   });
 
-  it('rejects arbitrary trigger text in the reduced tracer journal', () => {
-    expect(
-      journalRowSchema.safeParse({
-        ...baseRow,
-        trigger: 'brief',
-        state: 'RUN_OPENED',
-        verdict: null,
-      }).success,
-    ).toBe(false);
+  it('rejects arbitrary trigger text in the reduced runtime journal', () => {
     expect(
       journalRowSchema.safeParse({
         ...baseRow,
@@ -90,6 +83,41 @@ describe('journalRow', () => {
     ).toBe(true);
   });
 
+  it('requires a closed gate reason for non-send verdicts', () => {
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        state: 'FAILED',
+        verdict: 'hold',
+        gate_reason: 'cooldown_active',
+      }).success,
+    ).toBe(true);
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        state: 'FAILED',
+        verdict: 'drop',
+        gate_reason: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        state: 'GATED',
+        verdict: 'degrade',
+        gate_reason: 'budget_cap_exhausted',
+      }).success,
+    ).toBe(true);
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        state: 'GATED',
+        verdict: 'send',
+        gate_reason: 'cooldown_active',
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects a verdict set before GATED', () => {
     expect(
       journalRowSchema.safeParse({ ...baseRow, state: 'GOVERNOR_ADMITTED', verdict: 'send' })
@@ -107,6 +135,17 @@ describe('journalRow', () => {
     expect(journalRowSchema.safeParse({ ...baseRow, state: 'DONE', verdict: null }).success).toBe(
       false,
     );
+  });
+
+  it('accepts any known runtime trigger, not only fetch_alert', () => {
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        trigger: 'pre_activity_spot',
+        state: 'RUN_OPENED',
+        verdict: null,
+      }).success,
+    ).toBe(true);
   });
 
   it('rejects an unknown state and a null run_id', () => {

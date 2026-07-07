@@ -10,6 +10,7 @@ import {
   DAILY_PUSH_BUDGET,
   DELIVERY_POLICY,
   deliveryCandidateSchema,
+  deliveryGateReasonSchema,
   deliveryPolicyRowSchema,
   deliveryVerdictSchema,
   FETCH_ALERT_POLICY,
@@ -23,6 +24,17 @@ describe('deliveryVerdict', () => {
   it('is exactly the four ratified verdicts, with no defer_next_day', () => {
     expect(deliveryVerdictSchema.options).toEqual(['send', 'hold', 'degrade', 'drop']);
     expect(deliveryVerdictSchema.safeParse('defer_next_day').success).toBe(false);
+  });
+
+  it('uses a closed reason vocabulary for every non-send gate verdict', () => {
+    expect(deliveryGateReasonSchema.options).toEqual([
+      'candidate_expired',
+      'class_cap_exhausted',
+      'cooldown_active',
+      'budget_cap_exhausted',
+      'once_ever_already_sent',
+    ]);
+    expect(deliveryGateReasonSchema.safeParse('quiet maybe').success).toBe(false);
   });
 });
 
@@ -215,6 +227,32 @@ describe('deliveryCandidate', () => {
       }).success,
     ).toBe(false);
   });
+
+  it('requires sub_kind only for adjustment candidates', () => {
+    expect(
+      deliveryCandidateSchema.safeParse({
+        push_class: 'adjustment',
+        trigger: 'handoff_act',
+        event_id: 'adjustment-1',
+        sub_kind: 'proposed',
+      }).success,
+    ).toBe(true);
+    expect(
+      deliveryCandidateSchema.safeParse({
+        push_class: 'adjustment',
+        trigger: 'handoff_act',
+        event_id: 'adjustment-1',
+      }).success,
+    ).toBe(false);
+    expect(
+      deliveryCandidateSchema.safeParse({
+        push_class: 'fetch_alert',
+        trigger: 'fetch_alert',
+        event_id: 'fetch-1',
+        sub_kind: 'proposed',
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe('admission', () => {
@@ -222,6 +260,7 @@ describe('admission', () => {
     expect(
       admissionSchema.safeParse({
         verdict: 'send',
+        reason: null,
         channels: ['apns', 'telegram', 'in_app'],
         collapse_id: 'stack',
         budget_charged: false,
@@ -239,6 +278,7 @@ describe('admission', () => {
     expect(
       admissionSchema.safeParse({
         verdict: 'send',
+        reason: null,
         channels: ['apns'],
         collapse_id: 'stack',
         budget_charged: true,
@@ -248,6 +288,7 @@ describe('admission', () => {
     expect(
       admissionSchema.safeParse({
         verdict: 'send',
+        reason: null,
         channels: ['apns'],
         collapse_id: 'stack',
         budget_charged: false,
@@ -261,10 +302,44 @@ describe('admission', () => {
     expect(
       admissionSchema.safeParse({
         verdict: 'hold',
+        reason: 'cooldown_active',
         channels: [],
         collapse_id: 'stack',
         budget_charged: false,
         stamped: { push_class: 'adjustment', is_standalone: false, budget_exempt: false },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('requires reasons for non-send admissions and forbids reasons on sends', () => {
+    expect(
+      admissionSchema.safeParse({
+        verdict: 'degrade',
+        reason: 'budget_cap_exhausted',
+        channels: ['telegram', 'in_app'],
+        collapse_id: 'stack',
+        budget_charged: false,
+        stamped: { push_class: 'pre_activity_spot', is_standalone: false, budget_exempt: false },
+      }).success,
+    ).toBe(true);
+    expect(
+      admissionSchema.safeParse({
+        verdict: 'drop',
+        reason: null,
+        channels: [],
+        collapse_id: null,
+        budget_charged: false,
+        stamped: { push_class: 'constellation_first', is_standalone: true, budget_exempt: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      admissionSchema.safeParse({
+        verdict: 'send',
+        reason: 'cooldown_active',
+        channels: ['apns'],
+        collapse_id: 'stack',
+        budget_charged: false,
+        stamped: { push_class: 'fetch_alert', is_standalone: false, budget_exempt: true },
       }).success,
     ).toBe(false);
   });

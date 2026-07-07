@@ -1,43 +1,56 @@
 import type {
+  DeliveryCandidate,
   DeliverySink,
   DeliveryVerdict,
   JournalRow,
   OutboxIntent,
   OutboxRow,
+  PushClass,
+  TriggerType,
 } from '@waldo/contracts';
 import {
-  FETCH_ALERT_POLICY,
   assertIdempotentSink,
   canonicalDeliverySerialization,
+  deliveryCandidateSchema,
   deliveryVerdictSchema,
   outboxIntentSchema,
   sinkAckSchema,
   sinkRequestSchema,
+  triggerTypeSchema,
 } from '@waldo/contracts';
+import { computeAdmission } from '../delivery-gate/gate';
+import { DeliveryGateStore } from '../delivery-gate/store';
 import type { Deps } from '../seams/deps';
-import { computeVerdict } from '../tracer/gate';
 import { admit } from '../tracer/governor';
 import { Journal } from '../tracer/journal';
 import { Outbox } from '../tracer/outbox';
-import { Store } from '../tracer/store';
 
 const KIND = 'fetch_alert' as const;
 const PAYLOAD = 'synthetic-token-01';
 
 export type RunJournalOutboxCrashPoint =
   | 'pre_gate_commit'
+  | 'post_gate_pre_flush'
   | 'post_attempt_pre_send'
   | 'post_sink_pre_ack'
   | 'post_ack_pre_return';
 
 export type StartRunInput = {
   userId: string;
-  trigger: typeof KIND;
+  trigger: TriggerType;
   occurrenceAt: number;
+  candidate?: DeliveryCandidate;
 };
 
 export type EnqueueOutboxInput = Pick<OutboxIntent, 'run_id' | 'kind' | 'created_at'> & {
   verdict: DeliveryVerdict;
+  admissionAt?: number;
+};
+
+export type ReleaseHeldInput = {
+  userId: string;
+  eventId: string;
+  occurrenceAt: number;
 };
 
 type FaultHooks = {
@@ -47,7 +60,7 @@ type FaultHooks = {
 export class RunJournalOutbox {
   private readonly journal: Journal;
   private readonly outbox: Outbox;
-  private readonly store: Store;
+  private readonly store: DeliveryGateStore;
 
   constructor(
     private readonly storage: DurableObjectStorage,
@@ -58,17 +71,21 @@ export class RunJournalOutbox {
     assertIdempotentSink(sink);
     this.journal = new Journal(storage.sql, deps);
     this.outbox = new Outbox(storage.sql, deps);
-    this.store = new Store(storage.sql);
+    this.store = new DeliveryGateStore(storage.sql);
   }
 
   startRun(input: StartRunInput): string {
-    assertValidStartRunInput(input);
+    const parsed = parseStartRunInput(input);
     const runId = this.deps.newRunId();
-    this.journal.openRun({
-      runId,
-      userId: input.userId,
-      trigger: input.trigger,
-      occurrenceAt: input.occurrenceAt,
+    const candidate = parsed.candidate ?? defaultCandidateFor(parsed.trigger, runId);
+    this.storage.transactionSync(() => {
+      this.journal.openRun({
+        runId,
+        userId: parsed.userId,
+        trigger: parsed.trigger,
+        occurrenceAt: parsed.occurrenceAt,
+      });
+      this.store.writeCandidate(runId, candidate);
     });
     return runId;
   }
@@ -92,7 +109,8 @@ export class RunJournalOutbox {
     }
     const flushable = this.journal.readState(runId);
     if (flushable === 'GATED' || flushable === 'SINK_SENT') {
-      this.flushOutbox(runId, KIND);
+      this.crash('post_gate_pre_flush');
+      this.flushOutbox(runId, this.kindForRun(runId));
     }
     if (this.journal.readState(runId) === 'ACK_RECORDED') {
       this.finalize(runId);
@@ -105,13 +123,46 @@ export class RunJournalOutbox {
     await this.tickRun(run.run_id);
   }
 
+  releaseHeld(input: ReleaseHeldInput): string | null {
+    if (typeof input.userId !== 'string' || input.userId.length === 0) {
+      throw new Error('releaseHeld requires a non-empty userId');
+    }
+    if (typeof input.eventId !== 'string' || input.eventId.length === 0) {
+      throw new Error('releaseHeld requires a non-empty eventId');
+    }
+    if (!Number.isInteger(input.occurrenceAt) || input.occurrenceAt < 0) {
+      throw new Error('releaseHeld requires a non-negative integer occurrenceAt');
+    }
+
+    const held = this.store.readHeld(input.userId, input.eventId);
+    if (held === null) return null;
+    if (held.expires_at !== null && held.expires_at <= this.deps.now()) {
+      this.store.deleteHeld(input.userId, input.eventId);
+      return null;
+    }
+
+    const runId = this.deps.newRunId();
+    this.storage.transactionSync(() => {
+      this.journal.openRun({
+        runId,
+        userId: input.userId,
+        trigger: held.candidate.trigger,
+        occurrenceAt: input.occurrenceAt,
+      });
+      this.store.writeCandidate(runId, held.candidate);
+      this.store.deleteHeld(input.userId, input.eventId);
+    });
+    return runId;
+  }
+
   // Gate-owned enqueue: caller supplies the verdict and timing, while the runtime owns the opaque
   // payload and deterministic idempotency key.
   async enqueueOutbox(input: EnqueueOutboxInput): Promise<OutboxRow> {
     const verdict = deliveryVerdictSchema.parse(input.verdict);
-    if (verdict !== 'send') {
-      throw new Error('enqueueOutbox requires a send verdict');
+    if (verdict !== 'send' && verdict !== 'degrade') {
+      throw new Error('enqueueOutbox requires a send or degrade verdict');
     }
+    const admissionAt = input.admissionAt ?? this.deps.now();
     const idempotencyKey = await this.deps.sha256Hex(
       canonicalDeliverySerialization({
         run_id: input.run_id,
@@ -128,14 +179,39 @@ export class RunJournalOutbox {
     });
     let row: OutboxRow | null = null;
     this.storage.transactionSync(() => {
+      const candidate = this.store.readCandidate(input.run_id);
+      if (input.kind !== candidate.push_class) {
+        throw new Error(
+          `enqueueOutbox kind ${input.kind} does not match candidate ${candidate.push_class}`,
+        );
+      }
       const run = this.journal.read(input.run_id);
       if (run === null) throw new Error(`enqueueOutbox: no journal row for ${input.run_id}`);
       if (run.state !== 'GOVERNOR_ADMITTED') {
         throw new Error(`enqueueOutbox requires GOVERNOR_ADMITTED, got ${run.state}`);
       }
-      this.journal.stampVerdict(run.run_id, verdict);
-      this.store.incrementClassState(run.user_id, this.deps.now());
-      this.store.incrementExemptSend(run.user_id);
+      const admission = computeAdmission({
+        candidate,
+        classState: this.store.readClassState(run.user_id, candidate, admissionAt),
+        subKindState:
+          candidate.push_class === 'adjustment' && candidate.sub_kind !== undefined
+            ? this.store.readSubKindState(
+                run.user_id,
+                candidate.push_class,
+                candidate.sub_kind,
+                admissionAt,
+              )
+            : undefined,
+        countedSends: this.store.readBudget(run.user_id, admissionAt).sends_total,
+        now: admissionAt,
+      });
+      if (admission.verdict !== verdict) {
+        throw new Error(
+          `enqueueOutbox verdict ${verdict} does not match admission ${admission.verdict}`,
+        );
+      }
+      this.journal.stampVerdict(run.run_id, verdict, admission.reason);
+      this.store.applyAdmission(run.user_id, candidate, admission, admissionAt);
       this.outbox.insert(parsed);
       this.journal.advance(run.run_id, 'GATED');
       row = this.outbox.readRow(parsed.run_id, parsed.kind);
@@ -146,14 +222,14 @@ export class RunJournalOutbox {
 
   // kind is a single literal in SLICE-3b; the parameter keeps the call site ready for the deferred
   // multi-kind outbox without widening this slice.
-  flushOutbox(runId: string, kind: typeof KIND): void {
+  flushOutbox(runId: string, kind: PushClass = KIND): void {
     const run = this.journal.read(runId);
     if (run === null) throw new Error(`flushOutbox: no journal row for ${runId}`);
     if (run.state !== 'GATED' && run.state !== 'SINK_SENT') {
       throw new Error(`flushOutbox requires GATED or SINK_SENT, got ${run.state}`);
     }
-    if (run.verdict !== 'send') {
-      throw new Error('flushOutbox requires a send verdict');
+    if (run.verdict !== 'send' && run.verdict !== 'degrade') {
+      throw new Error('flushOutbox requires a send or degrade verdict');
     }
 
     const row = this.outbox.readRow(runId, kind);
@@ -206,15 +282,40 @@ export class RunJournalOutbox {
   }
 
   private async runGate(run: JournalRow): Promise<void> {
-    const classState = this.store.readClassState(run.user_id);
-    const admission = computeVerdict(
-      { push_class: KIND, now: this.deps.now() },
+    const candidate = this.store.readCandidate(run.run_id);
+    const gateAt = run.occurrence_at;
+    const classState = this.store.readClassState(run.user_id, candidate, gateAt);
+    const budget = this.store.readBudget(run.user_id, gateAt);
+    const admission = computeAdmission({
+      candidate,
       classState,
-      FETCH_ALERT_POLICY,
-    );
+      subKindState:
+        candidate.push_class === 'adjustment' && candidate.sub_kind !== undefined
+          ? this.store.readSubKindState(
+              run.user_id,
+              candidate.push_class,
+              candidate.sub_kind,
+              gateAt,
+            )
+          : undefined,
+      countedSends: budget.sends_total,
+      now: gateAt,
+    });
 
-    if (admission.verdict !== 'send') {
-      this.journal.advance(run.run_id, 'FAILED');
+    if (admission.verdict === 'hold') {
+      this.storage.transactionSync(() => {
+        this.journal.stampVerdict(run.run_id, admission.verdict, admission.reason);
+        this.store.recordHeld(run.user_id, candidate, admission);
+        this.journal.advance(run.run_id, 'FAILED');
+      });
+      return;
+    }
+
+    if (admission.verdict !== 'send' && admission.verdict !== 'degrade') {
+      this.storage.transactionSync(() => {
+        this.journal.stampVerdict(run.run_id, admission.verdict, admission.reason);
+        this.journal.advance(run.run_id, 'FAILED');
+      });
       return;
     }
 
@@ -222,10 +323,15 @@ export class RunJournalOutbox {
 
     await this.enqueueOutbox({
       run_id: run.run_id,
-      kind: KIND,
-      created_at: this.deps.now(),
+      kind: candidate.push_class,
+      created_at: gateAt,
       verdict: admission.verdict,
+      admissionAt: gateAt,
     });
+  }
+
+  private kindForRun(runId: string): PushClass {
+    return this.store.readCandidate(runId).push_class;
   }
 
   private finalize(runId: string): void {
@@ -244,17 +350,37 @@ function admitToState(verdict: 'admit' | 'deny'): 'GOVERNOR_ADMITTED' | 'FAILED'
   return verdict === 'admit' ? 'GOVERNOR_ADMITTED' : 'FAILED';
 }
 
-function assertValidStartRunInput(input: StartRunInput): void {
+function parseStartRunInput(input: StartRunInput): StartRunInput {
   if (typeof input !== 'object' || input === null) {
     throw new Error('startRun requires an input object');
   }
   if (typeof input.userId !== 'string' || input.userId.length === 0) {
     throw new Error('startRun requires a non-empty userId');
   }
-  if (input.trigger !== KIND) {
-    throw new Error('startRun requires trigger fetch_alert');
+  const triggerResult = triggerTypeSchema.safeParse(input.trigger);
+  if (!triggerResult.success) {
+    throw new Error('startRun requires a known trigger');
   }
+  const trigger = triggerResult.data;
   if (!Number.isInteger(input.occurrenceAt) || input.occurrenceAt < 0) {
     throw new Error('startRun requires a non-negative integer occurrenceAt');
   }
+  const candidate =
+    input.candidate === undefined ? undefined : deliveryCandidateSchema.parse(input.candidate);
+  if (candidate !== undefined && candidate.trigger !== trigger) {
+    throw new Error('startRun candidate trigger must match run trigger');
+  }
+  return { ...input, trigger, candidate };
+}
+
+function defaultCandidateFor(trigger: TriggerType, runId: string): DeliveryCandidate {
+  if (trigger !== KIND) {
+    throw new Error(`startRun requires a candidate for trigger ${trigger}`);
+  }
+  return deliveryCandidateSchema.parse({
+    push_class: KIND,
+    trigger,
+    event_id: runId,
+    expires_at: null,
+  });
 }

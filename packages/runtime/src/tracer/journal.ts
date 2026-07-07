@@ -1,5 +1,11 @@
-import type { DeliveryVerdict, JournalRow, RunState } from '@waldo/contracts';
+import type {
+  DeliveryGateReason,
+  DeliveryVerdict,
+  JournalRow,
+  RunState,
+} from '@waldo/contracts';
 import {
+  deliveryGateReasonSchema,
   journalRowSchema,
   runStateSchema,
   runStateTransitions,
@@ -12,6 +18,7 @@ type JournalSqlRow = {
   trigger: string;
   state: string;
   verdict: string | null;
+  gate_reason: string | null;
   occurrence_at: number;
   created_at: number;
   updated_at: number;
@@ -24,6 +31,7 @@ function toRow(r: JournalSqlRow): JournalRow {
     trigger: r.trigger,
     state: r.state,
     verdict: r.verdict,
+    gate_reason: r.gate_reason,
     occurrence_at: r.occurrence_at,
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -47,8 +55,8 @@ export class Journal {
     const at = this.deps.now();
     this.sql.exec(
       `INSERT INTO journal
-         (run_id, user_id, trigger, state, verdict, occurrence_at, created_at, updated_at)
-       VALUES (?, ?, ?, 'RUN_OPENED', NULL, ?, ?, ?)`,
+         (run_id, user_id, trigger, state, verdict, gate_reason, occurrence_at, created_at, updated_at)
+       VALUES (?, ?, ?, 'RUN_OPENED', NULL, NULL, ?, ?, ?)`,
       input.runId,
       input.userId,
       input.trigger,
@@ -101,16 +109,29 @@ export class Journal {
     );
   }
 
-  // The verdict is durable only alongside the GATED advance in the same transaction, so it is
-  // stamped while the row is still GOVERNOR_ADMITTED and the caller advances to GATED atomically.
-  stampVerdict(runId: string, verdict: DeliveryVerdict): void {
+  // The verdict is durable only alongside the GATED advance in the same transaction. Non-send
+  // verdicts keep a closed reason next to the verdict so evicted runtimes can explain the gate.
+  stampVerdict(
+    runId: string,
+    verdict: DeliveryVerdict,
+    gateReason: DeliveryGateReason | null,
+  ): void {
     const from = this.readState(runId);
     if (from !== 'GOVERNOR_ADMITTED') {
       throw new Error(`stampVerdict requires GOVERNOR_ADMITTED, got ${from}`);
     }
+    if (verdict === 'send' && gateReason !== null) {
+      throw new Error('stampVerdict: send verdict must not carry a gate reason');
+    }
+    if (verdict !== 'send' && gateReason === null) {
+      throw new Error('stampVerdict: non-send verdict requires a gate reason');
+    }
+    const parsedReason =
+      gateReason === null ? null : deliveryGateReasonSchema.parse(gateReason);
     this.sql.exec(
-      'UPDATE journal SET verdict = ?, updated_at = ? WHERE run_id = ?',
+      'UPDATE journal SET verdict = ?, gate_reason = ?, updated_at = ? WHERE run_id = ?',
       verdict,
+      parsedReason,
       this.deps.now(),
       runId,
     );

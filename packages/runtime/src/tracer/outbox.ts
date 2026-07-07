@@ -1,4 +1,4 @@
-import type { OutboxIntent, OutboxRow } from '@waldo/contracts';
+import type { OutboxIntent, OutboxRow, PushClass } from '@waldo/contracts';
 import { outboxRowSchema } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
 
@@ -59,7 +59,7 @@ export class Outbox {
     );
   }
 
-  readRow(runId: string, kind: 'fetch_alert'): OutboxRow | null {
+  readRow(runId: string, kind: PushClass): OutboxRow | null {
     const rows = this.sql
       .exec<OutboxSqlRow>('SELECT * FROM outbox WHERE run_id = ? AND kind = ?', runId, kind)
       .toArray();
@@ -69,7 +69,7 @@ export class Outbox {
 
   // TOTAL rows, including an already-acked one — the exactly-once assertion counts durable rows,
   // not active rows, so a masked double-processing bug cannot pass.
-  countRows(runId: string, kind: 'fetch_alert'): number {
+  countRows(runId: string, kind: PushClass): number {
     return this.sql
       .exec<{ n: number }>(
         'SELECT count(*) AS n FROM outbox WHERE run_id = ? AND kind = ?',
@@ -83,7 +83,7 @@ export class Outbox {
   // sink is about to be reached, and next_retry_at stamps when a resume should re-drive the
   // in-doubt row. Committing this first is what lets a post-send/pre-ack crash resume
   // without guessing whether the send happened.
-  markSendAttempt(runId: string, kind: 'fetch_alert', now: number): void {
+  markSendAttempt(runId: string, kind: PushClass, now: number): void {
     this.sql.exec(
       `UPDATE outbox
           SET status = 'sent_unacked', attempts = attempts + 1, next_retry_at = ?
@@ -96,7 +96,7 @@ export class Outbox {
 
   markAcked(
     runId: string,
-    kind: 'fetch_alert',
+    kind: PushClass,
     idempotencyKey: string,
     now: number,
   ): void {
@@ -116,7 +116,7 @@ export class Outbox {
     );
   }
 
-  recordSendError(runId: string, kind: 'fetch_alert'): void {
+  recordSendError(runId: string, kind: PushClass): void {
     // Keep durable failure evidence as a constant marker; provider exception text may contain
     // user data and belongs only in the thrown error/trace, not in DO SQLite.
     this.sql.exec(
