@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { journalRowSchema, runStateSchema, runStateTransitions } from './journal';
 
+// ADR-0054: durable journal rows must remain readable after any legal terminal transition.
 const baseRow = {
   run_id: 'run-1',
   user_id: 'user-1',
@@ -52,7 +53,26 @@ describe('journalRow', () => {
     ).toBe(true);
   });
 
-  it('accepts a verdict once the row is GATED or later', () => {
+  it('rejects arbitrary trigger text in the reduced tracer journal', () => {
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        trigger: 'brief',
+        state: 'RUN_OPENED',
+        verdict: null,
+      }).success,
+    ).toBe(false);
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        trigger: 'user said HRV 42',
+        state: 'RUN_OPENED',
+        verdict: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts a verdict once the row is GATED or later before terminal failure', () => {
     expect(
       journalRowSchema.safeParse({ ...baseRow, state: 'GATED', verdict: 'send' }).success,
     ).toBe(true);
@@ -61,11 +81,32 @@ describe('journalRow', () => {
     ).toBe(true);
   });
 
+  it('accepts FAILED rows with or without a prior committed verdict', () => {
+    expect(
+      journalRowSchema.safeParse({ ...baseRow, state: 'FAILED', verdict: null }).success,
+    ).toBe(true);
+    expect(
+      journalRowSchema.safeParse({ ...baseRow, state: 'FAILED', verdict: 'send' }).success,
+    ).toBe(true);
+  });
+
   it('rejects a verdict set before GATED', () => {
     expect(
       journalRowSchema.safeParse({ ...baseRow, state: 'GOVERNOR_ADMITTED', verdict: 'send' })
         .success,
     ).toBe(false);
+  });
+
+  it('rejects missing verdicts once a non-terminal row is GATED or later', () => {
+    expect(journalRowSchema.safeParse({ ...baseRow, state: 'GATED', verdict: null }).success).toBe(
+      false,
+    );
+    expect(
+      journalRowSchema.safeParse({ ...baseRow, state: 'SINK_SENT', verdict: null }).success,
+    ).toBe(false);
+    expect(journalRowSchema.safeParse({ ...baseRow, state: 'DONE', verdict: null }).success).toBe(
+      false,
+    );
   });
 
   it('rejects an unknown state and a null run_id', () => {

@@ -5,13 +5,14 @@ import { z } from 'zod';
 export const idempotencyKeySchema = z.string().regex(/^[0-9a-f]{64}$/);
 export type IdempotencyKey = z.infer<typeof idempotencyKeySchema>;
 
-// Opaque synthetic token only — never a physiological value. A purely numeric payload is
-// rejected to keep raw health values (HRV, HR, sleep hours, ...) out of the outbox.
+// Opaque synthetic token only — never a physiological value. Real provider-owned reference
+// prefixes should be added with their first runtime sink, not speculatively.
 export const opaquePayloadSchema = z
   .string()
   .min(1)
-  .refine((s) => !/^-?\d+(\.\d+)?$/.test(s), {
-    error: 'payload must be an opaque token, not a bare numeric value',
+  .max(96)
+  .regex(/^synthetic-token-[a-z0-9][a-z0-9-]{0,63}$/, {
+    error: 'payload must be an allowlisted opaque synthetic token',
   });
 export type OpaquePayload = z.infer<typeof opaquePayloadSchema>;
 
@@ -22,6 +23,9 @@ export type OpaquePayload = z.infer<typeof opaquePayloadSchema>;
 // the row must never reach a sink again.
 export const outboxStatusSchema = z.enum(['pending', 'sent_unacked', 'acked']);
 export type OutboxStatus = z.infer<typeof outboxStatusSchema>;
+
+export const outboxLastErrorSchema = z.literal('send_failed');
+export type OutboxLastError = z.infer<typeof outboxLastErrorSchema>;
 
 const intentShape = {
   run_id: z.string().min(1),
@@ -44,7 +48,7 @@ export const outboxRowSchema = z
     attempts: z.int().nonnegative(),
     next_retry_at: z.int().nonnegative().nullable(),
     acked_at: z.int().nonnegative().nullable(),
-    last_error: z.string().min(1).nullable(),
+    last_error: outboxLastErrorSchema.nullable(),
   })
   .refine((row) => (row.status === 'pending') === (row.attempts === 0), {
     error: 'attempts is zero before the first send attempt and positive from then on',

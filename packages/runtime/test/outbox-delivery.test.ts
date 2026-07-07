@@ -211,7 +211,7 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
     const failed = await readOutbox(stub);
     expect(failed.status).toBe('sent_unacked');
     expect(failed.attempts).toBe(1);
-    expect(failed.last_error).toContain('sink unavailable');
+    expect(failed.last_error).toBe('send_failed');
     expect(sink.observedDeliveries()).toBe(0);
 
     await evictDurableObject(stub);

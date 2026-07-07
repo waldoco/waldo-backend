@@ -5,8 +5,9 @@
 > which surfaces are safe to build against, and which must stay single-writer.
 >
 > Current as of 2026-07-07: Phase D contract spine, agent operating workflow, runtime
-> planning docs, and SLICE-3a/HEY-120 are merged to `main`. Use `NEXT-SESSION-PLAN.md`
-> and `HARNESS-RUNTIME-BUILD-PLAN.md` for the next active SLICE-3b session.
+> planning docs, SLICE-3a/HEY-120, and draft PR #23 / SLICE-3b/HEY-121 are represented in the
+> runtime build branch. Use `NEXT-SESSION-PLAN.md`, `SLICE-3B-HANDOFF.md`, and
+> `HARNESS-RUNTIME-BUILD-PLAN.md` for the next active SLICE-3c session.
 
 ---
 
@@ -23,10 +24,12 @@
 - **Current main is contract-only plus tracer compatibility.** No production DDL, no full
   DeliveryGate, no scheduler multiplexer, no dispatcher, and no provider surface are implemented.
 
-**When can other agents start building runtime logic?** Now. SLICE-3a landed the durable
+**When can other agents start building runtime logic?** After PR #23 merges for work that depends on
+the promoted journal/outbox seam. SLICE-3a landed the durable
 exactly-once *delivery* proof under real `@cloudflare/vitest-pool-workers` eviction/resume
-(`packages/runtime/test/outbox-delivery.test.ts`); the next runtime unit is SLICE-3b — promote
-the tracer journal/outbox into the runtime interface.
+(`packages/runtime/test/outbox-delivery.test.ts`), and PR #23 proposes to promote that proof into
+`RunJournalOutbox`. The next runtime unit after merge is SLICE-3c — DeliveryGate runtime state on
+top of the promoted journal/outbox interface.
 
 ---
 
@@ -50,12 +53,15 @@ the tracer journal/outbox into the runtime interface.
 
 ## 3. Current build map
 
-Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime) · `partial-contract` (some ADR surface pinned, rest deferred) · `tracer-only` (exists only inside the Phase-C tracer slice). **SW**: must stay single-writer. **Safe**: safe to build *contracts* against now.
+Legend — **status**: `built` · `contract-only` (Zod shape + tests, no runtime) · `partial-contract`
+(some ADR surface pinned, rest deferred) · `partial-runtime` (promoted reduced runtime, full ADR
+deferred) · `tracer-only` (exists only inside the Phase-C tracer slice). **SW**: must stay
+single-writer. **Safe**: safe to build *contracts* against now.
 
 | Module | ADR | Status | SW | Safe | Gap to full ADR |
 |---|---|---|---|---|---|
-| Run journal + FSM | 0054 | partial-contract | ✅ | ✅ | Full 8-state FSM (`run.ts`) is shape-only, **zero runtime consumers**. Tracer uses a distinct reduced 7-state FSM (`journal.ts`). `runs` table, tick/resume, watchdog on `next_expected_wake`, retry on `attempts` — unbuilt. |
-| Transactional outbox + sink | 0054 | tracer-only | ✅ | ✅ | Single-kind `fetch_alert` slice. Exactly-once *enqueue* airtight (UNIQUE constraints); exactly-once *delivery* **proven** at the durable layer (§6.3 resolved): status/attempts/next_retry_at/acked_at/last_error columns, attempt-marker-before-send, declared-idempotent sink contract. Needs multi-kind, retry exhaustion policy, cross-store `notification_log` mirror. |
+| Run journal + FSM | 0054 | partial-runtime | ✅ | ✅ | `RunJournalOutbox` now owns the reduced tracer FSM through `startRun`/`tickRun`/`resumeRun`; the full 8-state FSM (`run.ts`), watchdog on `next_expected_wake`, and full runtime expansion remain unbuilt. |
+| Transactional outbox + sink | 0054 | partial-runtime | ✅ | ✅ | Single-kind `fetch_alert` slice. Exactly-once *delivery* **proven** at the durable layer (§6.3 resolved) and promoted behind `enqueueOutbox`/`flushOutbox`: status/attempts/next_retry_at/acked_at/last_error columns, attempt-marker-before-send, declared-idempotent sink contract, read-seam parsing, and ack-key enforcement. Needs multi-kind, retry exhaustion policy, cross-store `notification_log` mirror. |
 | Session trust reset | 0033 | contract-only | ✅ | ✅ | Reset envelope pinned; the `session_reset` OnInvocationStart hook (priority 400) + the resume-rebuild obligation are runtime, unwired. |
 | Working memory | 0057 | contract-only | ❌ | ✅ | Bucket shapes + caps pinned; threading-through-tool-calls + compaction-survival re-attach are runtime behavioral invariants, absent. |
 | Persistent goals | 0064 | contract-only | ✅ | ✅ | `GoalRecord` shape complete + raw-health-rejecting. DO SQLite state home, onboarding/user-message write authority — unbuilt. |
@@ -142,7 +148,7 @@ Everything else the skeptics probed returned **safe**: mint forgery, consent esc
 ## 7. Contribution rules · single-writer vs parallelizable
 
 **Single-writer (one owner per file; a second concurrent writer corrupts the seam):**
-- `runtime/loop-policy.ts` (this seam), `runtime/delivery-policy.ts` (SLICE-2), `runtime/outbox.ts` + `runtime/journal.ts` + `runtime/run.ts` (SLICE-3), `runtime/schedule.ts`, `runtime/routing.ts`, `model/roster.ts`, `core/trigger.ts`, `memory/sanitise.ts`, all of `packages/runtime/src/tracer/*`, `index.ts`.
+- `runtime/loop-policy.ts` (this seam), `runtime/delivery-policy.ts` (SLICE-2), `runtime/outbox.ts` + `runtime/journal.ts` + `runtime/run.ts` (SLICE-3), `runtime/schedule.ts`, `runtime/routing.ts`, `model/roster.ts`, `core/trigger.ts`, `memory/sanitise.ts`, `packages/runtime/src/run-journal/*`, all of `packages/runtime/src/tracer/*`, `index.ts`.
 - Rationale: these own a shared vocabulary (budget, delivery, outbox, model roster, trigger, health-value) — the LOCAL-DEV anti-pattern is "a second writer for budget/outbox/memory/model/trigger."
 
 **Parallelizable (disjoint modules; safe for concurrent authoring in separate PRs):**
@@ -199,20 +205,14 @@ Slice names follow the Linear board (2026-07-06 restructure): SLICE-3a exactly-o
 SLICE-3b tracer journal/outbox promotion · SLICE-3c DeliveryGate runtime · SLICE-4 Loop Governor ·
 SLICE-5 scheduler/alarm multiplexer.
 
-1. SLICE-3b — promote tracer journal/outbox into the runtime interface. Preserve the SLICE-3a
-   proof while introducing `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
-   Enforce outbox row parsing at durable read seams and sink request/ack parsing at delivery seams.
-   Reject mismatched ack keys before mutation. Keep crash knobs and fixture helpers test-only unless
-   deliberately promoted.
-
-2. SLICE-3c — DeliveryGate runtime. Move from proof state into budgets, cooldowns, held
+1. SLICE-3c — DeliveryGate runtime. Move from proof state into budgets, cooldowns, held
    candidates, and the notification-log mirror seam once SLICE-3b stabilizes the runtime interface.
 
-3. SLICE-4 — Loop Governor runtime enforcement. Consume the existing ADR-0074 contracts:
+2. SLICE-4 — Loop Governor runtime enforcement. Consume the existing ADR-0074 contracts:
    comparator, per-run token/iteration/subagent bounds, kill flags, within-run dedup, no-progress
    rows, and outbound Art-9 floor. Do not invent new governor verdict enums.
 
-4. Dispatcher/sanitiser wiring (Phase 4 wave). Wire `taintGateBlocksDirectExecution` at PreToolUse,
+3. Dispatcher/sanitiser wiring (Phase 4 wave). Wire `taintGateBlocksDirectExecution` at PreToolUse,
    thread external taint from tool result to privileged args, and put the sanitiser runtime at the
    memory/prompt/egress boundaries using the single `RAW_SENSOR_PATTERNS` owner.
 

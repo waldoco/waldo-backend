@@ -79,12 +79,13 @@ Built:
 - Workers/DO test substrate with `@cloudflare/vitest-pool-workers`.
 - One scheduled `fetch_alert` tracer path proving `DO alarm -> Governor -> journal -> DeliveryGate -> outbox -> fake sink -> DONE`.
 - SLICE-3a/HEY-120 durable outbox proof: crash after sink send and before local ack resumes across DO eviction without duplicate physical delivery, with an explicit idempotent sink contract.
+- Draft PR #23 / SLICE-3b/HEY-121 promotes journal/outbox behavior into `RunJournalOutbox` with
+  `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
 - Static guard wall and pinned verification command.
 
 Not built:
 
 - Full run FSM runtime.
-- Promoted runtime journal/outbox interface beyond the tracer (`startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, `flushOutbox`).
 - Durable multi-kind DeliveryGate/outbox flusher and retry exhaustion policy.
 - Scheduler multiplexer.
 - Loop Governor runtime enforcement.
@@ -114,7 +115,7 @@ Split by runtime seam, not product feature. Product features should wait until t
 | 9 | Auth/Data Plane/Adapters | ES256 Supabase issuer, `db.forUser`, Vault OAuth, provider adapters. | Now | RLS cross-tenant tests, token expiry, no service-role in DO. | High in migrations/EFs |
 | 10 | Observability/Conformance | Trace event shape, scenario artifacts, replay/eval scaffolding. | Now | Scenario replay, property seeds, mutation reports, redaction checks. | Low |
 
-## Completed First Slice
+## Completed Runtime Slices
 
 **SLICE-3a/HEY-120: durable DeliveryGate/outbox proof** landed in PR #21.
 
@@ -132,28 +133,38 @@ Proof covered:
 - Assert durable state records the ack/retry outcome.
 - Assert the sink declares idempotency by key and the fake cannot hide re-key bugs.
 
-Remaining after SLICE-3a: multi-kind outbox, retry exhaustion policy, notification-log mirror, and the runtime-facing journal/outbox interface.
+**SLICE-3b/HEY-121: promoted journal/outbox runtime interface** is pending in draft PR #23 on
+branch `codex/hey-121-runtime-journal-outbox-interface`.
+
+The branch promotes the tracer-proven behavior behind `RunJournalOutbox`, preserves the SLICE-3a
+exactly-once delivery proof, adds Workers tests for the promoted interface across eviction, and
+enforces durable row parsing plus sink request/ack parsing at the runtime seam.
+
+Remaining after PR #23 merges: DeliveryGate runtime state, multi-kind outbox, retry exhaustion
+policy, notification-log mirror, full FSM expansion, scheduler multiplexer, Loop Governor runtime,
+dispatcher, Scribe runtime, and live provider/channel integration.
 
 ## Next Slice
 
-Build **SLICE-3b/HEY-121: promote tracer run journal/outbox into runtime interface**.
+Build **SLICE-3c/HEY-124: promote DeliveryGate runtime onto the journal/outbox interface**.
 
-The next PR should extract the tracer-proven behavior into a narrow runtime module without adopting scheduler, dispatcher, Scribe, real LLMs, live channels, or app-feed code.
+The next PR should move from the tracer's proof-shaped gate into a runtime DeliveryGate seam without
+adopting scheduler, dispatcher, Scribe, real LLMs, live channels, or app-feed code.
 
 Required first failing test:
 
-- Drive a run through the promoted runtime interface, not directly through tracer internals.
-- Evict/reconstruct the Durable Object between committed transitions.
-- Resume through `resumeRun`/`tickRun`.
-- Assert terminal state and outbox state converge exactly as the tracer proof did.
-- Assert malformed durable outbox/journal rows fail closed at the read seam.
-- Assert `sinkRequestSchema`/`sinkAckSchema` are enforced at egress/ack and an ack with the wrong idempotency key is rejected before mutation.
+- Drive DeliveryGate runtime state through the promoted journal/outbox interface.
+- Assert the gate commit keeps verdict, class-state accounting, and outbox intent atomic.
+- Assert ADR-0068 budget/cooldown/held-candidate behavior is enforced by runtime code, not only
+  contract tests.
+- Assert existing SLICE-3a/3b eviction, duplicate-send, corrupt-row, and ack-key tests still pass.
 
-Review carry-forward from PR #21:
+Review carry-forward from SLICE-3a/3b:
 
 - Promote only production-shaped journal/outbox code; leave crash knobs and tracer fixture helpers in tests.
 - Sanitize or normalize persisted `last_error` before real provider sinks exist.
 - Keep the sink idempotency contract explicit at the wiring seam.
+- Keep `enqueueOutbox` as a gate-owned commit boundary, not a free-standing row insert.
 
 ## Parallel Assignment Packet
 
@@ -173,13 +184,13 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before coding SLICE-3b, grill these decisions:
+Before coding SLICE-3c, grill these decisions:
 
-1. What is the smallest production runtime interface that hides DO SQLite rows without hiding failure evidence?
-2. Which table/row schemas must be parsed at durable read seams versus trusted only at write seams?
-3. Should `runs`, `journal`, and `outbox` live in one runtime module now or split only after a second caller appears?
-4. What is the exact transaction boundary for `tickRun` when it enqueues an outbox intent?
-5. What state does `resumeRun` return for `sent_unacked`, corrupt rows, terminal rows, and duplicate alarms?
-6. How do we keep `last_error` useful for debugging without preserving raw provider payloads or health/user content?
-7. Which tracer code should be promoted, and which tracer code should remain test-only scaffolding?
-8. Which files are single-writer for HEY-121, and which fake-eval/channel tasks can run in parallel without touching them?
+1. What is the smallest DeliveryGate runtime state that proves ADR-0068 without pulling in the full
+   scheduler or product channels?
+2. Which budget, cooldown, and held-candidate rows must commit with the gate verdict?
+3. How does the gate call `enqueueOutbox` without weakening the SLICE-3b transaction boundary?
+4. Which malformed policy/class-state rows fail closed before an outbox intent exists?
+5. Which parts of multi-kind outbox belong in SLICE-3c versus the later flusher/retry slice?
+6. Which files are single-writer for HEY-124, and which fake-eval/channel tasks can run in parallel
+   without touching them?
