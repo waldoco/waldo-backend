@@ -83,14 +83,16 @@ Built:
   `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
 - HEY-122/SLICE-4 Loop Governor runtime enforcement landed in PR #27.
 - HEY-123/SLICE-5 scheduler/alarm multiplexer landed in PR #28 at `061e72c`.
+- HEY-77 triage dispatcher landed in PR #29 at `a947600`.
+- HEY-12 hook registry landed in PR #31 at `1b180ef`.
 - Static guard wall and pinned verification command.
 
 Not built:
 
 - Full run FSM runtime.
 - Durable multi-kind DeliveryGate/outbox flusher and retry exhaustion policy.
-- Dispatcher hooks/ACL/tool runtime beyond HEY-77 triage.
-- Scribe/sanitiser runtime placement.
+- ToolDispatcher/ACL runtime beyond the HEY-12 hook seam.
+- Scribe/sanitiser runtime implementation beyond injected hook callbacks.
 - Context builder/prompt hydration runtime.
 - LLM provider runtime.
 - Real channel sinks, Telegram ingress, app feed, live chat.
@@ -154,31 +156,34 @@ UTC fallback because user timezone state does not exist yet; quiet-hours runtime
 `exempt_after_h` escalation wait on user-settings and scheduler slices; the Pro Max tier case and
 the last-budget-slot race case are untested.
 
-Remaining after PR #28: multi-kind outbox flusher, retry exhaustion policy, notification-log
-mirror, full FSM expansion, dispatcher hooks/ACL/sanitiser, Scribe runtime, and live
+Remaining after PR #31: multi-kind outbox flusher, retry exhaustion policy, notification-log
+mirror, full FSM expansion, ToolDispatcher/ACL integration, Scribe runtime, and live
 provider/channel integration. HEY-123/SLICE-5 scheduler/alarm multiplexer is merged via PR #28 at
-`061e72c`; HEY-77 triage dispatcher is the current runtime-lane PR.
+`061e72c`; HEY-77 triage dispatcher is merged via PR #29 at `a947600`; HEY-12 hook registry is
+merged via PR #31 at `1b180ef`; HEY-78 ToolDispatcher + per-trigger ACL is the current next
+runtime-lane unit.
 
 ## Next Slice
 
-Complete review and PR for **HEY-77: Triage dispatcher single entry**
-(ADR-0008, ADR-0065, `packages/contracts/src/core/trigger.ts`).
+Complete **HEY-78: ToolDispatcher + per-trigger ACL enforcement**
+(ADR-0008, ADR-0021, ADR-0029, ADR-0032, ADR-0049; `packages/contracts/src/tools/*`,
+`packages/contracts/src/runtime/session.ts`, `packages/runtime/src/hooks/registry.ts`).
 
-The triage dispatcher is the single runtime owner for classifying incoming wake envelopes before
-Governor/ACL/runtime wiring. It maps scheduler alarms, webhooks, user messages, app events, and
-HealthKit background deliveries from authenticated envelope metadata to canonical `TriggerType`
-values or typed rejections. It must not inspect raw message bodies, health values, or untrusted
-payload content.
+The ToolDispatcher is the single runtime owner for provider-shaped tool-call execution. It parses
+model/provider call envelopes into the contract-owned `ToolName` + args surface, enforces
+`TOOL_PERMISSIONS[session.trigger]`, validates args with the existing tool schemas, composes with
+the HEY-12 hook registry for ACL/autonomy/taint/sanitise gates, invokes injected typed handlers,
+and returns bounded/sanitised tool results.
 
 Required first failing test:
 
-- Classify each supported envelope kind to one canonical trigger.
-- Reject null, malformed, unknown, or unauthenticated envelopes without guessing a trigger.
-- Prove hostile webhook payload content does not affect the classification or leak into reasons.
-- Prove duplicate wake inputs classify deterministically.
-- Prove scheduled proactive wakes in `TracerDO` go through triage before `startRun`.
-- Assert existing SLICE-3a/3b/3c/4/5 eviction, exactly-once, gate, governor, and scheduler tests
-  still pass.
+- Parse supported provider-shaped tool calls into one canonical tool request.
+- Reject null, malformed, unknown-tool, ACL-denied, and invalid-args requests before handler
+  execution.
+- Prove privileged/tainted calls route through the existing HEY-12 autonomy/taint gate semantics.
+- Prove handler errors return typed failures without leaking internals.
+- Prove `PostToolUse` sanitise/egress safety composes through the hook runner.
+- Assert existing SLICE-3a/3b/3c/4/5, HEY-77, and HEY-12 tests still pass.
 
 Review carry-forward from SLICE-3a/3b/3c/4:
 
@@ -188,7 +193,8 @@ Review carry-forward from SLICE-3a/3b/3c/4:
 - Keep `enqueueOutbox` as the gate-owned commit boundary; the governor never reaches the outbox.
 - Date-scoped counters and cross-date cooldown timestamps have different storage semantics; keep
   them separate (SLICE-3c lesson).
-- Keep HEY-12, HEY-78, HEY-17, and HEY-136 out of the triage PR.
+- Keep HEY-17, HEY-136, Scribe runtime writes, live provider calls, and live channel delivery out
+  of the ToolDispatcher PR.
 
 ## Slice Ladder To First Agent Run
 
@@ -202,9 +208,9 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 
 1. HEY-122 · SLICE-4 Loop Governor — merged via PR #27.
 2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — merged via PR #28 at `061e72c`.
-3. HEY-77 · triage dispatcher single entry — current PR.
-4. HEY-12 · hook registry (9 lifecycle events) — prerequisite for HEY-78/HEY-17 wiring.
-5. HEY-78 · ToolDispatcher + per-trigger ACL.
+3. HEY-77 · triage dispatcher single entry — merged via PR #29 at `a947600`.
+4. HEY-12 · hook registry (9 lifecycle events) — merged via PR #31 at `1b180ef`.
+5. HEY-78 · ToolDispatcher + per-trigger ACL — current next runtime-lane unit.
 6. HEY-17 · LLMProvider via CF AI Gateway, fake-first (production caps wait on HEY-99).
 7. HEY-136 · SLICE-6 run-loop integration — **the first working agent loop**.
 
@@ -244,13 +250,14 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before opening or merging HEY-77, grill these decisions:
+Before opening or merging HEY-78, grill these decisions:
 
-1. Does every supported envelope kind classify from trusted metadata rather than payload content?
-2. Do null, malformed, unauthenticated, and unknown events reject without guessing a trigger?
-3. Does scheduler proactive wake classification go through the triage seam before `startRun`?
-4. Are `journal` and `handoff` alarm wakes tied to an existing run trigger rather than a new one?
-5. Did the PR avoid hook registry, ToolDispatcher ACL, sanitiser placement, model routing, and live
-   channel wiring?
-6. Which files are single-writer for HEY-77, and which fake-eval/channel tasks can run in parallel
+1. Does every supported provider/tool-call shape parse into one canonical tool request?
+2. Do null, malformed, unknown-tool, ACL-denied, and invalid-args requests halt before handlers?
+3. Does the dispatcher consume HEY-12 hooks instead of re-declaring ACL, taint, autonomy, or
+   sanitise law?
+4. Does `search_connector` remain fail-closed unless a contract-owned schema lands?
+5. Did the PR avoid LLMProvider, full run loop, Scribe memory writes, live providers, and channel
+   wiring?
+6. Which files are single-writer for HEY-78, and which fake-eval/channel tasks can run in parallel
    without touching them?
