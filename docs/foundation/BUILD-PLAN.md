@@ -140,9 +140,9 @@ a downstream app-surface task against the committed OpenAPI artifact.
   tracer proof behind `RunJournalOutbox` with `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`,
   and `flushOutbox`, plus read-seam parsing and ack-key enforcement.
 - [ ] **Runtime implementation waves** — DeliveryGate + durable multi-kind outbox flusher,
-  `held_candidates` + `loop_progress` DDL, dispatcher hooks/ACL/taint-gate wiring, sanitiser
-  runtime, and full run-FSM wiring. Loop Governor runtime enforcement and the scheduler
-  multiplexer are complete through PR #27 and PR #28.
+  `held_candidates` + `loop_progress` DDL, ToolDispatcher/ACL wiring, sanitiser runtime, and full
+  run-FSM wiring. Loop Governor runtime enforcement, the scheduler multiplexer, triage dispatcher,
+  and hook registry are complete through PR #27, PR #28, PR #29, and PR #31.
   These need real
   `@cloudflare/vitest-pool-workers` tests wherever DO SQLite, alarms, eviction, or crash/resume
   define the invariant.
@@ -207,11 +207,14 @@ git diff --check
 ```
 
 The Phase-D contract spine is ready for runtime implementation. SLICE-3a/HEY-120, SLICE-3b/HEY-121,
-SLICE-3c/HEY-124, SLICE-4/HEY-122, and SLICE-5/HEY-123 are complete; HEY-123 merged via PR #28 at
-`061e72c`. The current local safe unit is **HEY-77: triage dispatcher single entry** on
-`codex/hey-77-triage-dispatcher-single-entry`.
+SLICE-3c/HEY-124, SLICE-4/HEY-122, SLICE-5/HEY-123, HEY-77 triage, and HEY-12 hook registry are
+complete. HEY-123 merged via PR #28 at `061e72c`; HEY-77 merged via PR #29 at `a947600`; HEY-12
+merged via PR #31 at `1b180ef`. The current local safe unit is **HEY-78: ToolDispatcher +
+per-trigger ACL enforcement** from a clean `origin/main` branch.
 
-The HEY-77 PR must keep triage pure, classify only from authenticated envelope metadata, reject
-unknown/malformed events without guessing triggers, and keep hook registry, ToolDispatcher ACL,
-Scribe runtime, model routing beyond the gate, and live channel integrations out of scope. Use
-`docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async pillar map.
+The HEY-78 PR must parse provider-shaped tool calls into the contract-owned tool request surface,
+validate args with existing Zod schemas, enforce `TOOL_PERMISSIONS[session.trigger]`, compose with
+the HEY-12 hook registry, execute injected typed handlers, and return bounded/sanitised results.
+Keep LLMProvider, full run-loop integration, Scribe memory writes, live providers, and channel
+delivery out of scope. Use `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async
+pillar map.
