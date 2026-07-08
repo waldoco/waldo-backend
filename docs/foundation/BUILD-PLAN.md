@@ -142,7 +142,8 @@ a downstream app-surface task against the committed OpenAPI artifact.
 - [ ] **Runtime implementation waves** — DeliveryGate + durable multi-kind outbox flusher,
   `held_candidates` + `loop_progress` DDL, ToolDispatcher/ACL wiring, sanitiser runtime, and full
   run-FSM wiring. Loop Governor runtime enforcement, the scheduler multiplexer, triage dispatcher,
-  and hook registry are complete through PR #27, PR #28, PR #29, and PR #31.
+  and hook registry are complete through PR #27, PR #28, PR #29, and PR #31. HEY-78
+  ToolDispatcher/ACL wiring is open as draft PR #33.
   These need real
   `@cloudflare/vitest-pool-workers` tests wherever DO SQLite, alarms, eviction, or crash/resume
   define the invariant.
@@ -210,11 +211,13 @@ The Phase-D contract spine is ready for runtime implementation. SLICE-3a/HEY-120
 SLICE-3c/HEY-124, SLICE-4/HEY-122, SLICE-5/HEY-123, HEY-77 triage, and HEY-12 hook registry are
 complete. HEY-123 merged via PR #28 at `061e72c`; HEY-77 merged via PR #29 at `a947600`; HEY-12
 merged via PR #31 at `1b180ef`. The current local safe unit is **HEY-78: ToolDispatcher +
-per-trigger ACL enforcement** from a clean `origin/main` branch.
+per-trigger ACL enforcement**, open as draft PR #33 from branch
+`codex/hey-78-tooldispatcher-acl`.
 
 The HEY-78 PR must parse provider-shaped tool calls into the contract-owned tool request surface,
 validate args with existing Zod schemas, enforce `TOOL_PERMISSIONS[session.trigger]`, compose with
 the HEY-12 hook registry, execute injected typed handlers, and return bounded/sanitised results.
 Keep LLMProvider, full run-loop integration, Scribe memory writes, live providers, and channel
-delivery out of scope. Use `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async
-pillar map.
+delivery out of scope. After PR #33 merges, the next runtime-lane unit is HEY-17 LLMProvider via
+CF AI Gateway, fake-first. Use `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current
+async pillar map.
