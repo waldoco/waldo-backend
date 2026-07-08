@@ -21,11 +21,9 @@ Read in this order:
 2. `README.md`
 3. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
 4. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
-5. `docs/foundation/SLICE-3C-HANDOFF.md` (then `SLICE-3B-HANDOFF.md` for the seam invariants)
-6. `docs/foundation/FOUNDATION-HANDOVER.md`
-7. `docs/foundation/BUILD-PLAN.md`
-8. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-9. The Waldo Brain source files listed in the runtime build plan for the seam being grilled.
+5. `docs/foundation/BUILD-PLAN.md`
+6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
+7. The Waldo Brain source files listed in the runtime build plan for the seam being grilled.
 
 Then run the baseline gate before planning claims or edits:
 
@@ -42,7 +40,7 @@ git diff --check
   DeliveryGate, Loop Governor, and the HEY-123 scheduler/alarm multiplexer merged in PR #28.
 - SLICE-3a/HEY-120 is complete: PR #21 proved crash-after-send-before-ack resume without duplicate physical delivery in real `@cloudflare/vitest-pool-workers` tests.
 - SLICE-3b/HEY-121 is complete: `RunJournalOutbox` exposes `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`, with durable read parsing and ack-key enforcement.
-- SLICE-3c/HEY-124 is complete: the DeliveryGate runtime enforces ADR-0068 caps, budgets, cooldowns, sub-kind caps, held candidates, and gate reasons atomically inside the GATED commit. Acceptance residue (property tests, timezone state, quiet hours, Pro Max, race case) is listed in `SLICE-3C-HANDOFF.md` and awaits a founder placement call.
+- SLICE-3c/HEY-124 is complete: the DeliveryGate runtime enforces ADR-0068 caps, budgets, cooldowns, sub-kind caps, held candidates, and gate reasons atomically inside the GATED commit. Acceptance residue (property tests, timezone state, quiet hours, Pro Max, race case) is preserved in `docs/foundation/archive/SLICE-3C-HANDOFF.md` and awaits a founder placement call.
 - HEY-122/SLICE-4 is complete and merged via PR #27.
 - HEY-123/SLICE-5 is complete and merged via PR #28. It proves one Durable Object alarm entrypoint
   can dispatch due run resume, outbox retry, and scheduled proactive wake rows through durable
@@ -112,7 +110,7 @@ Acceptance:
 | Pillar | Can start? | Main owner | Notes |
 | --- | --- | --- | --- |
 | Run Journal + Outbox | Complete through PR #23 | Codex/runtime | Preserve; expand only if a slice exposes a real gap. |
-| DeliveryGate Runtime | Complete through PR #24 | Codex/runtime | Residue in `SLICE-3C-HANDOFF.md` awaits a placement call. |
+| DeliveryGate Runtime | Complete through PR #24 | Codex/runtime | Residue in `docs/foundation/archive/SLICE-3C-HANDOFF.md` awaits a placement call. |
 | Scheduler Multiplexer | Complete through PR #28 | Codex/scheduler | HEY-123/SLICE-5: alarm pop, recurrence, retry, quarantine, stale-run wake proof. Held-candidate wakeup + quiet-end re-admission policy remains later wiring. |
 | Loop Governor Runtime | Complete through PR #27 | Codex/policy runtime | HEY-122/SLICE-4: deterministic admission, budget kill, stuck-loop guard. |
 | Dispatcher + Hooks + ACL + Sanitiser | HEY-77 active | Codex/security runtime | HEY-77 owns triage only. Hook registry, ToolDispatcher ACL, and sanitiser placement remain later PRs. |
@@ -181,4 +179,6 @@ After HEY-77 merge:
 
 ## Archived Docs
 
-Historical Phase A/B/D handoffs and old Codex review notes are under `docs/foundation/archive/`. They are useful for archaeology, not current planning. Do not use them as the active next-session plan.
+Historical Phase A/B/D handoffs, the foundation handover, slice handoffs, and old Codex review
+notes are under `docs/foundation/archive/`. They are useful for archaeology and slice-specific
+lessons, not current planning. Do not use them as the active next-session plan.
