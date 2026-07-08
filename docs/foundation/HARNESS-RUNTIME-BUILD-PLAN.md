@@ -139,31 +139,51 @@ The slice promoted the tracer-proven behavior behind `RunJournalOutbox`, preserv
 exactly-once delivery proof, adds Workers tests for the promoted interface across eviction, and
 enforces durable row parsing plus sink request/ack parsing at the runtime seam.
 
-Remaining after PR #23: DeliveryGate runtime state, multi-kind outbox, retry exhaustion
-policy, notification-log mirror, full FSM expansion, scheduler multiplexer, Loop Governor runtime,
-dispatcher, Scribe runtime, and live provider/channel integration.
+**SLICE-3c/HEY-124: DeliveryGate runtime policy state** landed in PR #24 at `5789b42`.
+
+The slice promoted ADR-0068 policy state onto the promoted journal/outbox seam: per-class daily
+caps, counted APNs budget keyed by local date, exempt-but-counted telemetry, event-scoped
+cooldowns, adjustment sub-kind caps, held-candidate freeze plus a callable `releaseHeld`, a closed
+`gate_reason` vocabulary on every non-send verdict, and DO-local schema migration — with the GATED
+commit atomic and the SLICE-3a/3b proofs preserved. Verify green at merge: contracts 1,163 /
+runtime 46 / 10 guards.
+
+Acceptance residue from HEY-124 (details in `SLICE-3C-HANDOFF.md`): the fast-check property tests
+named in the acceptance bar were not written (example-based coverage only); day boundaries use the
+UTC fallback because user timezone state does not exist yet; quiet-hours runtime and `sync_error`
+`exempt_after_h` escalation wait on user-settings and scheduler slices; the Pro Max tier case and
+the last-budget-slot race case are untested.
+
+Remaining after PR #24: multi-kind outbox flusher, retry exhaustion policy, notification-log
+mirror, full FSM expansion, scheduler multiplexer, Loop Governor runtime, dispatcher, Scribe
+runtime, and live provider/channel integration.
 
 ## Next Slice
 
-Build **SLICE-3c/HEY-124: promote DeliveryGate runtime onto the journal/outbox interface**.
+Build **SLICE-4/HEY-122: Loop Governor deterministic gate** (ADR-0074).
 
-The next PR should move from the tracer's proof-shaped gate into a runtime DeliveryGate seam without
-adopting scheduler, dispatcher, Scribe, real LLMs, live channels, or app-feed code.
+The governor decides whether a loop may execute; DeliveryGate remains the separate module that
+decides whether a candidate sends. Consume `packages/contracts/src/runtime/loop-policy.ts`
+(`LOOP_POLICIES`, `lookupLoopPolicy`, `admit`) — do not invent runtime policy constants. The
+tracer's reduced `GOVERNOR_ADMITTED` admission is the seam this slice makes real.
 
 Required first failing test:
 
-- Drive DeliveryGate runtime state through the promoted journal/outbox interface.
-- Assert the gate commit keeps verdict, class-state accounting, and outbox intent atomic.
-- Assert ADR-0068 budget/cooldown/held-candidate behavior is enforced by runtime code, not only
-  contract tests.
-- Assert existing SLICE-3a/3b eviction, duplicate-send, corrupt-row, and ack-key tests still pass.
+- Drive a loop admission decision through runtime code consuming the loop-policy contract.
+- Assert allowed, held, and blocked loop decisions are deterministic and outside the LLM —
+  including Fetch-over-Brief priority, budget kill, and stuck-loop cases.
+- Assert governor state survives eviction: a killed run stays killed on resume.
+- Assert no budget decrement or outbox insert occurs inside the governor module.
+- Assert existing SLICE-3a/3b/3c eviction, exactly-once, and gate tests still pass.
 
-Review carry-forward from SLICE-3a/3b:
+Review carry-forward from SLICE-3a/3b/3c:
 
-- Promote only production-shaped journal/outbox code; leave crash knobs and tracer fixture helpers in tests.
-- Sanitize or normalize persisted `last_error` before real provider sinks exist.
-- Keep the sink idempotency contract explicit at the wiring seam.
-- Keep `enqueueOutbox` as a gate-owned commit boundary, not a free-standing row insert.
+- Promote only production-shaped code; leave crash knobs and fixture helpers in tests.
+- The Art-9 egress floor reuses `RAW_SENSOR_PATTERNS` from `packages/contracts/src/memory/sanitise.ts`;
+  do not declare another copy.
+- Keep `enqueueOutbox` as the gate-owned commit boundary; the governor never reaches the outbox.
+- Date-scoped counters and cross-date cooldown timestamps have different storage semantics; keep
+  them separate (SLICE-3c lesson).
 
 ## Parallel Assignment Packet
 
@@ -183,13 +203,15 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before coding SLICE-3c, grill these decisions:
+Before coding SLICE-4, grill these decisions:
 
-1. What is the smallest DeliveryGate runtime state that proves ADR-0068 without pulling in the full
-   scheduler or product channels?
-2. Which budget, cooldown, and held-candidate rows must commit with the gate verdict?
-3. How does the gate call `enqueueOutbox` without weakening the SLICE-3b transaction boundary?
-4. Which malformed policy/class-state rows fail closed before an outbox intent exists?
-5. Which parts of multi-kind outbox belong in SLICE-3c versus the later flusher/retry slice?
-6. Which files are single-writer for HEY-124, and which fake-eval/channel tasks can run in parallel
+1. What is the smallest Loop Governor runtime state that proves ADR-0074 without the scheduler or
+   the full run FSM?
+2. Where do `loop_progress` rows live and what exactly does the cross-run no-progress guard
+   (`isStuck`) read?
+3. How does the governor hand off to DeliveryGate without sharing state or transaction scope?
+4. Which malformed loop-policy or progress rows fail closed before a loop executes?
+5. Where does the HEY-124 acceptance residue land: a hardening slice, or folded into SLICE-4/5
+   scopes (property tests · timezone state · quiet hours · Pro Max · race case)?
+6. Which files are single-writer for HEY-122, and which fake-eval/channel tasks can run in parallel
    without touching them?
