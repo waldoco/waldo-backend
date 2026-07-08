@@ -9,11 +9,11 @@
 > runtime build branch. Use `NEXT-SESSION-PLAN.md`, `SLICE-3B-HANDOFF.md`, and
 > `HARNESS-RUNTIME-BUILD-PLAN.md` for the next active SLICE-3c session.
 >
-> Status note as of 2026-07-08: this handover is historical background. Current runtime state has
-> advanced through SLICE-3c/HEY-124 and SLICE-4/HEY-122, and HEY-123/SLICE-5 scheduler/alarm
-> multiplexer is implemented locally on `codex/hey-123-scheduler-alarm-multiplexer`, pending
-> review/PR/merge. Use `NEXT-SESSION-PLAN.md` and `HARNESS-RUNTIME-BUILD-PLAN.md` for active
-> runtime-lane status.
+> Status note as of 2026-07-09 IST: this handover is historical background. Current runtime state
+> has advanced through SLICE-3c/HEY-124, SLICE-4/HEY-122, HEY-123/SLICE-5, HEY-77, HEY-12, and
+> HEY-78/PR #33. HEY-17 LLMProvider routing is the active runtime-lane unit on
+> `codex/hey-17-llmprovider-routing`; HEY-136 starts only after HEY-17 is accepted or merged. Use
+> `NEXT-SESSION-PLAN.md` and `HARNESS-RUNTIME-BUILD-PLAN.md` for active runtime-lane status.
 
 ---
 
@@ -38,8 +38,8 @@
 the promoted journal/outbox seam is now unblocked by PR #23. SLICE-3a landed the durable
 exactly-once *delivery* proof under real `@cloudflare/vitest-pool-workers` eviction/resume
 (`packages/runtime/test/outbox-delivery.test.ts`), and PR #23 promoted that proof into
-`RunJournalOutbox`. As of 2026-07-08, the current runtime unit is HEY-123/SLICE-5 review and PR for
-the scheduler/alarm multiplexer; do not use this historical handover as the active next-slice plan.
+`RunJournalOutbox`. As of 2026-07-09 IST, the active runtime unit is HEY-17 LLMProvider routing;
+do not use this historical handover as the active next-slice plan.
 
 ---
 

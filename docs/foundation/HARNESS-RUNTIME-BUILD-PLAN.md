@@ -85,17 +85,17 @@ Built:
 - HEY-123/SLICE-5 scheduler/alarm multiplexer landed in PR #28 at `061e72c`.
 - HEY-77 triage dispatcher landed in PR #29 at `a947600`.
 - HEY-12 hook registry landed in PR #31 at `1b180ef`.
+- HEY-78 ToolDispatcher + per-trigger ACL enforcement landed in PR #33 at `600fb34`.
+- HEY-17 LLMProvider routing seam is in the current branch, fake-first and contract-owned.
 - Static guard wall and pinned verification command.
 
 Not built:
 
 - Full run FSM runtime.
 - Durable multi-kind DeliveryGate/outbox flusher and retry exhaustion policy.
-- ToolDispatcher/ACL runtime beyond the HEY-12 hook seam.
 - Scribe/sanitiser runtime implementation beyond injected hook callbacks.
 - Context builder/prompt hydration runtime.
-- LLM provider runtime.
-- Real channel sinks, Telegram ingress, app feed, live chat.
+- Live provider calls, real channel sinks, Telegram ingress, app feed, live chat.
 - Scenario/property/mutation/live evidence runners.
 
 ## Build Strategy
@@ -156,34 +156,36 @@ UTC fallback because user timezone state does not exist yet; quiet-hours runtime
 `exempt_after_h` escalation wait on user-settings and scheduler slices; the Pro Max tier case and
 the last-budget-slot race case are untested.
 
-Remaining after PR #31: multi-kind outbox flusher, retry exhaustion policy, notification-log
-mirror, full FSM expansion, ToolDispatcher/ACL integration, Scribe runtime, and live
+Remaining after HEY-17 lands: multi-kind outbox flusher, retry exhaustion policy,
+notification-log mirror, full FSM expansion, Scribe runtime, context/prompt hydration, and live
 provider/channel integration. HEY-123/SLICE-5 scheduler/alarm multiplexer is merged via PR #28 at
 `061e72c`; HEY-77 triage dispatcher is merged via PR #29 at `a947600`; HEY-12 hook registry is
-merged via PR #31 at `1b180ef`; HEY-78 ToolDispatcher + per-trigger ACL is open as draft PR #33.
+merged via PR #31 at `1b180ef`; HEY-78 ToolDispatcher + per-trigger ACL is merged via PR #33 at
+`600fb34`. HEY-17 is the current fake-first LLMProvider routing branch and keeps live provider
+credentials out of scope.
 
 ## Next Slice
 
-Review and merge **HEY-78: ToolDispatcher + per-trigger ACL enforcement** in draft PR #33
-(ADR-0008, ADR-0021, ADR-0029, ADR-0032, ADR-0049; `packages/contracts/src/tools/*`,
-`packages/contracts/src/runtime/session.ts`, `packages/runtime/src/hooks/registry.ts`).
+Review and merge **HEY-17: LLMProvider via CF AI Gateway, fake-first** (ADR-0004, ADR-0069,
+ADR-0051; `packages/contracts/src/runtime/routing.ts`,
+`packages/contracts/src/adapters/llm.ts`, `packages/runtime/src/hooks/registry.ts`).
 
-The ToolDispatcher is the single runtime owner for provider-shaped tool-call execution. It parses
-model/provider call envelopes into the contract-owned `ToolName` + args surface, enforces
-`TOOL_PERMISSIONS[session.trigger]`, validates args with the existing tool schemas, composes with
-the HEY-12 hook registry for ACL/autonomy/taint/sanitise gates, invokes injected typed handlers,
-and returns bounded/sanitised tool results. PR #33 implements this with injected handlers only; it
-does not add HEY-17 provider calls, HEY-136 run-loop wiring, Scribe runtime writes, or live channel
-delivery.
+The LLMProvider is the single runtime owner for model route selection and gateway-call fallback.
+It consumes contract-owned routing and LLM schemas, shapes calls for Cloudflare AI Gateway with
+constant privacy headers, composes with the HEY-12 PreLLMCall/PostLLMCall hooks, and returns only
+bounded model text plus metering. The current slice is fake-first: injected gateway adapters prove
+the behavior without live provider calls, credentials, prompt logging, memory writes, or run-loop
+wiring.
 
 Required first failing test:
 
-- Parse supported provider-shaped tool calls into one canonical tool request.
-- Reject null, malformed, unknown-tool, ACL-denied, and invalid-args requests before handler
-  execution.
-- Prove privileged/tainted calls route through the existing HEY-12 autonomy/taint gate semantics.
-- Prove handler errors return typed failures without leaking internals.
-- Prove `PostToolUse` sanitise/egress safety composes through the hook runner.
+- Select a contract-owned route for every trigger and reject unknown triggers.
+- Prove provider/model swaps are config-driven by routing policy.
+- Prove gateway headers are constant and payload logging stays disabled.
+- Prove fallback order: configured model full context, configured model reduced context, gateway
+  fallback chain, then route floor behavior.
+- Prove circuit breaker scope/cooldown, spend-cap degradation, template fallback, and PostLLMCall
+  sanitise/halt behavior.
 - Assert existing SLICE-3a/3b/3c/4/5, HEY-77, and HEY-12 tests still pass.
 
 Review carry-forward from SLICE-3a/3b/3c/4:
@@ -194,8 +196,8 @@ Review carry-forward from SLICE-3a/3b/3c/4:
 - Keep `enqueueOutbox` as the gate-owned commit boundary; the governor never reaches the outbox.
 - Date-scoped counters and cross-date cooldown timestamps have different storage semantics; keep
   them separate (SLICE-3c lesson).
-- Keep HEY-17, HEY-136, Scribe runtime writes, live provider calls, and live channel delivery out
-  of the ToolDispatcher PR.
+- Keep HEY-136, Scribe runtime writes, memory/context hydration, live provider calls, and live
+  channel delivery out of the LLMProvider PR.
 
 ## Slice Ladder To First Agent Run
 
@@ -203,7 +205,8 @@ Finalized 2026-07-08 (founder-directed). The target event is **SLICE-6/HEY-136**
 walking the full contract FSM (`PENDING -> CONTEXT_BUILT -> LLM_CALLED -> TOOLS_DONE -> GATED ->
 DELIVERED -> DONE`, pinned in `packages/contracts/src/runtime/run.ts`) from a scheduled wake to a
 fake-sink delivery with a trace assertion — loop-anatomy parity with pi/Hermes on the DO substrate.
-The fake-to-real flip afterward is HEY-17 route config, gated only by the HEY-99 spend-cap decision.
+HEY-17 installs the fake-first provider seam before SLICE-6; the live provider flip remains gated
+by the HEY-99 spend-cap decision and explicit credential work.
 
 Codex runtime lane (strict order — one runtime writer at a time on `packages/runtime/src/*`):
 
@@ -211,9 +214,9 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — merged via PR #28 at `061e72c`.
 3. HEY-77 · triage dispatcher single entry — merged via PR #29 at `a947600`.
 4. HEY-12 · hook registry (9 lifecycle events) — merged via PR #31 at `1b180ef`.
-5. HEY-78 · ToolDispatcher + per-trigger ACL — draft PR #33 in review.
-6. HEY-17 · LLMProvider via CF AI Gateway, fake-first (production caps wait on HEY-99) — next after PR #33 merges.
-7. HEY-136 · SLICE-6 run-loop integration — **the first working agent loop**.
+5. HEY-78 · ToolDispatcher + per-trigger ACL — merged via PR #33 at `600fb34`.
+6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — current branch.
+7. HEY-136 · SLICE-6 run-loop integration — **the first working agent loop**, after HEY-17 lands.
 
 Claude context lane (parallel; fake-backed start allowed now):
 
@@ -251,14 +254,12 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before opening or merging HEY-78, grill these decisions:
+Before opening or merging HEY-17, grill these decisions:
 
-1. Does every supported provider/tool-call shape parse into one canonical tool request?
-2. Do null, malformed, unknown-tool, ACL-denied, and invalid-args requests halt before handlers?
-3. Does the dispatcher consume HEY-12 hooks instead of re-declaring ACL, taint, autonomy, or
-   sanitise law?
-4. Does `search_connector` remain fail-closed unless a contract-owned schema lands?
-5. Did the PR avoid LLMProvider, full run loop, Scribe memory writes, live providers, and channel
-   wiring?
-6. Which files are single-writer for HEY-78, and which fake-eval/channel tasks can run in parallel
+1. Does every trigger resolve through contract-owned routing data, including provider swaps?
+2. Does fallback degrade context/model deterministically without logging raw prompts or raw health?
+3. Does spend-cap degradation stay separate from provider health and prompt-injection failure?
+4. Do PostLLMCall hooks gate and sanitise before the model text becomes a tool-call source?
+5. Did the PR avoid HEY-136 run-loop wiring, Scribe memory writes, live credentials, and channels?
+6. Which files are single-writer for HEY-17, and which eval/trace fixtures can run in parallel
    without touching them?
