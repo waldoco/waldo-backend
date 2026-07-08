@@ -14,9 +14,10 @@ import {
   type RunJournalOutboxCrashPoint,
   type StartRunInput,
 } from '../run-journal/outbox-runtime';
-import { type ScheduleEntry, scheduleKindTrigger } from '@waldo/contracts';
+import type { ScheduleEntry } from '@waldo/contracts';
 import { Scheduler, type ScheduleExecutors } from '../scheduler/multiplexer';
 import { productionDeps, type Deps } from '../seams/deps';
+import { triage } from '../triage/dispatcher';
 import { ensureSchema } from './schema';
 import { FakeSink } from './sink';
 
@@ -203,9 +204,17 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
   }
 
   private async startScheduledProactiveRun(entry: ScheduleEntry): Promise<void> {
-    const trigger = scheduleKindTrigger[entry.kind];
-    if (trigger === null) throw new Error(`schedule kind ${entry.kind} cannot start a trigger`);
-    const pushClass = entry.kind === 'brief' ? 'brief' : 'pre_activity_spot';
+    const decision = triage({
+      kind: 'alarm',
+      alarmName: entry.id,
+      scheduleKind: entry.kind,
+    });
+    if (!decision.ok) throw new Error(`triage rejected scheduler wake: ${decision.reason}`);
+    const trigger = decision.trigger;
+    if (trigger !== 'brief' && trigger !== 'pre_activity_spot') {
+      throw new Error(`triage produced non-proactive scheduler trigger: ${trigger}`);
+    }
+    const pushClass = trigger;
     const userId = requiredPayloadRef(entry, 'user_id');
     const runId = this.runtime.startRun({
       userId,

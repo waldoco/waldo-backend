@@ -81,15 +81,15 @@ Built:
 - SLICE-3a/HEY-120 durable outbox proof: crash after sink send and before local ack resumes across DO eviction without duplicate physical delivery, with an explicit idempotent sink contract.
 - SLICE-3b/HEY-121 landed in PR #23 at `f47127f`: journal/outbox behavior is promoted into `RunJournalOutbox` with
   `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
+- HEY-122/SLICE-4 Loop Governor runtime enforcement landed in PR #27.
+- HEY-123/SLICE-5 scheduler/alarm multiplexer landed in PR #28 at `061e72c`.
 - Static guard wall and pinned verification command.
 
 Not built:
 
 - Full run FSM runtime.
 - Durable multi-kind DeliveryGate/outbox flusher and retry exhaustion policy.
-- Scheduler multiplexer.
-- Loop Governor runtime enforcement.
-- Dispatcher/tool runtime.
+- Dispatcher hooks/ACL/tool runtime beyond HEY-77 triage.
 - Scribe/sanitiser runtime placement.
 - Context builder/prompt hydration runtime.
 - LLM provider runtime.
@@ -154,31 +154,31 @@ UTC fallback because user timezone state does not exist yet; quiet-hours runtime
 `exempt_after_h` escalation wait on user-settings and scheduler slices; the Pro Max tier case and
 the last-budget-slot race case are untested.
 
-Remaining after PR #27: multi-kind outbox flusher, retry exhaustion policy, notification-log
-mirror, full FSM expansion, dispatcher, Scribe runtime, and live provider/channel integration.
-HEY-123/SLICE-5 scheduler/alarm multiplexer is implemented locally on
-`codex/hey-123-scheduler-alarm-multiplexer` and awaits review/PR/merge.
+Remaining after PR #28: multi-kind outbox flusher, retry exhaustion policy, notification-log
+mirror, full FSM expansion, dispatcher hooks/ACL/sanitiser, Scribe runtime, and live
+provider/channel integration. HEY-123/SLICE-5 scheduler/alarm multiplexer is merged via PR #28 at
+`061e72c`; HEY-77 triage dispatcher is the current runtime-lane PR.
 
 ## Next Slice
 
-Complete review and PR for **SLICE-5/HEY-123: Scheduler/alarm multiplexer + wake proof**
-(ADR-0065, ADR-0054).
+Complete review and PR for **HEY-77: Triage dispatcher single entry**
+(ADR-0008, ADR-0065, `packages/contracts/src/core/trigger.ts`).
 
-The scheduler is the single runtime owner of logical wake selection. It stores durable schedule rows
-in DO SQLite, preserves the existing guarded alarm-slot seam, and dispatches due work from one
-Durable Object `alarm()` entrypoint. The current local implementation proves due run resume, outbox
-retry, scheduled proactive wake, deterministic selection, eviction survival, duplicate-delivery
-idempotency, product-kind quarantine, stale-run reconciliation, and daily-local DST recurrence.
+The triage dispatcher is the single runtime owner for classifying incoming wake envelopes before
+Governor/ACL/runtime wiring. It maps scheduler alarms, webhooks, user messages, app events, and
+HealthKit background deliveries from authenticated envelope metadata to canonical `TriggerType`
+values or typed rejections. It must not inspect raw message bodies, health values, or untrusted
+payload content.
 
 Required first failing test:
 
-- Dispatch due run resume, outbox retry, and scheduled proactive wake from one alarm.
-- Assert duplicate delivery after success is a no-op.
-- Assert schedule rows survive DO eviction and lost due rows are picked up on a later in-scope wake.
-- Assert product-kind repeated failure quarantines durably without wedging the single alarm slot.
-- Assert due-work selection is deterministic by kind priority, due time, and schedule id.
-- Assert payloads remain typed refs only.
-- Assert existing SLICE-3a/3b/3c/4 eviction, exactly-once, gate, and governor tests still pass.
+- Classify each supported envelope kind to one canonical trigger.
+- Reject null, malformed, unknown, or unauthenticated envelopes without guessing a trigger.
+- Prove hostile webhook payload content does not affect the classification or leak into reasons.
+- Prove duplicate wake inputs classify deterministically.
+- Prove scheduled proactive wakes in `TracerDO` go through triage before `startRun`.
+- Assert existing SLICE-3a/3b/3c/4/5 eviction, exactly-once, gate, governor, and scheduler tests
+  still pass.
 
 Review carry-forward from SLICE-3a/3b/3c/4:
 
@@ -188,7 +188,7 @@ Review carry-forward from SLICE-3a/3b/3c/4:
 - Keep `enqueueOutbox` as the gate-owned commit boundary; the governor never reaches the outbox.
 - Date-scoped counters and cross-date cooldown timestamps have different storage semantics; keep
   them separate (SLICE-3c lesson).
-- Keep HEY-77, HEY-12, HEY-78, HEY-17, and HEY-136 out of the scheduler PR.
+- Keep HEY-12, HEY-78, HEY-17, and HEY-136 out of the triage PR.
 
 ## Slice Ladder To First Agent Run
 
@@ -201,10 +201,8 @@ The fake-to-real flip afterward is HEY-17 route config, gated only by the HEY-99
 Codex runtime lane (strict order — one runtime writer at a time on `packages/runtime/src/*`):
 
 1. HEY-122 · SLICE-4 Loop Governor — merged via PR #27.
-2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — local implementation complete; review/PR/merge
-   next. This slice proves the multiplexer invariant first; held-candidate wakeup and quiet-end
-   re-admission policy wiring stay out unless explicitly re-scoped.
-3. HEY-77 · triage dispatcher single entry.
+2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — merged via PR #28 at `061e72c`.
+3. HEY-77 · triage dispatcher single entry — current PR.
 4. HEY-12 · hook registry (9 lifecycle events) — prerequisite for HEY-78/HEY-17 wiring.
 5. HEY-78 · ToolDispatcher + per-trigger ACL.
 6. HEY-17 · LLMProvider via CF AI Gateway, fake-first (production caps wait on HEY-99).
@@ -246,17 +244,13 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before opening or merging HEY-123, grill these decisions:
+Before opening or merging HEY-77, grill these decisions:
 
-1. Did removing the old tracer one-shot scheduler leave any stale imports or implicit ownership
-   paths?
-2. Are all schedule payloads typed references only, with no prompt text, health values, or raw
-   content in tests/logs/traces?
-3. Does stale-run reconciliation stay narrow enough, or should more journal/outbox wake
-   materialization move into a later retry-policy slice?
-4. Does the daily-local recurrence proof cover enough DST behavior for this slice without building
-   the full cadence matrix?
-5. Where does the HEY-124 acceptance residue land: a hardening slice, or folded into SLICE-4/5
-   scopes (property tests · timezone state · quiet hours · Pro Max · race case)?
-6. Which files are single-writer for HEY-123, and which fake-eval/channel tasks can run in parallel
+1. Does every supported envelope kind classify from trusted metadata rather than payload content?
+2. Do null, malformed, unauthenticated, and unknown events reject without guessing a trigger?
+3. Does scheduler proactive wake classification go through the triage seam before `startRun`?
+4. Are `journal` and `handoff` alarm wakes tied to an existing run trigger rather than a new one?
+5. Did the PR avoid hook registry, ToolDispatcher ACL, sanitiser placement, model routing, and live
+   channel wiring?
+6. Which files are single-writer for HEY-77, and which fake-eval/channel tasks can run in parallel
    without touching them?

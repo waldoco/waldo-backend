@@ -139,9 +139,10 @@ a downstream app-surface task against the committed OpenAPI artifact.
 - [x] **SLICE-3b promoted journal/outbox interface (HEY-121 / PR #23)** — PR #23 landed at `f47127f` and promotes the
   tracer proof behind `RunJournalOutbox` with `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`,
   and `flushOutbox`, plus read-seam parsing and ack-key enforcement.
-- [ ] **Runtime implementation waves** — governor comparator/budget/kill/no-progress enforcement,
-  DeliveryGate + durable multi-kind outbox flusher, `held_candidates` + `loop_progress` DDL,
-  scheduler multiplexer, dispatcher taint-gate wiring, sanitiser runtime, and full run-FSM wiring.
+- [ ] **Runtime implementation waves** — DeliveryGate + durable multi-kind outbox flusher,
+  `held_candidates` + `loop_progress` DDL, dispatcher hooks/ACL/taint-gate wiring, sanitiser
+  runtime, and full run-FSM wiring. Loop Governor runtime enforcement and the scheduler
+  multiplexer are complete through PR #27 and PR #28.
   These need real
   `@cloudflare/vitest-pool-workers` tests wherever DO SQLite, alarms, eviction, or crash/resume
   define the invariant.
@@ -206,12 +207,11 @@ git diff --check
 ```
 
 The Phase-D contract spine is ready for runtime implementation. SLICE-3a/HEY-120, SLICE-3b/HEY-121,
-SLICE-3c/HEY-124, and SLICE-4/HEY-122 are complete. The current local safe unit is
-**SLICE-5/HEY-123: scheduler/alarm multiplexer + wake proof** on
-`codex/hey-123-scheduler-alarm-multiplexer`, pending review/PR/merge.
+SLICE-3c/HEY-124, SLICE-4/HEY-122, and SLICE-5/HEY-123 are complete; HEY-123 merged via PR #28 at
+`061e72c`. The current local safe unit is **HEY-77: triage dispatcher single entry** on
+`codex/hey-77-triage-dispatcher-single-entry`.
 
-The HEY-123 PR must preserve the single guarded `setAlarm` seam, keep schedule state durable in DO
-SQLite, dispatch due run resume/outbox retry/proactive wake rows from one alarm entrypoint, and keep
-payloads to typed references only. Keep HEY-77, HEY-12, HEY-78, HEY-17, HEY-136, Scribe runtime,
-model routing beyond the gate, and live channel integrations out of that PR. Use
+The HEY-77 PR must keep triage pure, classify only from authenticated envelope metadata, reject
+unknown/malformed events without guessing triggers, and keep hook registry, ToolDispatcher ACL,
+Scribe runtime, model routing beyond the gate, and live channel integrations out of scope. Use
 `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async pillar map.
