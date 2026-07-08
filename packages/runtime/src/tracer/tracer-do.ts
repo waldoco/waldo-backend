@@ -1,5 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { JournalRow, OutboxRow } from '@waldo/contracts';
+import type {
+  GovernorDecision,
+  LoopEgressInput,
+  LoopObservationInput,
+  LoopUsageInput,
+  SetLoopKillFlagInput,
+} from '../loop-governor/governor';
 import {
   type EnqueueOutboxInput,
   type ReleaseHeldInput,
@@ -51,6 +58,26 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
 
   async resumeRun(runId: string): Promise<JournalRow | null> {
     return this.runtime.resumeRun(runId);
+  }
+
+  async admitRun(runId: string): Promise<GovernorDecision> {
+    return this.runtime.admitRun(runId);
+  }
+
+  async recordLoopUsage(input: LoopUsageInput): Promise<GovernorDecision> {
+    return this.runtime.recordLoopUsage(input);
+  }
+
+  async recordLoopObservation(input: LoopObservationInput): Promise<GovernorDecision> {
+    return this.runtime.recordLoopObservation(input);
+  }
+
+  async checkLoopEgress(input: LoopEgressInput): Promise<GovernorDecision> {
+    return this.runtime.checkLoopEgress(input);
+  }
+
+  async setLoopKillFlag(input: SetLoopKillFlagInput): Promise<void> {
+    this.runtime.setLoopKillFlag(input);
   }
 
   async tickRun(runId: string): Promise<void> {
