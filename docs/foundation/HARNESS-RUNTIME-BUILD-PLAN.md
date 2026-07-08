@@ -29,13 +29,15 @@ Primary backend sources:
 
 | Source | Why it matters |
 | --- | --- |
-| `docs/foundation/FOUNDATION-HANDOVER.md` | Current done-vs-unbuilt map and single-writer rules. |
 | `docs/foundation/BUILD-PLAN.md` | Contract-spine build order and current runtime dependency layer. |
 | `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md` | Verification wall and runtime/evidence testing standard. |
 | `docs/foundation/AGENT-OPERATING-WORKFLOW.md` | Session loop, skill map, plugin boundaries, and verification wall. |
 | `packages/contracts/src/index.ts` | Barrel for the implemented contract spine. |
 | `packages/runtime/src/tracer/tracer-do.ts` | Only executing runtime slice today. |
 | `packages/runtime/test/tracer.test.ts` | Workerd crash/resume proof for the tracer path. |
+
+Historical backend sources live under `docs/foundation/archive/`. Use archived slice handoffs only
+for slice-specific lessons; they are not active planning entrypoints.
 
 Research inputs used:
 
@@ -148,11 +150,11 @@ cooldowns, adjustment sub-kind caps, held-candidate freeze plus a callable `rele
 commit atomic and the SLICE-3a/3b proofs preserved. Verify green at merge: contracts 1,163 /
 runtime 46 / 10 guards.
 
-Acceptance residue from HEY-124 (details in `SLICE-3C-HANDOFF.md`): the fast-check property tests
-named in the acceptance bar were not written (example-based coverage only); day boundaries use the
-UTC fallback because user timezone state does not exist yet; quiet-hours runtime and `sync_error`
-`exempt_after_h` escalation wait on user-settings and scheduler slices; the Pro Max tier case and
-the last-budget-slot race case are untested.
+Acceptance residue from HEY-124 (preserved in `docs/foundation/archive/SLICE-3C-HANDOFF.md`): the
+fast-check property tests named in the acceptance bar were not written (example-based coverage
+only); day boundaries use the UTC fallback because user timezone state does not exist yet;
+quiet-hours runtime and `sync_error` `exempt_after_h` escalation wait on user-settings and
+scheduler slices; the Pro Max tier case and the last-budget-slot race case are untested.
 
 Remaining after PR #28: multi-kind outbox flusher, retry exhaustion policy, notification-log
 mirror, full FSM expansion, dispatcher hooks/ACL/sanitiser, Scribe runtime, and live
