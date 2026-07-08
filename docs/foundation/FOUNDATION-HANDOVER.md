@@ -11,7 +11,7 @@
 >
 > Status note as of 2026-07-09 IST: this handover is historical background. Current runtime state
 > has advanced through SLICE-3c/HEY-124, SLICE-4/HEY-122, HEY-123/SLICE-5, HEY-77, HEY-12, and
-> HEY-78/PR #33. HEY-17 LLMProvider routing is the active runtime-lane unit on
+> HEY-78/PR #33. HEY-17 LLMProvider routing is the active runtime-lane unit in draft PR #34 on
 > `codex/hey-17-llmprovider-routing`; HEY-136 starts only after HEY-17 is accepted or merged. Use
 > `NEXT-SESSION-PLAN.md` and `HARNESS-RUNTIME-BUILD-PLAN.md` for active runtime-lane status.
 
@@ -38,8 +38,8 @@
 the promoted journal/outbox seam is now unblocked by PR #23. SLICE-3a landed the durable
 exactly-once *delivery* proof under real `@cloudflare/vitest-pool-workers` eviction/resume
 (`packages/runtime/test/outbox-delivery.test.ts`), and PR #23 promoted that proof into
-`RunJournalOutbox`. As of 2026-07-09 IST, the active runtime unit is HEY-17 LLMProvider routing;
-do not use this historical handover as the active next-slice plan.
+`RunJournalOutbox`. As of 2026-07-09 IST, the active runtime unit is HEY-17 LLMProvider routing in
+draft PR #34; do not use this historical handover as the active next-slice plan.
 
 ---
 

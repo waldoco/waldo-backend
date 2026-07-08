@@ -143,7 +143,7 @@ a downstream app-surface task against the committed OpenAPI artifact.
   `held_candidates` + `loop_progress` DDL, sanitiser runtime, live provider flip, and full
   run-FSM wiring. Loop Governor runtime enforcement, the scheduler multiplexer, triage dispatcher,
   hook registry, and ToolDispatcher/ACL wiring are complete through PR #27, PR #28, PR #29, PR #31,
-  and PR #33. HEY-17 LLMProvider routing is the current fake-first runtime slice.
+  and PR #33. HEY-17 LLMProvider routing is the current fake-first runtime slice in draft PR #34.
   These need real
   `@cloudflare/vitest-pool-workers` tests wherever DO SQLite, alarms, eviction, or crash/resume
   define the invariant.
@@ -211,8 +211,8 @@ The Phase-D contract spine is ready for runtime implementation. SLICE-3a/HEY-120
 SLICE-3c/HEY-124, SLICE-4/HEY-122, SLICE-5/HEY-123, HEY-77 triage, HEY-12 hook registry, and
 HEY-78 ToolDispatcher/ACL are complete. HEY-123 merged via PR #28 at `061e72c`; HEY-77 merged via
 PR #29 at `a947600`; HEY-12 merged via PR #31 at `1b180ef`; HEY-78 merged via PR #33 at `600fb34`.
-The current local safe unit is **HEY-17: LLMProvider via CF AI Gateway, fake-first** on branch
-`codex/hey-17-llmprovider-routing`.
+The current local safe unit is **HEY-17: LLMProvider via CF AI Gateway, fake-first** in draft
+PR #34 on branch `codex/hey-17-llmprovider-routing`.
 
 The HEY-17 PR must select contract-owned model routes, shape fake-first Cloudflare AI Gateway calls
 with constant privacy headers, prove deterministic fallback/circuit/spend-cap behavior, compose with

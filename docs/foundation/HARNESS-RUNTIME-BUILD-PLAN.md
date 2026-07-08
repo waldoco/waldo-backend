@@ -86,7 +86,7 @@ Built:
 - HEY-77 triage dispatcher landed in PR #29 at `a947600`.
 - HEY-12 hook registry landed in PR #31 at `1b180ef`.
 - HEY-78 ToolDispatcher + per-trigger ACL enforcement landed in PR #33 at `600fb34`.
-- HEY-17 LLMProvider routing seam is in the current branch, fake-first and contract-owned.
+- HEY-17 LLMProvider routing seam is in draft PR #34, fake-first and contract-owned.
 - Static guard wall and pinned verification command.
 
 Not built:
@@ -161,13 +161,13 @@ notification-log mirror, full FSM expansion, Scribe runtime, context/prompt hydr
 provider/channel integration. HEY-123/SLICE-5 scheduler/alarm multiplexer is merged via PR #28 at
 `061e72c`; HEY-77 triage dispatcher is merged via PR #29 at `a947600`; HEY-12 hook registry is
 merged via PR #31 at `1b180ef`; HEY-78 ToolDispatcher + per-trigger ACL is merged via PR #33 at
-`600fb34`. HEY-17 is the current fake-first LLMProvider routing branch and keeps live provider
-credentials out of scope.
+`600fb34`. HEY-17 is the current fake-first LLMProvider routing draft PR #34 and keeps live
+provider credentials out of scope.
 
 ## Next Slice
 
-Review and merge **HEY-17: LLMProvider via CF AI Gateway, fake-first** (ADR-0004, ADR-0069,
-ADR-0051; `packages/contracts/src/runtime/routing.ts`,
+Review and merge **HEY-17: LLMProvider via CF AI Gateway, fake-first** in draft PR #34
+(ADR-0004, ADR-0069, ADR-0051; `packages/contracts/src/runtime/routing.ts`,
 `packages/contracts/src/adapters/llm.ts`, `packages/runtime/src/hooks/registry.ts`).
 
 The LLMProvider is the single runtime owner for model route selection and gateway-call fallback.
@@ -215,7 +215,7 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 3. HEY-77 · triage dispatcher single entry — merged via PR #29 at `a947600`.
 4. HEY-12 · hook registry (9 lifecycle events) — merged via PR #31 at `1b180ef`.
 5. HEY-78 · ToolDispatcher + per-trigger ACL — merged via PR #33 at `600fb34`.
-6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — current branch.
+6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — draft PR #34.
 7. HEY-136 · SLICE-6 run-loop integration — **the first working agent loop**, after HEY-17 lands.
 
 Claude context lane (parallel; fake-backed start allowed now):

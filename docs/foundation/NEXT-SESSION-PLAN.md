@@ -1,6 +1,6 @@
 # Next Session Plan - Harness Runtime HEY-17 Review
 
-Status: active entrypoint for HEY-17 LLMProvider review and HEY-136 prep after merge.
+Status: active entrypoint for HEY-17 draft PR #34 review and HEY-136 prep after merge.
 Date: 2026-07-09 IST.
 Baseline: SLICE-3a/HEY-120 merged in PR #21, SLICE-3b/HEY-121 merged in PR #23 at
 `f47127f`, SLICE-3c/HEY-124 merged in PR #24 at `5789b42`, HEY-122/SLICE-4 merged in
@@ -8,7 +8,8 @@ PR #27, HEY-123/SLICE-5 merged in PR #28 at `061e72c`, HEY-77 triage dispatcher 
 in PR #29 at `a947600`, HEY-12 hook registry merged in PR #31 at `1b180ef`, and HEY-78
 ToolDispatcher + per-trigger ACL enforcement merged in PR #33 at `600fb34`.
 
-HEY-17 is the current runtime-lane unit on branch `codex/hey-17-llmprovider-routing`. It
+HEY-17 is the current runtime-lane unit in draft PR #34 on branch
+`codex/hey-17-llmprovider-routing`. It
 adds the fake-first LLMProvider routing seam behind contract-owned model routes and Cloudflare AI
 Gateway request policy. HEY-136 must not start until HEY-17 is accepted or merged.
 
@@ -140,7 +141,7 @@ Safe parallel lanes:
 
 Immediate plan:
 
-1. Review HEY-17 LLMProvider routing seam.
+1. Review draft PR #34 for the HEY-17 LLMProvider routing seam.
 2. Confirm validation remains green: runtime `llm-provider` tests, workspace typecheck,
    `npx -y pnpm@10.34.4 verify`, `git diff --check`, check-contract, and break-feature.
 3. Keep HEY-136, Scribe runtime, memory/context hydration, live providers, and live channels out
