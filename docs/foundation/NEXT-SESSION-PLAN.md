@@ -1,14 +1,17 @@
-# Next Session Plan - Harness Runtime SLICE-4 Build
+# Next Session Plan - Harness Runtime SLICE-5 Build
 
-Status: active entrypoint for the Waldo backend SLICE-4 Loop Governor runtime build.
-Date: 2026-07-07.
+Status: active entrypoint for the Waldo backend SLICE-5 scheduler/alarm multiplexer review and PR.
+Date: 2026-07-08.
 Baseline: SLICE-3a/HEY-120 merged in PR #21, SLICE-3b/HEY-121 merged in PR #23 at `f47127f`, and
-SLICE-3c/HEY-124 merged in PR #24 at `5789b42`.
+SLICE-3c/HEY-124 merged in PR #24 at `5789b42`. HEY-122/SLICE-4 Loop Governor merged via PR #27;
+`origin/main` is at or after `bef73fa`.
 
 The durable delivery spine is real: journal/outbox resume is proven, the promoted `RunJournalOutbox`
-interface owns the commit boundary, and the DeliveryGate runtime enforces ADR-0068 policy state.
-The current session should build the ADR-0074 Loop Governor seam on top, without pulling in
-scheduler, dispatcher, Scribe, real providers, or live channels.
+interface owns the commit boundary, the DeliveryGate runtime enforces ADR-0068 policy state, and
+the Loop Governor runtime seam is merged. The current local branch
+`codex/hey-123-scheduler-alarm-multiplexer` implements SLICE-5/HEY-123; the next action is review,
+PR preparation, and merge discipline. Do not start HEY-77, HEY-12, HEY-78, HEY-17, HEY-136, or later
+runtime-lane work from this document until HEY-123 has been reviewed and merged.
 
 ## Start Here
 
@@ -35,11 +38,17 @@ git diff --check
 
 - The Waldo Brain architecture is no longer an open research problem for V1. It calls for a per-user Cloudflare Durable Object running a resumable, journaled, deterministically governed agent loop.
 - The backend contract spine is broad and real: contracts exist for runtime run/session/schedule/goal/outbox/policy, tools, memory, prompt, model routing, adapters, public DTO/OpenAPI, telemetry, and evidence lanes.
-- The backend runtime is still mostly skeletal. The executing harness path now uses the promoted `RunJournalOutbox` seam from PR #23.
+- The backend runtime is still incomplete, but the runtime spine now includes journal/outbox,
+  DeliveryGate, Loop Governor, and a local HEY-123 scheduler/alarm multiplexer implementation.
 - SLICE-3a/HEY-120 is complete: PR #21 proved crash-after-send-before-ack resume without duplicate physical delivery in real `@cloudflare/vitest-pool-workers` tests.
 - SLICE-3b/HEY-121 is complete: `RunJournalOutbox` exposes `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`, with durable read parsing and ack-key enforcement.
 - SLICE-3c/HEY-124 is complete: the DeliveryGate runtime enforces ADR-0068 caps, budgets, cooldowns, sub-kind caps, held candidates, and gate reasons atomically inside the GATED commit. Acceptance residue (property tests, timezone state, quiet hours, Pro Max, race case) is listed in `SLICE-3C-HANDOFF.md` and awaits a founder placement call.
-- The current work is Loop Governor runtime promotion, not more broad contract expansion and not full product wiring.
+- HEY-122/SLICE-4 is complete and merged via PR #27.
+- HEY-123/SLICE-5 is implemented locally on `codex/hey-123-scheduler-alarm-multiplexer`, pending
+  review/PR/merge. It proves one Durable Object alarm entrypoint can dispatch due run resume,
+  outbox retry, and scheduled proactive wake rows through durable schedule state.
+- The current work is HEY-123 review and merge, not more broad contract expansion and not full
+  product wiring.
 - Split work by runtime seam, not by product pillar. Brief, Fetch, Spots, and Chat all converge on the same DO loop, journal, scheduler, dispatcher, memory, and delivery files.
 
 ## Grilling Questions
@@ -54,48 +63,53 @@ Use `/grill-with-docs`, `/waldo-isa-run-contract`, and `/codebase-design` agains
 6. Which parallel lanes are safe because they do not write the same runtime files?
 7. What would make the plan unsafe for Art-9 health data, auth, memory, or delivery?
 
-## Exact Next Slice
+## Exact Current Slice
 
-Start with **SLICE-4/HEY-122: Loop Governor deterministic gate on the runtime tick path**.
+Complete **SLICE-5/HEY-123: Scheduler/alarm multiplexer + wake proof**.
 
 Goal:
 
-- Promote the tracer's reduced `GOVERNOR_ADMITTED` admission into the ADR-0074 Loop Governor seam:
-  deterministic loop admission, budget kill, and the cross-run no-progress guard.
-- Consume `packages/contracts/src/runtime/loop-policy.ts` (`LOOP_POLICIES`, `lookupLoopPolicy`,
-  `admit`) as the source of truth; do not invent runtime policy constants.
-- Keep Governor and DeliveryGate separate modules and separate decisions: the governor decides
-  whether a loop runs, never whether a candidate sends, and never touches budget or outbox state.
-- The pre-delivery Art-9 egress floor is deterministic, reuses `RAW_SENSOR_PATTERNS` from
-  `packages/contracts/src/memory/sanitise.ts`, and cannot be bypassed by prompt/model output.
-- Use real `@cloudflare/vitest-pool-workers` tests for any DO SQLite transaction, eviction, or
-  kill-state persistence behavior.
+- Preserve the single raw `setAlarm` owner in `packages/runtime/src/scheduler/alarm-slot.ts`.
+- Use durable DO SQLite schedule rows as the system of record for logical wakes.
+- Dispatch due run resume, outbox retry, and scheduled proactive wake rows from one `alarm()`
+  entrypoint.
+- Keep due-work ordering deterministic by schedule-kind priority, due time, and schedule id.
+- Make duplicate alarm delivery idempotent: a completed one-shot row is gone, and terminal runs do
+  not send again.
+- Quarantine repeatedly failing product schedules durably; never quarantine durability kinds
+  (`journal`, `handoff`).
+- Keep schedule payloads to typed references only: ids/cursors, never prompt text, health values, or
+  raw content.
+- Use real `@cloudflare/vitest-pool-workers` helpers for alarm delivery and eviction proof.
 
-Out of scope for SLICE-4:
+Out of scope for SLICE-5:
 
-- DeliveryGate policy rewrite (HEY-124 shipped; residue is a separate placement call).
-- Full scheduler multiplexer (HEY-123).
+- Full patrol cadence matrix.
 - Dispatcher/tool runtime (HEY-78).
+- Triage dispatcher entrypoint (HEY-77).
+- Hook registry (HEY-12).
 - Scribe memory runtime.
 - Real LLM provider calls.
 - Live APNs/Telegram/provider credentials.
 - Live chat transport and app feed implementation.
+- Full run-loop integration (HEY-136).
 
 First PR shape:
 
 ```text
-runtime: promote loop governor gate
+runtime: add scheduler alarm multiplexer
 ```
 
 Acceptance:
 
-- Failing test first for a governor decision driven through runtime code against the loop-policy
-  contract.
-- Allowed, held, and blocked loop decisions are deterministic and outside the LLM — including
-  Fetch-over-Brief priority, budget kill, and stuck-loop cases.
-- Kill/no-progress state survives eviction; a killed run stays killed on resume.
-- No budget decrement or outbox insert occurs in the governor module.
-- Existing SLICE-3a/3b/3c crash/resume, exactly-once, and gate tests still pass.
+- Failing tests first for the multiplexer behavior.
+- One alarm dispatches due run resume, outbox retry, and scheduled proactive wake.
+- Duplicate delivery after success is a no-op.
+- Schedule state survives DO eviction.
+- Lost due rows are picked up on the next in-scope wake.
+- Product-kind repeated failure quarantines durably without wedging the alarm slot.
+- Daily-local recurrence covers DST gap/repeated-hour behavior at the scheduler layer.
+- Existing SLICE-3a/3b/3c/4 crash/resume, exactly-once, gate, and governor tests still pass.
 - `npx -y pnpm@10.34.4 verify` and `git diff --check` pass.
 
 ## Async Pillars
@@ -104,8 +118,8 @@ Acceptance:
 | --- | --- | --- | --- |
 | Run Journal + Outbox | Complete through PR #23 | Codex/runtime | Preserve; expand only if a slice exposes a real gap. |
 | DeliveryGate Runtime | Complete through PR #24 | Codex/runtime | Residue in `SLICE-3C-HANDOFF.md` awaits a placement call. |
-| Scheduler Multiplexer | Design now, runtime after governor | Codex/scheduler | Alarm pop, recurrence, retry, quarantine, liveness. Also owns held-candidate wakeup + quiet-end re-admission alarms. |
-| Loop Governor Runtime | Active | Codex/policy runtime | HEY-122/SLICE-4: deterministic admission, budget kill, stuck-loop guard. |
+| Scheduler Multiplexer | Local implementation pending review | Codex/scheduler | HEY-123/SLICE-5: alarm pop, recurrence, retry, quarantine, stale-run wake proof. Held-candidate wakeup + quiet-end re-admission policy remains later wiring. |
+| Loop Governor Runtime | Complete through PR #27 | Codex/policy runtime | HEY-122/SLICE-4: deterministic admission, budget kill, stuck-loop guard. |
 | Dispatcher + Hooks + ACL + Sanitiser | Isolated tests now | Codex/security runtime | Integration waits on invocation/run skeleton. |
 | Context + Memory + Prompt Hydration | Fake-backed design now | Claude memory/context + Codex integration | Keep raw health out of DO/R2/prompts/logs. |
 | LLMProvider + Routing + Eval | Now | Codex/eval | Fake-first provider and route tests are low collision. |
@@ -151,20 +165,22 @@ Safe parallel lanes:
 
 ## Week Plan
 
-Week 1:
+Immediate plan:
 
-1. Assign a single writer to HEY-122/SLICE-4.
-2. Preserve the SLICE-3a/3b/3c proofs while promoting Loop Governor runtime state.
+1. Review and PR HEY-123/SLICE-5 from `codex/hey-123-scheduler-alarm-multiplexer`.
+2. Preserve the SLICE-3a/3b/3c/4 proofs while merging scheduler runtime state.
 3. Run ADR-0066 ES256 Supabase issuer spike in parallel (HEY-125).
 4. Start fake-first LLM routing/eval lane only if it avoids runtime files.
 5. Start fake channel sink and Telegram ingress gate tests only against contracts/fakes.
-6. Start trace/conformance artifact scaffold; do not take over runtime files from the SLICE-4 writer.
+6. Start trace/conformance artifact scaffold only if it does not take over runtime files from the
+   HEY-123 writer.
 7. Founder placement call on the HEY-124 acceptance residue (property tests · timezone state · quiet hours · Pro Max · race case).
 
-Week 2:
+After HEY-123 merge:
 
-1. Finish Loop Governor runtime or split remaining enforcement into the next slice.
-2. Begin scheduler multiplexer (HEY-123) — it also owns held-candidate wakeup and quiet-end re-admission alarms.
+1. Begin HEY-77 triage dispatcher single entry.
+2. Keep held-candidate quiet-end re-admission and full cadence matrix out of HEY-77 unless explicitly
+   re-scoped.
 3. Wire dispatcher/hooks/sanitiser around the invocation skeleton.
 4. Keep memory/context fake-backed until the runtime loop can consume it safely.
 

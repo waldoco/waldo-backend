@@ -12,13 +12,12 @@ import type { TracerDO } from '../src/tracer/tracer-do';
 const KIND = 'fetch_alert';
 const USER = 'user-tracer-01';
 
-// Arm the one-shot alarm in the future so workerd does not auto-fire it before the test's manual
-// runDurableObjectAlarm() — the manual trigger must be the SOLE, deterministic fire. (An alarm armed
-// in the past is already due, so the runtime fires and clears it, and runDurableObjectAlarm then
-// reports false with nothing to run.) The occurrence value is opaque to the path: the gate's cooldown
-// compares now - last_sent_at, and last_sent_at is null on the first send, so the verdict is 'send'.
+// Keep the schedule inside the scheduler's due-work lookahead while still avoiding a past alarm that
+// workerd could auto-fire before the manual runDurableObjectAlarm() call. The occurrence value is
+// opaque to the path: the gate's cooldown compares now - last_sent_at, and last_sent_at is null on
+// the first send, so the verdict is 'send'.
 function futureOccurrence(): number {
-  return Date.now() + 3_600_000;
+  return Date.now() + 500;
 }
 
 function utcLocalDate(at: number): string {

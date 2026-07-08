@@ -11,10 +11,10 @@ import type { TracerDO } from '../src/tracer/tracer-do';
 const KIND = 'fetch_alert';
 const USER = 'user-outbox-01';
 
-// Future occurrence so the manual runDurableObjectAlarm is the sole, deterministic fire
-// (see tracer.test.ts for the full rationale).
+// Keep the schedule inside the scheduler's due-work lookahead while still avoiding a past alarm that
+// workerd could auto-fire before the manual runDurableObjectAlarm() call.
 function futureOccurrence(): number {
-  return Date.now() + 3_600_000;
+  return Date.now() + 500;
 }
 
 beforeEach(() => {
@@ -96,6 +96,17 @@ async function schedule(stub: DurableObjectStub<TracerDO>) {
 async function resume(stub: DurableObjectStub<TracerDO>) {
   await runInDurableObject(stub, async (instance) => {
     await instance.alarm();
+  });
+}
+
+async function makeScheduleDue(stub: DurableObjectStub<TracerDO>) {
+  await runInDurableObject(stub, (_instance, state) => {
+    const now = Date.now();
+    state.storage.sql.exec(
+      'UPDATE schedule SET due_at = MAX(occurrence_at, ?), updated_at = ?',
+      now,
+      now,
+    );
   });
 }
 
@@ -204,9 +215,9 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
 
     await schedule(stub);
     FakeSink.failNextSend('sink unavailable');
-    // The send throw propagates (re-raise, not swallow) after the failure is recorded, so
-    // the runtime's at-least-once retry re-drives the in-doubt row.
-    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('sink unavailable');
+    // The scheduler records the executor failure and rearms the journal handoff; the outbox keeps
+    // the durable in-doubt marker so the next due wake retries with the same idempotency key.
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const failed = await readOutbox(stub);
     expect(failed.status).toBe('sent_unacked');
@@ -215,6 +226,7 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
     expect(sink.observedDeliveries()).toBe(0);
 
     await evictDurableObject(stub);
+    await makeScheduleDue(stub);
     await resume(stub);
 
     expect(sink.observedDeliveries()).toBe(1);

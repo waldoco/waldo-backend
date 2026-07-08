@@ -154,29 +154,33 @@ UTC fallback because user timezone state does not exist yet; quiet-hours runtime
 `exempt_after_h` escalation wait on user-settings and scheduler slices; the Pro Max tier case and
 the last-budget-slot race case are untested.
 
-Remaining after PR #24: multi-kind outbox flusher, retry exhaustion policy, notification-log
-mirror, full FSM expansion, scheduler multiplexer, Loop Governor runtime, dispatcher, Scribe
-runtime, and live provider/channel integration.
+Remaining after PR #27: multi-kind outbox flusher, retry exhaustion policy, notification-log
+mirror, full FSM expansion, dispatcher, Scribe runtime, and live provider/channel integration.
+HEY-123/SLICE-5 scheduler/alarm multiplexer is implemented locally on
+`codex/hey-123-scheduler-alarm-multiplexer` and awaits review/PR/merge.
 
 ## Next Slice
 
-Build **SLICE-4/HEY-122: Loop Governor deterministic gate** (ADR-0074).
+Complete review and PR for **SLICE-5/HEY-123: Scheduler/alarm multiplexer + wake proof**
+(ADR-0065, ADR-0054).
 
-The governor decides whether a loop may execute; DeliveryGate remains the separate module that
-decides whether a candidate sends. Consume `packages/contracts/src/runtime/loop-policy.ts`
-(`LOOP_POLICIES`, `lookupLoopPolicy`, `admit`) — do not invent runtime policy constants. The
-tracer's reduced `GOVERNOR_ADMITTED` admission is the seam this slice makes real.
+The scheduler is the single runtime owner of logical wake selection. It stores durable schedule rows
+in DO SQLite, preserves the existing guarded alarm-slot seam, and dispatches due work from one
+Durable Object `alarm()` entrypoint. The current local implementation proves due run resume, outbox
+retry, scheduled proactive wake, deterministic selection, eviction survival, duplicate-delivery
+idempotency, product-kind quarantine, stale-run reconciliation, and daily-local DST recurrence.
 
 Required first failing test:
 
-- Drive a loop admission decision through runtime code consuming the loop-policy contract.
-- Assert allowed, held, and blocked loop decisions are deterministic and outside the LLM —
-  including Fetch-over-Brief priority, budget kill, and stuck-loop cases.
-- Assert governor state survives eviction: a killed run stays killed on resume.
-- Assert no budget decrement or outbox insert occurs inside the governor module.
-- Assert existing SLICE-3a/3b/3c eviction, exactly-once, and gate tests still pass.
+- Dispatch due run resume, outbox retry, and scheduled proactive wake from one alarm.
+- Assert duplicate delivery after success is a no-op.
+- Assert schedule rows survive DO eviction and lost due rows are picked up on a later in-scope wake.
+- Assert product-kind repeated failure quarantines durably without wedging the single alarm slot.
+- Assert due-work selection is deterministic by kind priority, due time, and schedule id.
+- Assert payloads remain typed refs only.
+- Assert existing SLICE-3a/3b/3c/4 eviction, exactly-once, gate, and governor tests still pass.
 
-Review carry-forward from SLICE-3a/3b/3c:
+Review carry-forward from SLICE-3a/3b/3c/4:
 
 - Promote only production-shaped code; leave crash knobs and fixture helpers in tests.
 - The Art-9 egress floor reuses `RAW_SENSOR_PATTERNS` from `packages/contracts/src/memory/sanitise.ts`;
@@ -184,6 +188,7 @@ Review carry-forward from SLICE-3a/3b/3c:
 - Keep `enqueueOutbox` as the gate-owned commit boundary; the governor never reaches the outbox.
 - Date-scoped counters and cross-date cooldown timestamps have different storage semantics; keep
   them separate (SLICE-3c lesson).
+- Keep HEY-77, HEY-12, HEY-78, HEY-17, and HEY-136 out of the scheduler PR.
 
 ## Slice Ladder To First Agent Run
 
@@ -195,9 +200,10 @@ The fake-to-real flip afterward is HEY-17 route config, gated only by the HEY-99
 
 Codex runtime lane (strict order — one runtime writer at a time on `packages/runtime/src/*`):
 
-1. HEY-122 · SLICE-4 Loop Governor (`ready-for-agent` now).
-2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — also owns held-candidate wakeup and quiet-end
-   re-admission alarms (flip `ready-for-agent` when the HEY-122 PR opens).
+1. HEY-122 · SLICE-4 Loop Governor — merged via PR #27.
+2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — local implementation complete; review/PR/merge
+   next. This slice proves the multiplexer invariant first; held-candidate wakeup and quiet-end
+   re-admission policy wiring stay out unless explicitly re-scoped.
 3. HEY-77 · triage dispatcher single entry.
 4. HEY-12 · hook registry (9 lifecycle events) — prerequisite for HEY-78/HEY-17 wiring.
 5. HEY-78 · ToolDispatcher + per-trigger ACL.
@@ -240,15 +246,17 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before coding SLICE-4, grill these decisions:
+Before opening or merging HEY-123, grill these decisions:
 
-1. What is the smallest Loop Governor runtime state that proves ADR-0074 without the scheduler or
-   the full run FSM?
-2. Where do `loop_progress` rows live and what exactly does the cross-run no-progress guard
-   (`isStuck`) read?
-3. How does the governor hand off to DeliveryGate without sharing state or transaction scope?
-4. Which malformed loop-policy or progress rows fail closed before a loop executes?
+1. Did removing the old tracer one-shot scheduler leave any stale imports or implicit ownership
+   paths?
+2. Are all schedule payloads typed references only, with no prompt text, health values, or raw
+   content in tests/logs/traces?
+3. Does stale-run reconciliation stay narrow enough, or should more journal/outbox wake
+   materialization move into a later retry-policy slice?
+4. Does the daily-local recurrence proof cover enough DST behavior for this slice without building
+   the full cadence matrix?
 5. Where does the HEY-124 acceptance residue land: a hardening slice, or folded into SLICE-4/5
    scopes (property tests · timezone state · quiet hours · Pro Max · race case)?
-6. Which files are single-writer for HEY-122, and which fake-eval/channel tasks can run in parallel
+6. Which files are single-writer for HEY-123, and which fake-eval/channel tasks can run in parallel
    without touching them?

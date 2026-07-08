@@ -8,6 +8,12 @@
 > planning docs, SLICE-3a/HEY-120, and SLICE-3b/HEY-121 (PR #23, `f47127f`) are represented in the
 > runtime build branch. Use `NEXT-SESSION-PLAN.md`, `SLICE-3B-HANDOFF.md`, and
 > `HARNESS-RUNTIME-BUILD-PLAN.md` for the next active SLICE-3c session.
+>
+> Status note as of 2026-07-08: this handover is historical background. Current runtime state has
+> advanced through SLICE-3c/HEY-124 and SLICE-4/HEY-122, and HEY-123/SLICE-5 scheduler/alarm
+> multiplexer is implemented locally on `codex/hey-123-scheduler-alarm-multiplexer`, pending
+> review/PR/merge. Use `NEXT-SESSION-PLAN.md` and `HARNESS-RUNTIME-BUILD-PLAN.md` for active
+> runtime-lane status.
 
 ---
 
@@ -17,19 +23,23 @@
   delivery policy, ADR-0070 engagement telemetry, ADR-0029 public DTO/OpenAPI freshness, evidence
   lanes, ADR-0074 loop policy helpers, PR #13 Art-9 hardening, and PR #14 taint-gate authority are
   represented in `packages/contracts` with tests/guards.
-- **The runtime is essentially unbuilt.** Only the Phase-C scheduled tracer executes; the full harness loop, the DO scheduler multiplexer, the delivery flusher, and the sanitiser runtime do not exist. Do not read "contracts shipped" as "runtime built."
+- **The runtime is partially built, not product-complete.** The durable journal/outbox,
+  DeliveryGate, Loop Governor, and local HEY-123 scheduler/alarm multiplexer spine exist. The full
+  harness loop, dispatcher, delivery flusher, Scribe runtime, provider surface, and live channels do
+  not exist. Do not read "contracts shipped" or "scheduler proof exists" as "runtime product built."
 - **All three historical findings are resolved.** The **HIGH** Art-9 Scribe-sanitiser finding is
   resolved in PR #13; the **MEDIUM** ADR-0049 taint-gate authority is resolved in PR #14;
   exactly-once *delivery* is proven at the durable layer by SLICE-3a (§6.3).
-- **Current main is contract-only plus tracer compatibility.** No production DDL, no full
-  DeliveryGate, no scheduler multiplexer, no dispatcher, and no provider surface are implemented.
+- **Current runtime branch is beyond tracer compatibility but still fake-backed.** Production-shaped
+  DO SQLite DDL, journal/outbox, DeliveryGate, Loop Governor, and local scheduler proof exist; no
+  dispatcher, provider surface, Scribe runtime, or live channel integration is implemented.
 
 **When can other agents start building runtime logic?** Work that depends on
 the promoted journal/outbox seam is now unblocked by PR #23. SLICE-3a landed the durable
 exactly-once *delivery* proof under real `@cloudflare/vitest-pool-workers` eviction/resume
 (`packages/runtime/test/outbox-delivery.test.ts`), and PR #23 promoted that proof into
-`RunJournalOutbox`. The current runtime unit is SLICE-3c — DeliveryGate runtime state on
-top of the promoted journal/outbox interface.
+`RunJournalOutbox`. As of 2026-07-08, the current runtime unit is HEY-123/SLICE-5 review and PR for
+the scheduler/alarm multiplexer; do not use this historical handover as the active next-slice plan.
 
 ---
 
