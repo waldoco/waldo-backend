@@ -26,6 +26,67 @@ export function ensureSchema(storage: DurableObjectStorage): void {
     );
   `);
 
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS loop_governor_runs (
+      run_id          TEXT PRIMARY KEY,
+      user_id         TEXT NOT NULL,
+      loop_type       TEXT NOT NULL,
+      occurrence_id   TEXT NOT NULL,
+      verdict         TEXT,
+      reason          TEXT,
+      disposition     TEXT,
+      tokens_used     INTEGER NOT NULL DEFAULT 0,
+      iterations      INTEGER NOT NULL DEFAULT 0,
+      subagent_spawns INTEGER NOT NULL DEFAULT 0,
+      created_at      INTEGER NOT NULL,
+      updated_at      INTEGER NOT NULL
+    );
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS loop_kill_flags (
+      flag_key   TEXT PRIMARY KEY,
+      scope      TEXT NOT NULL,
+      loop_type  TEXT,
+      active     INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS loop_progress (
+      user_id              TEXT NOT NULL,
+      loop_type            TEXT NOT NULL,
+      occurrence_id        TEXT NOT NULL,
+      call_count           INTEGER NOT NULL DEFAULT 0,
+      unique_param_hashes  INTEGER NOT NULL DEFAULT 0,
+      successes            INTEGER NOT NULL DEFAULT 0,
+      updated_at           INTEGER NOT NULL,
+      PRIMARY KEY (user_id, loop_type, occurrence_id)
+    );
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS loop_progress_params (
+      user_id               TEXT NOT NULL,
+      loop_type             TEXT NOT NULL,
+      occurrence_id         TEXT NOT NULL,
+      canonical_params_hash TEXT NOT NULL,
+      PRIMARY KEY (user_id, loop_type, occurrence_id, canonical_params_hash)
+    );
+  `);
+
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS loop_observations (
+      run_id                TEXT NOT NULL,
+      tool_name             TEXT NOT NULL,
+      canonical_params_hash TEXT NOT NULL,
+      result_hash           TEXT NOT NULL,
+      created_at            INTEGER NOT NULL,
+      PRIMARY KEY (run_id, tool_name, canonical_params_hash, result_hash)
+    );
+  `);
+
   // status/attempts/next_retry_at/acked_at/last_error carry the durable delivery state
   // (outboxRowSchema): the send attempt is marked BEFORE the sink is reached and the ack is
   // recorded after it, so a crash between the two resumes as an in-doubt row instead of

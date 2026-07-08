@@ -3,6 +3,7 @@ import type {
   DeliverySink,
   DeliveryVerdict,
   JournalRow,
+  LoopType,
   OutboxIntent,
   OutboxRow,
   PushClass,
@@ -20,8 +21,15 @@ import {
 } from '@waldo/contracts';
 import { computeAdmission } from '../delivery-gate/gate';
 import { DeliveryGateStore } from '../delivery-gate/store';
+import type {
+  GovernorDecision,
+  LoopEgressInput,
+  LoopObservationInput,
+  LoopUsageInput,
+  SetLoopKillFlagInput,
+} from '../loop-governor/governor';
+import { LoopGovernor } from '../loop-governor/governor';
 import type { Deps } from '../seams/deps';
-import { admit } from '../tracer/governor';
 import { Journal } from '../tracer/journal';
 import { Outbox } from '../tracer/outbox';
 
@@ -39,6 +47,8 @@ export type StartRunInput = {
   userId: string;
   trigger: TriggerType;
   occurrenceAt: number;
+  loopType?: LoopType;
+  occurrenceId?: string;
   candidate?: DeliveryCandidate;
 };
 
@@ -61,6 +71,7 @@ export class RunJournalOutbox {
   private readonly journal: Journal;
   private readonly outbox: Outbox;
   private readonly store: DeliveryGateStore;
+  private readonly governor: LoopGovernor;
 
   constructor(
     private readonly storage: DurableObjectStorage,
@@ -72,6 +83,7 @@ export class RunJournalOutbox {
     this.journal = new Journal(storage.sql, deps);
     this.outbox = new Outbox(storage.sql, deps);
     this.store = new DeliveryGateStore(storage.sql);
+    this.governor = new LoopGovernor(storage.sql, deps);
   }
 
   startRun(input: StartRunInput): string {
@@ -85,6 +97,14 @@ export class RunJournalOutbox {
         trigger: parsed.trigger,
         occurrenceAt: parsed.occurrenceAt,
       });
+      this.governor.startRun({
+        runId,
+        userId: parsed.userId,
+        trigger: parsed.trigger,
+        occurrenceAt: parsed.occurrenceAt,
+        loopType: parsed.loopType,
+        occurrenceId: parsed.occurrenceId,
+      });
       this.store.writeCandidate(runId, candidate);
     });
     return runId;
@@ -96,12 +116,79 @@ export class RunJournalOutbox {
     return this.journal.read(runId);
   }
 
+  admitRun(runId: string): GovernorDecision {
+    let decision: GovernorDecision | null = null;
+    this.storage.transactionSync(() => {
+      const run = this.journal.read(runId);
+      if (run === null) throw new Error(`admitRun: no journal row for ${runId}`);
+      if (run.state !== 'RUN_OPENED') {
+        throw new Error(`admitRun requires RUN_OPENED, got ${run.state}`);
+      }
+      decision = this.governor.admitRun(runId);
+      this.journal.advance(runId, admitToState(decision.verdict));
+    });
+    if (decision === null) throw new Error(`admitRun: no governor decision for ${runId}`);
+    return decision;
+  }
+
+  recordLoopUsage(input: LoopUsageInput): GovernorDecision {
+    return this.recordPostAdmissionDecision(input.runId, 'recordLoopUsage', () =>
+      this.governor.recordUsage(input),
+    );
+  }
+
+  recordLoopObservation(input: LoopObservationInput): GovernorDecision {
+    return this.recordPostAdmissionDecision(input.runId, 'recordLoopObservation', () =>
+      this.governor.recordObservation(input),
+    );
+  }
+
+  checkLoopEgress(input: LoopEgressInput): GovernorDecision {
+    return this.recordPostAdmissionDecision(input.runId, 'checkLoopEgress', () =>
+      this.governor.checkEgress(input),
+    );
+  }
+
+  setLoopKillFlag(input: SetLoopKillFlagInput): void {
+    this.governor.setKillFlag(input);
+  }
+
+  private recordPostAdmissionDecision(
+    runId: string,
+    operation: string,
+    record: () => GovernorDecision,
+  ): GovernorDecision {
+    let decision: GovernorDecision | null = null;
+    this.storage.transactionSync(() => {
+      const state = this.journal.readState(runId);
+      if (state === null) throw new Error(`${operation}: no journal row for ${runId}`);
+      if (state === 'DONE' || state === 'FAILED') {
+        decision = this.governor.readDecision(runId);
+        if (decision === null) {
+          throw new Error(`${operation}: terminal run has no governor decision for ${runId}`);
+        }
+        return;
+      }
+      if (state !== 'GOVERNOR_ADMITTED') {
+        throw new Error(`${operation} requires GOVERNOR_ADMITTED, got ${state}`);
+      }
+      decision = record();
+      if (decision.verdict === 'deny') {
+        this.journal.advance(runId, 'FAILED');
+      }
+    });
+    if (decision === null) {
+      throw new Error(`${operation}: no governor decision for ${runId}`);
+    }
+    return decision;
+  }
+
   async tickRun(runId: string): Promise<void> {
     const run = this.journal.read(runId);
     if (run === null || run.state === 'DONE' || run.state === 'FAILED') return;
 
     if (run.state === 'RUN_OPENED') {
-      this.journal.advance(run.run_id, admitToState(admit('fetch')));
+      this.admitRun(run.run_id);
     }
     const afterAdmit = this.journal.read(runId);
     if (afterAdmit?.state === 'GOVERNOR_ADMITTED') {
@@ -144,6 +231,12 @@ export class RunJournalOutbox {
     const runId = this.deps.newRunId();
     this.storage.transactionSync(() => {
       this.journal.openRun({
+        runId,
+        userId: input.userId,
+        trigger: held.candidate.trigger,
+        occurrenceAt: input.occurrenceAt,
+      });
+      this.governor.startRun({
         runId,
         userId: input.userId,
         trigger: held.candidate.trigger,
