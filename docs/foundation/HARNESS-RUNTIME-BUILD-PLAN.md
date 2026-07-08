@@ -160,12 +160,11 @@ Remaining after PR #31: multi-kind outbox flusher, retry exhaustion policy, noti
 mirror, full FSM expansion, ToolDispatcher/ACL integration, Scribe runtime, and live
 provider/channel integration. HEY-123/SLICE-5 scheduler/alarm multiplexer is merged via PR #28 at
 `061e72c`; HEY-77 triage dispatcher is merged via PR #29 at `a947600`; HEY-12 hook registry is
-merged via PR #31 at `1b180ef`; HEY-78 ToolDispatcher + per-trigger ACL is the current next
-runtime-lane unit.
+merged via PR #31 at `1b180ef`; HEY-78 ToolDispatcher + per-trigger ACL is open as draft PR #33.
 
 ## Next Slice
 
-Complete **HEY-78: ToolDispatcher + per-trigger ACL enforcement**
+Review and merge **HEY-78: ToolDispatcher + per-trigger ACL enforcement** in draft PR #33
 (ADR-0008, ADR-0021, ADR-0029, ADR-0032, ADR-0049; `packages/contracts/src/tools/*`,
 `packages/contracts/src/runtime/session.ts`, `packages/runtime/src/hooks/registry.ts`).
 
@@ -173,7 +172,9 @@ The ToolDispatcher is the single runtime owner for provider-shaped tool-call exe
 model/provider call envelopes into the contract-owned `ToolName` + args surface, enforces
 `TOOL_PERMISSIONS[session.trigger]`, validates args with the existing tool schemas, composes with
 the HEY-12 hook registry for ACL/autonomy/taint/sanitise gates, invokes injected typed handlers,
-and returns bounded/sanitised tool results.
+and returns bounded/sanitised tool results. PR #33 implements this with injected handlers only; it
+does not add HEY-17 provider calls, HEY-136 run-loop wiring, Scribe runtime writes, or live channel
+delivery.
 
 Required first failing test:
 
@@ -210,8 +211,8 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — merged via PR #28 at `061e72c`.
 3. HEY-77 · triage dispatcher single entry — merged via PR #29 at `a947600`.
 4. HEY-12 · hook registry (9 lifecycle events) — merged via PR #31 at `1b180ef`.
-5. HEY-78 · ToolDispatcher + per-trigger ACL — current next runtime-lane unit.
-6. HEY-17 · LLMProvider via CF AI Gateway, fake-first (production caps wait on HEY-99).
+5. HEY-78 · ToolDispatcher + per-trigger ACL — draft PR #33 in review.
+6. HEY-17 · LLMProvider via CF AI Gateway, fake-first (production caps wait on HEY-99) — next after PR #33 merges.
 7. HEY-136 · SLICE-6 run-loop integration — **the first working agent loop**.
 
 Claude context lane (parallel; fake-backed start allowed now):
