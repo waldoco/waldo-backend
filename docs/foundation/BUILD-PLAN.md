@@ -205,10 +205,13 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-The Phase-D contract spine is ready for runtime implementation. SLICE-3a and SLICE-3b are complete.
-The current safe unit is **SLICE-3c/HEY-124: promote
-DeliveryGate runtime state onto the journal/outbox interface**. Start with a failing test that proves
-gate state commits atomically with the promoted `enqueueOutbox` boundary while preserving the
-SLICE-3a/3b exactly-once delivery proof. Keep scheduler, full governor enforcement, dispatcher,
-Scribe runtime, model routing beyond the gate, and live channel integrations out of that PR. Use
+The Phase-D contract spine is ready for runtime implementation. SLICE-3a/HEY-120, SLICE-3b/HEY-121,
+SLICE-3c/HEY-124, and SLICE-4/HEY-122 are complete. The current local safe unit is
+**SLICE-5/HEY-123: scheduler/alarm multiplexer + wake proof** on
+`codex/hey-123-scheduler-alarm-multiplexer`, pending review/PR/merge.
+
+The HEY-123 PR must preserve the single guarded `setAlarm` seam, keep schedule state durable in DO
+SQLite, dispatch due run resume/outbox retry/proactive wake rows from one alarm entrypoint, and keep
+payloads to typed references only. Keep HEY-77, HEY-12, HEY-78, HEY-17, HEY-136, Scribe runtime,
+model routing beyond the gate, and live channel integrations out of that PR. Use
 `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` as the current async pillar map.
