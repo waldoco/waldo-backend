@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { armAlarm } from './scheduler/alarm-slot';
 
+export * from './hooks/registry';
 export { TracerDO } from './tracer/tracer-do';
 import type { TracerDO } from './tracer/tracer-do';
 
