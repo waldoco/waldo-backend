@@ -185,6 +185,43 @@ Review carry-forward from SLICE-3a/3b/3c:
 - Date-scoped counters and cross-date cooldown timestamps have different storage semantics; keep
   them separate (SLICE-3c lesson).
 
+## Slice Ladder To First Agent Run
+
+Finalized 2026-07-08 (founder-directed). The target event is **SLICE-6/HEY-136**: one journaled run
+walking the full contract FSM (`PENDING -> CONTEXT_BUILT -> LLM_CALLED -> TOOLS_DONE -> GATED ->
+DELIVERED -> DONE`, pinned in `packages/contracts/src/runtime/run.ts`) from a scheduled wake to a
+fake-sink delivery with a trace assertion — loop-anatomy parity with pi/Hermes on the DO substrate.
+The fake-to-real flip afterward is HEY-17 route config, gated only by the HEY-99 spend-cap decision.
+
+Codex runtime lane (strict order — one runtime writer at a time on `packages/runtime/src/*`):
+
+1. HEY-122 · SLICE-4 Loop Governor (`ready-for-agent` now).
+2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — also owns held-candidate wakeup and quiet-end
+   re-admission alarms (flip `ready-for-agent` when the HEY-122 PR opens).
+3. HEY-77 · triage dispatcher single entry.
+4. HEY-12 · hook registry (9 lifecycle events) — prerequisite for HEY-78/HEY-17 wiring.
+5. HEY-78 · ToolDispatcher + per-trigger ACL.
+6. HEY-17 · LLMProvider via CF AI Gateway, fake-first (production caps wait on HEY-99).
+7. HEY-136 · SLICE-6 run-loop integration — **the first working agent loop**.
+
+Claude context lane (parallel; fake-backed start allowed now):
+
+- HEY-10 (DO SQLite base tables) -> HEY-15 (recall-before-act) -> HEY-14 (skill loader) ->
+  HEY-16 (REASONS prompt builder). HEY-11 (AuditedDB) rides HEY-10. HEY-13 (sanitiser runtime)
+  runs parallel — the governor egress floor and Scribe both consume it. HEY-102 (CRS) may stay
+  faked through SLICE-6.
+
+Safe-parallel at any point: HEY-111 (eval/trace spine — SLICE-6 is proven against its assertions),
+HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100, HEY-125.
+
+Ordered follow-ups, not on the critical path: HEY-138 (ADR-0068 D4 timezone/quiet-hours — after
+HEY-10), HEY-135 (fleet watchdog — after HEY-123), HEY-18/HEY-19 channels (after HEY-136; they make
+the loop user-visible), Scribe memory-write slice (after HEY-136).
+
+Explicitly not on this path, by decision: session resume and always-on sockets (ADR-0033 trust
+reset; ADR-0074 socket residency), mid-run steering (HEY-126 live-chat spike owns that seam),
+`execute_code`/browser powers (non-negotiables), LLM-written committed memory (Scribe-only, ever).
+
 ## Parallel Assignment Packet
 
 Use this template for each developer/agent assignment:
