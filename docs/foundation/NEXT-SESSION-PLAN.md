@@ -1,18 +1,21 @@
-# Next Session Plan - HEY-142 To Agent Harness Alpha
+# Next Session Plan - HEY-143 To Agent Harness Alpha
 
-Status: active entrypoint after HEY-139, HEY-10, and HEY-111. The current runtime lane is
-HEY-142 before the first honest agent-harness alpha.
+Status: active entrypoint after HEY-142. The current runtime lane is HEY-143 real-provider flip
+readiness before the first honest agent-harness alpha.
 Date: 2026-07-09 IST.
 Baseline: SLICE-3a/HEY-120 merged in PR #21, SLICE-3b/HEY-121 merged in PR #23 at
 `f47127f`, SLICE-3c/HEY-124 merged in PR #24 at `5789b42`, HEY-122/SLICE-4 merged in
 PR #27, HEY-123/SLICE-5 merged in PR #28 at `061e72c`, HEY-77 triage dispatcher merged
 in PR #29 at `a947600`, HEY-12 hook registry merged in PR #31 at `1b180ef`, and HEY-78
 ToolDispatcher + per-trigger ACL enforcement merged in PR #33 at `600fb34`. HEY-17 merged in
-PR #34 at `0aae766`; HEY-136 merged in PR #35 at `3d336c7`.
+PR #34 at `0aae766`; HEY-136 merged in PR #35 at `3d336c7`; HEY-139 merged in PR #38 at
+`b736470`; HEY-10 merged in PR #37 at `7980aad`; HEY-111 merged in PR #39 at `61eb3c7`;
+HEY-142 merged in PR #42 at `d896500`.
 
 HEY-136 proved the fake-first run-loop skeleton. HEY-139 hardened the runtime driver, HEY-10 landed
-the context schema root, and HEY-111 added replayable local evidence. HEY-142 now owns the next
-runtime milestone: governed multi-iteration `plan -> act -> observe`.
+the context schema root, HEY-111 added replayable local evidence, and HEY-142 added the fake-first
+governed multi-iteration `plan -> act -> observe` loop. HEY-143 now owns real-provider flip
+readiness.
 
 ## Start Here
 
@@ -24,9 +27,10 @@ Read in this order:
 4. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
 5. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
 6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-7. `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` when touching DO SQLite context schema scope.
-8. `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` when touching deferred DO SQLite tables.
-9. The Waldo Brain source files listed in the runtime build plan for the seam being reviewed.
+7. `docs/foundation/HEY-142-PHASE-HANDOFF.md`
+8. `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` when touching DO SQLite context schema scope.
+9. `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` when touching deferred DO SQLite tables.
+10. The Waldo Brain source files listed in the runtime build plan for the seam being reviewed.
 
 Then run the baseline gate before planning claims or edits:
 
@@ -45,33 +49,36 @@ git diff --check
   telemetry, and evidence lanes.
 - The runtime spine now includes journal/outbox, DeliveryGate, Loop Governor, scheduler/alarm
   multiplexer, triage dispatcher, hook registry, ToolDispatcher/ACL runtime, fake-first
-  LLMProvider routing, and fake-first `RunLoopDO`.
+  LLMProvider routing, fake-first `RunLoopDO`, replay/evidence, and a governed multi-iteration
+  model/tool/observe loop.
 - HEY-136 is intentionally fake-first: it proves loop anatomy and durable resume, not production
   provider/channel/memory behavior.
-- HEY-142 keeps live provider calls, live channel delivery, Scribe writes, and raw health/private
-  data out of scope.
+- HEY-142 is still fake-first. It does not prove production provider, channel, context, memory, or
+  live health-data behavior.
+- HEY-143 may prepare real-provider readiness, but live channel delivery, Scribe writes, and raw
+  health/private data remain out of scope unless explicitly re-scoped with staging safeguards.
 - Split work by runtime seam, not by product pillar. Brief, Fetch, Spots, and Chat all converge on
   the same DO loop, journal, scheduler, dispatcher, memory, model, and delivery files.
 
 ## Exact Current Slice
 
-Start **HEY-142 governed multi-iteration runtime loop** while the context lane continues from
-HEY-10.
+Start **HEY-143 real-provider flip readiness** while the context lane continues from HEY-10.
 
 Goal:
 
-- Preserve the HEY-139 hardened fake-first proof and HEY-111 replay/evidence surface.
-- Turn the current single observe/synthesise pass into a bounded `plan -> act -> observe` loop.
-- Accumulate governor usage across all model/tool passes and stop deterministically on budget,
-  kill, or no-progress outcomes.
-- Keep trace/replay evidence readable enough to debug each iteration without storing prompts,
-  raw health, provider bodies, credentials, or channel payloads.
-- Revisit trace `event_key` granularity if repeated event types in one runtime state step become
-  legitimate during iteration.
+- Preserve the HEY-142 fake-first multi-iteration loop and HEY-111 replay/evidence surface.
+- Make the provider flip safe to test behind explicit staging-only configuration, spend limits,
+  kill switches, and fake-first defaults.
+- Prove provider response/error parsing at the adapter seam without storing prompts, raw health,
+  provider bodies, credentials, or channel payloads.
+- Keep live channel delivery, committed Scribe memory writes, and production Cloudflare/Supabase
+  side effects out of the default verification path.
+- Carry forward the HEY-142 P3 notes: iteration-cap semantics are explicit today, and future real
+  tools need semantic observation canonicalizers for duplicate/no-progress detection.
 
-Out of scope for this iteration slice:
+Out of scope for this iteration slice unless explicitly re-scoped:
 
-- Live provider calls, live API credentials, or provider-specific SDK adoption.
+- Production live-provider calls or unmanaged API credentials.
 - Scribe memory writes or committed memory mutation.
 - Production context/prompt hydration beyond the HEY-15/HEY-14/HEY-16 seams.
 - Channel delivery and app feed integration.
@@ -79,12 +86,14 @@ Out of scope for this iteration slice:
 
 Acceptance:
 
-- Failing tests first for at least one multi-pass path, budget accumulation across passes,
-  deterministic stop conditions, and replay evidence of each pass.
+- Failing tests first for provider adapter readiness, response/error classification, spend-cap or
+  kill-switch behavior before live calls, and replay evidence privacy.
+- Fake-first local runtime tests still pass, including HEY-142 multi-pass loop coverage.
 - Existing contracts and runtime tests still pass.
 - `/check-contract`: runtime remains on contract-owned run states, model routes, tool schemas, and
   governor decisions.
-- `/break-feature`: the PR must not imply production provider/channel/memory readiness.
+- `/break-feature`: the PR must not imply production channel/memory readiness or uncontrolled live
+  provider use.
 - `npx -y pnpm@10.34.4 verify` and `git diff --check` pass.
 
 ## Async Pillars
@@ -97,10 +106,10 @@ Acceptance:
 | Loop Governor Runtime | Complete through PR #27 | Codex/policy runtime | Deterministic admission, budget kill, stuck-loop guard. |
 | Dispatcher + Hooks + ACL + Sanitiser | Complete through PR #33 | Codex/security runtime | HEY-77, HEY-12, and HEY-78 are merged; do not re-own this seam in HEY-17. |
 | Context + Memory + Prompt Hydration | Fake-backed design now | Claude memory/context + Codex integration | Keep raw health out of DO/R2/prompts/logs. |
-| LLMProvider + Routing + Eval | Complete fake-first with HEY-111 local evidence | Codex/eval | No live credentials; HEY-142 must reuse trace/replay evidence. |
+| LLMProvider + Routing + Eval | Complete fake-first through HEY-142; HEY-143 next | Codex/eval | Real-provider readiness must stay staging-gated with no provider bodies in evidence. |
 | Channels + App Surfaces | Fake sinks now | Codex/channel + app team | Production delivery waits on outbox, feed/channel contracts, and explicit adapter work. |
 | Auth/Data Plane/Adapters | Now | Claude/Supabase + Codex adapters | ADR-0066 ES256 Supabase issuer spike remains parallel. |
-| Observability/Conformance | HEY-111 merged; extend in HEY-142 | Codex/infra | Trace event shape, replay fixture, local eval are available for fake-first loop proof. |
+| Observability/Conformance | HEY-111 merged; HEY-142 reused it | Codex/infra | Trace event shape, replay fixture, and local eval are available for fake-first loop proof; standalone eval suite is still absent. |
 
 ## Coordination Rules
 
@@ -141,10 +150,9 @@ Safe parallel lanes:
 
 Immediate plan:
 
-1. Work from `origin/main` at or after `61eb3c7` (`HEY-111 add runtime evidence spine`, PR #39).
-   HEY-139, HEY-10, and HEY-111 are merged.
-2. Start HEY-142 on the runtime lane: governed multi-iteration `plan -> act -> observe` loop,
-   using HEY-111 evidence for trace/replay assertions.
+1. Work from `origin/main` at or after `d896500` (`HEY-142 governed runtime loop`, PR #42).
+2. Start HEY-143 on the runtime lane: real-provider flip readiness, keeping fake-first defaults and
+   staging-only live-provider safeguards.
 3. Continue the context lane from the HEY-10 schema root: HEY-15 recall-before-act, HEY-14 skill
    loader, and HEY-16 prompt builder. Full goal hydration still waits for HEY-144.
 4. Keep live providers, Scribe runtime, memory writes, app feed, and live channels out
@@ -152,13 +160,13 @@ Immediate plan:
 
 Next build step for the actual agent harness:
 
-1. Build HEY-142 so one runtime can call the model, dispatch tools, observe results, and iterate
-   under governor budgets instead of stopping after one pass.
+1. Build HEY-143 so the fake-first multi-iteration loop can be prepared for real-provider dogfood
+   without uncontrolled credentials, spend, provider logs, or channel side effects.
 2. Wire real context/recall/prompt/skill registry into `RunLoopDO` behind fake provider and fake
    delivery adapters.
 3. Add Scribe proposal lifecycle after context/prompt hydration is testable and redaction proof is
    green.
-4. Only then add HEY-143 opt-in live-provider dogfood with spend cap, kill switch, replay evidence, and no
+4. Keep opt-in live-provider dogfood behind spend cap, kill switch, replay evidence privacy, and no
    live channel delivery by default.
 
 ## Archived Docs
