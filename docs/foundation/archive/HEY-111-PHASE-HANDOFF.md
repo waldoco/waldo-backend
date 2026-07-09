@@ -1,6 +1,8 @@
 # HEY-111 Sequencing Handoff
 
-## HEY-111 → Post-HEY-139 Handoff
+## HEY-111 → Post-Merge Handoff
+
+Status: merged via PR #39 at `61eb3c7` after HEY-139 PR #38 and HEY-10 PR #37.
 
 ### What Was Built
 
@@ -15,16 +17,15 @@
 - [observed] Contract evidence schemas pass via:
   - `npx -y pnpm@10.34.4 --filter @waldo/contracts test -- src/runtime/evidence.test.ts`
 - [observed] Runtime fake-first evidence paths pass via:
-  - `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- src/run-loop.test.ts`
+  - `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- test/run-loop.test.ts`
 - [observed] Full repo verification passed before this handoff via:
   - `npx -y pnpm@10.34.4 verify`
   - `git diff --check`
 
 ### What Doesn't Work Yet (known issues)
 
-- [blocked] HEY-139 is still In Progress in Linear and owns overlapping changes in `packages/runtime/src/run-loop/do.ts` and `packages/runtime/test/run-loop.test.ts`.
-- [blocked] No HEY-111 PR should be opened from the current base until HEY-139 merges, unless the coordinator explicitly asks for a stacked PR.
 - [blocked] No standalone eval-suite runner or golden corpus exists in this repo. HEY-111 has local rule scoring only; fake-first WIS remains unavailable rather than fake-green.
+- [inference] HEY-142 should revisit trace `event_key` granularity if multi-iteration loops can emit the same event type more than once in one runtime state step. HEY-111's current key is intentionally sufficient for fake-first retry/resume dedupe.
 
 ### Architecture Decisions Made During This Phase
 
@@ -38,22 +39,17 @@
 - HEY-111 and HEY-139 intentionally touch the same run-loop files. HEY-139 should land first because it changes ingress, idempotency, gate branches, and failure coverage that HEY-111 needs to describe rather than compete with.
 - Trace schema must answer harness/product questions directly. OpenAI/LangGraph/OTel patterns are useful precedent, but Waldo's fake-first evidence contract should not copy their schemas.
 
-### Prerequisites for Next Phase
+### Next Phase
 
-1. Wait until HEY-139 is merged to `origin/main`.
-2. Rebase `codex/hey-111-runtime-eval-trace-replay` onto updated `origin/main`.
-3. Resolve overlaps deliberately in:
-   - `packages/runtime/src/run-loop/do.ts`
-   - `packages/runtime/test/run-loop.test.ts`
-4. Preserve `docs/foundation/HEY-111-EVIDENCE-SPINE.md`.
-5. Rerun:
+1. Start HEY-142 from `origin/main` at or after `61eb3c7`.
+2. Use HEY-111 evidence as the assertion surface for multi-iteration behavior: trace order, terminal visibility, outbox consistency, and privacy guard.
+3. Update trace `event_key` shape only if HEY-142 proves duplicate event types are legitimate within one runtime step.
+4. Rerun:
    - `npx -y pnpm@10.34.4 --filter @waldo/contracts test -- src/runtime/evidence.test.ts`
-   - `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- src/run-loop.test.ts`
+   - `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- test/run-loop.test.ts`
    - `npx -y pnpm@10.34.4 verify`
    - `git diff --check`
-6. Run `/check-contract`, `/break-feature`, `/run-eval`, and `/code-review` before opening a PR.
-7. Push/open a draft PR only after HEY-139 merge/rebase unless a stacked PR is explicitly requested.
-8. Move Linear HEY-111 to In Review only after the PR exists.
+5. Run `/check-contract`, `/break-feature`, `/run-eval`, and `/code-review` before opening a PR.
 
 ### Files Changed
 

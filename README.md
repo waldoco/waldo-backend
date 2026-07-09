@@ -11,13 +11,15 @@ This repo is not meant to be worked on in isolation. Keep the Waldo Brain reposi
 
 Before coding, read:
 
-1. [AGENTS.md](AGENTS.md) for repo-specific agent orchestration.
-2. [CLAUDE.md](CLAUDE.md) for current foundation status and backend rules.
+1. [Contributor Onboarding](docs/foundation/CONTRIBUTOR-ONBOARDING.md) for the current build lanes and safety boundaries.
+2. [AGENTS.md](AGENTS.md) for repo-specific agent orchestration.
 3. [Agent Operating Workflow](docs/foundation/AGENT-OPERATING-WORKFLOW.md) for the session loop, skill map, plugin boundaries, and verification wall.
-4. [Next Session Plan](docs/foundation/NEXT-SESSION-PLAN.md) for the current harness grilling/planning entrypoint.
+4. [Next Session Plan](docs/foundation/NEXT-SESSION-PLAN.md) for the current harness entrypoint.
 5. [Harness Runtime Build Plan](docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md) for the source-backed async pillar map.
-6. `.claude/rules/INDEX.md` plus the relevant foundation docs and accepted ADRs.
-7. The relevant Waldo Brain pages for the seam you are touching.
+6. [Local Dev Testing Pipeline](docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md) for verification expectations.
+7. `.claude/rules/INDEX.md` plus the relevant accepted ADRs and Waldo Brain pages for the seam you are touching.
+
+Historical phase handoffs and old benchmark reports live in `docs/foundation/archive/`. They are useful for archaeology, not onboarding.
 
 ## Operating Loop
 

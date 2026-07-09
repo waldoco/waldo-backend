@@ -29,14 +29,15 @@ Primary backend sources:
 
 | Source | Why it matters |
 | --- | --- |
-| `docs/foundation/FOUNDATION-HANDOVER.md` | Current done-vs-unbuilt map and single-writer rules. |
-| `docs/foundation/BUILD-PLAN.md` | Contract-spine build order and current runtime dependency layer. |
+| `docs/foundation/CONTRIBUTOR-ONBOARDING.md` | Short path for new contributors and lane ownership. |
+| `docs/foundation/NEXT-SESSION-PLAN.md` | Current HEY-142 entrypoint and acceptance bar. |
 | `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md` | Verification wall and runtime/evidence testing standard. |
 | `docs/foundation/AGENT-OPERATING-WORKFLOW.md` | Session loop, skill map, plugin boundaries, and verification wall. |
 | `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` | HEY-10 deferred DO table coverage: ADR/Linear ownership for goals, memory edges, commitments, handoff state, and compaction. |
+| `docs/foundation/HEY-111-EVIDENCE-SPINE.md` | Merged fake-first replay/evidence surface that HEY-142 must reuse. |
 | `packages/contracts/src/index.ts` | Barrel for the implemented contract spine. |
-| `packages/runtime/src/tracer/tracer-do.ts` | Only executing runtime slice today. |
-| `packages/runtime/test/tracer.test.ts` | Workerd crash/resume proof for the tracer path. |
+| `packages/runtime/src/run-loop/do.ts` | Fake-first hardened runtime driver. |
+| `packages/runtime/test/run-loop.test.ts` | Current runtime proof and replay/evidence assertions. |
 
 Research inputs used:
 
@@ -87,15 +88,19 @@ Built:
 - HEY-77 triage dispatcher landed in PR #29 at `a947600`.
 - HEY-12 hook registry landed in PR #31 at `1b180ef`.
 - HEY-78 ToolDispatcher + per-trigger ACL enforcement landed in PR #33 at `600fb34`.
-- HEY-17 LLMProvider routing seam is in draft PR #34, fake-first and contract-owned.
+- HEY-17 LLMProvider routing seam landed in PR #34 at `0aae766`, fake-first and contract-owned.
+- HEY-136 fake-first `RunLoopDO` integration landed in PR #35 at `3d336c7`.
+- HEY-139 runtime driver hardening landed in PR #38 at `b736470`.
+- HEY-10 DO SQLite context schema root landed in PR #37 at `7980aad`.
+- HEY-111 runtime evidence spine landed in PR #39 at `61eb3c7`.
 - Static guard wall and pinned verification command.
 
 Not built:
 
-- Full run FSM runtime.
-- Durable multi-kind DeliveryGate/outbox flusher and retry exhaustion policy.
-- Scribe/sanitiser runtime implementation beyond injected hook callbacks.
-- Context builder/prompt hydration runtime.
+- Governed multi-iteration `plan -> act -> observe` loop; HEY-142 owns this next runtime slice.
+- Production context builder, recall-before-act, skill loading, and prompt hydration; HEY-15/HEY-14/HEY-16 own this lane.
+- Scribe/sanitiser runtime and committed-memory proposal lifecycle beyond injected hook callbacks.
+- Multi-kind production channel delivery and app feed surfaces.
 - Live provider calls, real channel sinks, Telegram ingress, app feed, live chat.
 - Scenario/property/mutation/live evidence runners.
 
@@ -151,38 +156,29 @@ cooldowns, adjustment sub-kind caps, held-candidate freeze plus a callable `rele
 commit atomic and the SLICE-3a/3b proofs preserved. Verify green at merge: contracts 1,163 /
 runtime 46 / 10 guards.
 
-Acceptance residue from HEY-124 (details in `SLICE-3C-HANDOFF.md`): the fast-check property tests
-named in the acceptance bar were not written (example-based coverage only); day boundaries use the
-UTC fallback because user timezone state does not exist yet; quiet-hours runtime and `sync_error`
-`exempt_after_h` escalation wait on user-settings and scheduler slices; the Pro Max tier case and
-the last-budget-slot race case are untested.
+Acceptance residue from HEY-124 is archived in
+`docs/foundation/archive/SLICE-3C-HANDOFF.md`. Do not use that handoff as the current slice plan.
 
-Remaining after HEY-17 lands: multi-kind outbox flusher, retry exhaustion policy,
-notification-log mirror, full FSM expansion, Scribe runtime, context/prompt hydration, and live
-provider/channel integration. HEY-123/SLICE-5 scheduler/alarm multiplexer is merged via PR #28 at
-`061e72c`; HEY-77 triage dispatcher is merged via PR #29 at `a947600`; HEY-12 hook registry is
-merged via PR #31 at `1b180ef`; HEY-78 ToolDispatcher + per-trigger ACL is merged via PR #33 at
-`600fb34`. HEY-17 is the current fake-first LLMProvider routing draft PR #34 and keeps live
-provider credentials out of scope.
+Remaining after HEY-139/HEY-111: governed iteration, production context/prompt hydration, Scribe
+proposal lifecycle, multi-kind production delivery, app/channel surfaces, and real-provider flip
+readiness.
 
 ## Next Slice
 
-Review and merge **HEY-17: LLMProvider via CF AI Gateway, fake-first** in draft PR #34
-(ADR-0004, ADR-0069, ADR-0051; `packages/contracts/src/runtime/routing.ts`,
-`packages/contracts/src/adapters/llm.ts`, `packages/runtime/src/hooks/registry.ts`).
+Build **HEY-142: governed multi-iteration `plan -> act -> observe` loop**.
 
-The LLMProvider is the single runtime owner for model route selection and gateway-call fallback.
-It consumes contract-owned routing and LLM schemas, shapes calls for Cloudflare AI Gateway with
-constant privacy headers, composes with the HEY-12 PreLLMCall/PostLLMCall hooks, and returns only
-bounded model text plus metering. The current slice is fake-first: injected gateway adapters prove
-the behavior without live provider calls, credentials, prompt logging, memory writes, or run-loop
-wiring.
+HEY-142 must keep the fake-first safety boundary while making the runtime loop honest: the model can
+plan, tools can run, observations can feed the next model pass, and governor budgets/kill/no-progress
+conditions bound the loop. It must reuse HEY-111 evidence instead of inventing a parallel trace path.
 
 Required first failing test:
 
-- Select a contract-owned route for every trigger and reject unknown triggers.
-- Prove provider/model swaps are config-driven by routing policy.
-- Prove gateway headers are constant and payload logging stays disabled.
+- At least one run performs multiple model/tool/observe passes before terminal gate/outbox.
+- Governor usage accumulates across every LLM pass and stops deterministically at budget.
+- Replay evidence shows each pass without prompt bodies, raw health, provider bodies, credentials,
+  or channel payloads.
+- Trace `event_key` granularity is revised if repeated event types within one runtime state step are
+  legitimate.
 - Prove fallback order: configured model full context, configured model reduced context, gateway
   fallback chain, then route floor behavior.
 - Prove circuit breaker scope/cooldown, spend-cap degradation, template fallback, and PostLLMCall
@@ -224,24 +220,27 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 5. HEY-78 · ToolDispatcher + per-trigger ACL — merged via PR #33 at `600fb34`.
 6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — merged via PR #34 at `0aae766`.
 7. HEY-136 · SLICE-6 run-loop integration — merged via PR #35 at `3d336c7`.
-8. Runtime hardening after HEY-136 — current slice; closes spend-cap, governor-terminal, adapter
-   seam, and observe-pass gaps before the first honest agent-harness alpha.
-9. HEY-139 · Runtime hardening follow-up — ingress, idempotent duplicate wakes, integrated gate
-   branches, and remaining malformed/denied branch coverage before Agent Harness Alpha.
+8. HEY-139 · Runtime hardening follow-up — merged via PR #38 at `b736470`.
+9. HEY-111 · Runtime evidence spine — merged via PR #39 at `61eb3c7`.
+10. HEY-142 · governed multi-iteration `plan -> act -> observe` loop — next runtime slice. It must
+   reuse HEY-111 evidence and revisit trace `event_key` granularity if one runtime state step can
+   legitimately emit the same event type more than once.
+11. HEY-143 · real-provider flip readiness — after HEY-142 proves loop iteration with fake
+   provider/sinks.
 
 Claude context lane (parallel; fake-backed start allowed now):
 
-- HEY-10 (DO SQLite base tables) -> HEY-15 (recall-before-act) -> HEY-14 (skill loader) ->
-  HEY-16 (REASONS prompt builder). HEY-11 (AuditedDB) rides HEY-10. HEY-13 (sanitiser runtime)
-  runs parallel — the governor egress floor and Scribe both consume it. HEY-102 (CRS) may stay
-  faked through SLICE-6.
-- HEY-10 lands the exact 10-table base schema in
+- HEY-10 (DO SQLite base tables) merged via PR #37 at `7980aad` -> HEY-15
+  (recall-before-act) -> HEY-14 (skill loader) -> HEY-16 (REASONS prompt builder). HEY-11
+  (AuditedDB) rides HEY-10. HEY-13 (sanitiser runtime) runs parallel — the governor egress floor
+  and Scribe both consume it. HEY-102 (CRS) may stay faked through SLICE-6.
+- HEY-10 landed the exact 10-table base schema in
   `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md`. `goals` is intentionally excluded and owned by
   HEY-144, which blocks full HEY-16 goal hydration. Deferred tables remain mapped in
   `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md`.
 
-Safe-parallel at any point: HEY-111 (eval/trace spine — the hardened loop is proven against its assertions),
-HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100, HEY-125.
+Safe-parallel at any point: HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100,
+HEY-125, HEY-141, and channel/fake-sink prep that does not trigger live delivery.
 
 Ordered follow-ups, not on the critical path: HEY-138 (ADR-0068 D4 timezone/quiet-hours — after
 HEY-10), HEY-135 (fleet watchdog — after HEY-123), HEY-18/HEY-19 channels (after HEY-136; they make
