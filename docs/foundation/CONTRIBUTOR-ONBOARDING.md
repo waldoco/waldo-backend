@@ -7,11 +7,12 @@ Date: 2026-07-09.
 
 Waldo backend is building a Cloudflare Durable Object based agent harness. The current proof is
 fake-first but durable: scheduler, governor, run journal, ToolDispatcher, hooks, fake LLM routing,
-runtime driver hardening, context schema root, and local replay/evidence are merged.
+runtime driver hardening, context schema root, local replay/evidence, and governed multi-iteration
+runtime looping are merged.
 
-The next honest runtime milestone is **HEY-142**: a governed multi-iteration
-`plan -> act -> observe` loop. Do not describe the runtime as a real Pi/Hermes-style agent loop
-until HEY-142 and the context lane are wired and verified.
+The next honest runtime milestone is **HEY-143**: real-provider flip readiness. Do not describe the
+runtime as production-provider/channel/memory ready until HEY-143 and the context lane are wired and
+verified with staging safeguards.
 
 ## Read This First
 
@@ -31,11 +32,11 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 
 | Lane | Next work | Notes |
 | --- | --- | --- |
-| Runtime | HEY-142 governed multi-iteration loop | Single-writer over `packages/runtime/src/run-loop/*` and runtime evidence behavior. |
+| Runtime | HEY-143 real-provider flip readiness | Single-writer over runtime/provider seams and runtime evidence behavior. |
 | Context | HEY-15 recall, HEY-14 skills, HEY-16 prompt builder | Starts from HEY-10's merged DO SQLite schema root. Full goal hydration waits for HEY-144. |
 | Safety/Scribe | HEY-13 sanitiser runtime and Scribe proposal lifecycle | No direct committed-memory writes from the LLM. |
-| Evidence | Extend HEY-111 evidence during HEY-142 | Reuse `readRunEvidence`, `replayFixture`, and `scoreRun`; do not create a parallel trace path. |
-| Provider flip | HEY-143 after HEY-142 | No live provider calls before fake-first iteration is proven. |
+| Evidence | HEY-111/HEY-142 local evidence is available | Reuse `readRunEvidence`, `replayFixture`, and `scoreRun`; do not create a parallel trace path. |
+| Provider flip | HEY-143 | No unmanaged live provider calls; staging-only readiness must keep replay privacy. |
 | Product surfaces | Brief, Fetch, Chat, Spots after shared harness | Product loops should use the shared runtime spine, not bespoke paths. |
 
 ## Detailed Track Build Order
@@ -124,21 +125,23 @@ Done:
 - `HEY-136` fake-first run-loop skeleton.
 - `HEY-139` runtime driver hardening.
 - `HEY-111` local runtime evidence/replay spine.
+- `HEY-142` governed multi-iteration `plan -> act -> observe` loop.
 
 Next:
 
-- `HEY-142` governed multi-iteration `plan -> act -> observe` loop.
+- `HEY-143` real-provider flip readiness.
 
 After:
 
-- `HEY-143` real-provider flip readiness.
+- Production context/prompt hydration, Scribe proposal lifecycle, product/channel surfaces, and
+  standalone eval/live evidence runners.
 
-Suggested owner: Codex/runtime. This is single-writer over `packages/runtime/src/*`; do not
-parallelize `HEY-142` implementation with other runtime-loop edits.
+Suggested owner: Codex/runtime. This is single-writer over `packages/runtime/src/*` and provider
+seams; do not parallelize `HEY-143` implementation with other runtime-loop/provider edits.
 
 ### 4. Context / Memory / Prompt
 
-Status: can run parallel to `HEY-142`.
+Status: can run parallel to `HEY-143`.
 
 Order:
 
@@ -286,7 +289,7 @@ Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open
 
 ## What To Assign Now
 
-1. Runtime single writer: `HEY-142`.
+1. Runtime single writer: `HEY-143`.
 2. Context parallel: `HEY-15`, `HEY-11`, `HEY-13`.
 3. Safe parallel: `HEY-137`, `HEY-141`, `HEY-100`, `HEY-125`, `HEY-104` through `HEY-107`.
 4. Human/external: `HEY-128`, `HEY-130`, `HEY-127`, `HEY-131`.
@@ -410,8 +413,8 @@ Session rules:
 - The session starts by reading `AGENTS.md`, this onboarding file, the active plan, relevant ADRs,
   and the ticket body/comments.
 - The session declares owned files and out-of-scope files before editing.
-- Runtime-loop sessions are single-writer. Do not run another Codex session that edits
-  `packages/runtime/src/run-loop/*` while `HEY-142` is active.
+- Runtime-loop/provider sessions are single-writer. Do not run another Codex session that edits
+  `packages/runtime/src/run-loop/*` or provider seams while `HEY-143` is active.
 - Parallel Codex sessions are allowed for context, safety, docs, app, eval, and read-only review when
   their write sets do not overlap.
 - Each session works on its own branch/worktree and opens a PR or reports why it is blocked.
@@ -433,7 +436,7 @@ Session lifecycle:
 
 Good parallel session examples:
 
-- `HEY-142` runtime loop: one Codex session only.
+- `HEY-143` provider-readiness/runtime lane: one Codex session only.
 - `HEY-15` recall runtime: separate context session if it avoids runtime-loop files.
 - `HEY-13` sanitiser/Scribe placement: separate safety session if it declares boundaries.
 - `HEY-137` DeliveryGate tests: separate test-hardening session.
@@ -565,10 +568,10 @@ For harness/runtime changes, include focused runtime or contract tests and evide
 
 Start from Linear and the active docs, not from archived plans:
 
-- Runtime builder: HEY-142 first.
+- Runtime builder: HEY-143 next; HEY-142 is merged.
 - Context builder: HEY-15, then HEY-14 and HEY-16.
 - Safety builder: HEY-13 / HEY-141 where scoped.
-- Infra/provider builder: HEY-143 only after HEY-142.
+- Infra/provider builder: HEY-143 now that HEY-142 has merged.
 
 When in doubt, post the current -> ideal -> gap and ask for the lane owner before editing shared
 runtime files.

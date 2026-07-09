@@ -30,11 +30,12 @@ Primary backend sources:
 | Source | Why it matters |
 | --- | --- |
 | `docs/foundation/CONTRIBUTOR-ONBOARDING.md` | Short path for new contributors and lane ownership. |
-| `docs/foundation/NEXT-SESSION-PLAN.md` | Current HEY-142 entrypoint and acceptance bar. |
+| `docs/foundation/NEXT-SESSION-PLAN.md` | Current HEY-143 entrypoint and acceptance bar. |
 | `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md` | Verification wall and runtime/evidence testing standard. |
 | `docs/foundation/AGENT-OPERATING-WORKFLOW.md` | Session loop, skill map, plugin boundaries, and verification wall. |
 | `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` | HEY-10 deferred DO table coverage: ADR/Linear ownership for goals, memory edges, commitments, handoff state, and compaction. |
-| `docs/foundation/HEY-111-EVIDENCE-SPINE.md` | Merged fake-first replay/evidence surface that HEY-142 must reuse. |
+| `docs/foundation/HEY-111-EVIDENCE-SPINE.md` | Merged fake-first replay/evidence surface reused by HEY-142 and still required for HEY-143. |
+| `docs/foundation/HEY-142-PHASE-HANDOFF.md` | Post-merge HEY-142 evidence, residual risks, and HEY-143 prerequisites. |
 | `packages/contracts/src/index.ts` | Barrel for the implemented contract spine. |
 | `packages/runtime/src/run-loop/do.ts` | Fake-first hardened runtime driver. |
 | `packages/runtime/test/run-loop.test.ts` | Current runtime proof and replay/evidence assertions. |
@@ -93,11 +94,12 @@ Built:
 - HEY-139 runtime driver hardening landed in PR #38 at `b736470`.
 - HEY-10 DO SQLite context schema root landed in PR #37 at `7980aad`.
 - HEY-111 runtime evidence spine landed in PR #39 at `61eb3c7`.
+- HEY-142 governed multi-iteration `plan -> act -> observe` loop landed in PR #42 at `d896500`.
 - Static guard wall and pinned verification command.
 
 Not built:
 
-- Governed multi-iteration `plan -> act -> observe` loop; HEY-142 owns this next runtime slice.
+- Real-provider flip readiness; HEY-143 owns this next runtime slice.
 - Production context builder, recall-before-act, skill loading, and prompt hydration; HEY-15/HEY-14/HEY-16 own this lane.
 - Scribe/sanitiser runtime and committed-memory proposal lifecycle beyond injected hook callbacks.
 - Multi-kind production channel delivery and app feed surfaces.
@@ -159,26 +161,25 @@ runtime 46 / 10 guards.
 Acceptance residue from HEY-124 is archived in
 `docs/foundation/archive/SLICE-3C-HANDOFF.md`. Do not use that handoff as the current slice plan.
 
-Remaining after HEY-139/HEY-111: governed iteration, production context/prompt hydration, Scribe
-proposal lifecycle, multi-kind production delivery, app/channel surfaces, and real-provider flip
-readiness.
+Remaining after HEY-142: real-provider flip readiness, production context/prompt hydration, Scribe
+proposal lifecycle, multi-kind production delivery, app/channel surfaces, and standalone eval/live
+evidence runners.
 
 ## Next Slice
 
-Build **HEY-142: governed multi-iteration `plan -> act -> observe` loop**.
+Build **HEY-143: real-provider flip readiness**.
 
-HEY-142 must keep the fake-first safety boundary while making the runtime loop honest: the model can
-plan, tools can run, observations can feed the next model pass, and governor budgets/kill/no-progress
-conditions bound the loop. It must reuse HEY-111 evidence instead of inventing a parallel trace path.
+HEY-143 must preserve the fake-first default while making the provider flip safe to test. The
+runtime loop can now iterate under governor control; the next gap is provider-readiness at the
+adapter/routing seam with explicit staging configuration, spend/kill safeguards, and replay evidence
+that excludes prompts, raw health, provider bodies, credentials, and channel payloads.
 
 Required first failing test:
 
-- At least one run performs multiple model/tool/observe passes before terminal gate/outbox.
-- Governor usage accumulates across every LLM pass and stops deterministically at budget.
-- Replay evidence shows each pass without prompt bodies, raw health, provider bodies, credentials,
-  or channel payloads.
-- Trace `event_key` granularity is revised if repeated event types within one runtime state step are
-  legitimate.
+- Real-provider adapter responses are parsed into the same contract-owned LLM response shape as the
+  fake provider.
+- Provider errors, malformed provider output, spend-cap/kill-switch decisions, and fallback
+  degradation are deterministic and replay-visible without raw provider bodies.
 - Prove fallback order: configured model full context, configured model reduced context, gateway
   fallback chain, then route floor behavior.
 - Prove circuit breaker scope/cooldown, spend-cap degradation, template fallback, and PostLLMCall
@@ -222,11 +223,11 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 7. HEY-136 · SLICE-6 run-loop integration — merged via PR #35 at `3d336c7`.
 8. HEY-139 · Runtime hardening follow-up — merged via PR #38 at `b736470`.
 9. HEY-111 · Runtime evidence spine — merged via PR #39 at `61eb3c7`.
-10. HEY-142 · governed multi-iteration `plan -> act -> observe` loop — next runtime slice. It must
-   reuse HEY-111 evidence and revisit trace `event_key` granularity if one runtime state step can
-   legitimately emit the same event type more than once.
-11. HEY-143 · real-provider flip readiness — after HEY-142 proves loop iteration with fake
-   provider/sinks.
+10. HEY-142 · governed multi-iteration `plan -> act -> observe` loop — merged via PR #42 at
+   `d896500`. It reused HEY-111 evidence; repeated event families remain unique across distinct
+   runtime state steps.
+11. HEY-143 · real-provider flip readiness — next runtime slice, after HEY-142 proved loop
+   iteration with fake provider/sinks.
 
 Claude context lane (parallel; fake-backed start allowed now):
 
@@ -268,12 +269,13 @@ Merge dependency:
 
 ## What To Grill Next
 
-Before opening or merging HEY-17, grill these decisions:
+Before opening or merging HEY-143, grill these decisions:
 
 1. Does every trigger resolve through contract-owned routing data, including provider swaps?
 2. Does fallback degrade context/model deterministically without logging raw prompts or raw health?
 3. Does spend-cap degradation stay separate from provider health and prompt-injection failure?
 4. Do PostLLMCall hooks gate and sanitise before the model text becomes a tool-call source?
-5. Did the PR avoid HEY-136 run-loop wiring, Scribe memory writes, live credentials, and channels?
-6. Which files are single-writer for HEY-17, and which eval/trace fixtures can run in parallel
+5. Did the PR avoid Scribe memory writes, live channel delivery, production credentials, and
+   provider body logging?
+6. Which files are single-writer for HEY-143, and which eval/trace fixtures can run in parallel
    without touching them?
