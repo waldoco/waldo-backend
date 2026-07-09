@@ -38,6 +38,505 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 | Provider flip | HEY-143 after HEY-142 | No live provider calls before fake-first iteration is proven. |
 | Product surfaces | Brief, Fetch, Chat, Spots after shared harness | Product loops should use the shared runtime spine, not bespoke paths. |
 
+## Detailed Track Build Order
+
+Use this section to assign ownership. Each contributor should take one track, declare owned files,
+and avoid editing another track's single-writer surfaces without coordination.
+
+### 0. Foundation / Dev Loop
+
+Status: mostly done. This is a support lane now.
+
+Order:
+
+`HEY-6 -> HEY-7 -> HEY-8 -> HEY-9`
+
+Done:
+
+- `HEY-6` repo/org/branch setup.
+- `HEY-7` type/contract foundation.
+- `HEY-8` Worker and Durable Object scaffold.
+- `HEY-9` Supabase canonical schema/RLS baseline.
+
+Next / parallel:
+
+- `HEY-103 -> HEY-104 -> HEY-105 -> HEY-106 -> HEY-107`.
+- Highest leverage: `HEY-107` CI/branch-protection verification wall if still open.
+
+Suggested owner: infra/dev-loop.
+
+### 1. Durable Runtime Spine
+
+Status: done as the core durability spine.
+
+Order:
+
+`HEY-120 -> HEY-121 -> HEY-124`
+
+Done:
+
+- `HEY-120` durable DeliveryGate/outbox exactly-once proof.
+- `HEY-121` promoted journal/outbox runtime interface.
+- `HEY-124` DeliveryGate runtime policy state.
+
+Next / parallel:
+
+- `HEY-100` DO-only conformance guard.
+- `HEY-125` ES256 issuer staging spike.
+
+Suggested owner: runtime/infra. Do not reopen the spine unless a later slice exposes a real gap.
+
+### 2. Wake / Governor / Scheduler
+
+Status: core control plane done; support follow-ups remain.
+
+Order:
+
+`HEY-122 -> HEY-123 -> HEY-77 -> HEY-12`
+
+Done:
+
+- `HEY-122` Loop Governor.
+- `HEY-123` scheduler/alarm multiplexer.
+- `HEY-77` triage dispatcher single entry.
+- `HEY-12` hook registry.
+
+Next / parallel:
+
+- `HEY-137` DeliveryGate test hardening; can start now.
+- `HEY-135` fleet watchdog; follows scheduler.
+- `HEY-138` user timezone / quiet-hours; after context/user timezone state exists.
+
+Suggested owner: runtime/control-plane.
+
+### 3. Main Runtime Loop
+
+Status: critical path.
+
+Order:
+
+`HEY-78 -> HEY-17 -> HEY-136 -> HEY-139 -> HEY-111 -> HEY-142 -> HEY-143`
+
+Done:
+
+- `HEY-78` ToolDispatcher + per-trigger ACL.
+- `HEY-17` fake-first LLMProvider.
+- `HEY-136` fake-first run-loop skeleton.
+- `HEY-139` runtime driver hardening.
+- `HEY-111` local runtime evidence/replay spine.
+
+Next:
+
+- `HEY-142` governed multi-iteration `plan -> act -> observe` loop.
+
+After:
+
+- `HEY-143` real-provider flip readiness.
+
+Suggested owner: Codex/runtime. This is single-writer over `packages/runtime/src/*`; do not
+parallelize `HEY-142` implementation with other runtime-loop edits.
+
+### 4. Context / Memory / Prompt
+
+Status: can run parallel to `HEY-142`.
+
+Order:
+
+`HEY-10 -> HEY-15 -> HEY-14 -> HEY-16`
+
+Done:
+
+- `HEY-10` DO SQLite context schema root.
+
+Next:
+
+- `HEY-15` recall-before-act.
+- `HEY-11` AuditedDB wrapper alongside.
+- `HEY-13` Scribe sanitiser runtime alongside.
+
+After:
+
+- `HEY-14` skill loader.
+- `HEY-16` REASONS prompt builder.
+
+Needed / related:
+
+- `HEY-144` before full goal hydration.
+- `HEY-134` Supabase schema re-land.
+- `HEY-133` ADR-0024 vocabulary sync.
+- `HEY-102`, `HEY-75`, `HEY-79`, `HEY-74` as context/safety support.
+
+Suggested owner: Claude/context plus Codex integration. Hard rule: no raw health in DO SQLite,
+prompts, logs, traces, or fixtures.
+
+### 5. Tools / Adapters / Write Gates
+
+Status: after core loop/context for integration, but design and isolated adapter work can start.
+
+Order:
+
+`HEY-129 -> HEY-48 -> HEY-31 -> HEY-30/HEY-98 -> adapters -> write tools`
+
+Adapters:
+
+- `HEY-38` document adapter.
+- `HEY-39` email drafts.
+- `HEY-64` calendar OAuth.
+- `HEY-50` sheets.
+
+Write tools:
+
+- `HEY-40`, `HEY-41`, `HEY-42`, `HEY-51`, `HEY-52`.
+
+External / decision blockers:
+
+- `HEY-130` Google restricted-scope verification; can start early.
+- `HEY-99` spend-cap decision; blocks production cap policy.
+
+Suggested owner: adapter/tooling lane. Restricted writes wait for OAuth custody, ACL, autonomy, and
+sanitiser gates.
+
+### 6. Delivery / Product Loops
+
+Status: after the shared harness loop is real.
+
+Order:
+
+`HEY-18 -> HEY-19 -> HEY-127 -> HEY-126 -> product loop skills/threading`
+
+Channels:
+
+- `HEY-18` Telegram inbound and shared thread identity.
+- `HEY-19` APNs.
+- `HEY-5` Apple/APNs external setup is done.
+
+Product surfaces:
+
+- `HEY-127` in-app feed; needs founder/Suyash input.
+- `HEY-126` live-chat transport spike.
+- `HEY-131` Telegram privacy/product residue.
+
+Skills / threading:
+
+- `HEY-20` through `HEY-24`, plus `HEY-44` and `HEY-45`.
+- `HEY-25` through `HEY-27`.
+- `HEY-32`, `HEY-46`, `HEY-66`, `HEY-67`, `HEY-43`.
+
+Suggested owner: channel/product plus app team. Product loops must use the shared harness, not
+bespoke paths.
+
+### 7. Eval / Launch Hardening
+
+Status: evidence spine has started; launch proof remains.
+
+Order:
+
+`HEY-111 -> HEY-53 -> HEY-54 -> HEY-55`
+
+Done:
+
+- `HEY-111` local runtime evidence/replay spine.
+
+Next eval:
+
+- `HEY-53` LLM judge.
+- `HEY-54` WIS instrumentation.
+- `HEY-55` 30 golden eval cases.
+
+Launch proof:
+
+- `HEY-101` GDPR deletion cascade.
+- `HEY-128` privacy artifacts, DPIA, and consent model.
+- `HEY-113` through `HEY-118` Supabase hardening.
+- `HEY-99` outcome/spend enforcement.
+
+Suggested owner: eval/privacy/infra. Beta gate requires replay, crash/resume, privacy fuzzing, and
+mutation evidence.
+
+### 8. App Track
+
+Status: parallel, but depends on backend contracts and delivery surfaces.
+
+Order:
+
+`HEY-132 -> iOS surfaces -> channel/feed integration`
+
+Next:
+
+- `HEY-132` generated client refresh from committed OpenAPI artifact.
+
+After:
+
+- iOS/chat/feed surfaces as backend contracts stabilize.
+- Push/feed surfaces after `HEY-18`, `HEY-19`, and `HEY-127`.
+
+Suggested owner: app team.
+
+### 9. Deferred / Post-V1
+
+Status: do not assign for V1 unless founder scope changes.
+
+Deferred:
+
+- `HEY-49`, `HEY-37`, `HEY-58`, `HEY-59`.
+- `HEY-80` through `HEY-97`.
+- `HEY-76`, `HEY-108`, `HEY-60`, `HEY-61`, `HEY-62`.
+
+Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open.
+
+## What To Assign Now
+
+1. Runtime single writer: `HEY-142`.
+2. Context parallel: `HEY-15`, `HEY-11`, `HEY-13`.
+3. Safe parallel: `HEY-137`, `HEY-141`, `HEY-100`, `HEY-125`, `HEY-104` through `HEY-107`.
+4. Human/external: `HEY-128`, `HEY-130`, `HEY-127`, `HEY-131`.
+5. App parallel: `HEY-132`.
+
+## How We Use Skills, Agents, And Coding Rules
+
+Skills and agents are part of the build discipline, not ceremony. Use them to reduce ambiguity,
+catch failure modes, and leave evidence that another contributor can inspect.
+
+### Required Source Load
+
+At the start of a non-trivial session:
+
+1. Read `AGENTS.md`.
+2. Read `.claude/rules/INDEX.md` and the referenced rule files.
+3. Read this onboarding file.
+4. Read `docs/foundation/NEXT-SESSION-PLAN.md` and the section of
+   `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md` for the touched seam.
+5. Read the relevant accepted ADRs and Waldo Brain source pages.
+6. Read the specific skill instructions you will use. Do not load the whole skill directory.
+
+### Skill Loop
+
+Use this default sequence for runtime, context, tool, adapter, schema, or safety work:
+
+```text
+Open:
+  /session-bus when coordinating across sessions
+  read rules + onboarding + active plan + relevant ADRs
+
+Shape:
+  /current-ideal-gap for small fuzzy work
+  /waldo-isa-run-contract for non-trivial work or handoffs
+  /thinking-mode-router when the uncertainty type matters
+
+Design:
+  /codebase-design for modules, interfaces, seams, adapters, and impact surface
+  name owned files and out-of-scope files before editing
+
+Build:
+  /tdd for new behavior
+  /diagnose for bugs, regressions, or flakes
+  /check-contract for DTOs, schemas, tool outputs, adapters, Worker/EF responses, persisted rows
+
+Break:
+  /break-feature or qa-breaker for happy/null/hostile/concurrent/degraded paths
+  /review-all or /code-review before merge
+
+Close:
+  npx -y pnpm@10.34.4 verify
+  git diff --check
+  /run-eval when evals exist; otherwise record the eval-suite gap
+  /compound-learning-capture when a reusable lesson emerged
+  /phase-handoff at phase or lane boundaries
+```
+
+### Skill Selection
+
+Use these consistently:
+
+| Skill | Use it when |
+| --- | --- |
+| `/current-ideal-gap` | The work needs a quick current -> ideal -> gaps -> verification pass. |
+| `/waldo-isa-run-contract` | Done must be durable: criteria, tests, work slices, evidence, learning. |
+| `/thinking-mode-router` | The task needs first-principles, systems, RCA, red-team, research, or council mode. |
+| `/codebase-design` | You are changing modules, seams, interfaces, adapters, contracts, or shared vocabulary. |
+| `/tdd` | You are adding new runtime, contract, schema, adapter, or safety behavior. |
+| `/diagnose` | You are debugging a failure, regression, flake, or confusing behavior. |
+| `/check-contract` | You touch `packages/contracts`, persisted rows, DTOs, tool outputs, or adapter boundaries. |
+| `/break-feature` | A feature appears done and needs adversarial proof. |
+| `/review-all` | The change touches auth, health data, RLS, DO memory, prompts, provider calls, or delivery. |
+| `/run-eval` | Eval suite exists or the ticket claims eval/replay/quality evidence. |
+| `/compound-learning-capture` | A fix or review produced a reusable lesson. |
+| `/phase-handoff` | A phase, lane, or PR series is ending and another builder will continue. |
+
+### How We Use Agents
+
+Use agents to split work only when the ownership boundaries are clear.
+
+Good agent assignments:
+
+- Read-only source reconstruction from ADRs, Waldo Brain, Linear, and local docs.
+- Workflow mapping before a new Durable Object, Edge Function, schema, adapter, or channel path.
+- Adversarial QA for privacy leaks, retry/resume bugs, duplicate side effects, malformed inputs,
+  permission revocation, null health data, and timeout behavior.
+- Spec-vs-code review after implementation.
+- Fixture or eval-case drafting that does not touch shared runtime files.
+
+Do not use agents this way:
+
+- Do not let multiple agents edit `packages/runtime/src/*` at the same time.
+- Do not let multiple agents edit shared contract barrels, schema vocabularies, model roster, trigger
+  registry, or policy files at the same time.
+- Do not treat subagent output as proof. The main owner must spot-check sources, run tests, review
+  diffs, and own the final claim.
+- Do not ask an agent to use live credentials, live providers, live channel delivery, or production
+  Cloudflare/Supabase state unless the ticket explicitly scopes it and the user approves.
+
+Every agent task should include:
+
+```text
+Owner:
+Ticket:
+Primary sources:
+Files owned:
+Files explicitly out of scope:
+Invariant:
+First failing test or review target:
+Verification command:
+Merge dependency:
+```
+
+### How We Manage Codex Sessions
+
+Treat each Codex session as an owned build lane with a bounded contract, not an open-ended chat.
+
+Session rules:
+
+- One Codex session owns one ticket or one clearly named lane.
+- The session starts by reading `AGENTS.md`, this onboarding file, the active plan, relevant ADRs,
+  and the ticket body/comments.
+- The session declares owned files and out-of-scope files before editing.
+- Runtime-loop sessions are single-writer. Do not run another Codex session that edits
+  `packages/runtime/src/run-loop/*` while `HEY-142` is active.
+- Parallel Codex sessions are allowed for context, safety, docs, app, eval, and read-only review when
+  their write sets do not overlap.
+- Each session works on its own branch/worktree and opens a PR or reports why it is blocked.
+- Each session posts evidence: changed files, tests run, skipped gates, residual risks, and exact next
+  dependency.
+- Coordinator reviews claims against source, tests, and diff before merging.
+
+Session lifecycle:
+
+```text
+1. Assign one Linear ticket and one lane.
+2. Paste the session prompt with primary sources, skills, ownership, and non-goals.
+3. Let the session implement or verify inside its own branch/worktree.
+4. Ask for a final report with observed evidence, inference, blockers, tests, and PR status.
+5. Main coordinator spot-checks the diff and runs/reads verification.
+6. Merge only when the PR claim matches the evidence.
+7. Update Linear and, if needed, active docs.
+```
+
+Good parallel session examples:
+
+- `HEY-142` runtime loop: one Codex session only.
+- `HEY-15` recall runtime: separate context session if it avoids runtime-loop files.
+- `HEY-13` sanitiser/Scribe placement: separate safety session if it declares boundaries.
+- `HEY-137` DeliveryGate tests: separate test-hardening session.
+- `HEY-132` app generated client: separate app session.
+
+Bad parallel session examples:
+
+- Two sessions both editing `RunLoopDO`.
+- One session changing `packages/contracts/src/index.ts` while another changes public contract exports.
+- A channel session wiring live delivery before the fake harness loop is verified.
+- A provider session using real credentials before `HEY-143`.
+
+### Example Codex Session Prompt
+
+Use this shape when assigning a ticket. Replace bracketed fields before sending.
+
+```text
+You are starting a focused Waldo backend build session for [HEY-### / ticket title].
+
+Repo:
+- /Users/shivanshfulper/Developer/Pin4sf/waldo-backend
+- Work from latest main.
+- Create/use a branch named codex/[short-ticket-slug].
+
+Goal:
+- Complete [specific ticket outcome].
+- Keep the claim narrow: [what this proves] and not [what remains out of scope].
+
+Required reading before edits:
+1. AGENTS.md
+2. .claude/rules/INDEX.md and referenced universal rules
+3. docs/foundation/CONTRIBUTOR-ONBOARDING.md
+4. docs/foundation/NEXT-SESSION-PLAN.md
+5. docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md
+6. docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md
+7. The Linear ticket body and latest comments for [HEY-###]
+8. Relevant accepted ADRs and Waldo Brain source files for this seam
+9. Relevant official library docs/cookbooks for any tool or framework touched
+
+Required skills/modes:
+- /waldo-isa-run-contract to define current -> ideal -> done
+- /codebase-design for the seam and ownership boundary
+- /tdd for new behavior or /diagnose for a bug
+- /check-contract if contracts, schemas, DTOs, persisted rows, tool outputs, or adapters are touched
+- /break-feature before calling the ticket done
+- /run-eval if eval/replay quality is claimed; otherwise record the eval-suite gap
+- /compound-learning-capture if reusable lessons emerge
+- /phase-handoff if the session ends with follow-up work
+
+Ownership:
+- Files owned: [exact files/directories]
+- Files explicitly out of scope: [exact files/directories]
+- Single-writer rule: do not edit shared runtime/contract files outside this list without stopping and reporting.
+
+Constraints:
+- Do not make live provider calls.
+- Do not use live credentials.
+- Do not trigger live channel delivery.
+- Do not cause production Cloudflare or Supabase side effects.
+- Do not write raw health/private data into docs, logs, traces, fixtures, or Linear.
+- Distinguish [observed] facts from [inference].
+- Do not claim completion without verification evidence.
+
+Implementation bar:
+- Add failing tests first where practical.
+- Cover happy, degraded, malformed, denied, retry/resume, timeout, and privacy paths relevant to this ticket.
+- Keep changes scoped; no broad refactors.
+
+Verification:
+- Run focused tests for touched code.
+- Run npx -y pnpm@10.34.4 verify unless the ticket is docs-only.
+- Run git diff --check.
+- For docs-only work, run git diff --check and npx -y pnpm@10.34.4 verify:guards.
+
+Deliverables:
+1. PR or local diff summary.
+2. Exact changed files.
+3. Tests/commands run and results.
+4. Residual risks and follow-up tickets.
+5. Linear-ready update comment.
+6. If blocked, say exactly what is blocked and what source/evidence proves it.
+```
+
+### Coding Rules Contributors Must Follow
+
+- Contract-first: public, persisted, tool, adapter, and DTO shapes belong in `packages/contracts`
+  with strict schemas where appropriate.
+- Source-backed: accepted ADRs, active foundation docs, and verified code beat stale Linear text or
+  archived plans.
+- Single writer: coordinate before editing shared runtime, contracts, schema barrels, registries,
+  policies, model roster, triggers, or migrations.
+- Privacy floor: no raw health, prompts, provider bodies, credentials, cookies, auth headers, or
+  channel payload bodies in logs, DO SQLite, R2, traces, fixtures, docs, or Linear.
+- Fake-first until scoped otherwise: no live provider calls, live credentials, live channel delivery,
+  or production Cloudflare/Supabase side effects by default.
+- Durable behavior needs durable evidence: journal, trace, replay, eval, ACL, sanitiser, or state
+  evidence must prove the claim.
+- Tests must cover degraded paths: malformed model output, denied tools, duplicate triggers,
+  crash/resume, budget kill, timeout, null/missing data, and permission revocation where relevant.
+- No broad refactors inside feature PRs. Keep changes scoped to the ticket's seam and ownership
+  boundary.
+- Report skipped gates honestly. Do not mark a ticket complete because the happy path works.
+
 ## Working Rules
 
 - Keep raw health, secrets, provider bodies, prompts, and live channel payloads out of logs, DO
