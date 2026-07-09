@@ -3,8 +3,10 @@ import { armAlarm } from './scheduler/alarm-slot';
 
 export * from './hooks/registry';
 export * from './llm/provider';
+export * from './run-loop/do';
 export * from './tools/dispatcher';
 export { TracerDO } from './tracer/tracer-do';
+import type { RunLoopDO } from './run-loop/do';
 import type { TracerDO } from './tracer/tracer-do';
 
 // Augment the ambient worker env so both the DO base (typed on Cloudflare.Env)
@@ -13,6 +15,7 @@ declare global {
   namespace Cloudflare {
     interface Env {
       RUNTIME_DO: DurableObjectNamespace<RuntimeProbeDO>;
+      RUN_LOOP_DO: DurableObjectNamespace<RunLoopDO>;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
     }
   }
