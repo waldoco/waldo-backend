@@ -26,7 +26,9 @@ Read in this order:
 5. `docs/foundation/BUILD-PLAN.md`
 6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
 7. `docs/foundation/FOUNDATION-HANDOVER.md`
-8. The Waldo Brain source files listed in the runtime build plan for the seam being reviewed.
+8. `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` when touching HEY-10 or DO SQLite schema scope.
+9. `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` when touching deferred DO SQLite tables.
+10. The Waldo Brain source files listed in the runtime build plan for the seam being reviewed.
 
 Then run the baseline gate before planning claims or edits:
 

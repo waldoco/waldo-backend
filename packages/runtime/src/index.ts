@@ -3,6 +3,7 @@ import { armAlarm } from './scheduler/alarm-slot';
 
 export * from './hooks/registry';
 export * from './llm/provider';
+export * from './do-schema';
 export * from './run-loop/do';
 export * from './tools/dispatcher';
 export { TracerDO } from './tracer/tracer-do';
