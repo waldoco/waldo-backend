@@ -224,24 +224,27 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 5. HEY-78 · ToolDispatcher + per-trigger ACL — merged via PR #33 at `600fb34`.
 6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — merged via PR #34 at `0aae766`.
 7. HEY-136 · SLICE-6 run-loop integration — merged via PR #35 at `3d336c7`.
-8. Runtime hardening after HEY-136 — current slice; closes spend-cap, governor-terminal, adapter
-   seam, and observe-pass gaps before the first honest agent-harness alpha.
-9. HEY-139 · Runtime hardening follow-up — ingress, idempotent duplicate wakes, integrated gate
-   branches, and remaining malformed/denied branch coverage before Agent Harness Alpha.
+8. HEY-139 · Runtime hardening follow-up — merged via PR #38 at `b736470`.
+9. HEY-111 · Runtime evidence spine — merged via PR #39 at `61eb3c7`.
+10. HEY-142 · governed multi-iteration `plan -> act -> observe` loop — next runtime slice. It must
+   reuse HEY-111 evidence and revisit trace `event_key` granularity if one runtime state step can
+   legitimately emit the same event type more than once.
+11. HEY-143 · real-provider flip readiness — after HEY-142 proves loop iteration with fake
+   provider/sinks.
 
 Claude context lane (parallel; fake-backed start allowed now):
 
-- HEY-10 (DO SQLite base tables) -> HEY-15 (recall-before-act) -> HEY-14 (skill loader) ->
-  HEY-16 (REASONS prompt builder). HEY-11 (AuditedDB) rides HEY-10. HEY-13 (sanitiser runtime)
-  runs parallel — the governor egress floor and Scribe both consume it. HEY-102 (CRS) may stay
-  faked through SLICE-6.
-- HEY-10 lands the exact 10-table base schema in
+- HEY-10 (DO SQLite base tables) merged via PR #37 at `7980aad` -> HEY-15
+  (recall-before-act) -> HEY-14 (skill loader) -> HEY-16 (REASONS prompt builder). HEY-11
+  (AuditedDB) rides HEY-10. HEY-13 (sanitiser runtime) runs parallel — the governor egress floor
+  and Scribe both consume it. HEY-102 (CRS) may stay faked through SLICE-6.
+- HEY-10 landed the exact 10-table base schema in
   `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md`. `goals` is intentionally excluded and owned by
   HEY-144, which blocks full HEY-16 goal hydration. Deferred tables remain mapped in
   `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md`.
 
-Safe-parallel at any point: HEY-111 (eval/trace spine — the hardened loop is proven against its assertions),
-HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100, HEY-125.
+Safe-parallel at any point: HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100,
+HEY-125, HEY-141, and channel/fake-sink prep that does not trigger live delivery.
 
 Ordered follow-ups, not on the critical path: HEY-138 (ADR-0068 D4 timezone/quiet-hours — after
 HEY-10), HEY-135 (fleet watchdog — after HEY-123), HEY-18/HEY-19 channels (after HEY-136; they make

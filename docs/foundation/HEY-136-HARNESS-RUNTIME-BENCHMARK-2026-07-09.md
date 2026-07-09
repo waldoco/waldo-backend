@@ -20,6 +20,12 @@ This is a credible proof of loop anatomy, not a credible proof of the actual age
 
 ## Post-Benchmark Hardening Status
 
+[observed] Update after 2026-07-09 merges: PR #38 / HEY-139, PR #37 / HEY-10, and PR #39 /
+HEY-111 are now merged into `main` through `61eb3c7`. The original verdict still holds: Waldo has
+a much stronger fake-first harness proof, but the actual Pi/Hermes-style loop is still not complete
+until HEY-142 builds governed multi-iteration `plan -> act -> observe` behavior and the context lane
+wires real recall/prompt/skill hydration.
+
 [observed] A follow-up Runtime hardening branch was started after this benchmark. It does not make
 the runtime production-ready, but it closes several integration gaps identified here:
 
@@ -28,16 +34,18 @@ the runtime production-ready, but it closes several integration gaps identified 
 - The fake run loop now performs plan -> tool dispatch -> observe/synthesise before gate/outbox.
 - Runtime fake provider/sink behavior is behind a test override seam so adversarial loop tests do
   not require live provider calls or channel delivery.
+- Duplicate schedule/run idempotency, authenticated local ingress, gate branches, malformed/denied
+  branches, and replayable local evidence are now covered by HEY-139 / HEY-111.
 
 Remaining P0 gaps before an honest Agent Harness Alpha:
 
-- Duplicate schedule/run idempotency.
-- Real authenticated local ingress into `RunLoopDO`.
-- Integrated gate hold/drop/degrade cases inside the run loop.
-- HEY-111 replay/eval/trace spine.
+- HEY-142 governed multi-iteration loop; the current run loop can observe once but is not yet a
+  general iterative agent runtime.
 - Real context/recall/prompt/skill hydration behind fake provider and fake delivery.
+- HEY-143 real-provider flip readiness after HEY-142 proves iteration with fake adapters.
 
-Linear mapping: HEY-139 owns the remaining runtime-driver hardening gaps; HEY-111 owns replay/eval.
+Linear mapping: HEY-142 owns runtime iteration; HEY-15/HEY-14/HEY-16 own context, recall, skills,
+and prompt hydration; HEY-143 owns fake-to-real provider readiness.
 
 ## Run Contract
 
@@ -239,18 +247,17 @@ Gaps:
 
 ## Priority Backlog
 
-P0 - Add a HEY-136 follow-up hardening issue:
+P0 - HEY-142 governed multi-iteration loop:
 
-- Real authenticated local ingress to schedule/inspect runs without production side effects.
-- Duplicate schedule/run idempotency using the contract scheduled occurrence model.
-- Integrated gate hold/drop/degrade, malformed LLM output, denied tools, bad tool args, and
-  stronger redaction assertions.
-- Crash tests around side-effect success before durable commit.
+- Turn the current plan/tool/observe/synthesise path into a real bounded loop.
+- Accumulate governor usage across all model/tool passes.
+- Revisit trace `event_key` granularity if the same event type can appear multiple times in one
+  runtime state step.
 
 P0 - HEY-111 observability/eval/replay spine:
 
-- Turn `runtime_trace` and `runtime_journal` into replayable scenario fixtures.
-- Add local eval cases for happy, failure, resume, no-delivery, and redaction behavior.
+- Merged via PR #39. Continue extending this surface during HEY-142 rather than inventing a second
+  trace/eval path.
 
 P0 - HEY-10 / HEY-13 / HEY-15 / HEY-14 / HEY-16 context, recall, prompt, skills, Scribe:
 

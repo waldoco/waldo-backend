@@ -1,6 +1,6 @@
 # HEY-10 DO SQLite Schema
 
-Status: implemented in `packages/runtime/src/do-schema.ts`.
+Status: implemented in `packages/runtime/src/do-schema.ts`; merged via PR #37 at `7980aad`.
 Date: 2026-07-09.
 
 ## Positioning

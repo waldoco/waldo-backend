@@ -1,6 +1,6 @@
 # HEY-111 Evidence Spine
 
-Status: implementation note for the local fake-first runtime proof spine.
+Status: merged local fake-first runtime proof spine. Landed in PR #39 at `61eb3c7`.
 
 ## Positioning
 
@@ -36,6 +36,8 @@ Status: implementation note for the local fake-first runtime proof spine.
 [observed] This slice does not write Supabase `agent_logs`, `trace_evaluations`, outcome signals, or R2 Interaction Journal segments. It does not add dashboards, OTel/Langfuse export, live provider traces, LLM judge, a 30-case corpus, mobile/channel delivery, or HEY-142 loop iteration logic.
 
 [blocked] Full WIS/keep-rate scoring is not observable from fake-first local runs because there is no real user outcome signal in this runtime slice. The contract reports `wis.available = false` with reason `not_observed_fake_first`.
+
+[inference] HEY-142 should revisit trace `event_key` granularity if the real iteration loop can emit the same event type more than once within one runtime state step. HEY-111's current key is designed for retry/resume dedupe in the fake-first proof path.
 
 ## Verification Recipe
 
