@@ -5,11 +5,13 @@
   "durable_objects": {
     "bindings": [
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
+      { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
       { "name": "TRACER_DO", "class_name": "TracerDO" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["TracerDO"] }
+    { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
+    { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] }
   ]
 }
