@@ -255,7 +255,7 @@ describe('RuntimeLLMProvider', () => {
     expect(gateway.requests).toHaveLength(3);
   });
 
-  it('records spend-cap degradation as budget, not provider failure or injection', async () => {
+  it('uses the deterministic floor without a gateway call when spend cap is reached', async () => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
       data: response(request.request.model, 'primary degraded answer'),
@@ -282,10 +282,18 @@ describe('RuntimeLLMProvider', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.routing_log).toBe('spend_cap_degrade');
-    expect(result.response.model).toBe(ROSTER.primary);
-    expect(result.fallback_step).toBe('configured_model');
+    expect(result.response).toEqual({
+      model: ROSTER.primary,
+      text: 'template fallback',
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      latency_ms: 0,
+    });
+    expect(result.fallback_step).toBe('template');
     expect(result.degraded).toBe(true);
-    expect(gateway.requests.map((request) => request.step.model)).toEqual([ROSTER.primary]);
+    expect(result.attempts).toEqual([]);
+    expect(gateway.requests).toEqual([]);
   });
 
   it('returns the sanitised PostLLMCall text as the tool-call source', async () => {

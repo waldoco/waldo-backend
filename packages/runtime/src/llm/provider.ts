@@ -212,8 +212,7 @@ export function selectModelRoute(input: SelectModelRouteInput): ModelRoute {
     throw new Error(`routing policy missing trigger: ${trigger}`);
   }
 
-  const selected = spendCapExceeded(input.spend) ? { ...route, fallback: [] } : route;
-  return modelRouteSchema.parse(selected);
+  return modelRouteSchema.parse(route);
 }
 
 export class RuntimeLLMProvider {
@@ -237,6 +236,10 @@ export class RuntimeLLMProvider {
       ? 'spend_cap_degrade'
       : null;
     const attempts: LLMAttempt[] = [];
+
+    if (routingLog === 'spend_cap_degrade') {
+      return templateOrFailure(input, route, attempts, routingLog);
+    }
 
     for (const plan of attemptPlan(route)) {
       if (this.circuitBreaker.isOpen(plan.step.provider)) {
