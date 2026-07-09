@@ -42,3 +42,10 @@ test in this package:
 pnpm --filter @waldo/runtime typecheck
 pnpm --filter @waldo/runtime test
 ```
+
+## Local bindings
+
+- `RUN_LOOP_LOCAL_INGRESS_TOKEN` enables the fake-first `RunLoopDO` local ingress
+  test seam. Leave it unset outside local/test harnesses; ingress fails closed when
+  the binding is absent or shorter than 16 characters. The Vitest pool supplies a
+  non-secret synthetic value in `vitest.config.ts`.

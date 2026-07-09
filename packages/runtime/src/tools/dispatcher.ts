@@ -124,6 +124,16 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(call.id, null, 'unknown tool', 'invalid_args', 'unknown_tool');
   }
 
+  if (!sessionToolAllowed(ctx.session, tool.data)) {
+    return failDispatch(
+      call.id,
+      tool.data,
+      'tool outside trigger ACL',
+      'forbidden',
+      'acl_denied',
+    );
+  }
+
   const handler = options.handlers.find((candidate) => candidate.name === tool.data);
   if (handler === undefined) {
     return failDispatch(
@@ -142,16 +152,6 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       'tool handler ACL drift',
       'transient',
       'handler_acl_drift',
-    );
-  }
-
-  if (!sessionToolAllowed(ctx.session, tool.data)) {
-    return failDispatch(
-      call.id,
-      tool.data,
-      'tool outside trigger ACL',
-      'forbidden',
-      'acl_denied',
     );
   }
 

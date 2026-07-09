@@ -9,6 +9,11 @@ export default defineConfig({
   },
   plugins: [
     cloudflareTest({
+      miniflare: {
+        bindings: {
+          RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
+        },
+      },
       wrangler: { configPath: './wrangler.jsonc' },
     }),
   ],
