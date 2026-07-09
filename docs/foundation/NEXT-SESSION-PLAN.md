@@ -1,17 +1,19 @@
-# Next Session Plan - Harness Runtime HEY-17 Review
+# Next Session Plan - Runtime Hardening To Agent Harness Alpha
 
-Status: active entrypoint for HEY-17 draft PR #34 review and HEY-136 prep after merge.
+Status: active entrypoint after HEY-17 and HEY-136. The current lane is Runtime hardening before
+the first honest agent-harness alpha.
 Date: 2026-07-09 IST.
 Baseline: SLICE-3a/HEY-120 merged in PR #21, SLICE-3b/HEY-121 merged in PR #23 at
 `f47127f`, SLICE-3c/HEY-124 merged in PR #24 at `5789b42`, HEY-122/SLICE-4 merged in
 PR #27, HEY-123/SLICE-5 merged in PR #28 at `061e72c`, HEY-77 triage dispatcher merged
 in PR #29 at `a947600`, HEY-12 hook registry merged in PR #31 at `1b180ef`, and HEY-78
-ToolDispatcher + per-trigger ACL enforcement merged in PR #33 at `600fb34`.
+ToolDispatcher + per-trigger ACL enforcement merged in PR #33 at `600fb34`. HEY-17 merged in
+PR #34 at `0aae766`; HEY-136 merged in PR #35 at `3d336c7`.
 
-HEY-17 is the current runtime-lane unit in draft PR #34 on branch
-`codex/hey-17-llmprovider-routing`. It
-adds the fake-first LLMProvider routing seam behind contract-owned model routes and Cloudflare AI
-Gateway request policy. HEY-136 must not start until HEY-17 is accepted or merged.
+HEY-136 proved the fake-first run-loop skeleton. The current hardening branch closes the highest
+integration gaps before live provider/channel or memory work: spend cap must avoid gateway calls,
+governor deny decisions must become durable runtime failures, and the loop must do a
+plan -> act -> observe/synthesise pass rather than gating a constant string.
 
 ## Start Here
 
@@ -42,49 +44,46 @@ git diff --check
   goal/outbox/policy, tools, memory, prompt, model routing, adapters, public DTO/OpenAPI,
   telemetry, and evidence lanes.
 - The runtime spine now includes journal/outbox, DeliveryGate, Loop Governor, scheduler/alarm
-  multiplexer, triage dispatcher, hook registry, and ToolDispatcher/ACL runtime.
-- HEY-17 is intentionally fake-first: it proves contract-owned model route selection, gateway
-  request shaping, fallback, circuit behavior, spend-cap degradation, template fallback, hook
-  composition, and metering-only return data without live provider credentials or calls.
+  multiplexer, triage dispatcher, hook registry, ToolDispatcher/ACL runtime, fake-first
+  LLMProvider routing, and fake-first `RunLoopDO`.
+- HEY-136 is intentionally fake-first: it proves loop anatomy and durable resume, not production
+  provider/channel/memory behavior.
+- The active hardening slice keeps live provider calls, live channel delivery, Scribe writes, and
+  raw health/private data out of scope.
 - Split work by runtime seam, not by product pillar. Brief, Fetch, Spots, and Chat all converge on
   the same DO loop, journal, scheduler, dispatcher, memory, model, and delivery files.
 
 ## Exact Current Slice
 
-Review and finish **HEY-17: LLMProvider via CF AI Gateway, fake-first**.
+Finish **Runtime hardening after HEY-136**.
 
 Goal:
 
-- One runtime LLMProvider seam selects a `ModelRoute` from `packages/contracts`.
-- Provider/model swaps are data-driven through the routing policy, not scattered conditionals.
-- Gateway calls receive constant Cloudflare AI Gateway safety headers, especially
-  `cf-aig-collect-log-payload:false`.
-- Fallback order is deterministic: configured model full context, configured model reduced
-  context, gateway fallback chain reduced context, then floor behavior.
-- Spend-cap degradation is logged as budget state, not injection or provider failure.
-- Circuit breakers are provider-scoped and cool down without taking every provider dark.
-- Post-LLM hooks gate and sanitise generated text before it becomes tool-call source text.
-- Output contains metering and bounded model text only; it does not persist prompts, raw health, or
-  live provider payloads.
+- Preserve the HEY-136 full-FSM proof while making the loop harder to overclaim.
+- Spend cap means no gateway call; use deterministic floor behavior.
+- Governor deny decisions at admission, usage, observation, and egress become durable runtime
+  `FAILED` outcomes.
+- The loop performs plan -> tool dispatch -> observe/synthesise before gate/outbox.
+- Runtime fakes are behind adapter seams so tests can swap gateway/sink behavior without editing
+  production code paths.
 
-Out of scope for HEY-17:
+Out of scope for this hardening slice:
 
-- Full run-loop integration (HEY-136).
 - Live provider calls, live API credentials, or provider-specific SDK adoption.
 - Scribe memory writes or committed memory mutation.
-- Context/prompt hydration beyond caller-injected request rendering.
-- Tool execution, already owned by HEY-78.
+- Real context/prompt hydration beyond fake-derived context.
+- Real gate verdict selection beyond the current fake brief send path.
 - Channel delivery and app feed integration.
+- Multi-loop arbitration across simultaneous product loops.
 
 Acceptance:
 
-- Failing tests first for route selection, provider swaps through config, gateway headers, fallback
-  order, circuit cooldown, template floor, spend-cap degradation, and PostLLMCall safety.
+- Failing tests first for spend cap, governor admission deny, mid-run budget kill, and
+  observe/synthesise behavior.
 - Existing contracts and runtime tests still pass.
-- `/check-contract`: runtime imports and parses contract-owned schemas instead of duplicating model
-  route or LLM response shapes.
-- `/break-feature`: happy, null/malformed, hostile, concurrent, and degraded cases are covered or
-  explicitly recorded as residual risk.
+- `/check-contract`: runtime remains on contract-owned run states, model routes, tool schemas, and
+  governor decisions.
+- `/break-feature`: the PR must not imply production provider/channel/memory readiness.
 - `npx -y pnpm@10.34.4 verify` and `git diff --check` pass.
 
 ## Async Pillars
@@ -97,8 +96,8 @@ Acceptance:
 | Loop Governor Runtime | Complete through PR #27 | Codex/policy runtime | Deterministic admission, budget kill, stuck-loop guard. |
 | Dispatcher + Hooks + ACL + Sanitiser | Complete through PR #33 | Codex/security runtime | HEY-77, HEY-12, and HEY-78 are merged; do not re-own this seam in HEY-17. |
 | Context + Memory + Prompt Hydration | Fake-backed design now | Claude memory/context + Codex integration | Keep raw health out of DO/R2/prompts/logs. |
-| LLMProvider + Routing + Eval | HEY-17 current | Codex/eval | Fake-first provider and route tests; no live credentials. |
-| Channels + App Surfaces | Fake sinks now | Codex/channel + app team | Production delivery waits on outbox and HEY-136. |
+| LLMProvider + Routing + Eval | Complete fake-first; hardened spend cap current | Codex/eval | No live credentials; cap must avoid gateway calls. |
+| Channels + App Surfaces | Fake sinks now | Codex/channel + app team | Production delivery waits on outbox, feed/channel contracts, and explicit adapter work. |
 | Auth/Data Plane/Adapters | Now | Claude/Supabase + Codex adapters | ADR-0066 ES256 Supabase issuer spike remains parallel. |
 | Observability/Conformance | Now | Codex/infra | Trace event shape, scenario artifacts, replay/eval scaffolding. |
 
@@ -141,17 +140,25 @@ Safe parallel lanes:
 
 Immediate plan:
 
-1. Review draft PR #34 for the HEY-17 LLMProvider routing seam.
-2. Confirm validation remains green: runtime `llm-provider` tests, workspace typecheck,
-   `npx -y pnpm@10.34.4 verify`, `git diff --check`, check-contract, and break-feature.
-3. Keep HEY-136, Scribe runtime, memory/context hydration, live providers, and live channels out
+1. Finish the Runtime hardening PR and validate with focused runtime tests, `verify`, and
+   `git diff --check`.
+2. Update Linear/PR notes to state the honest claim: fake-first agent-loop anatomy plus hardened
+   governor/spend-cap/observe seams, not production runtime.
+3. Track the remaining runtime-driver gaps in HEY-139: ingress, duplicate schedule/run
+   idempotency, integrated gate hold/drop/degrade, malformed/denied branches, and side-effect
+   commit-window tests.
+4. Keep live providers, Scribe runtime, memory/context hydration, app feed, and live channels out
    unless explicitly re-scoped.
-4. After HEY-17 is accepted or merged, begin HEY-136 SLICE-6 run-loop integration.
 
-After HEY-17 merge:
+Next build step for the actual agent harness:
 
-1. Begin HEY-136 with fake LLM/context/channel seams only.
-2. Preserve HEY-17 as the model-routing seam; do not inline provider logic into the run loop.
+1. Build HEY-111 trace/replay/eval spine so every loop claim has replayable evidence.
+2. Start Agent Harness Alpha: wire real context/recall/prompt/skill registry into `RunLoopDO`
+   behind fake provider and fake delivery adapters.
+3. Add Scribe proposal lifecycle after context/prompt hydration is testable and redaction proof is
+   green.
+4. Only then add opt-in live-provider dogfood with spend cap, kill switch, replay evidence, and no
+   live channel delivery by default.
 
 ## Archived Docs
 

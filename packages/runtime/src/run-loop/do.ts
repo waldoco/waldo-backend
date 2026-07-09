@@ -23,8 +23,10 @@ import {
   RuntimeLLMProvider,
   type LLMGatewayAdapter,
   type LLMGatewayRequest,
+  type RouteSpendState,
 } from '../llm/provider';
 import { RunJournalOutbox } from '../run-journal/outbox-runtime';
+import type { GovernorDecision, SetLoopKillFlagInput } from '../loop-governor/governor';
 import { Scheduler, type ScheduleExecutors } from '../scheduler/multiplexer';
 import { productionDeps, type Deps } from '../seams/deps';
 import {
@@ -40,6 +42,8 @@ const TRIGGER = 'brief' satisfies TriggerType;
 const PUSH_CLASS = 'brief' as const;
 const CANARY_TOKENS = ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'];
 const DELIVERY_TEXT = 'Derived steady-state brief ready for delivery.';
+const PLAN_SYSTEM_PREFIX = 'run-loop:plan';
+const OBSERVE_SYSTEM_PREFIX = 'run-loop:observe';
 
 export type ScheduleFakeRunInput = {
   scheduleId: string;
@@ -88,6 +92,8 @@ type TraceSqlRow = {
 type ScratchState = {
   tool_calls?: RuntimeToolCall[];
   tool_results?: { tool: ToolName | null; ok: boolean; reason?: string }[];
+  delivery_text?: string;
+  delivery_text_source?: 'fallback' | 'llm';
   llm?: {
     model: string;
     fallback_step: string;
@@ -98,6 +104,20 @@ type ScratchState = {
 
 class FakeRunLoopGateway implements LLMGatewayAdapter {
   async complete(request: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
+    if ((request.request.system ?? '').startsWith(OBSERVE_SYSTEM_PREFIX)) {
+      return {
+        ok: true,
+        data: {
+          model: request.request.model,
+          text: DELIVERY_TEXT,
+          input_tokens: 16,
+          output_tokens: 10,
+          cache_read_input_tokens: 0,
+          latency_ms: 1,
+        },
+      };
+    }
+
     return {
       ok: true,
       data: {
@@ -136,11 +156,36 @@ class RunLoopFakeSink implements DeliverySink {
   }
 }
 
+export type RunLoopTestOverrides = {
+  gateway?: LLMGatewayAdapter;
+  sink?: DeliverySink;
+  spend?: RouteSpendState | null;
+  deliveryTextFallback?: string;
+};
+
+type RunLoopAdapters = {
+  deps: Deps;
+  gateway: LLMGatewayAdapter;
+  sink: DeliverySink;
+  spend?: RouteSpendState;
+  deliveryTextFallback: string;
+};
+
+function defaultRunLoopAdapters(): RunLoopAdapters {
+  return {
+    deps: productionDeps(),
+    gateway: new FakeRunLoopGateway(),
+    sink: new RunLoopFakeSink(),
+    deliveryTextFallback: DELIVERY_TEXT,
+  };
+}
+
 export class RunLoopDO extends DurableObject<Cloudflare.Env> {
-  private readonly deps: Deps;
+  private adapters: RunLoopAdapters;
+  private deps: Deps;
   private readonly scheduler: Scheduler;
-  private readonly journalOutbox: RunJournalOutbox;
-  private readonly llm: RuntimeLLMProvider;
+  private journalOutbox: RunJournalOutbox;
+  private llm: RuntimeLLMProvider;
 
   __runLoopCrashAfter?: RuntimeRunState;
 
@@ -148,10 +193,34 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     super(ctx, env);
     ensureSchema(ctx.storage);
     ensureRunLoopSchema(ctx.storage.sql);
-    this.deps = productionDeps();
+    this.adapters = defaultRunLoopAdapters();
+    this.deps = this.adapters.deps;
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, this.deps);
-    this.journalOutbox = new RunJournalOutbox(ctx.storage, this.deps, new RunLoopFakeSink());
-    this.llm = new RuntimeLLMProvider({ gateway: new FakeRunLoopGateway() });
+    this.journalOutbox = new RunJournalOutbox(ctx.storage, this.deps, this.adapters.sink);
+    this.llm = new RuntimeLLMProvider({ gateway: this.adapters.gateway });
+  }
+
+  // Test-only seam: lets integration tests exercise governor and adapter branches without making
+  // live provider/channel calls or widening the production Worker fetch surface.
+  __runLoopSetTestOverrides(overrides: RunLoopTestOverrides): void {
+    this.adapters = {
+      ...this.adapters,
+      gateway: overrides.gateway ?? this.adapters.gateway,
+      sink: overrides.sink ?? this.adapters.sink,
+      spend: overrides.spend === null ? undefined : (overrides.spend ?? this.adapters.spend),
+      deliveryTextFallback:
+        overrides.deliveryTextFallback ?? this.adapters.deliveryTextFallback,
+    };
+    this.journalOutbox = new RunJournalOutbox(
+      this.ctx.storage,
+      this.deps,
+      this.adapters.sink,
+    );
+    this.llm = new RuntimeLLMProvider({ gateway: this.adapters.gateway });
+  }
+
+  __runLoopSetKillFlag(input: SetLoopKillFlagInput): void {
+    this.journalOutbox.setLoopKillFlag(input);
   }
 
   async scheduleFakeRun(input: ScheduleFakeRunInput): Promise<string> {
@@ -274,8 +343,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     while (run.state !== 'DONE' && run.state !== 'FAILED') {
       switch (run.state) {
         case 'PENDING':
-          this.admitGovernor(run.run_id);
-          this.recordTrace(run.run_id, 'governor_admitted', { loop_type: 'brief' });
+          let admissionDecision: GovernorDecision;
+          {
+            admissionDecision = this.admitGovernor(run.run_id);
+            if (admissionDecision.verdict === 'deny') {
+              this.recordGovernorDenied(run.run_id, admissionDecision);
+              run = this.failRun(run.run_id, governorFailureReason(admissionDecision));
+              break;
+            }
+          }
+          this.recordTrace(run.run_id, 'governor_admitted', {
+            loop_type: admissionDecision.loopType,
+          });
           ctx = await this.rebuildInvocationContext(run);
           run = this.advanceRun(run.run_id, 'CONTEXT_BUILT', {
             context: this.buildFakeContext(run, ctx.session),
@@ -294,6 +373,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           this.crashAfter('TOOLS_DONE');
           break;
         case 'TOOLS_DONE':
+          run = await this.synthesiseDelivery(run, ctx);
+          if (run.state === 'FAILED') break;
           run = await this.gate(run);
           this.crashAfter('GATED');
           break;
@@ -360,9 +441,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     const result = await this.llm.complete(
       {
         trigger: run.trigger,
+        spend: this.adapters.spend,
         renderRequest({ step, context }) {
           return {
-            system: `run-loop:${context}:${step.provider}`,
+            system: `${PLAN_SYSTEM_PREFIX}:${context}:${step.provider}`,
             messages: [{ role: 'user', content: 'derived brief context only' }],
             max_tokens: 256,
             temperature: 0,
@@ -391,18 +473,22 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         tool_call_count: parsedCalls.calls.length,
       },
     };
-    this.journalOutbox.recordLoopUsage({
+    const usageDecision = this.journalOutbox.recordLoopUsage({
       runId: run.run_id,
       tokensUsed: result.usage.input_tokens + result.usage.output_tokens,
       iterations: 1,
       subagentSpawns: 0,
     });
-    const next = this.advanceRun(run.run_id, 'LLM_CALLED', { scratch });
     this.recordTrace(run.run_id, 'llm_called', {
       model: result.response.model,
       fallback_step: result.fallback_step,
       tool_call_count: parsedCalls.calls.length,
     });
+    if (usageDecision.verdict === 'deny') {
+      this.recordGovernorDenied(run.run_id, usageDecision);
+      return this.failRun(run.run_id, governorFailureReason(usageDecision));
+    }
+    const next = this.advanceRun(run.run_id, 'LLM_CALLED', { scratch });
     return next;
   }
 
@@ -424,13 +510,21 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       );
       const paramsHash = await this.deps.sha256Hex(JSON.stringify(call.args));
       const resultHash = await this.deps.sha256Hex(JSON.stringify(result));
-      this.journalOutbox.recordLoopObservation({
+      const decision = this.journalOutbox.recordLoopObservation({
         runId: run.run_id,
         toolName: call.name,
         canonicalParamsHash: paramsHash,
         resultHash,
         success: result.ok,
       });
+      if (decision.verdict === 'deny') {
+        this.recordTrace(run.run_id, 'tool_dispatched', {
+          tools: results.filter((item) => item.ok).map((item) => item.tool),
+          denied: results.filter((item) => !item.ok).map((item) => item.tool),
+        });
+        this.recordGovernorDenied(run.run_id, decision);
+        return this.failRun(run.run_id, governorFailureReason(decision));
+      }
     }
 
     const next = this.advanceRun(run.run_id, 'TOOLS_DONE', {
@@ -443,12 +537,73 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     return next;
   }
 
+  private async synthesiseDelivery(
+    run: RuntimeRunRecord,
+    ctx: HookRuntimeContext | null,
+  ): Promise<RuntimeRunRecord> {
+    const scratch = parseScratch(run.scratch_json);
+    if (scratch.delivery_text !== undefined) return run;
+    const result = await this.llm.complete(
+      {
+        trigger: run.trigger,
+        spend: this.adapters.spend,
+        renderRequest({ step, context }) {
+          return {
+            system: `${OBSERVE_SYSTEM_PREFIX}:${context}:${step.provider}`,
+            messages: [
+              {
+                role: 'user',
+                content: JSON.stringify({
+                  context: run.context_json,
+                  tool_results: scratch.tool_results ?? [],
+                }),
+              },
+            ],
+            max_tokens: 256,
+            temperature: 0,
+          };
+        },
+        renderTemplate: () => this.adapters.deliveryTextFallback,
+      },
+      ctx ?? (await this.rebuildInvocationContext(run)),
+    );
+
+    if (!result.ok) {
+      return this.failRun(run.run_id, `llm_observe:${result.reason}`);
+    }
+
+    const usageDecision = this.journalOutbox.recordLoopUsage({
+      runId: run.run_id,
+      tokensUsed: result.usage.input_tokens + result.usage.output_tokens,
+      iterations: 1,
+      subagentSpawns: 0,
+    });
+    this.recordTrace(run.run_id, 'llm_observed', {
+      model: result.response.model,
+      fallback_step: result.fallback_step,
+      delivery_text_source: result.fallback_step === 'template' ? 'fallback' : 'llm',
+    });
+    if (usageDecision.verdict === 'deny') {
+      this.recordGovernorDenied(run.run_id, usageDecision);
+      return this.failRun(run.run_id, governorFailureReason(usageDecision));
+    }
+
+    return this.updateRunScratch(run.run_id, {
+      ...scratch,
+      delivery_text: result.response.text,
+      delivery_text_source: result.fallback_step === 'template' ? 'fallback' : 'llm',
+    });
+  }
+
   private async gate(run: RuntimeRunRecord): Promise<RuntimeRunRecord> {
+    const scratch = parseScratch(run.scratch_json);
+    const deliveryText = scratch.delivery_text ?? this.adapters.deliveryTextFallback;
     const egressDecision = this.journalOutbox.checkLoopEgress({
       runId: run.run_id,
-      text: DELIVERY_TEXT,
+      text: deliveryText,
     });
     if (egressDecision.verdict === 'deny') {
+      this.recordGovernorDenied(run.run_id, egressDecision);
       return this.failRun(run.run_id, `governor:${egressDecision.reason}`);
     }
     const outbox = await this.journalOutbox.enqueueOutbox({
@@ -462,6 +617,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     this.recordTrace(run.run_id, 'gated', {
       verdict: 'send',
       outbox_kind: outbox.kind,
+      delivery_text_source: scratch.delivery_text_source ?? 'fallback',
     });
     return next;
   }
@@ -565,6 +721,26 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     return next;
   }
 
+  private updateRunScratch(runId: string, scratch: ScratchState): RuntimeRunRecord {
+    let next: RuntimeRunRecord | null = null;
+    this.ctx.storage.transactionSync(() => {
+      const run = this.requireRuntimeRun(runId);
+      const at = this.deps.now();
+      this.ctx.storage.sql.exec(
+        `UPDATE runtime_runs
+            SET scratch_json = ?,
+                updated_at = ?
+          WHERE run_id = ?`,
+        jsonOrNull(scratch),
+        at,
+        runId,
+      );
+      next = this.requireRuntimeRun(runId);
+    });
+    if (next === null) throw new Error(`updateRunScratch failed for ${runId}`);
+    return next;
+  }
+
   private failRun(runId: string, reason: string): RuntimeRunRecord {
     let next: RuntimeRunRecord | null = null;
     this.ctx.storage.transactionSync(() => {
@@ -599,14 +775,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     return next;
   }
 
-  private admitGovernor(runId: string): void {
+  private admitGovernor(runId: string): GovernorDecision {
     const legacy = this.journalOutbox.resumeRun(runId);
     if (legacy === null) throw new Error(`admitGovernor: no journal row for ${runId}`);
-    if (legacy.state === 'GOVERNOR_ADMITTED') return;
-    const decision = this.journalOutbox.admitRun(runId);
-    if (decision.verdict === 'deny') {
-      throw new Error(`governor denied run: ${decision.reason}`);
+    if (legacy.state === 'GOVERNOR_ADMITTED') {
+      const decision = this.journalOutbox.readGovernorDecision(runId);
+      if (decision === null) {
+        throw new Error(`admitGovernor: admitted run has no governor decision for ${runId}`);
+      }
+      return decision;
     }
+    const decision = this.journalOutbox.admitRun(runId);
+    return decision;
   }
 
   private readRuntimeRun(runId: string): RuntimeRunRecord | null {
@@ -644,6 +824,13 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if (this.__runLoopCrashAfter === state) {
       throw new Error(`crash-injection:${state}`);
     }
+  }
+
+  private recordGovernorDenied(runId: string, decision: GovernorDecision): void {
+    this.recordTrace(runId, 'governor_denied', {
+      reason: decision.reason,
+      disposition: decision.disposition,
+    });
   }
 }
 
@@ -777,4 +964,8 @@ function parseJsonObject(text: string): Record<string, unknown> {
 
 function assertNever(value: never): never {
   throw new Error(`unreachable runtime state: ${String(value)}`);
+}
+
+function governorFailureReason(decision: GovernorDecision): string {
+  return `governor:${decision.reason}`;
 }

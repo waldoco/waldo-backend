@@ -208,6 +208,12 @@ fake-sink delivery with a trace assertion — loop-anatomy parity with pi/Hermes
 HEY-17 installs the fake-first provider seam before SLICE-6; the live provider flip remains gated
 by the HEY-99 spend-cap decision and explicit credential work.
 
+2026-07-09 update: HEY-17 and HEY-136 have merged. HEY-136 should now be described as the
+fake-first run-loop skeleton, not the production agent loop. The follow-up Runtime hardening slice
+adds the missing integration guardrails before Agent Harness Alpha: spend cap avoids gateway calls,
+governor deny decisions become durable runtime `FAILED` outcomes, and the loop performs
+plan -> act -> observe/synthesise before gate/outbox.
+
 Codex runtime lane (strict order — one runtime writer at a time on `packages/runtime/src/*`):
 
 1. HEY-122 · SLICE-4 Loop Governor — merged via PR #27.
@@ -215,8 +221,12 @@ Codex runtime lane (strict order — one runtime writer at a time on `packages/r
 3. HEY-77 · triage dispatcher single entry — merged via PR #29 at `a947600`.
 4. HEY-12 · hook registry (9 lifecycle events) — merged via PR #31 at `1b180ef`.
 5. HEY-78 · ToolDispatcher + per-trigger ACL — merged via PR #33 at `600fb34`.
-6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — draft PR #34.
-7. HEY-136 · SLICE-6 run-loop integration — **the first working agent loop**, after HEY-17 lands.
+6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — merged via PR #34 at `0aae766`.
+7. HEY-136 · SLICE-6 run-loop integration — merged via PR #35 at `3d336c7`.
+8. Runtime hardening after HEY-136 — current slice; closes spend-cap, governor-terminal, adapter
+   seam, and observe-pass gaps before the first honest agent-harness alpha.
+9. HEY-139 · Runtime hardening follow-up — ingress, idempotent duplicate wakes, integrated gate
+   branches, and remaining malformed/denied branch coverage before Agent Harness Alpha.
 
 Claude context lane (parallel; fake-backed start allowed now):
 
@@ -225,7 +235,7 @@ Claude context lane (parallel; fake-backed start allowed now):
   runs parallel — the governor egress floor and Scribe both consume it. HEY-102 (CRS) may stay
   faked through SLICE-6.
 
-Safe-parallel at any point: HEY-111 (eval/trace spine — SLICE-6 is proven against its assertions),
+Safe-parallel at any point: HEY-111 (eval/trace spine — the hardened loop is proven against its assertions),
 HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100, HEY-125.
 
 Ordered follow-ups, not on the critical path: HEY-138 (ADR-0068 D4 timezone/quiet-hours — after

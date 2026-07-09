@@ -180,9 +180,9 @@ export class LoopGovernor {
     const row = this.readRun(input.runId);
     const killed = this.killDecision(row);
     if (killed !== null) return killed;
-    const tokensUsed = nextCounter(input.tokensUsed, row.tokens_used, 'tokensUsed');
-    const iterations = nextCounter(input.iterations, row.iterations, 'iterations');
-    const subagentSpawns = nextCounter(
+    const tokensUsed = nextCounterTotal(input.tokensUsed, row.tokens_used, 'tokensUsed');
+    const iterations = nextCounterTotal(input.iterations, row.iterations, 'iterations');
+    const subagentSpawns = nextCounterTotal(
       input.subagentSpawns,
       row.subagent_spawns,
       'subagentSpawns',
@@ -530,12 +530,12 @@ export class LoopGovernor {
   }
 }
 
-function nextCounter(input: number | undefined, current: number, field: string): number {
-  const value = input ?? current;
-  if (!Number.isInteger(value) || value < 0) {
+function nextCounterTotal(delta: number | undefined, current: number, field: string): number {
+  if (delta === undefined) return current;
+  if (!Number.isInteger(delta) || delta < 0) {
     throw new Error(`recordUsage requires a non-negative integer ${field}`);
   }
-  return value;
+  return current + delta;
 }
 
 function occurrenceWindowId(loopType: LoopType, occurrenceAt: number): string {
