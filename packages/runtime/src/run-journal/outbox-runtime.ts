@@ -131,6 +131,10 @@ export class RunJournalOutbox {
     return decision;
   }
 
+  readGovernorDecision(runId: string): GovernorDecision | null {
+    return this.governor.readDecision(runId);
+  }
+
   recordLoopUsage(input: LoopUsageInput): GovernorDecision {
     return this.recordPostAdmissionDecision(input.runId, 'recordLoopUsage', () =>
       this.governor.recordUsage(input),

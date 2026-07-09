@@ -343,15 +343,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     while (run.state !== 'DONE' && run.state !== 'FAILED') {
       switch (run.state) {
         case 'PENDING':
+          let admissionDecision: GovernorDecision;
           {
-            const decision = this.admitGovernor(run.run_id);
-            if (decision.verdict === 'deny') {
-              this.recordGovernorDenied(run.run_id, decision);
-              run = this.failRun(run.run_id, governorFailureReason(decision));
+            admissionDecision = this.admitGovernor(run.run_id);
+            if (admissionDecision.verdict === 'deny') {
+              this.recordGovernorDenied(run.run_id, admissionDecision);
+              run = this.failRun(run.run_id, governorFailureReason(admissionDecision));
               break;
             }
           }
-          this.recordTrace(run.run_id, 'governor_admitted', { loop_type: 'brief' });
+          this.recordTrace(run.run_id, 'governor_admitted', {
+            loop_type: admissionDecision.loopType,
+          });
           ctx = await this.rebuildInvocationContext(run);
           run = this.advanceRun(run.run_id, 'CONTEXT_BUILT', {
             context: this.buildFakeContext(run, ctx.session),
@@ -776,12 +779,11 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     const legacy = this.journalOutbox.resumeRun(runId);
     if (legacy === null) throw new Error(`admitGovernor: no journal row for ${runId}`);
     if (legacy.state === 'GOVERNOR_ADMITTED') {
-      return {
-        verdict: 'admit',
-        reason: 'policy_admitted',
-        disposition: null,
-        loopType: 'brief',
-      };
+      const decision = this.journalOutbox.readGovernorDecision(runId);
+      if (decision === null) {
+        throw new Error(`admitGovernor: admitted run has no governor decision for ${runId}`);
+      }
+      return decision;
     }
     const decision = this.journalOutbox.admitRun(runId);
     return decision;

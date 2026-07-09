@@ -313,6 +313,51 @@ describe('RunLoopDO full contract FSM', () => {
     });
   });
 
+  it('resumes governor admission from the stored decision instead of fabricating brief', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:stored-governor-decision',
+      userId: `${USER}-stored-governor-decision`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec(
+          `UPDATE journal
+              SET state = 'GOVERNOR_ADMITTED',
+                  updated_at = ?
+            WHERE run_id = ?`,
+          dueAt,
+          runId,
+        );
+        state.storage.sql.exec(
+          `UPDATE loop_governor_runs
+              SET loop_type = 'patrol',
+                  verdict = 'admit',
+                  reason = 'policy_admitted',
+                  disposition = NULL,
+                  updated_at = ?
+            WHERE run_id = ?`,
+          dueAt,
+          runId,
+        );
+      });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(proof.trace.find((event) => event.event === 'governor_admitted')?.detail).toEqual({
+      loop_type: 'patrol',
+    });
+    expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+  });
+
   it.each(['CONTEXT_BUILT', 'LLM_CALLED', 'TOOLS_DONE', 'GATED', 'DELIVERED'] as const)(
     'resumes after eviction from %s without duplicate delivery',
     async (crashAfter) => {
