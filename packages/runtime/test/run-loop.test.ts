@@ -10,6 +10,8 @@ import {
   RUNTIME_RUN_STATE_SEQUENCE,
   type DeliveryCandidate,
   type LLMResponse,
+  type RuntimeReplayFixture,
+  type RuntimeTraceEval,
 } from '@waldo/contracts';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 
@@ -39,6 +41,9 @@ type RunLoopStub = DurableObjectStub & {
     candidate?: DeliveryCandidate;
   }): Promise<string>;
   readRunProof(runId: string): Promise<RunLoopProof>;
+  readRunEvidence(runId: string): Promise<RuntimeReplayFixture>;
+  replayFixture(runId: string): Promise<RuntimeReplayFixture>;
+  scoreRun(traceId: string): Promise<RuntimeTraceEval>;
 };
 
 type CrashableRunLoopInstance = {
@@ -133,6 +138,35 @@ describe('RunLoopDO full contract FSM', () => {
     expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
     expect(proof.delivery_journal).toEqual({ state: 'DONE', verdict: 'send' });
     expect(JSON.stringify(proof)).not.toContain('raw');
+
+    const evidence = await stub.readRunEvidence(runId);
+    expect(evidence.trace.map((event) => [event.seq, event.family, event.event, event.status])).toEqual([
+      [0, 'wake', 'scheduled_wake', 'scheduled'],
+      [1, 'governor', 'governor_admitted', 'admitted'],
+      [2, 'session', 'session_reset', 'ok'],
+      [3, 'context', 'context_built', 'ok'],
+      [4, 'llm', 'llm_called', 'ok'],
+      [5, 'tool', 'tool_dispatched', 'ok'],
+      [6, 'llm', 'llm_observed', 'ok'],
+      [7, 'gate', 'gated', 'send'],
+      [8, 'delivery', 'delivered', 'acked'],
+      [9, 'outcome', 'done', 'done'],
+    ]);
+    expect(evidence.trace.every((event) => event.trace_id === runId)).toBe(true);
+    expect(evidence.trace.every((event) => event.run_id === runId)).toBe(true);
+    expect(evidence.trace.every((event) => event.event_key.startsWith(`${runId}:`))).toBe(true);
+    expect(evidence.eval).toMatchObject({
+      trace_id: runId,
+      run_id: runId,
+      result: 'pass',
+      wis: { available: false, reason: 'not_observed_fake_first' },
+    });
+    expect(evidence.eval.rules.every((rule) => rule.status === 'pass')).toBe(true);
+    expect(JSON.stringify(evidence)).not.toContain('prompt');
+    expect(JSON.stringify(evidence)).not.toContain('raw_health');
+
+    await expect(stub.replayFixture(runId)).resolves.toEqual(evidence);
+    await expect(stub.scoreRun(runId)).resolves.toEqual(evidence.eval);
   });
 
   it('treats duplicate fake schedule attempts as the same scheduled occurrence', async () => {
@@ -435,6 +469,17 @@ describe('RunLoopDO full contract FSM', () => {
     expect(proof.outbox).toEqual([]);
     expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
     expect(proof.delivery_journal).toEqual({ state: 'FAILED', verdict: null });
+
+    const evidence = await stub.readRunEvidence(runId);
+    expect(evidence.trace.map((event) => [event.family, event.event, event.status])).toEqual([
+      ['wake', 'scheduled_wake', 'scheduled'],
+      ['governor', 'governor_denied', 'denied'],
+      ['outcome', 'failed', 'failed'],
+    ]);
+    expect(evidence.eval.result).toBe('pass');
+    expect(evidence.eval.rules.find((rule) => rule.id === 'failure_visible')).toMatchObject({
+      status: 'pass',
+    });
   });
 
   it('stops before tools and delivery when LLM usage exhausts governor budget', async () => {
@@ -486,6 +531,16 @@ describe('RunLoopDO full contract FSM', () => {
     expect(proof.trace.find((event) => event.event === 'tool_dispatched')).toBeUndefined();
     expect(proof.outbox).toEqual([]);
     expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+
+    const evidence = await stub.readRunEvidence(runId);
+    expect(evidence.trace.find((event) => event.event === 'governor_denied')).toMatchObject({
+      family: 'governor',
+      status: 'denied',
+      privacy: 'policy_metadata',
+    });
+    expect(evidence.eval.rules.find((rule) => rule.id === 'failure_visible')).toMatchObject({
+      status: 'pass',
+    });
   });
 
   it('fails durably when the LLM emits malformed tool-call JSON', async () => {
@@ -776,6 +831,86 @@ describe('RunLoopDO full contract FSM', () => {
     });
   });
 
+  it('exposes malformed LLM output as a terminal replayable failure', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) =>
+      response(request.request.model, 'not-json-tool-call'),
+    );
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:malformed-llm',
+      userId: `${USER}-malformed-llm`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const evidence = await stub.readRunEvidence(runId);
+    expect(evidence.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'tool_parse:invalid_args',
+    });
+    expect(evidence.trace.map((event) => [event.family, event.event])).toEqual([
+      ['wake', 'scheduled_wake'],
+      ['governor', 'governor_admitted'],
+      ['session', 'session_reset'],
+      ['context', 'context_built'],
+      ['tool', 'tool_parse_failed'],
+      ['outcome', 'failed'],
+    ]);
+    expect(evidence.eval.rules.find((rule) => rule.id === 'failure_visible')).toMatchObject({
+      status: 'pass',
+    });
+  });
+
+  it('records denied tool outcomes without storing tool result bodies', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        return response(request.request.model, 'Synthesized brief after denied tool observation.');
+      }
+      return response(
+        request.request.model,
+        JSON.stringify({
+          tool_calls: [
+            {
+              id: 'call-unknown',
+              name: 'get_crs',
+              arguments: { range_days: 999 },
+            },
+          ],
+        }),
+      );
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:tool-denial',
+      userId: `${USER}-tool-denial`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const evidence = await stub.readRunEvidence(runId);
+    const toolEvent = evidence.trace.find((event) => event.event === 'tool_dispatched');
+    expect(toolEvent).toMatchObject({
+      family: 'tool',
+      status: 'denied',
+      detail: { tools: [], denied: ['get_crs'] },
+    });
+    expect(JSON.stringify(toolEvent)).not.toContain('result');
+  });
+
   it('resumes governor admission from the stored decision instead of fabricating brief', async () => {
     const stub = freshStub();
     const dueAt = soon();
@@ -856,6 +991,11 @@ describe('RunLoopDO full contract FSM', () => {
       expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
       expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
       expect(proof.delivery_journal).toEqual({ state: 'DONE', verdict: 'send' });
+
+      const evidence = await stub.readRunEvidence(runId);
+      expect(new Set(evidence.trace.map((event) => event.event_key)).size).toBe(
+        evidence.trace.length,
+      );
     },
   );
 

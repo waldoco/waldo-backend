@@ -41,6 +41,7 @@ export * from './runtime/schedule';
 export * from './runtime/loop-policy';
 export * from './runtime/sink';
 export * from './runtime/routing';
+export * from './runtime/evidence';
 export * from './telemetry/engagement';
 export * from './public/dto';
 export * from './public/openapi';
