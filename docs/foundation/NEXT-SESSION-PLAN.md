@@ -1,7 +1,7 @@
-# Next Session Plan - Runtime Hardening To Agent Harness Alpha
+# Next Session Plan - HEY-142 To Agent Harness Alpha
 
-Status: active entrypoint after HEY-17 and HEY-136. The current lane is Runtime hardening before
-the first honest agent-harness alpha.
+Status: active entrypoint after HEY-139, HEY-10, and HEY-111. The current runtime lane is
+HEY-142 before the first honest agent-harness alpha.
 Date: 2026-07-09 IST.
 Baseline: SLICE-3a/HEY-120 merged in PR #21, SLICE-3b/HEY-121 merged in PR #23 at
 `f47127f`, SLICE-3c/HEY-124 merged in PR #24 at `5789b42`, HEY-122/SLICE-4 merged in
@@ -10,10 +10,9 @@ in PR #29 at `a947600`, HEY-12 hook registry merged in PR #31 at `1b180ef`, and 
 ToolDispatcher + per-trigger ACL enforcement merged in PR #33 at `600fb34`. HEY-17 merged in
 PR #34 at `0aae766`; HEY-136 merged in PR #35 at `3d336c7`.
 
-HEY-136 proved the fake-first run-loop skeleton. The current hardening branch closes the highest
-integration gaps before live provider/channel or memory work: spend cap must avoid gateway calls,
-governor deny decisions must become durable runtime failures, and the loop must do a
-plan -> act -> observe/synthesise pass rather than gating a constant string.
+HEY-136 proved the fake-first run-loop skeleton. HEY-139 hardened the runtime driver, HEY-10 landed
+the context schema root, and HEY-111 added replayable local evidence. HEY-142 now owns the next
+runtime milestone: governed multi-iteration `plan -> act -> observe`.
 
 ## Start Here
 
@@ -21,14 +20,13 @@ Read in this order:
 
 1. `.claude/rules/INDEX.md`
 2. `README.md`
-3. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
-4. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
-5. `docs/foundation/BUILD-PLAN.md`
+3. `docs/foundation/CONTRIBUTOR-ONBOARDING.md`
+4. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
+5. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
 6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-7. `docs/foundation/FOUNDATION-HANDOVER.md`
-8. `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` when touching HEY-10 or DO SQLite schema scope.
-9. `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` when touching deferred DO SQLite tables.
-10. The Waldo Brain source files listed in the runtime build plan for the seam being reviewed.
+7. `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` when touching DO SQLite context schema scope.
+8. `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` when touching deferred DO SQLite tables.
+9. The Waldo Brain source files listed in the runtime build plan for the seam being reviewed.
 
 Then run the baseline gate before planning claims or edits:
 
@@ -50,8 +48,8 @@ git diff --check
   LLMProvider routing, and fake-first `RunLoopDO`.
 - HEY-136 is intentionally fake-first: it proves loop anatomy and durable resume, not production
   provider/channel/memory behavior.
-- The active hardening slice keeps live provider calls, live channel delivery, Scribe writes, and
-  raw health/private data out of scope.
+- HEY-142 keeps live provider calls, live channel delivery, Scribe writes, and raw health/private
+  data out of scope.
 - Split work by runtime seam, not by product pillar. Brief, Fetch, Spots, and Chat all converge on
   the same DO loop, journal, scheduler, dispatcher, memory, model, and delivery files.
 
@@ -94,7 +92,7 @@ Acceptance:
 | Pillar | Can start? | Main owner | Notes |
 | --- | --- | --- | --- |
 | Run Journal + Outbox | Complete through PR #23 | Codex/runtime | Preserve; expand only if a slice exposes a real gap. |
-| DeliveryGate Runtime | Complete through PR #24 | Codex/runtime | Residue in `SLICE-3C-HANDOFF.md` awaits a founder placement call. |
+| DeliveryGate Runtime | Complete through PR #24 | Codex/runtime | Residue is archived in `docs/foundation/archive/SLICE-3C-HANDOFF.md`; do not use it as a current plan. |
 | Scheduler Multiplexer | Complete through PR #28 | Codex/scheduler | Alarm pop, recurrence, retry, quarantine, stale-run wake proof. |
 | Loop Governor Runtime | Complete through PR #27 | Codex/policy runtime | Deterministic admission, budget kill, stuck-loop guard. |
 | Dispatcher + Hooks + ACL + Sanitiser | Complete through PR #33 | Codex/security runtime | HEY-77, HEY-12, and HEY-78 are merged; do not re-own this seam in HEY-17. |
@@ -165,6 +163,5 @@ Next build step for the actual agent harness:
 
 ## Archived Docs
 
-Historical Phase A/B/D handoffs and old Codex review notes are under `docs/foundation/archive/`.
-They are useful for archaeology, not current planning. Do not use them as the active next-session
-plan.
+Historical phase handoffs, old build plans, and benchmark reports are under `docs/foundation/archive/`.
+They are useful for archaeology, not current planning. Do not use them as the active next-session plan.

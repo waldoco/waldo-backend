@@ -1,44 +1,32 @@
 # waldo-backend — Claude Code Instructions
 
-## Current Foundation Status (2026-07-07)
+## Current Foundation Status (2026-07-09)
 
-The legacy guidance below is kept for repo background, but current foundation
-work is governed by the local rule index, foundation docs, accepted ADRs, and
-Waldo Brain DeepWiki pages.
+Current work is governed by the local rule index, active foundation docs, accepted ADRs, and
+Waldo Brain source pages. Archived foundation docs are archaeology, not onboarding.
 
 Before any implementation:
 
 1. Read `.claude/rules/INDEX.md`.
-2. Read `docs/foundation/BUILD-PLAN.md`.
-3. Read `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
+2. Read `docs/foundation/CONTRIBUTOR-ONBOARDING.md`.
+3. Read `docs/foundation/AGENT-OPERATING-WORKFLOW.md`.
 4. Read `docs/foundation/NEXT-SESSION-PLAN.md`.
 5. Read `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`.
-6. Read `docs/foundation/AGENT-OPERATING-WORKFLOW.md`.
+6. Read `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
 7. Read the relevant Waldo Brain source pages and accepted ADRs.
 
 Current facts:
 
 - Collaboration model: Claude Code builds; Codex audits adversarially.
-- Foundation Phases A/B/C and Phase D Waves 1-4a are on `main` via PR #7:
-  root contracts, CI/conformance wall, Cloudflare Workers/Durable Object test
-  substrate, the scheduled durable-execution tracer bullet, memory/CRS/prompt,
-  routing/LLM, UI cards/notifications, and provider adapter contracts.
-- PR #8-#17 are on `main`: channel/tools/hooks/auth contracts, runtime
-  run/session/working-memory, scheduler/goal, Loop Governor contract, Art-9
-  sanitiser hardening, taint-gate authority, DeliveryGate policy, engagement,
-  OpenAPI/public DTOs, and evidence contracts.
-- PR #18-#20 are on `main`: agent operating workflow, runtime session planning,
-  Linear-aligned slice names, README, builder skills, and stale-reference guard.
-- PR #21 is on `main`: SLICE-3a/HEY-120 proves durable outbox exactly-once
-  delivery under real Workers/Durable Object eviction and crash/resume tests.
-- Phase C is still a tracer, not the full harness runtime. It proves one
-  scheduled path in workerd: `DO alarm -> Loop Governor -> run journal ->
-  DeliveryGate -> outbox -> fake sink`, including crash/resume for that tracer.
-- The next runtime work is SLICE-3b/HEY-121: promote the tracer-proven run
-  journal/outbox behavior into the narrow runtime interface (`startRun`,
-  `tickRun`, `resumeRun`, `enqueueOutbox`, `flushOutbox`). Do not replay A/B/C,
-  Phase D contract waves, or the completed SLICE-3a proof unless a regression
-  forces it.
+- Runtime foundation through HEY-139 is merged: scheduler, Loop Governor, journal/outbox,
+  DeliveryGate, hooks, ToolDispatcher/ACL, fake-first LLM provider, fake-first `RunLoopDO`,
+  ingress/idempotency/gate/failure hardening.
+- HEY-10 is merged: DO SQLite context schema root.
+- HEY-111 is merged: typed local runtime evidence, replay fixtures, and local rule-based eval.
+- The next runtime work is HEY-142: governed multi-iteration `plan -> act -> observe`.
+- The next context work is HEY-15 recall, HEY-14 skill loader, and HEY-16 prompt builder.
+- Do not call the harness a complete Pi/Hermes-style agent loop until HEY-142 and context
+  hydration are wired and verified.
 - Retired external contract package references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
