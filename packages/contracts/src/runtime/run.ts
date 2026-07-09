@@ -22,7 +22,7 @@ export const runtimeRunStateTransitions: Readonly<
   PENDING: ['CONTEXT_BUILT', 'FAILED'],
   CONTEXT_BUILT: ['LLM_CALLED', 'FAILED'],
   LLM_CALLED: ['TOOLS_DONE', 'GATED', 'FAILED'],
-  TOOLS_DONE: ['GATED', 'FAILED'],
+  TOOLS_DONE: ['LLM_CALLED', 'GATED', 'FAILED'],
   GATED: ['DELIVERED', 'DONE', 'FAILED'],
   DELIVERED: ['DONE'],
   DONE: [],
