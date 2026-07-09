@@ -11,8 +11,10 @@ import {
   type DeliverySink,
   type GetCrsArgs,
   type LLMResponse,
+  type RuntimeReplayFixture,
   type RuntimeRunRecord,
   type RuntimeRunState,
+  type RuntimeTraceEval,
   type ScheduleEntry,
   type SessionState,
   type SinkAck,
@@ -43,6 +45,13 @@ import {
 } from '../tools/dispatcher';
 import { ensureSchema } from '../tracer/schema';
 import { triage } from '../triage/dispatcher';
+import {
+  buildRuntimeReplayFixture,
+  normaliseRuntimeTraceDetail,
+  runtimeTraceEventKey,
+  scoreRuntimeFixture,
+  type RuntimeTraceSqlRow,
+} from './evidence';
 
 const TRIGGER = 'brief' satisfies TriggerType;
 const PUSH_CLASS = 'brief' as const;
@@ -95,8 +104,11 @@ type RuntimeRunSqlRow = {
 };
 
 type TraceSqlRow = {
+  seq: number;
+  event_key: string | null;
   event: string;
   detail_json: string;
+  created_at: number;
 };
 
 type RuntimeRunIdentitySqlRow = {
@@ -350,7 +362,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if (run === null) throw new Error(`readRunProof: no run ${runId}`);
     const trace = this.ctx.storage.sql
       .exec<TraceSqlRow>(
-        'SELECT event, detail_json FROM runtime_trace WHERE run_id = ? ORDER BY seq',
+        'SELECT seq, event_key, event, detail_json, created_at FROM runtime_trace WHERE run_id = ? ORDER BY seq',
         runId,
       )
       .toArray()
@@ -391,6 +403,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       delivery_journal: deliveryJournal,
       current: { state: run.state, failure_reason: run.failure_reason },
     };
+  }
+
+  async readRunEvidence(runId: string): Promise<RuntimeReplayFixture> {
+    return this.buildRunEvidence(runId);
+  }
+
+  async replayFixture(runId: string): Promise<RuntimeReplayFixture> {
+    return this.buildRunEvidence(runId);
+  }
+
+  async scoreRun(traceId: string): Promise<RuntimeTraceEval> {
+    return scoreRuntimeFixture(this.buildRunEvidence(traceId));
   }
 
   override async alarm(): Promise<void> {
@@ -956,6 +980,44 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     );
   }
 
+  private buildRunEvidence(runId: string): RuntimeReplayFixture {
+    const run = this.readRuntimeRun(runId);
+    if (run === null) throw new Error(`buildRunEvidence: no run ${runId}`);
+    const traceRows = this.ctx.storage.sql
+      .exec<RuntimeTraceSqlRow>(
+        'SELECT seq, event_key, event, detail_json, created_at FROM runtime_trace WHERE run_id = ? ORDER BY seq',
+        runId,
+      )
+      .toArray();
+    const fsm = this.ctx.storage.sql
+      .exec<{ state: RuntimeRunState }>(
+        'SELECT state FROM runtime_journal WHERE run_id = ? ORDER BY step',
+        runId,
+      )
+      .toArray()
+      .map((row) => row.state);
+    const outbox = this.ctx.storage.sql
+      .exec<{ kind: string; status: string; attempts: number }>(
+        'SELECT kind, status, attempts FROM outbox WHERE run_id = ? ORDER BY kind',
+        runId,
+      )
+      .toArray();
+    const deliveryJournal = this.ctx.storage.sql
+      .exec<{ state: string; verdict: string | null }>(
+        'SELECT state, verdict FROM journal WHERE run_id = ?',
+        runId,
+      )
+      .one();
+    return buildRuntimeReplayFixture({
+      runId,
+      traceRows,
+      fsm,
+      outbox,
+      deliveryJournal,
+      current: { state: run.state, failure_reason: run.failure_reason },
+    });
+  }
+
   private requireRuntimeRun(runId: string): RuntimeRunRecord {
     const run = this.readRuntimeRun(runId);
     if (run === null) throw new Error(`runtime run not found: ${runId}`);
@@ -963,6 +1025,11 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   private recordTrace(runId: string, event: string, detail: Record<string, unknown>): void {
+    const step = this.ctx.storage.sql
+      .exec<{ step: number }>('SELECT step FROM runtime_runs WHERE run_id = ?', runId)
+      .one().step;
+    const eventKey = runtimeTraceEventKey({ runId, event, step });
+    const safeDetail = normaliseRuntimeTraceDetail(event, detail);
     const nextSeq = this.ctx.storage.sql
       .exec<{ seq: number }>(
         'SELECT COALESCE(MAX(seq) + 1, 0) AS seq FROM runtime_trace WHERE run_id = ?',
@@ -970,12 +1037,13 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       )
       .one().seq;
     this.ctx.storage.sql.exec(
-      `INSERT INTO runtime_trace (run_id, seq, event, detail_json, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR IGNORE INTO runtime_trace (run_id, seq, event_key, event, detail_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       runId,
       nextSeq,
+      eventKey,
       event,
-      JSON.stringify(detail),
+      JSON.stringify(safeDetail),
       this.deps.now(),
     );
   }
@@ -1042,6 +1110,7 @@ function ensureRunLoopSchema(sql: SqlStorage): void {
     CREATE TABLE IF NOT EXISTS runtime_trace (
       run_id      TEXT NOT NULL,
       seq         INTEGER NOT NULL,
+      event_key   TEXT,
       event       TEXT NOT NULL,
       detail_json TEXT NOT NULL,
       created_at  INTEGER NOT NULL,
@@ -1055,6 +1124,19 @@ function ensureRunLoopSchema(sql: SqlStorage): void {
       updated_at INTEGER NOT NULL
     );
   `);
+  ensureRuntimeTraceEventKey(sql);
+  sql.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS runtime_trace_event_key_idx
+      ON runtime_trace (run_id, event_key)
+      WHERE event_key IS NOT NULL;
+  `);
+}
+
+function ensureRuntimeTraceEventKey(sql: SqlStorage): void {
+  const columns = sql.exec<{ name: string }>('PRAGMA table_info(runtime_trace)').toArray();
+  if (!columns.some((column) => column.name === 'event_key')) {
+    sql.exec('ALTER TABLE runtime_trace ADD COLUMN event_key TEXT');
+  }
 }
 
 function parseScheduleFakeRunInput(input: ScheduleFakeRunInput): ScheduleFakeRunInput {
