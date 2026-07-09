@@ -5,11 +5,18 @@ import {
   runInDurableObject,
 } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { ROSTER, RUNTIME_RUN_STATE_SEQUENCE, type LLMResponse } from '@waldo/contracts';
+import {
+  ROSTER,
+  RUNTIME_RUN_STATE_SEQUENCE,
+  type DeliveryCandidate,
+  type LLMResponse,
+} from '@waldo/contracts';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 
 const USER = 'user-run-loop-01';
 const FSM = RUNTIME_RUN_STATE_SEQUENCE.filter((state) => state !== 'FAILED');
+const LOCAL_RUN_TOKEN = (env as unknown as { RUN_LOOP_LOCAL_INGRESS_TOKEN: string })
+  .RUN_LOOP_LOCAL_INGRESS_TOKEN;
 
 type RunLoopProof = {
   fsm: string[];
@@ -21,18 +28,22 @@ type RunLoopProof = {
   current: { state: string; failure_reason: string | null };
 };
 
+type RuntimeRunCountRow = { n: number };
+
 type RunLoopStub = DurableObjectStub & {
   scheduleFakeRun(input: {
     scheduleId: string;
     userId: string;
     dueAt: number;
     occurrenceAt: number;
+    candidate?: DeliveryCandidate;
   }): Promise<string>;
   readRunProof(runId: string): Promise<RunLoopProof>;
 };
 
 type CrashableRunLoopInstance = {
   __runLoopCrashAfter?: string;
+  __runLoopOutboxCrashPoint?: string;
   __runLoopSetKillFlag(input: {
     scope: 'global' | 'loop';
     loopType: 'brief' | null;
@@ -52,6 +63,10 @@ function freshStub(): RunLoopStub {
 
 function soon(): number {
   return Date.now() + 500;
+}
+
+function utcLocalDate(at: number): string {
+  return new Date(at).toISOString().slice(0, 10);
 }
 
 function response(model: string, text: string, inputTokens = 24, outputTokens = 12): LLMResponse {
@@ -118,6 +133,273 @@ describe('RunLoopDO full contract FSM', () => {
     expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
     expect(proof.delivery_journal).toEqual({ state: 'DONE', verdict: 'send' });
     expect(JSON.stringify(proof)).not.toContain('raw');
+  });
+
+  it('treats duplicate fake schedule attempts as the same scheduled occurrence', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const userId = `${USER}-duplicate-schedule`;
+
+    const firstRunId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:duplicate',
+      userId,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    const secondRunId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:duplicate',
+      userId,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+
+    expect(secondRunId).toBe(firstRunId);
+    const openedRuns = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<RuntimeRunCountRow>('SELECT COUNT(*) AS n FROM runtime_runs WHERE user_id = ?', userId)
+        .one().n,
+    );
+    expect(openedRuns).toBe(1);
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    await runInDurableObject(stub, async (instance) => {
+      const runLoop = instance as unknown as CrashableRunLoopInstance;
+      await runLoop.alarm();
+    });
+
+    const proof = await stub.readRunProof(firstRunId);
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+  });
+
+  it('fails closed for unauthenticated local RunLoopDO ingress', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const userId = `${USER}-unauth-ingress`;
+
+    const response = await stub.fetch('https://run-loop.local/local/runs', {
+      method: 'POST',
+      body: JSON.stringify({
+        scheduleId: 'brief:unauth-ingress',
+        userId,
+        dueAt,
+        occurrenceAt: dueAt,
+      }),
+    });
+
+    expect(response.status).toBe(401);
+    const openedRuns = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<RuntimeRunCountRow>('SELECT COUNT(*) AS n FROM runtime_runs WHERE user_id = ?', userId)
+        .one().n,
+    );
+    expect(openedRuns).toBe(0);
+  });
+
+  it('schedules and inspects a fake run through authenticated local ingress', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+
+    const scheduleResponse = await stub.fetch('https://run-loop.local/local/runs', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-waldo-local-run-token': LOCAL_RUN_TOKEN,
+      },
+      body: JSON.stringify({
+        scheduleId: 'brief:local-ingress',
+        userId: `${USER}-local-ingress`,
+        dueAt,
+        occurrenceAt: dueAt,
+      }),
+    });
+
+    expect(scheduleResponse.status).toBe(202);
+    const scheduled = (await scheduleResponse.json()) as { run_id: string };
+    expect(scheduled.run_id).toMatch(/[0-9a-f-]{36}/);
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const inspectResponse = await stub.fetch(
+      `https://run-loop.local/local/runs/${scheduled.run_id}`,
+      {
+        headers: { 'x-waldo-local-run-token': LOCAL_RUN_TOKEN },
+      },
+    );
+
+    expect(inspectResponse.status).toBe(200);
+    const proof = (await inspectResponse.json()) as RunLoopProof;
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+  });
+
+  it('fails closed for malformed authenticated local ingress without opening a run', async () => {
+    const stub = freshStub();
+
+    const response = await stub.fetch('https://run-loop.local/local/runs', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-waldo-local-run-token': LOCAL_RUN_TOKEN,
+      },
+      body: '{',
+    });
+
+    expect(response.status).toBe(400);
+    const openedRuns = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql.exec<RuntimeRunCountRow>('SELECT COUNT(*) AS n FROM runtime_runs').one()
+        .n,
+    );
+    expect(openedRuns).toBe(0);
+  });
+
+  it('rate-limits authenticated local ingress without opening a run', async () => {
+    const stub = freshStub();
+
+    for (let i = 0; i < 32; i += 1) {
+      const response = await stub.fetch('https://run-loop.local/local/runs', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-waldo-local-run-token': LOCAL_RUN_TOKEN,
+        },
+        body: '{',
+      });
+      expect(response.status).toBe(400);
+    }
+
+    const limited = await stub.fetch('https://run-loop.local/local/runs', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-waldo-local-run-token': LOCAL_RUN_TOKEN,
+      },
+      body: '{',
+    });
+
+    expect(limited.status).toBe(429);
+    const openedRuns = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql.exec<RuntimeRunCountRow>('SELECT COUNT(*) AS n FROM runtime_runs').one()
+        .n,
+    );
+    expect(openedRuns).toBe(0);
+  });
+
+  it('exercises the DeliveryGate degrade branch through RunLoopDO when budget is exhausted', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const userId = `${USER}-gate-degrade`;
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:gate-degrade',
+      userId,
+      dueAt,
+      occurrenceAt: dueAt,
+      candidate: {
+        push_class: 'spot_digest',
+        trigger: 'brief',
+        event_id: 'synthetic-gate-degrade',
+        expires_at: null,
+      },
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO daily_push_budget (user_id, local_date, sends_total)
+         VALUES (?, ?, 3)`,
+        userId,
+        utcLocalDate(dueAt),
+      );
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(proof.trace.find((event) => event.event === 'gated')?.detail).toMatchObject({
+      verdict: 'degrade',
+      outbox_kind: 'spot_digest',
+    });
+    expect(proof.outbox).toEqual([{ kind: 'spot_digest', status: 'acked', attempts: 1 }]);
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+    expect(proof.delivery_journal).toEqual({ state: 'DONE', verdict: 'degrade' });
+  });
+
+  it('exercises the DeliveryGate hold branch through RunLoopDO without outbox delivery', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const userId = `${USER}-gate-hold`;
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:gate-hold',
+      userId,
+      dueAt,
+      occurrenceAt: dueAt,
+      candidate: {
+        push_class: 'spot_digest',
+        trigger: 'brief',
+        event_id: 'synthetic-gate-hold',
+        expires_at: null,
+      },
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO class_state (user_id, local_date, push_class, count, last_sent_at)
+         VALUES (?, ?, 'spot_digest', 1, ?)`,
+        userId,
+        utcLocalDate(dueAt),
+        dueAt - 1,
+      );
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'delivery_gate:class_cap_exhausted',
+    });
+    expect(proof.trace.find((event) => event.event === 'gated')?.detail).toMatchObject({
+      verdict: 'hold',
+      reason: 'class_cap_exhausted',
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+    expect(proof.delivery_journal).toEqual({ state: 'FAILED', verdict: 'hold' });
+  });
+
+  it('exercises the DeliveryGate drop branch through RunLoopDO without outbox delivery', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const userId = `${USER}-gate-drop`;
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:gate-drop',
+      userId,
+      dueAt,
+      occurrenceAt: dueAt,
+      candidate: {
+        push_class: 'spot_digest',
+        trigger: 'brief',
+        event_id: 'synthetic-gate-drop',
+        expires_at: dueAt - 1,
+      },
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'delivery_gate:candidate_expired',
+    });
+    expect(proof.trace.find((event) => event.event === 'gated')?.detail).toMatchObject({
+      verdict: 'drop',
+      reason: 'candidate_expired',
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+    expect(proof.delivery_journal).toEqual({ state: 'FAILED', verdict: 'drop' });
   });
 
   it('fails closed when the governor denies admission before context or delivery', async () => {
@@ -202,6 +484,187 @@ describe('RunLoopDO full contract FSM', () => {
       'governor_denied',
     ]);
     expect(proof.trace.find((event) => event.event === 'tool_dispatched')).toBeUndefined();
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('fails durably when the LLM emits malformed tool-call JSON', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) =>
+      response(request.request.model, 'not-json'),
+    );
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:malformed-tools',
+      userId: `${USER}-malformed-tools`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.fsm).toEqual(['PENDING', 'CONTEXT_BUILT', 'FAILED']);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'tool_parse:invalid_args',
+    });
+    expect(proof.trace.map((event) => event.event)).toEqual([
+      'scheduled_wake',
+      'governor_admitted',
+      'session_reset',
+      'context_built',
+      'tool_parse_failed',
+    ]);
+    expect(proof.trace.find((event) => event.event === 'tool_parse_failed')?.detail).toEqual({
+      code: 'invalid_args',
+    });
+    expect(proof.outbox).toEqual([]);
+  });
+
+  it('fails durably when a tool is denied by the trigger ACL', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) =>
+      response(
+        request.request.model,
+        JSON.stringify({
+          tool_calls: [
+            {
+              id: 'call-write-task',
+              name: 'write_task',
+              arguments: { title: 'synthetic denied task', reasoning: 'synthetic' },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:denied-tool',
+      userId: `${USER}-denied-tool`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'tool_dispatch:acl_denied',
+    });
+    expect(proof.trace.find((event) => event.event === 'tool_dispatched')?.detail).toEqual({
+      tools: [],
+      denied: ['write_task'],
+      reasons: ['acl_denied'],
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('fails durably when tool arguments fail schema validation', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) =>
+      response(
+        request.request.model,
+        JSON.stringify({
+          tool_calls: [
+            {
+              id: 'call-bad-get-crs',
+              name: 'get_crs',
+              arguments: { range_days: 999 },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:bad-tool-args',
+      userId: `${USER}-bad-tool-args`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'tool_dispatch:invalid_args',
+    });
+    expect(proof.trace.find((event) => event.event === 'tool_dispatched')?.detail).toEqual({
+      tools: [],
+      denied: ['get_crs'],
+      reasons: ['invalid_args'],
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('fails durably when the governor detects no progress from tool observations', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const userId = `${USER}-no-progress`;
+    const gateway = new ScriptedRunLoopGateway((request) =>
+      response(
+        request.request.model,
+        JSON.stringify({
+          tool_calls: [
+            {
+              id: 'call-get-crs',
+              name: 'get_crs',
+              arguments: { range_days: 1 },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:no-progress',
+      userId,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, async (instance, state) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+      const occurrenceId = state.storage.sql
+        .exec<{ occurrence_id: string }>(
+          'SELECT occurrence_id FROM loop_governor_runs WHERE run_id = ?',
+          runId,
+        )
+        .one().occurrence_id;
+      state.storage.sql.exec(
+        `INSERT INTO loop_progress
+           (user_id, loop_type, occurrence_id, call_count, unique_param_hashes, successes, updated_at)
+         VALUES (?, 'brief', ?, 4, 0, 0, ?)`,
+        userId,
+        occurrenceId,
+        dueAt,
+      );
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'governor:no_progress',
+    });
+    expect(proof.trace.map((event) => event.event)).toContain('governor_denied');
     expect(proof.outbox).toEqual([]);
     expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
   });
@@ -392,6 +855,74 @@ describe('RunLoopDO full contract FSM', () => {
       expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
       expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
       expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+      expect(proof.delivery_journal).toEqual({ state: 'DONE', verdict: 'send' });
+    },
+  );
+
+  it.each([
+    {
+      crashPoint: 'post_gate_pre_flush',
+      atCrashOutbox: [{ kind: 'brief', status: 'pending', attempts: 0 }],
+      atCrashSink: { deliveries: 0, attempts: 0 },
+      finalOutbox: [{ kind: 'brief', status: 'acked', attempts: 1 }],
+      finalSink: { deliveries: 1, attempts: 1 },
+    },
+    {
+      crashPoint: 'post_attempt_pre_send',
+      atCrashOutbox: [{ kind: 'brief', status: 'sent_unacked', attempts: 1 }],
+      atCrashSink: { deliveries: 0, attempts: 0 },
+      finalOutbox: [{ kind: 'brief', status: 'acked', attempts: 2 }],
+      finalSink: { deliveries: 1, attempts: 1 },
+    },
+    {
+      crashPoint: 'post_sink_pre_ack',
+      atCrashOutbox: [{ kind: 'brief', status: 'sent_unacked', attempts: 1 }],
+      atCrashSink: { deliveries: 1, attempts: 1 },
+      finalOutbox: [{ kind: 'brief', status: 'acked', attempts: 2 }],
+      finalSink: { deliveries: 1, attempts: 2 },
+    },
+    {
+      crashPoint: 'post_ack_pre_return',
+      atCrashOutbox: [{ kind: 'brief', status: 'acked', attempts: 1 }],
+      atCrashSink: { deliveries: 1, attempts: 1 },
+      finalOutbox: [{ kind: 'brief', status: 'acked', attempts: 1 }],
+      finalSink: { deliveries: 1, attempts: 1 },
+    },
+  ] as const)(
+    'resumes after outbox crash at $crashPoint without duplicate delivery',
+    async ({ crashPoint, atCrashOutbox, atCrashSink, finalOutbox, finalSink }) => {
+      const stub = freshStub();
+      const dueAt = soon();
+
+      const runId = await stub.scheduleFakeRun({
+        scheduleId: `brief:${crashPoint}`,
+        userId: `${USER}-${crashPoint}`,
+        dueAt,
+        occurrenceAt: dueAt,
+      });
+      await runInDurableObject(stub, (instance) => {
+        const runLoop = instance as unknown as CrashableRunLoopInstance;
+        runLoop.__runLoopOutboxCrashPoint = crashPoint;
+      });
+
+      await expect(runDurableObjectAlarm(stub)).rejects.toThrow(
+        `crash-injection:${crashPoint}`,
+      );
+      const atCrash = await stub.readRunProof(runId);
+      expect(atCrash.current).toEqual({ state: 'GATED', failure_reason: null });
+      expect(atCrash.outbox).toEqual(atCrashOutbox);
+      expect(atCrash.sink).toEqual(atCrashSink);
+
+      await evictDurableObject(stub);
+      await runInDurableObject(stub, async (instance) => {
+        const runLoop = instance as unknown as CrashableRunLoopInstance;
+        await runLoop.alarm();
+      });
+
+      const proof = await stub.readRunProof(runId);
+      expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+      expect(proof.outbox).toEqual(finalOutbox);
+      expect(proof.sink).toEqual(finalSink);
       expect(proof.delivery_journal).toEqual({ state: 'DONE', verdict: 'send' });
     },
   );

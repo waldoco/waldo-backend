@@ -16,6 +16,7 @@ declare global {
     interface Env {
       RUNTIME_DO: DurableObjectNamespace<RuntimeProbeDO>;
       RUN_LOOP_DO: DurableObjectNamespace<RunLoopDO>;
+      RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
     }
   }

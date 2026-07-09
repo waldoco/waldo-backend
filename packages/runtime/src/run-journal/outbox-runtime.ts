@@ -208,6 +208,19 @@ export class RunJournalOutbox {
     }
   }
 
+  async gateRun(runId: string): Promise<JournalRow> {
+    const run = this.journal.read(runId);
+    if (run === null) throw new Error(`gateRun: no journal row for ${runId}`);
+    if (run.state === 'GATED' || run.state === 'FAILED') return run;
+    if (run.state !== 'GOVERNOR_ADMITTED') {
+      throw new Error(`gateRun requires GOVERNOR_ADMITTED, got ${run.state}`);
+    }
+    await this.runGate(run);
+    const gated = this.journal.read(runId);
+    if (gated === null) throw new Error(`gateRun: no journal row after gate for ${runId}`);
+    return gated;
+  }
+
   async tickNextOpenRun(): Promise<void> {
     const run = this.journal.findOpenRun();
     if (run === null) return;
