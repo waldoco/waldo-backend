@@ -33,6 +33,7 @@ Primary backend sources:
 | `docs/foundation/BUILD-PLAN.md` | Contract-spine build order and current runtime dependency layer. |
 | `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md` | Verification wall and runtime/evidence testing standard. |
 | `docs/foundation/AGENT-OPERATING-WORKFLOW.md` | Session loop, skill map, plugin boundaries, and verification wall. |
+| `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` | HEY-10 deferred DO table coverage: ADR/Linear ownership for goals, memory edges, commitments, handoff state, and compaction. |
 | `packages/contracts/src/index.ts` | Barrel for the implemented contract spine. |
 | `packages/runtime/src/tracer/tracer-do.ts` | Only executing runtime slice today. |
 | `packages/runtime/test/tracer.test.ts` | Workerd crash/resume proof for the tracer path. |
@@ -234,6 +235,10 @@ Claude context lane (parallel; fake-backed start allowed now):
   HEY-16 (REASONS prompt builder). HEY-11 (AuditedDB) rides HEY-10. HEY-13 (sanitiser runtime)
   runs parallel — the governor egress floor and Scribe both consume it. HEY-102 (CRS) may stay
   faked through SLICE-6.
+- HEY-10 lands the exact 10-table base schema in
+  `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md`. `goals` is intentionally excluded and owned by
+  HEY-144, which blocks full HEY-16 goal hydration. Deferred tables remain mapped in
+  `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md`.
 
 Safe-parallel at any point: HEY-111 (eval/trace spine — the hardened loop is proven against its assertions),
 HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100, HEY-125.
