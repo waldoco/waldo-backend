@@ -85,6 +85,24 @@ function response(model: string, text: string, inputTokens = 24, outputTokens = 
   } as LLMResponse;
 }
 
+function getCrsToolCallText(id: string, rangeDays: number): string {
+  return JSON.stringify({
+    tool_calls: [
+      {
+        id,
+        name: 'get_crs',
+        arguments: { range_days: rangeDays },
+      },
+    ],
+  });
+}
+
+function runtimePassSystems(gateway: ScriptedRunLoopGateway): string[] {
+  return gateway.requests.map((request) =>
+    (request.request.system ?? '').split(':').slice(0, 2).join(':'),
+  );
+}
+
 class ScriptedRunLoopGateway implements LLMGatewayAdapter {
   readonly requests: LLMGatewayRequest[] = [];
 
@@ -786,18 +804,7 @@ describe('RunLoopDO full contract FSM', () => {
       if ((request.request.system ?? '').startsWith('run-loop:observe')) {
         return response(request.request.model, 'Synthesized brief after get_crs observation.');
       }
-      return response(
-        request.request.model,
-        JSON.stringify({
-          tool_calls: [
-            {
-              id: 'call-get-crs',
-              name: 'get_crs',
-              arguments: { range_days: 1 },
-            },
-          ],
-        }),
-      );
+      return response(request.request.model, getCrsToolCallText('call-get-crs', 1));
     });
 
     const runId = await stub.scheduleFakeRun({
@@ -814,11 +821,7 @@ describe('RunLoopDO full contract FSM', () => {
 
     const proof = await stub.readRunProof(runId);
     expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
-    expect(
-      gateway.requests.map((request) =>
-        (request.request.system ?? '').split(':').slice(0, 2).join(':'),
-      ),
-    ).toEqual(['run-loop:plan', 'run-loop:observe']);
+    expect(runtimePassSystems(gateway)).toEqual(['run-loop:plan', 'run-loop:observe']);
     expect(proof.trace.find((event) => event.event === 'llm_observed')?.detail).toEqual({
       model: ROSTER.primary,
       fallback_step: 'configured_model',
@@ -829,6 +832,386 @@ describe('RunLoopDO full contract FSM', () => {
       outbox_kind: 'brief',
       delivery_text_source: 'llm',
     });
+  });
+
+  it('runs multiple governed model/tool/observe passes before terminal gate and delivery', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    let observeCalls = 0;
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        observeCalls += 1;
+        if (observeCalls === 1) {
+          return response(request.request.model, getCrsToolCallText('call-get-crs-2', 2));
+        }
+        return response(request.request.model, 'Synthesized brief after two get_crs observations.');
+      }
+      return response(request.request.model, getCrsToolCallText('call-get-crs-1', 1));
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:multi-pass',
+      userId: `${USER}-multi-pass`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.fsm).toEqual([
+      'PENDING',
+      'CONTEXT_BUILT',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'GATED',
+      'DELIVERED',
+      'DONE',
+    ]);
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(runtimePassSystems(gateway)).toEqual([
+      'run-loop:plan',
+      'run-loop:observe',
+      'run-loop:observe',
+    ]);
+    expect(
+      proof.trace
+        .map((event) => event.event)
+        .filter((event) => event === 'llm_called' || event === 'tool_dispatched' || event === 'llm_observed'),
+    ).toEqual([
+      'llm_called',
+      'tool_dispatched',
+      'llm_observed',
+      'tool_dispatched',
+      'llm_observed',
+    ]);
+    expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+
+    const evidence = await stub.readRunEvidence(runId);
+    expect(new Set(evidence.trace.map((event) => event.event_key)).size).toBe(
+      evidence.trace.length,
+    );
+    expect(evidence.fsm).toEqual(proof.fsm);
+    const serialized = JSON.stringify(evidence);
+    expect(serialized).not.toContain('prompt');
+    expect(serialized).not.toContain('raw_health');
+    expect(serialized).not.toContain('provider_body');
+    expect(serialized).not.toContain('credentials');
+  });
+
+  it('fails durably when an observe pass emits a malformed tool-call envelope', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        return response(request.request.model, JSON.stringify({ tool_calls: 'oops' }));
+      }
+      return response(request.request.model, getCrsToolCallText('call-observe-malformed', 1));
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:observe-malformed-tools',
+      userId: `${USER}-observe-malformed-tools`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.fsm).toEqual([
+      'PENDING',
+      'CONTEXT_BUILT',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'FAILED',
+    ]);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'tool_parse:invalid_args',
+    });
+    expect(runtimePassSystems(gateway)).toEqual(['run-loop:plan', 'run-loop:observe']);
+    expect(proof.trace.map((event) => event.event)).toContain('llm_observed');
+    expect(proof.trace.find((event) => event.event === 'tool_parse_failed')?.detail).toEqual({
+      code: 'invalid_args',
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('treats unrelated terminal JSON from observe as delivery text', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        return response(request.request.model, JSON.stringify(['Synthesized brief as JSON.']));
+      }
+      return response(request.request.model, getCrsToolCallText('call-observe-json-terminal', 1));
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:observe-json-terminal',
+      userId: `${USER}-observe-json-terminal`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.fsm).toEqual([
+      'PENDING',
+      'CONTEXT_BUILT',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'GATED',
+      'DELIVERED',
+      'DONE',
+    ]);
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(proof.trace.map((event) => event.event)).not.toContain('tool_parse_failed');
+    expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+  });
+
+  it('accumulates usage across every loop pass and stops before gate when budget is exhausted', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    let observeCalls = 0;
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        observeCalls += 1;
+        if (observeCalls === 1) {
+          return response(request.request.model, getCrsToolCallText('call-budget-2', 2), 8_000, 0);
+        }
+        return response(request.request.model, 'Synthesized brief after budget edge.', 8_001, 0);
+      }
+      return response(request.request.model, getCrsToolCallText('call-budget-1', 1), 8_000, 0);
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:multi-pass-budget-kill',
+      userId: `${USER}-multi-pass-budget-kill`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.fsm).toEqual([
+      'PENDING',
+      'CONTEXT_BUILT',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'FAILED',
+    ]);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'governor:token_budget_exhausted',
+    });
+    expect(runtimePassSystems(gateway)).toEqual([
+      'run-loop:plan',
+      'run-loop:observe',
+      'run-loop:observe',
+    ]);
+    expect(proof.trace.map((event) => event.event).at(-1)).toBe('governor_denied');
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('terminates deterministically when the governed iteration budget is exhausted', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    let llmCalls = 0;
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      llmCalls += 1;
+      return response(request.request.model, getCrsToolCallText(`call-iteration-${llmCalls}`, llmCalls));
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:iteration-budget-exhausted',
+      userId: `${USER}-iteration-budget-exhausted`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(gateway.requests).toHaveLength(11);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'governor:iteration_budget_exhausted',
+    });
+    expect(proof.trace.map((event) => event.event)).toContain('governor_denied');
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('fails durably when an observe pass repeats the same tool observation', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    let observeCalls = 0;
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        observeCalls += 1;
+        if (observeCalls === 1) {
+          return response(request.request.model, getCrsToolCallText('call-duplicate-2', 1));
+        }
+        return response(request.request.model, 'Should not gate after duplicate observation.');
+      }
+      return response(request.request.model, getCrsToolCallText('call-duplicate-1', 1));
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:duplicate-observation',
+      userId: `${USER}-duplicate-observation`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'governor:duplicate_observation',
+    });
+    expect(proof.trace.map((event) => event.event)).toContain('governor_denied');
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('resumes a multi-pass run from TOOLS_DONE without re-executing completed tools', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    let observeCalls = 0;
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        observeCalls += 1;
+        if (observeCalls === 1) {
+          return response(request.request.model, getCrsToolCallText('call-resume-2', 2));
+        }
+        return response(request.request.model, 'Synthesized brief after resumed observations.');
+      }
+      return response(request.request.model, getCrsToolCallText('call-resume-1', 1));
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:multi-pass-resume',
+      userId: `${USER}-multi-pass-resume`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      const runLoop = instance as unknown as CrashableRunLoopInstance;
+      runLoop.__runLoopCrashAfter = 'TOOLS_DONE';
+      runLoop.__runLoopSetTestOverrides({ gateway });
+    });
+
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+    const atCrash = await stub.readRunProof(runId);
+    expect(atCrash.fsm).toEqual(['PENDING', 'CONTEXT_BUILT', 'LLM_CALLED', 'TOOLS_DONE']);
+
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (instance, state) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+      await (instance as unknown as CrashableRunLoopInstance).alarm();
+
+      const progress = state.storage.sql
+        .exec<{ call_count: number }>(
+          `SELECT call_count
+             FROM loop_progress
+            WHERE user_id = ? AND loop_type = 'brief'`,
+          `${USER}-multi-pass-resume`,
+        )
+        .one();
+      expect(progress.call_count).toBe(2);
+    });
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(proof.fsm).toEqual([
+      'PENDING',
+      'CONTEXT_BUILT',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'LLM_CALLED',
+      'TOOLS_DONE',
+      'GATED',
+      'DELIVERED',
+      'DONE',
+    ]);
+    expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+  });
+
+  it('honors a kill flag before the next observe LLM call after resume', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) => {
+      if ((request.request.system ?? '').startsWith('run-loop:observe')) {
+        return response(request.request.model, 'Should not be called after kill flag.');
+      }
+      return response(request.request.model, getCrsToolCallText('call-kill-before-observe', 1));
+    });
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:kill-before-observe',
+      userId: `${USER}-kill-before-observe`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      const runLoop = instance as unknown as CrashableRunLoopInstance;
+      runLoop.__runLoopCrashAfter = 'TOOLS_DONE';
+      runLoop.__runLoopSetTestOverrides({ gateway });
+    });
+
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+    expect(gateway.requests).toHaveLength(1);
+
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (instance) => {
+      const runLoop = instance as unknown as CrashableRunLoopInstance;
+      runLoop.__runLoopSetTestOverrides({ gateway });
+      runLoop.__runLoopSetKillFlag({ scope: 'loop', loopType: 'brief', active: true });
+      await runLoop.alarm();
+    });
+
+    const proof = await stub.readRunProof(runId);
+    expect(gateway.requests).toHaveLength(1);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'governor:kill_flag_active',
+    });
+    expect(proof.trace.map((event) => event.event)).toContain('governor_denied');
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
   });
 
   it('exposes malformed LLM output as a terminal replayable failure', async () => {

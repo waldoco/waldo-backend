@@ -9,6 +9,7 @@ import {
   type AdapterResult,
   type DeliveryCandidate,
   type DeliverySink,
+  type ErrorCode,
   type GetCrsArgs,
   type LLMResponse,
   type RuntimeReplayFixture,
@@ -40,6 +41,7 @@ import { productionDeps, type Deps } from '../seams/deps';
 import {
   dispatchTool,
   parseToolCalls,
+  type DispatchToolResult,
   type RuntimeToolCall,
   type ToolDispatcherContext,
 } from '../tools/dispatcher';
@@ -516,8 +518,12 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         case 'TOOLS_DONE':
           run = await this.synthesiseDelivery(run, ctx);
           if (run.state === 'FAILED') break;
-          run = await this.gate(run);
-          this.crashAfter('GATED');
+          if (run.state === 'LLM_CALLED') {
+            this.crashAfter('LLM_CALLED');
+          } else {
+            run = await this.gate(run);
+            this.crashAfter('GATED');
+          }
           break;
         case 'GATED':
           await this.journalOutbox.tickRun(run.run_id);
@@ -579,6 +585,12 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     run: RuntimeRunRecord,
     ctx: HookRuntimeContext,
   ): Promise<RuntimeRunRecord> {
+    const preflight = this.checkGovernorBeforeLlm(run.run_id);
+    if (preflight.verdict === 'deny') {
+      this.recordGovernorDenied(run.run_id, preflight);
+      return this.failRun(run.run_id, governorFailureReason(preflight));
+    }
+
     const result = await this.llm.complete(
       {
         trigger: run.trigger,
@@ -608,6 +620,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
     const scratch: ScratchState = {
       tool_calls: parsedCalls.calls,
+      tool_results: [],
       llm: {
         model: result.response.model,
         fallback_step: result.fallback_step,
@@ -650,8 +663,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           ? { tool: result.tool, ok: true }
           : { tool: result.tool, ok: false, reason: result.reason },
       );
-      const paramsHash = await this.deps.sha256Hex(JSON.stringify(call.args));
-      const resultHash = await this.deps.sha256Hex(JSON.stringify(result));
+      const paramsHash = await this.deps.sha256Hex(stableJsonStringify(call.args));
+      const resultHash = await this.deps.sha256Hex(
+        stableJsonStringify(governorObservationResult(result)),
+      );
       const decision = this.journalOutbox.recordLoopObservation({
         runId: run.run_id,
         toolName: call.name,
@@ -671,7 +686,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
 
     const next = this.advanceRun(run.run_id, 'TOOLS_DONE', {
-      scratch: { ...scratch, tool_results: results },
+      scratch: { ...scratch, tool_results: [...(scratch.tool_results ?? []), ...results] },
     });
     this.recordToolDispatchTrace(run.run_id, results);
     return next;
@@ -683,6 +698,12 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   ): Promise<RuntimeRunRecord> {
     const scratch = parseScratch(run.scratch_json);
     if (scratch.delivery_text !== undefined) return run;
+    const preflight = this.checkGovernorBeforeLlm(run.run_id);
+    if (preflight.verdict === 'deny') {
+      this.recordGovernorDenied(run.run_id, preflight);
+      return this.failRun(run.run_id, governorFailureReason(preflight));
+    }
+
     const result = await this.llm.complete(
       {
         trigger: run.trigger,
@@ -726,6 +747,28 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if (usageDecision.verdict === 'deny') {
       this.recordGovernorDenied(run.run_id, usageDecision);
       return this.failRun(run.run_id, governorFailureReason(usageDecision));
+    }
+
+    const continuation = await parseObserveContinuation(result.tool_call_source.text);
+    if (continuation.kind === 'malformed') {
+      this.recordTrace(run.run_id, 'tool_parse_failed', { code: continuation.code });
+      return this.failRun(run.run_id, `tool_parse:${continuation.code}`);
+    }
+    if (continuation.kind === 'tool_calls') {
+      return this.advanceRun(run.run_id, 'LLM_CALLED', {
+        scratch: {
+          ...scratch,
+          tool_calls: continuation.calls,
+          delivery_text: undefined,
+          delivery_text_source: undefined,
+          llm: {
+            model: result.response.model,
+            fallback_step: result.fallback_step,
+            degraded: result.degraded,
+            tool_call_count: continuation.calls.length,
+          },
+        },
+      });
     }
 
     return this.updateRunScratch(run.run_id, {
@@ -1061,6 +1104,15 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
+  private checkGovernorBeforeLlm(runId: string): GovernorDecision {
+    return this.journalOutbox.recordLoopUsage({
+      runId,
+      tokensUsed: 0,
+      iterations: 0,
+      subagentSpawns: 0,
+    });
+  }
+
   private recordToolDispatchTrace(
     runId: string,
     results: { tool: ToolName | null; ok: boolean; reason?: string }[],
@@ -1222,12 +1274,128 @@ function jsonOrNull(value: Record<string, unknown> | ScratchState | null | undef
   return value === null || value === undefined ? null : JSON.stringify(value);
 }
 
+type ObserveContinuation =
+  | { kind: 'terminal' }
+  | { kind: 'tool_calls'; calls: RuntimeToolCall[] }
+  | { kind: 'malformed'; code: ErrorCode };
+
+async function parseObserveContinuation(text: string): Promise<ObserveContinuation> {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+    return { kind: 'terminal' };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed) as unknown;
+  } catch {
+    return trimmed.includes('tool_calls')
+      ? { kind: 'malformed', code: 'invalid_args' }
+      : { kind: 'terminal' };
+  }
+
+  const envelopeKind = observeToolCallEnvelopeKind(parsed);
+  if (envelopeKind === 'malformed') {
+    return { kind: 'malformed', code: 'invalid_args' };
+  }
+  if (envelopeKind === 'terminal') {
+    return { kind: 'terminal' };
+  }
+
+  const parsedCalls = await parseToolCalls(parsed);
+  if (!parsedCalls.ok) {
+    return { kind: 'malformed', code: parsedCalls.code };
+  }
+  if (parsedCalls.calls.length === 0) {
+    return { kind: 'terminal' };
+  }
+  return { kind: 'tool_calls', calls: parsedCalls.calls };
+}
+
+function observeToolCallEnvelopeKind(value: unknown): 'terminal' | 'candidate' | 'malformed' {
+  if (Array.isArray(value)) {
+    return value.some(isToolCallCandidateShape) ? 'candidate' : 'terminal';
+  }
+  if (!isRecord(value)) return 'terminal';
+  if (Object.prototype.hasOwnProperty.call(value, 'tool_calls')) {
+    return Array.isArray(value.tool_calls) ? 'candidate' : 'malformed';
+  }
+  if (Array.isArray(value.content)) {
+    return value.content.some(isToolCallCandidateShape) ? 'candidate' : 'terminal';
+  }
+  if (Array.isArray(value.choices)) {
+    return value.choices.some(choiceHasToolCalls) ? 'candidate' : 'terminal';
+  }
+  return 'terminal';
+}
+
+function isToolCallCandidateShape(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' ||
+    typeof value.name === 'string' ||
+    typeof value.tool === 'string' ||
+    isRecord(value.function) ||
+    Object.prototype.hasOwnProperty.call(value, 'input') ||
+    Object.prototype.hasOwnProperty.call(value, 'args') ||
+    Object.prototype.hasOwnProperty.call(value, 'arguments') ||
+    value.type === 'tool_use' ||
+    value.type === 'tool_call'
+  );
+}
+
+function choiceHasToolCalls(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const source = isRecord(value.message) ? value.message : value;
+  return Array.isArray(source.tool_calls) && source.tool_calls.some(isToolCallCandidateShape);
+}
+
+function stableJsonStringify(value: unknown): string {
+  if (value === undefined) return 'null';
+  if (value === null || typeof value !== 'object') {
+    const encoded = JSON.stringify(value);
+    return encoded === undefined ? 'null' : encoded;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJsonStringify(entry)).join(',')}]`;
+  }
+
+  const entries = Object.entries(value)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries
+    .map(([key, entry]) => `${JSON.stringify(key)}:${stableJsonStringify(entry)}`)
+    .join(',')}}`;
+}
+
+function governorObservationResult(result: DispatchToolResult): unknown {
+  if (result.ok) {
+    return {
+      ok: true,
+      tool: result.tool,
+      data: result.data,
+      card: result.card ?? null,
+    };
+  }
+  return {
+    ok: false,
+    tool: result.tool,
+    code: result.code,
+    reason: result.reason,
+    error: result.error,
+  };
+}
+
 function parseJsonObject(text: string): Record<string, unknown> {
   const parsed = JSON.parse(text) as unknown;
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('expected JSON object');
   }
   return parsed as Record<string, unknown>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function assertNever(value: never): never {

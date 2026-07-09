@@ -51,7 +51,9 @@ describe('runtimeRunStateTransitions', () => {
   it('allows the journal path and the no-tools/no-send fast paths', () => {
     expect(runtimeRunStateTransitions.PENDING).toEqual(['CONTEXT_BUILT', 'FAILED']);
     expect(runtimeRunStateTransitions.LLM_CALLED).toEqual(['TOOLS_DONE', 'GATED', 'FAILED']);
+    expect(runtimeRunStateTransitions.TOOLS_DONE).toEqual(['LLM_CALLED', 'GATED', 'FAILED']);
     expect(runtimeRunStateTransitions.GATED).toEqual(['DELIVERED', 'DONE', 'FAILED']);
+    expect(runtimeRunCanAdvance('TOOLS_DONE', 'LLM_CALLED')).toBe(true);
     expect(runtimeRunCanAdvance('LLM_CALLED', 'GATED')).toBe(true);
     expect(runtimeRunCanAdvance('GATED', 'DONE')).toBe(true);
   });
