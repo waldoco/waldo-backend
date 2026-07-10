@@ -2,7 +2,6 @@ import {
   type AdapterResult,
   type DeliverySink,
   type LLMResponse,
-  type SanitiseResult,
   type SinkAck,
   type SinkRequest,
 } from '@waldo/contracts';
@@ -12,6 +11,8 @@ import {
   type GatewaySecretBinding,
 } from '../llm/gateway';
 import type { LLMGatewayAdapter, LLMGatewayRequest, RouteSpendState } from '../llm/provider';
+import { evaluateMedicalClaim } from '../scribe/medical-gate';
+import { sanitise } from '../scribe/sanitiser';
 import { productionDeps, type Deps } from '../seams/deps';
 
 export const RUN_LOOP_DELIVERY_TEXT = 'Derived steady-state brief ready for delivery.';
@@ -239,17 +240,16 @@ function localPermissiveSafety(): RunLoopSafetyCallbacks {
   return {
     rateLimitCheck: () => true,
     hasApproval: () => true,
-    sanitise: ({ text }) => ({ ok: true, output: text, redactions: [] }),
-    medicalGate: () => true,
+    sanitise,
+    medicalGate: evaluateMedicalClaim,
   };
 }
 
 function failClosedSafety(): RunLoopSafetyCallbacks {
-  const blocked = (): SanitiseResult => ({ ok: false, reason: 'untrusted_instruction' });
   return {
     rateLimitCheck: () => ({ ok: false, reason: 'rate limit check unconfigured', code: 'transient' }),
     hasApproval: () => false,
-    sanitise: blocked,
-    medicalGate: () => ({ ok: false, reason: 'medical gate unconfigured', code: 'transient' }),
+    sanitise,
+    medicalGate: evaluateMedicalClaim,
   };
 }

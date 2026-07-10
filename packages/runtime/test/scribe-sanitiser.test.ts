@@ -41,6 +41,28 @@ describe('Scribe sanitiser', () => {
     ).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
   });
 
+  it('denies structured health serialized inside model text', () => {
+    expect(inspect(JSON.stringify({ metric: 'hrv', measurement: 58 }))).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+  });
+
+  it('denies double-serialized health and fails closed beyond the two-pass JSON bound', () => {
+    const health = JSON.stringify({ metric: 'hrv', measurement: 58 });
+    expect(inspect(JSON.stringify(health))).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+    expect(inspect(JSON.stringify(JSON.stringify(health)))).toEqual({
+      ok: false,
+      check: 'size_cap',
+      reason: 'invalid_payload',
+    });
+  });
+
   it('returns content-free failures and preserves taint only on allowed content', () => {
     const denied = inspect(`leaked ${CANARIES[0]}`);
     expect(denied).toEqual({ ok: false, check: 'canary_token', reason: 'canary_leak' });
@@ -59,6 +81,39 @@ describe('Scribe sanitiser', () => {
       source_taint: 'external',
       redactions: [],
     });
+  });
+
+  it('allows strict content-free RunLoop scratch across repeated tool passes', () => {
+    const payload: SanitiseInput['payload'] = {
+        tool_calls: [{ id: 'call-get-crs-2', name: 'get_crs', args: { range_days: 2 } }],
+        tool_results: [{ tool: 'get_crs', ok: true }],
+        llm: {
+          model: '@cf/google/gemma-4-26b-a4b-it',
+          fallback_step: 'configured_model',
+          degraded: false,
+          tool_call_count: 1,
+        },
+        source_taint: null,
+      };
+    expect(inspect(payload)).toMatchObject({ ok: true, payload });
+  });
+
+  it('allows a content-free RunLoop observation request', () => {
+    expect(
+      inspect([
+        {
+          role: 'user',
+          content: JSON.stringify({
+            context: {
+              source: 'fake-derived',
+              trigger: 'brief',
+              body_state: 'steady',
+            },
+            tool_results: [{ tool: 'get_crs', ok: true }],
+          }),
+        },
+      ]),
+    ).toMatchObject({ ok: true });
   });
 
   it.each([

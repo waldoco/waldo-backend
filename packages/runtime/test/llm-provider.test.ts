@@ -553,7 +553,12 @@ describe('RuntimeLLMProvider', () => {
       runtimeCtx(),
     );
 
-    expect(result).toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'hook_halt',
+      code: 'forbidden',
+      scribe: { destination: 'internal_context', reason: 'health_value_leak' },
+    });
     expect(gateway.requests).toEqual([]);
   });
 
@@ -679,7 +684,12 @@ describe('RuntimeLLMProvider', () => {
       runtimeCtx(),
     );
 
-    expect(result).toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'hook_halt',
+      code: 'forbidden',
+      scribe: { destination: 'send_message', reason: 'health_value_leak' },
+    });
   });
 
   it.each([

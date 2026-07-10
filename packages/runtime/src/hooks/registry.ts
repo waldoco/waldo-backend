@@ -843,7 +843,7 @@ async function sanitiseCandidate(
     if (!result.ok) {
       return {
         ok: false,
-        result: halt('scribe sanitise rejected output', sanitiseFailureCode(result.reason)),
+        result: halt(`scribe:${result.reason}`, sanitiseFailureCode(result.reason)),
       };
     }
     if (result.source_taint !== sourceTaint) {

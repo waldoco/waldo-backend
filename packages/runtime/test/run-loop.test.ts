@@ -58,6 +58,14 @@ type CrashableRunLoopInstance = {
     gateway?: LLMGatewayAdapter;
     providerMode?: 'fake' | 'gateway';
   }): void;
+  __runLoopIngestExternalToolResultForTest(runId: string): Promise<{
+    ok: boolean;
+    source_taint?: 'external' | null;
+  }>;
+  __runLoopProbePrivilegedToolForTest(runId: string): Promise<{
+    result: { ok: boolean; reason?: string };
+    handler_calls: number;
+  }>;
   alarm(): Promise<void>;
 };
 
@@ -145,6 +153,35 @@ class ScriptedRunLoopGateway implements LLMGatewayAdapter {
 }
 
 describe('RunLoopDO full contract FSM', () => {
+  it('replaces denied trace detail with content-free Scribe evidence', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:hrv:58',
+      userId: `${USER}-trace-scribe`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.trace).toEqual([
+      {
+        event: 'scribe_denied',
+        detail: { destination: 'audit_log', reason: 'health_value_leak' },
+      },
+    ]);
+    const persistedTrace = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ event: string; detail_json: string }>(
+          'SELECT event, detail_json FROM runtime_trace WHERE run_id = ?',
+          runId,
+        )
+        .one(),
+    );
+    expect(JSON.stringify(persistedTrace).toLowerCase()).not.toContain('hrv');
+    expect(JSON.stringify(persistedTrace)).not.toContain('58');
+  });
+
   it('walks a scheduled fake-backed run through the full FSM with trace and delivery proof', async () => {
     const stub = freshStub();
     const dueAt = soon();
@@ -627,6 +664,125 @@ describe('RunLoopDO full contract FSM', () => {
       code: 'invalid_args',
     });
     expect(proof.outbox).toEqual([]);
+  });
+
+  it('denies hostile provider health output before any checkpoint, trace detail, outbox, or sink', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) =>
+      response(
+        request.request.model,
+        JSON.stringify(JSON.stringify({ metric: 'hrv', measurement: 58 })),
+      ),
+    );
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:scribe-health-denial',
+      userId: `${USER}-scribe-health-denial`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    const replay = await stub.replayFixture(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:health_value_leak',
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+    expect(gateway.requests).toHaveLength(1);
+
+    const persisted = await runInDurableObject(stub, (_instance, state) => ({
+      runs: state.storage.sql
+        .exec<{ context_json: string | null; scratch_json: string | null; failure_reason: string | null }>(
+          'SELECT context_json, scratch_json, failure_reason FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .toArray(),
+      trace: state.storage.sql
+        .exec<{ detail_json: string }>(
+          'SELECT detail_json FROM runtime_trace WHERE run_id = ? ORDER BY seq',
+          runId,
+        )
+        .toArray(),
+      outbox: state.storage.sql
+        .exec<{ payload: string }>('SELECT payload FROM outbox WHERE run_id = ?', runId)
+        .toArray(),
+    }));
+    const publicEvidence = JSON.stringify({ proof, replay, persisted }).toLowerCase();
+    expect(publicEvidence).not.toContain('hrv');
+    expect(publicEvidence).not.toContain('measurement');
+    expect(persisted.outbox).toEqual([]);
+  });
+
+  it('scrubs a hostile resumed delivery before gate, outbox, replay, or sink', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:scribe-resume-delivery',
+      userId: `${USER}-scribe-resume-delivery`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'TOOLS_DONE';
+    });
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+
+    await runInDurableObject(stub, (_instance, state) => {
+      const row = state.storage.sql
+        .exec<{ scratch_json: string }>(
+          'SELECT scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one();
+      const scratch = JSON.parse(row.scratch_json) as Record<string, unknown>;
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          ...scratch,
+          delivery_text: JSON.stringify(JSON.stringify({ metric: 'hrv', measurement: 58 })),
+          delivery_text_source: 'llm',
+        }),
+        runId,
+      );
+    });
+
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as CrashableRunLoopInstance).alarm();
+    });
+
+    const proof = await stub.readRunProof(runId);
+    const replay = await stub.replayFixture(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:health_value_leak',
+    });
+    expect(proof.trace.at(-1)).toEqual({
+      event: 'scribe_denied',
+      detail: { destination: 'outbox', reason: 'health_value_leak' },
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+
+    const scratchJson = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ scratch_json: string }>(
+          'SELECT scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one().scratch_json,
+    );
+    const serialized = JSON.stringify({ proof, replay, scratchJson }).toLowerCase();
+    expect(serialized).not.toContain('hrv');
+    expect(serialized).not.toContain('measurement');
   });
 
   it('fails durably when a tool is denied by the trigger ACL', async () => {
@@ -1166,11 +1322,22 @@ describe('RunLoopDO full contract FSM', () => {
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
     const atCrash = await stub.readRunProof(runId);
     expect(atCrash.fsm).toEqual(['PENDING', 'CONTEXT_BUILT', 'LLM_CALLED', 'TOOLS_DONE']);
+    await runInDurableObject(stub, async (instance) => {
+      const result = await (
+        instance as unknown as CrashableRunLoopInstance
+      ).__runLoopIngestExternalToolResultForTest(runId);
+      expect(result).toMatchObject({ ok: true, source_taint: 'external' });
+    });
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
-      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
-      await (instance as unknown as CrashableRunLoopInstance).alarm();
+      const runLoop = instance as unknown as CrashableRunLoopInstance;
+      runLoop.__runLoopSetTestOverrides({ gateway });
+      await expect(runLoop.__runLoopProbePrivilegedToolForTest(runId)).resolves.toMatchObject({
+        result: { ok: false, reason: 'approval_denied' },
+        handler_calls: 0,
+      });
+      await runLoop.alarm();
 
       const progress = state.storage.sql
         .exec<{ call_count: number }>(
@@ -1198,6 +1365,16 @@ describe('RunLoopDO full contract FSM', () => {
     ]);
     expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
     expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+    const restoredTaint = await runInDurableObject(stub, (_instance, state) => {
+      const row = state.storage.sql
+        .exec<{ scratch_json: string }>(
+          'SELECT scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one();
+      return (JSON.parse(row.scratch_json) as { source_taint: unknown }).source_taint;
+    });
+    expect(restoredTaint).toBe('external');
   });
 
   it('honors a kill flag before the next observe LLM call after resume', async () => {

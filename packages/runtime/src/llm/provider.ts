@@ -3,6 +3,7 @@ import {
   FALLBACK_LADDER,
   GATEWAY_CONSTANT_HEADERS,
   ROUTING_TABLE,
+  sanitiseFailureReasonSchema,
   sanitiseInputSchema,
   sanitiseResultSchema,
   sourceTaintSchema,
@@ -22,6 +23,8 @@ import {
   type Provider,
   type RoutingLogEvent,
   type RoutingPolicy,
+  type SanitiseDestination,
+  type SanitiseFailureReason,
 } from '@waldo/contracts';
 import {
   HookHaltError,
@@ -124,6 +127,10 @@ export type RuntimeLLMFailure = {
   fallback_step: RuntimeFallbackStep;
   attempts: LLMAttempt[];
   routing_log: RoutingLogEvent | null;
+  scribe?: {
+    destination: SanitiseDestination;
+    reason: SanitiseFailureReason;
+  };
 };
 
 export type RuntimeLLMResult = RuntimeLLMSuccess | RuntimeLLMFailure;
@@ -153,7 +160,13 @@ type PreLlmHookResult =
   | { ok: true; request: LLMRequest }
   | { ok: false; error: HookHaltError };
 
-type SanitiseRequestResult = PreLlmHookResult;
+type SanitiseRequestResult =
+  | { ok: true; request: LLMRequest }
+  | {
+      ok: false;
+      error: HookHaltError;
+      scribeDestination?: Extract<SanitiseDestination, 'system_prompt' | 'internal_context'>;
+    };
 
 const DEFAULT_ROUTING_POLICY: RoutingPolicy = routingPolicySchema.parse({
   routes: Object.values(ROUTING_TABLE),
@@ -278,7 +291,13 @@ export class RuntimeLLMProvider {
 
       const sanitisedRequest = await sanitiseRequest(customPreHook.request, ctx);
       if (!sanitisedRequest.ok) {
-        return failFromHook(sanitisedRequest.error, plan.fallback_step, attempts, routingLog);
+        return failFromHook(
+          sanitisedRequest.error,
+          plan.fallback_step,
+          attempts,
+          routingLog,
+          sanitisedRequest.scribeDestination,
+        );
       }
 
       const preHook = await this.runCorePreLlmHooks(sanitisedRequest.request, ctx);
@@ -341,7 +360,13 @@ export class RuntimeLLMProvider {
 
       const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
       if (!postHook.ok) {
-        return failFromHook(postHook.error, plan.fallback_step, attempts, routingLog);
+        return failFromHook(
+          postHook.error,
+          plan.fallback_step,
+          attempts,
+          routingLog,
+          'send_message',
+        );
       }
 
       this.circuitBreaker.recordSuccess(plan.step.provider);
@@ -497,7 +522,7 @@ export class RuntimeLLMProvider {
 
     const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
     if (!postHook.ok) {
-      return failFromHook(postHook.error, 'template', attempts, routingLog);
+      return failFromHook(postHook.error, 'template', attempts, routingLog, 'send_message');
     }
     const response = postHook.response;
     return {
@@ -566,8 +591,13 @@ function failFromHook(
   fallbackStep: RuntimeFallbackStep,
   attempts: LLMAttempt[],
   routingLog: RoutingLogEvent | null,
+  scribeDestination?: SanitiseDestination,
 ): RuntimeLLMFailure {
-  return {
+  const scribeReason =
+    error.hook === 'scribe_sanitise' && error.reason.startsWith('scribe:')
+      ? sanitiseFailureReasonSchema.safeParse(error.reason.slice('scribe:'.length))
+      : null;
+  const failure: RuntimeLLMFailure = {
     ok: false,
     error: error.clientMessage,
     code: error.code,
@@ -576,6 +606,10 @@ function failFromHook(
     attempts,
     routing_log: routingLog,
   };
+  if (scribeDestination !== undefined && scribeReason?.success === true) {
+    failure.scribe = { destination: scribeDestination, reason: scribeReason.data };
+  }
+  return failure;
 }
 
 function usageFromResponse(response: LLMResponse): LLMUsage {
@@ -663,7 +697,9 @@ async function sanitiseRequest(
     request.system === undefined
       ? undefined
       : await sanitiseValue(request.system, 'system_prompt');
-  if (system !== undefined && !system.ok) return system;
+  if (system !== undefined && !system.ok) {
+    return { ...system, scribeDestination: 'system_prompt' };
+  }
   if (system !== undefined && typeof system.payload !== 'string') {
     return {
       ok: false,
@@ -671,7 +707,7 @@ async function sanitiseRequest(
     };
   }
   const messages = await sanitiseValue(request.messages, 'internal_context');
-  if (!messages.ok) return messages;
+  if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
   if (!Array.isArray(messages.payload)) {
     return {
       ok: false,

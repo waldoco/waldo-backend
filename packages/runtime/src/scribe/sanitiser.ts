@@ -12,6 +12,7 @@ import {
   type RedactionKind,
   type SanitiseCheck,
   type SanitiseDestination,
+  type SanitiseDestinationPolicy,
   type SanitiseFailureReason,
   type SanitiseInput,
   type SanitiseResult,
@@ -53,6 +54,7 @@ const NUMERIC_VALUE = /^\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s
 const HEALTH_MEASUREMENT_KEY = /^(?:measurement|value|reading|amount|score|sample)$/i;
 const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)$/i;
 const HEALTH_FREE_TEXT: readonly RegExp[] = [
+  /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)\b\s*,\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*,\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)(?=$|[^a-z0-9])/i,
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?\b/i,
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*mmhg\b/i,
@@ -171,6 +173,12 @@ function decodePercent(text: string): string | null | undefined {
 }
 
 function printableUtf8FromBase64(token: string): string | undefined {
+  if (
+    !token.includes('=') &&
+    (!/[A-Z]/.test(token) || !/[a-z]/.test(token) || !/\d/.test(token))
+  ) {
+    return undefined;
+  }
   const normalized = token.replaceAll('-', '+').replaceAll('_', '/');
   if (normalized.length % 4 === 1) return undefined;
   const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
@@ -398,19 +406,54 @@ function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDesti
 }
 
 function containsForbiddenHealth(
-  payload: JsonValue,
-  destination: SanitiseDestination,
+  input: PreparedInput,
+  jsonPass = 0,
 ): { invalid: boolean; matched: boolean } {
-  if (objectHasHealthCorrelation(payload, destination)) return { invalid: false, matched: true };
-  return visitStrings(
-    payload,
-    destination,
-    (text) =>
-      RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
-      DERIVED_SCORE_PATTERNS.some((pattern) => matches(pattern, text)) ||
-      HEALTH_FREE_TEXT.some((pattern) => pattern.test(text)),
+  if (objectHasHealthCorrelation(input.payload, input.destination)) {
+    return { invalid: false, matched: true };
+  }
+  let nestedInvalid = false;
+  const visited = visitStrings(
+    input.payload,
+    input.destination,
+    (text) => {
+      if (
+        RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
+        DERIVED_SCORE_PATTERNS.some((pattern) => matches(pattern, text)) ||
+        HEALTH_FREE_TEXT.some((pattern) => pattern.test(text))
+      ) {
+        return true;
+      }
+      const trimmed = text.trim();
+      const looksJson =
+        trimmed.startsWith('{') || trimmed.startsWith('[') || trimmed.startsWith('"');
+      if (!looksJson) {
+        return false;
+      }
+      if (jsonPass >= MAX_DECODE_PASSES) {
+        nestedInvalid = true;
+        return false;
+      }
+      try {
+        const payload = JSON.parse(trimmed) as unknown;
+        if (typeof payload !== 'string' && (typeof payload !== 'object' || payload === null)) {
+          return false;
+        }
+        const prepared = prepareInput({ ...input, payload } as SanitiseInput);
+        if (prepared === undefined) {
+          nestedInvalid = true;
+          return false;
+        }
+        const nested = containsForbiddenHealth(prepared, jsonPass + 1);
+        nestedInvalid ||= nested.invalid;
+        return nested.matched;
+      } catch {
+        return false;
+      }
+    },
     true,
   );
+  return { invalid: visited.invalid || nestedInvalid, matched: visited.matched };
 }
 
 function increment(counts: Map<RedactionKind, number>, kind: RedactionKind, count = 1): void {
@@ -602,7 +645,7 @@ function applyDestinationPolicy(
   payload: JsonValue,
   redactions: Redaction[],
 ): SanitiseResult {
-  const policy = SANITISE_DESTINATION_POLICIES[input.destination];
+  const policy: SanitiseDestinationPolicy = SANITISE_DESTINATION_POLICIES[input.destination];
   const isText = typeof payload === 'string';
   const isStructured = typeof payload === 'object' && payload !== null;
   if (
@@ -665,7 +708,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   if (secret === 'invalid_payload') return deny('size_cap', secret);
   if (secret !== undefined) return deny('canary_token', secret);
 
-  const health = containsForbiddenHealth(input.payload, input.destination);
+  const health = containsForbiddenHealth(input);
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
