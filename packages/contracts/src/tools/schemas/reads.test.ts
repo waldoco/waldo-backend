@@ -165,7 +165,7 @@ describe('searchEpisodesArgs', () => {
 });
 
 describe('executeActionArgs', () => {
-  const base = { action_id: 'act-1', confirmation_token: 'tok-1', user_id: 'user-1' };
+  const base = { action_id: 'act-1', confirmation_token: 'tok-1' };
 
   it('accepts a confirmed action reference', () => {
     expect(executeActionArgsSchema.safeParse(base).success).toBe(true);
@@ -174,6 +174,10 @@ describe('executeActionArgs', () => {
   it('rejects execution without the confirmation token', () => {
     const { confirmation_token: _dropped, ...rest } = base;
     expect(executeActionArgsSchema.safeParse(rest).success).toBe(false);
+  });
+
+  it('rejects a model-supplied user_id (identity comes from trusted context)', () => {
+    expect(executeActionArgsSchema.safeParse({ ...base, user_id: 'user-1' }).success).toBe(false);
   });
 });
 

@@ -198,15 +198,26 @@ describe('DEFAULT_HOOK_TIMEOUT_MS', () => {
 });
 
 describe('locked tool-dispatch priorities', () => {
-  it('PreToolUse slots are the six ADR-0032 gates, numbered in order', () => {
+  it('PreToolUse slots include Scribe between Zod validation and autonomy', () => {
     expect(Object.entries(PRE_TOOL_USE_PRIORITIES)).toEqual([
       ['tool_in_acl_check', 100],
       ['tool_arg_zod_validate', 200],
+      ['tool_arg_sanitise', 250],
       ['autonomy_gate_check', 300],
       ['rate_limit_per_tool', 400],
       ['egress_allowlist_check', 500],
       ['tool_audit_log_pre', 600],
     ]);
+  });
+
+  it('pins Scribe after Zod validation and before the autonomy gate', () => {
+    expect(PRE_TOOL_USE_PRIORITIES.tool_arg_sanitise).toBe(250);
+    expect(PRE_TOOL_USE_PRIORITIES.tool_arg_zod_validate).toBeLessThan(
+      PRE_TOOL_USE_PRIORITIES.tool_arg_sanitise,
+    );
+    expect(PRE_TOOL_USE_PRIORITIES.tool_arg_sanitise).toBeLessThan(
+      PRE_TOOL_USE_PRIORITIES.autonomy_gate_check,
+    );
   });
 
   it('PostToolUse slots are the four ADR-0032 gates, numbered in order', () => {

@@ -35,7 +35,6 @@ export type ProposeActionArgs = z.infer<typeof proposeActionArgsSchema>;
 // collapses a retry onto the prior send instead of double-delivering.
 export const sendMessageArgsSchema = z.strictObject({
   channel: channelNameSchema,
-  user_id: z.string().min(1),
   content: z.string().min(1).max(4_096),
   idempotency_key: idempotencyKeySchema,
 });

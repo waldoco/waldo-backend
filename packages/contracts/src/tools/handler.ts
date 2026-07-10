@@ -12,12 +12,17 @@ import { TOOL_PERMISSIONS, type ToolName } from './permissions';
 // owned by ui/card.
 export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
   z.discriminatedUnion('ok', [
-    z.strictObject({ ok: z.literal(true), data: dataSchema, card: waldoCardSchema.optional() }),
+    z.strictObject({
+      ok: z.literal(true),
+      data: dataSchema,
+      card: waldoCardSchema.optional(),
+      source_taint: z.null(),
+    }),
     z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema }),
   ]);
 
 export type ToolResult<T> =
-  | { ok: true; data: T; card?: WaldoCard }
+  | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
   | { ok: false; error: string; code: ErrorCode };
 
 // ADR-0049 accepted amendment: source_taint is a REQUIRED field on external-origin tool

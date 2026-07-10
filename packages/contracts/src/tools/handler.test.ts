@@ -33,7 +33,7 @@ const echoSchema = z.strictObject({ echo: z.string() });
 const resultSchema = toolResultSchema(echoSchema);
 const externalSchema = externalToolResultSchema(echoSchema);
 
-const baseOk = { ok: true, data: { echo: 'synthetic-token-01' } };
+const baseOk = { ok: true, data: { echo: 'synthetic-token-01' }, source_taint: null };
 const baseErr = { ok: false, error: 'provider unreachable', code: 'transient' };
 const baseCard = {
   kind: 'context_card',
@@ -42,8 +42,17 @@ const baseCard = {
 };
 
 describe('toolResultSchema', () => {
-  it('accepts a success result without a card', () => {
+  it('accepts an internal success stamped with null taint', () => {
     expect(resultSchema.safeParse(baseOk).success).toBe(true);
+  });
+
+  it('rejects a success with no taint stamp', () => {
+    const { source_taint: _sourceTaint, ...unstamped } = baseOk;
+    expect(resultSchema.safeParse(unstamped).success).toBe(false);
+  });
+
+  it("rejects an external stamp at the internal-result seam", () => {
+    expect(resultSchema.safeParse({ ...baseOk, source_taint: 'external' }).success).toBe(false);
   });
 
   it('accepts a success result carrying a render card', () => {
@@ -81,6 +90,10 @@ describe('toolResultSchema', () => {
 
   it('rejects an unknown extra key on the failure branch (strictObject)', () => {
     expect(resultSchema.safeParse({ ...baseErr, retriable: true }).success).toBe(false);
+  });
+
+  it('rejects a taint stamp on the content-free failure branch', () => {
+    expect(resultSchema.safeParse({ ...baseErr, source_taint: null }).success).toBe(false);
   });
 
   it('rejects a malformed card', () => {
