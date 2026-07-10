@@ -509,7 +509,7 @@ async function runTerminalHooks<Ctx extends ToolDispatcherContext>(
   const transformed =
     extraHooks === undefined
       ? payload
-      : await runHooks(event, payload, ctx, { registry: extraHooks });
+      : await runHooks(event, payload, ctx, { registry: extraHooks, commitContext: false });
   return runHooks(event, transformed, ctx, {
     registry: HOOK_REGISTRY as HookRegistry<Ctx>,
   });

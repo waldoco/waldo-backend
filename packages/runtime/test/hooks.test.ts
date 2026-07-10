@@ -34,6 +34,8 @@ describe('hook registry', () => {
       now: () => 1_700_000_000_000,
       rateLimitCheck: () => true,
       hasApproval: () => true,
+      sourceTaint: null,
+      toolArgSourceTaint: null,
       sanitise: ({ payload, source_taint }) =>
         ({
           ok: true,

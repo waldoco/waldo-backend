@@ -92,8 +92,8 @@ export type HookRuntimeContext = {
     args: unknown;
     session: SessionState | null;
   }) => MaybePromise<boolean>;
-  sourceTaint?: SourceTaint;
-  toolArgSourceTaint?: SourceTaint;
+  sourceTaint: SourceTaint;
+  toolArgSourceTaint: SourceTaint;
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   medicalGate?: (text: string) => MaybePromise<HookDecision>;
@@ -275,7 +275,7 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     if (payload.event !== 'PreToolUse') return ok();
     const tool = parseToolName(payload.tool);
     if (!tool.parsed) return tool.result;
-    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint ?? null);
+    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
     if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
     const sanitized = await sanitiseCandidate(
       payload.args,
@@ -307,7 +307,7 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint ?? null);
+    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
     if (!sourceTaint.success) {
       return halt('tool argument taint invalid', 'invalid_args');
     }
@@ -452,6 +452,7 @@ export const HOOK_REGISTRY: HookRegistry<HookRuntimeContext> = Object.freeze([
 
 export type RunHooksOptions<Ctx> = {
   registry?: HookRegistry<Ctx>;
+  commitContext?: boolean;
 };
 
 export class HookHaltError extends Error {
@@ -493,12 +494,13 @@ export async function runHooks<Ctx>(
   }
 
   const registry = options.registry ?? (HOOK_REGISTRY as unknown as HookRegistry<Ctx>);
+  const runContext = options.commitContext === false ? cloneHookContext(ctx) : ctx;
   const matching = [...registry]
     .filter((hook) => hook.event === parsedEvent)
     .sort((left, right) => left.priority - right.priority || left.name.localeCompare(right.name));
 
   for (const hook of matching) {
-    const hookCtx = cloneHookContext(ctx);
+    const hookCtx = cloneHookContext(runContext);
     const hookPayload = cloneHookValue(currentPayload);
     let result: HookResult;
     try {
@@ -526,7 +528,7 @@ export async function runHooks<Ctx>(
       }
     }
 
-    commitHookContext(ctx, hookCtx);
+    commitHookContext(runContext, hookCtx);
     currentPayload = nextPayload;
   }
 
@@ -799,7 +801,7 @@ async function sanitiseHookPayload(
   }
 
   if (payload.event === 'PostLLMCall') {
-    const sourceTaint = sourceTaintSchema.safeParse(ctx.sourceTaint ?? null);
+    const sourceTaint = sourceTaintSchema.safeParse(ctx.sourceTaint);
     if (!sourceTaint.success) return halt('model output taint invalid', 'transient');
     const sanitized = await sanitiseCandidate(
       payload.response,
