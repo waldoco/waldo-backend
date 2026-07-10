@@ -7,7 +7,8 @@ import { z } from 'zod';
 // dedicated ES256 issuer (valid signature, auth.uid() populated, role switch applied,
 // custom iss accepted). Shapes and vocabulary only — no key material lives in contracts.
 
-export const MINT_ISSUER = 'waldo-do-mint';
+export const MINT_ISSUER =
+  'https://oqcjjcytjvrckvylagsl.supabase.co/functions/v1/mint-agent-jwt';
 
 // ADR-0066 §4 law: margin = 15-min handler wall-clock ceiling + 5-min skew, so a token
 // that passes the pre-run check cannot expire inside one handler's ceiling.
