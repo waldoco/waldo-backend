@@ -1,6 +1,6 @@
 # HEY-125 ADR-0066 Staging Proof
 
-Date: 2026-07-09
+Date: 2026-07-10
 Project: Project Woof 1
 Supabase ref: `oqcjjcytjvrckvylagsl`
 Issue: HEY-125
@@ -12,7 +12,7 @@ HEY-125 remains a staging proof, not production `db.forUser` implementation.
 
 Project Woof 1 initially had no Waldo public schema, no Waldo migrations, and no public RLS policies. Schema setup was therefore added to staging spike prep. The HEY-9 baseline schema is now applied to Project Woof 1 and verified: 16 canonical public tables, RLS enabled and forced on all 16, 12 client-readable policies, authenticated grants matching the HEY-9 contract, and a rollbacked synthetic RLS probe showing User A sees own rows and zero explicit User B health rows.
 
-The ES256 issuer proof is not complete yet. The remaining blocker is issuer/signing-key trust configuration: the current Supabase MCP and discovered CLI commands can inspect/apply database state and generate signing material, but do not expose a command/tool to register/import the dedicated ES256 issuer/signing key into Project Woof 1. No private key or JWT was generated because doing so before a confirmed trust path would create avoidable secret-handling risk.
+The ES256 issuer proof is complete. Project Woof 1 trusts the dedicated HTTPS issuer through generic Supabase Third-Party Auth. Supabase resolved the issuer JWKS, and the resolved `kid`, `x`, and `y` matched the deployed public JWK before any proof token was minted. A temporary authenticated staging mint route derived `sub` from a verified Supabase Auth session and pinned `alg`, `kid`, `role`, `aud`, `iss`, and `actor`. The complete positive and negative Data API matrix passed. The route is disabled again, all synthetic fixtures are deleted, and the original Auth settings are restored.
 
 ## Source Packet
 
@@ -52,10 +52,12 @@ Criteria:
   - Falsifier: User A can see User B rows.
 - [x] ISC-4 Anti: Staging prep does not commit secrets, raw JWTs, auth headers, or raw health values.
   - Falsifier: artifact or diff contains secret material, bearer tokens, or health measurements.
-- [ ] ISC-5: Data API accepts a dedicated ES256 issuer JWT and populates `auth.uid()`.
+- [x] ISC-5: Data API accepts a dedicated ES256 issuer JWT and populates `auth.uid()`.
   - Falsifier: issuer cannot be configured, token is rejected, or `auth.uid()` is not populated.
-- [ ] ISC-6: Data API rejects expired, garbage, and `none` algorithm JWTs.
+- [x] ISC-6: Data API rejects expired, garbage, and `none` algorithm JWTs.
   - Falsifier: invalid JWT reaches protected data.
+- [x] ISC-7: The staging proof route is disabled and every synthetic fixture is removed after evidence capture.
+  - Falsifier: `POST /proof/mint` remains reachable, Auth settings remain changed, or a marked Auth/relational fixture remains.
 
 ## Staging Prep Applied
 
@@ -139,56 +141,67 @@ Interpretation:
 - User A sees exactly one own row in the sampled client-readable tables.
 - User A sees zero explicit User B `health_daily` rows.
 
-## CLI Discovery
-
-Local global Supabase CLI was not installed:
+## Issuer Registration And Resolution
 
 ```text
-supabase --version -> command not recognized
+issuer: https://oqcjjcytjvrckvylagsl.supabase.co/functions/v1/mint-agent-jwt
+jwks:   https://oqcjjcytjvrckvylagsl.supabase.co/functions/v1/mint-agent-jwt/.well-known/jwks.json
+algorithm: ES256 / P-256
+integration type: generic Third-Party Auth
+resolved state: true
+resolved key count: 1
+resolved kid/x/y equal deployed JWKS: true
+Custom OAuth/OIDC login provider used: false
+Supabase project signing key imported: false
 ```
 
-`npx.cmd supabase` worked:
+The private JWK was generated in memory, uploaded from an OS-temporary file to the Edge Function secret, and removed in cleanup. It was never printed, committed, attached to Linear, or returned by the JWKS route.
+
+## Live Data API Matrix
+
+Synthetic fixtures contained no measured health values. The health rows carried only ownership, date, and a synthetic source marker after an explicit synthetic consent row was created.
 
 ```text
-npx.cmd supabase --version -> 2.109.1
+PASS  valid token exact ES256 header and pinned claims
+PASS  User A reads own users row                         HTTP 200, count 1
+PASS  User B reads own users row                         HTTP 200, count 1
+PASS  User A explicit User B users query                 HTTP 200, count 0
+PASS  User A reads own synthetic health row              HTTP 200, count 1
+PASS  User A explicit User B health query                HTTP 200, count 0
+PASS  one-hour-expired registered-key token              HTTP 401
+PASS  garbage signature                                  HTTP 401
+PASS  wrong kid                                          HTTP 401
+PASS  wrong issuer                                       HTTP 401
+PASS  wrong audience                                     HTTP 401
+PASS  service_role-shaped tampered token                 HTTP 401
+PASS  alg none                                           HTTP 401
+PASS  malformed bearer                                   HTTP 401
+PASS  missing bearer                                     HTTP 401
+PASS  arbitrary sub/role request body at mint seam       HTTP 400
+PASS  native Supabase session cross-user baseline        HTTP 200, count 0
 ```
 
-Discovered command shapes:
+The staging mint seam never accepted a caller-supplied subject. It called the fixed Project Woof 1 Auth `/user` endpoint, used only the verified Auth UUID, pinned `role` and `aud` to `authenticated`, signed only ES256 with the resolved `kid`, and failed closed on verification, configuration, or signing errors.
+
+## Cutback And Cleanup
 
 ```text
-supabase gen signing-key [--algorithm ES256|RS256] [--append]
-supabase gen bearer-jwt [--role string] [--sub string] [--exp string] [--valid-for string] [--payload string]
+POST /proof/mint after cutback: 404
+discovery after cutback: 200
+JWKS key count after cutback: 1
+JWKS private d present: false
+marked Auth fixtures: 0
+marked public users fixtures: 0
+marked consent fixtures: 0
+marked health fixtures: 0
+anonymous Auth enabled: false
+mailer autoconfirm: false
+email rate limit: 2 (original value)
+Third-Party Auth resolved after cutback: true
 ```
 
-No command was found in the available CLI help or MCP tools to register/import the dedicated issuer/signing key into Project Woof 1.
-
-## Remaining Blocker
-
-Blocked:
-
-- Dedicated ES256 issuer/signing-key trust configuration for Project Woof 1.
-
-Needed next:
-
-1. Configure Project Woof 1 to trust the dedicated ES256 issuer/signing key through the Supabase Dashboard or an authenticated Admin API path that supports the current signing-key/custom-provider setup.
-2. After trust is configured, generate a short-lived test JWT with:
-   - `alg: ES256`
-   - `kid` matching the trusted key
-   - `sub` equal to the Supabase Auth user UUID
-   - `role: authenticated`
-   - `aud: authenticated`
-   - `iss` matching the configured issuer
-   - `iat`, `nbf`, `exp`
-   - `actor: do-agent`
-3. Call the Data API with a publishable `apikey` header and a bearer-token authorization header.
-4. Record redacted pass/fail for:
-   - own-row read
-   - cross-tenant zero-row read
-   - expired JWT rejection
-   - garbage JWT rejection
-   - `none` algorithm rejection
-   - HS256 not used except as explicitly marked non-production contingency
+Production `db.forUser`, production rotation automation, provider-token custody, and unrelated runtime changes remain out of scope.
 
 ## Secret Handling
 
-No private signing key, service-role key, raw JWT, auth header, raw health payload, provider secret, or production project reference is included in this artifact.
+No private signing key, API key, service-role key, raw JWT, auth header, raw health value, provider secret, synthetic UUID, or synthetic email is included in this artifact.

@@ -1,7 +1,7 @@
 # HEY-125 Staging Prep -> ES256 Issuer Proof Handoff
 
-Status: handoff after Project Woof 1 staging schema prep.
-Date: 2026-07-09 IST.
+Status: HEY-125 issuer and Data API proof complete; staging mint seam disabled.
+Date: 2026-07-10 IST.
 Branch: `codex/hey-125-es256-issuer-spike`.
 Linear: HEY-125.
 
@@ -36,15 +36,16 @@ Linear: HEY-125.
 - Whitespace verification: `git diff --check` passed.
 - Artifact secret scan: focused scan found no service-role key, secret key, private key, raw JWT, or bearer header in `artifacts/spikes/adr-0066`.
 
-## What Does Not Work Yet (Known Issues)
+## Proof Completion Update
 
-- ES256 Data API proof: severity CRITICAL for HEY-125 acceptance.
-  - The remaining proof cannot run until Project Woof 1 trusts the dedicated ES256 issuer/signing key.
-  - Current Supabase MCP tools expose database, advisors, docs, publishable keys, branches, Edge Functions, and SQL, but not issuer/signing-key trust configuration.
-  - Supabase CLI was discovered through `npx.cmd supabase` at `2.109.1`; help confirms `gen signing-key` and `gen bearer-jwt`, but not the project trust-registration step.
-  - No private key or JWT was generated before a confirmed trust path exists.
-- HEY-125 cannot be marked Done yet.
-  - Missing checks: Data API own-row read with ES256 JWT, cross-tenant zero-row read through Data API, expired JWT rejection, garbage JWT rejection, `none` algorithm rejection, and HS256 non-production confirmation.
+- Generic Supabase Third-Party Auth registration is resolved for the dedicated HTTPS issuer/JWKS.
+- Supabase resolved one ES256 public key and matched the deployed public `kid`, `x`, and `y` before minting.
+- The authenticated staging mint seam derived `sub` from a verified Supabase Auth session and pinned `role`, `aud`, `iss`, `alg`, `kid`, and `actor`.
+- Live Data API proof passed for A/B own-row reads and zero-row cross-user reads on `users` and synthetic `health_daily` fixtures.
+- Expired, garbage-signature, wrong-kid, wrong-issuer, wrong-audience, service-role-shaped tampering, `alg:none`, malformed, and missing bearer probes were rejected.
+- The proof route is disabled and returns 404. Discovery/JWKS remain healthy.
+- All marked Auth, user, consent, and health fixtures are deleted. Temporary Auth settings are restored.
+- Security reviewer and QA breaker both returned PASS.
 
 ## Architecture Decisions Made During This Phase
 
@@ -69,26 +70,9 @@ Linear: HEY-125.
 - The HEY-9 schema's user identity model is two-step: JWT `sub` -> `auth.uid()` -> `users.auth_id` -> `app_user_id()`.
 - Supabase advisor INFO items can be expected and intentional when service-only tables have RLS enabled and no client policies; WARN items need explicit triage.
 
-## Prerequisites For Next Phase
+## Next Phase Boundary
 
-The next phase is the actual ES256 issuer/Data API proof.
-
-Required before resuming:
-
-1. Confirm Project Woof 1 remains the active Supabase MCP/project target: `oqcjjcytjvrckvylagsl`.
-2. Configure Project Woof 1 to trust the dedicated ES256 issuer/signing key through the Supabase Dashboard or a verified authenticated Admin API path.
-3. Record the trust path used without committing private key material, raw JWTs, auth headers, service-role keys, or raw health data.
-4. Generate only short-lived test tokens after trust exists.
-5. Run Data API proof with a publishable `apikey` header and a bearer-token authorization header.
-6. Record redacted pass/fail evidence for:
-   - own-row read
-   - cross-tenant zero-row read
-   - expired JWT rejection
-   - garbage JWT rejection
-   - `none` algorithm rejection
-   - HS256 not used except as explicitly marked non-production contingency
-7. Update `artifacts/spikes/adr-0066/HEY-125-STAGING-PROOF.md` with the final redacted proof.
-8. Run `git diff --check`, `npx.cmd -y pnpm@10.34.4 verify:guards`, and a focused artifact secret scan.
+HEY-125 no longer blocks the custom-issuer platform decision. The next production slice may design `db.forUser` and operational rotation separately. Do not promote the temporary proof seam, its per-isolate limiter, anonymous fixture setup, or local service-role cleanup path into production runtime code.
 
 ## Files Changed
 
@@ -120,4 +104,4 @@ Supabase Project Woof 1 (`oqcjjcytjvrckvylagsl`) now has the following remote mi
 - No production Cloudflare state was touched.
 - No runtime files were edited.
 - No private signing key, service-role key, raw JWT, auth header, provider secret, or raw health payload was committed.
-- HEY-125 should stay `In Progress` until the issuer trust/Data API proof is complete.
+- HEY-125 proof evidence is complete. The temporary proof route remains disabled.

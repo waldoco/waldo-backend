@@ -29,7 +29,7 @@ const baseClaims = {
   sub: 'user-1',
   role: 'authenticated',
   aud: 'authenticated',
-  iss: 'waldo-do-mint',
+  iss: 'https://oqcjjcytjvrckvylagsl.supabase.co/functions/v1/mint-agent-jwt',
   iat: 1_700_000_000,
   nbf: 1_699_999_940,
   exp: 1_700_003_600,
@@ -226,8 +226,10 @@ describe('compactJws', () => {
 });
 
 describe('ADR-pinned constants', () => {
-  it('issuer is waldo-do-mint', () => {
-    expect(MINT_ISSUER).toBe('waldo-do-mint');
+  it('issuer is the exact registered HEY-125 HTTPS issuer', () => {
+    expect(MINT_ISSUER).toBe(
+      'https://oqcjjcytjvrckvylagsl.supabase.co/functions/v1/mint-agent-jwt',
+    );
   });
 
   it('TTL 60 min and refresh margin 20 min (15-min handler ceiling + 5 skew)', () => {
