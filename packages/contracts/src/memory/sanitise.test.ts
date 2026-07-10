@@ -106,12 +106,12 @@ describe('sanitise destination structural policy', () => {
         max_key_chars: 64,
       },
       system_prompt: {
-        payload_kind: 'text',
+        payload_kind: 'text_or_structured',
         max_chars: 32_768,
-        max_depth: 0,
-        max_object_fields: 0,
-        max_array_items: 0,
-        max_key_chars: 0,
+        max_depth: 4,
+        max_object_fields: 9,
+        max_array_items: 16,
+        max_key_chars: 128,
       },
       internal_context: {
         payload_kind: 'structured',

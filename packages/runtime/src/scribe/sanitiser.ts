@@ -50,6 +50,8 @@ const HEALTH_KEY = /(?:^|[^a-z0-9])(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)
 const HEALTH_KEY_COMPACT = /^(?:hrv(?:ms)?|heartratevariability(?:ms)?|restingheartrate(?:bpm)?|heartrate(?:bpm)?|pulse(?:bpm)?|spo2|oxygensaturation(?:percent|pct)?|bloodoxygen(?:percent|pct)?|systolic(?:mmhg)?|diastolic(?:mmhg)?|bloodpressure|bp|bodyweight(?:kg|lb|lbs)?|bodymass(?:kg|lb|lbs)?|weight(?:kg|lb|lbs)?|calorieburn(?:kcal)?|caloriesburned(?:kcal)?|activeenergy(?:kcal)?|sleep(?:hours|duration|minutes|mins)?|remsleep(?:minutes|mins)?|deepsleep(?:minutes|mins)?|crs|form(?:score)?|recovery(?:score)?|load(?:score)?)$/i;
 const HEALTH_INDICATOR_VALUE = /^(?:hrv|heart rate(?: variability)?|resting heart rate|pulse|spo2|oxygen saturation|blood oxygen|systolic|diastolic|blood pressure|bp|body weight|body mass|weight|sleep|rem sleep|deep sleep|active energy|calorie burn|crs|form|recovery|load)$/i;
 const NUMERIC_VALUE = /^\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*$/;
+const HEALTH_MEASUREMENT_KEY = /^(?:measurement|value|reading|amount|score|sample)$/i;
+const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)$/i;
 const HEALTH_FREE_TEXT: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?\b/i,
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*\/\s*\d+(?:\.\d+)?/i,
@@ -70,7 +72,7 @@ const SECRET_PATTERNS: readonly RegExp[] = [
 ];
 
 const ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,5}\s+(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|way)\b/gi;
-const ATTENDEE_KEY = /^(?:attendee|attendee_name|participant_name|contact_name)$/i;
+const ATTENDEE_KEY = /^(?:attendee|attendees|attendee_name|participant|participants|participant_name|contact_name)$/i;
 const ADDRESS_KEY = /^(?:address|street_address|mailing_address|home_address|ip|ip_address)$/i;
 const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
 const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])[A-Za-z0-9+\/_-]{12,}={0,2}(?![A-Za-z0-9+\/_=-])/g;
@@ -328,36 +330,71 @@ function isHealthIndicatorText(value: string): boolean {
   );
 }
 
-function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDestination): boolean {
-  if (typeof value !== 'object' || value === null) return false;
+function subtreeHealthFlags(
+  value: JsonValue,
+  destination: SanitiseDestination,
+): { indicator: boolean; measurement: boolean; numeric: boolean; unit: boolean } {
+  if (typeof value === 'number') {
+    return {
+      indicator: false,
+      measurement: false,
+      numeric: Number.isFinite(value),
+      unit: false,
+    };
+  }
+  if (typeof value === 'string') {
+    return {
+      indicator: isHealthIndicatorText(value),
+      measurement: false,
+      numeric: isNumeric(value),
+      unit: HEALTH_UNIT_VALUE.test(value.trim()),
+    };
+  }
+  if (typeof value !== 'object' || value === null) {
+    return { indicator: false, measurement: false, numeric: false, unit: false };
+  }
   if (!Array.isArray(value)) {
     const parsedView = derivedHealthDestinationViewSchema.safeParse(value);
-    if (parsedView.success) return !isEligibleHealthView(value, destination);
+    if (parsedView.success) {
+      return isEligibleHealthView(value, destination)
+        ? { indicator: false, measurement: false, numeric: false, unit: false }
+        : { indicator: true, measurement: true, numeric: true, unit: false };
+    }
   }
 
+  let indicator = false;
+  let measurement = false;
+  let numeric = false;
+  let unit = false;
   if (Array.isArray(value)) {
-    const indicator = value.some(
-      (item) => typeof item === 'string' && isHealthIndicatorText(item),
-    );
-    if (indicator && value.some(isNumeric)) return true;
-    return value.some((item) => objectHasHealthCorrelation(item, destination));
+    for (const item of value) {
+      const child = subtreeHealthFlags(item, destination);
+      indicator ||= child.indicator;
+      measurement ||= child.measurement;
+      numeric ||= child.numeric;
+      unit ||= child.unit;
+    }
+    measurement ||= numeric;
+  } else {
+    for (const [key, item] of Object.entries(value)) {
+      const healthKey = HEALTH_KEY.test(key) || HEALTH_KEY_COMPACT.test(compactKey(key));
+      indicator ||= healthKey;
+      const child = subtreeHealthFlags(item, destination);
+      indicator ||= child.indicator;
+      measurement ||=
+        child.measurement || ((healthKey || HEALTH_MEASUREMENT_KEY.test(key)) && child.numeric);
+      numeric ||= child.numeric;
+      unit ||= child.unit;
+    }
+    measurement ||= unit && numeric;
   }
+  return { indicator, measurement, numeric, unit };
+}
 
-  const entries = Object.entries(value);
-  for (const [key, item] of entries) {
-    if (HEALTH_KEY_COMPACT.test(compactKey(key)) && isNumeric(item)) return true;
-  }
-  const indicator = entries.some(
-    ([key, item]) =>
-      HEALTH_KEY.test(key) ||
-      (typeof item === 'string' && isHealthIndicatorText(item)),
-  );
-  const measurement = entries.some(
-    ([key, item]) =>
-      /^(?:measurement|value|reading|amount|score)$/i.test(key) && isNumeric(item),
-  );
-  if (indicator && measurement) return true;
-  return entries.some(([, item]) => objectHasHealthCorrelation(item, destination));
+function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDestination): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const flags = subtreeHealthFlags(value, destination);
+  return flags.indicator && flags.measurement;
 }
 
 function containsForbiddenHealth(
@@ -465,13 +502,16 @@ function redactPiiText(
 function transformJsonStrings(
   payload: JsonValue,
   transform: (text: string, key: string | undefined) => string,
+  parentKey?: string,
 ): TransformResult {
-  if (typeof payload === 'string') return { invalid: false, payload: transform(payload, undefined) };
+  if (typeof payload === 'string') {
+    return { invalid: false, payload: transform(payload, parentKey) };
+  }
   if (typeof payload !== 'object' || payload === null) return { invalid: false, payload };
   if (Array.isArray(payload)) {
     const output: JsonValue[] = [];
     for (const item of payload) {
-      const transformed = transformJsonStrings(item, transform);
+      const transformed = transformJsonStrings(item, transform, parentKey);
       if (transformed.invalid) return transformed;
       output.push(transformed.payload);
     }
@@ -485,7 +525,7 @@ function transformJsonStrings(
     const transformedValue =
       typeof item === 'string'
         ? { invalid: false, payload: transform(item, key) as JsonValue }
-        : transformJsonStrings(item, transform);
+        : transformJsonStrings(item, transform, key);
     if (transformedValue.invalid) return transformedValue;
     output[transformedKey] = transformedValue.payload;
   }
@@ -533,18 +573,19 @@ function inspectInstructions(
   if (pattern === undefined) return deny('instruction_pattern', 'untrusted_instruction');
   let instructionCount = 0;
   const transformed = transformJsonStrings(payload, (text) => {
+    let output = text;
     if (matches(pattern, text)) {
       const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
       const global = new RegExp(pattern.source, flags);
       instructionCount += Array.from(text.matchAll(global)).length;
-      return text.replace(new RegExp(pattern.source, flags), '[REDACTED_INSTRUCTION]');
+      output = text.replace(new RegExp(pattern.source, flags), '[REDACTED_INSTRUCTION]');
     }
-    const decoded = decodedViews(text, destination);
+    const decoded = decodedViews(output, destination);
     if (decoded.views.slice(1).some((view) => matches(pattern, view))) {
       instructionCount += 1;
       return '[REDACTED_INSTRUCTION]';
     }
-    return text;
+    return output;
   });
   if (transformed.invalid) return deny('size_cap', 'invalid_payload');
   const existing = redactions.find((redaction) => redaction.kind === 'instruction_pattern');
@@ -564,6 +605,13 @@ function applyDestinationPolicy(
   const policy = SANITISE_DESTINATION_POLICIES[input.destination];
   const isText = typeof payload === 'string';
   const isStructured = typeof payload === 'object' && payload !== null;
+  if (
+    input.destination === 'system_prompt' &&
+    isStructured &&
+    !isEligibleHealthView(payload, input.destination)
+  ) {
+    return deny('size_cap', 'invalid_payload');
+  }
   if (
     (policy.payload_kind === 'text' && !isText) ||
     (policy.payload_kind === 'structured' && !isStructured) ||

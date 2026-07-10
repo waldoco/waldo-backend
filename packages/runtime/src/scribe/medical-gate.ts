@@ -9,7 +9,8 @@ const DOSAGE = /\b(?:take|start|increase|decrease|use)\b[^.!?]{0,40}\b\d+(?:\.\d
 const PRESCRIPTIVE_HEALTH = /\b(?:prescribe|prescribed dosage|medical diagnosis|diagnose[ds]?)\b/i;
 const SYMPTOM_INTERPRETATION = /\b(?:your|these)\s+(?:symptoms?|readings?|data|numbers?)\b[^.!?]{0,50}\b(?:indicate|mean|show|suggest|prove)s?\b[^.!?]{0,50}\b(?:illness|disease|condition|infection|disorder)\b/i;
 const GENERIC_DIAGNOSIS = /\byou\s+(?:have|may have|might have|could have)\s+(?:[a-z-]+\s+){0,3}(?:disease|syndrome|disorder|condition|infection|cancer)\b/i;
-const COMMON_TREATMENT = /\b(?:take|start taking|stop taking|increase|decrease)\s+(?:your\s+)?(?:ibuprofen|acetaminophen|paracetamol|vitamin\s+[a-z0-9]+|creatine|ashwagandha|[a-z]+(?:pril|olol|statin|cillin|cycline))\b/i;
+const COMMON_TREATMENT = /\b(?:take|start taking|begin taking|stop taking|increase|decrease)\s+(?:(?:a|an|your)\s+){0,2}(?:prescription\s+)?(?:drug|metformin|tylenol|ibuprofen|acetaminophen|paracetamol|vitamin\s+[a-z0-9]+|creatine|ashwagandha|[a-z]+(?:pril|olol|statin|cillin|cycline))\b/i;
+const DIRECT_SUBSTANCE_INSTRUCTION = /\b(?:take|start(?: taking)?|begin(?: taking)?|stop(?: taking)?)\s+(?:(?:a|an|your|prescribed)\s+){0,2}(?!(?:a\s+)?(?:(?:short|brief|deep)\s+)?(?:walk|break|breath|rest|nap|moment|time|shower|step)|it|things|care)\b[a-z][a-z0-9-]*(?:\s+[a-z][a-z0-9-]*){0,2}\s+(?:now|today|tonight|daily|immediately)\b/i;
 
 export function evaluateMedicalClaim(text: string): MedicalClaimDecision {
   if (
@@ -20,7 +21,8 @@ export function evaluateMedicalClaim(text: string): MedicalClaimDecision {
     PRESCRIPTIVE_HEALTH.test(text) ||
     SYMPTOM_INTERPRETATION.test(text) ||
     GENERIC_DIAGNOSIS.test(text) ||
-    COMMON_TREATMENT.test(text)
+    COMMON_TREATMENT.test(text) ||
+    DIRECT_SUBSTANCE_INSTRUCTION.test(text)
   ) {
     return { ok: false, reason: 'medical_claim' };
   }

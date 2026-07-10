@@ -19,6 +19,12 @@ describe('medical claim gate', () => {
     'You may have a respiratory disorder.',
     'Start taking ibuprofen today.',
     'Take vitamin D for this pattern.',
+    'Take metformin now.',
+    'Take Tylenol tonight.',
+    'Begin taking a prescription drug.',
+    'Take sertraline now.',
+    'Start insulin today.',
+    'Stop warfarin immediately.',
   ])('denies immutable medical claims and direct treatment instructions: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: false, reason: 'medical_claim' });
   });
@@ -28,6 +34,7 @@ describe('medical claim gate', () => {
     'Your body is showing stress signals.',
     'A short walk and an earlier bedtime may support recovery.',
     'Consider discussing persistent concerns with a qualified clinician.',
+    'Take a short walk today.',
   ])('allows bounded wellness language: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: true });
   });

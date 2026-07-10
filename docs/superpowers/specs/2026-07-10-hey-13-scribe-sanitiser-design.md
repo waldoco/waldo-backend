@@ -82,7 +82,7 @@ The contract-owned structural policies are:
 | Destination | Kind | Chars | Depth | Fields | Array items | Key chars |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
 | `memory_block` | text or structured | 2,048 | 4 | 8 | 10 | 64 |
-| `system_prompt` | text | 32,768 | 0 | 0 | 0 | 0 |
+| `system_prompt` | text or structured | 32,768 | 4 | 9 | 16 | 128 |
 | `internal_context` | structured | 32,768 | 16 | 64 | 128 | 128 |
 | `draft_document` | text or structured | 51,200 | 4 | 8 | 16 | 128 |
 | `draft_email` | text or structured | 10,240 | 4 | 12 | 50 | 128 |
