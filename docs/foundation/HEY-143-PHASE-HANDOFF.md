@@ -1,8 +1,9 @@
 # HEY-143 Provider-Readiness Handoff
 
-Status: provider adapter/configuration hardening implemented locally and awaiting PR review.
+Status: provider adapter/configuration hardening merged in PR #44 at `b311d54`; HEY-143 remains
+In Progress because real-path and Alpha acceptance are unproved.
 Date: 2026-07-10 IST.
-Branch: `codex/hey-143-provider-readiness`.
+Historical implementation branch: `codex/hey-143-provider-readiness`.
 
 ## [observed] Implemented
 
@@ -17,7 +18,7 @@ Branch: `codex/hey-143-provider-readiness`.
 - Local run ingress is restricted to `test|local`.
 - The fake callback guard has fixture-backed self-test coverage.
 
-## [verified] Evidence
+## [historical verified] Merge Evidence
 
 - `npx -y pnpm@10.34.4 verify`: contracts typecheck and 1,168 tests passed; runtime typecheck
   and 182 tests passed; all guards and their self-tests passed.
@@ -28,15 +29,21 @@ Branch: `codex/hey-143-provider-readiness`.
 
 ## [blocked] Before Alpha
 
-- HEY-13 must supply real sanitiser, rate-limit, approval, and medical callback wiring.
-- HEY-99 needs an auditable daily-spend reader available before each provider call.
+- HEY-13 must supply structured sanitizer/Scribe/taint wiring before real content.
+- Provider spend needs atomic/auditable reservation and reconciliation before each attempt.
 - A Cloudflare Secrets Store binding must be provisioned outside this repository.
-- An explicitly approved bounded staging smoke, real context/recall, and a real/staging sink are
-  required for the ticket's alpha acceptance run.
+- Real context/recall, one accepted source seam, and a bounded provider staging smoke remain.
+- HEY-153 must prove verified subject to one owner-bound DO before public projection access.
+- HEY-110 must prove the separate asynchronous idempotent in-app adapter.
+- HEY-156 must prove two-user staging parity and whole-path rollback.
+- Shadow Fetch delivery must remain off; real Spots and persistent text Chat remain unbuilt.
 
 ## Next Owner Handoff
 
-Keep the runtime/provider files single-writer. The next provider session should consume the real
-safety and spend seams, add a bounded staging smoke only after approval, and preserve the no-payload
-logging invariant. Do not mark HEY-143 complete until the alpha acceptance criteria are separately
-observed.
+HEY-13 is the next backend harness execution slice. Keep sanitizer/hooks/provider/run-loop files
+single-writer where that slice crosses them. A later provider session consumes the real safety,
+context, spend, secret, and source seams and preserves the no-payload logging invariant.
+
+The first public morning-Brief GET is a side-effect-free committed-projection read. It is not a
+provider call, async delivery, HEY-143 completion, or Alpha proof. Do not mark HEY-143 complete
+until the promoted Alpha criteria are separately observed.

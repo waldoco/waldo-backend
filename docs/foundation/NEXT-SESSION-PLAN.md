@@ -1,37 +1,10 @@
-# Next Session Plan - HEY-143 To Agent Harness Alpha
+# Next Session Plan - HEY-13 And The First App Seam
 
-Status: HEY-143 provider-readiness hardening is implemented on
-`codex/hey-143-provider-readiness` and awaiting PR review. Full real-provider flip and alpha
-acceptance remain blocked by safety, spend, credential, context, and channel prerequisites.
+Status: documentation promotion after the approved app/backend/Brain reconciliation.
 Date: 2026-07-10 IST.
-Baseline: SLICE-3a/HEY-120 merged in PR #21, SLICE-3b/HEY-121 merged in PR #23 at
-`f47127f`, SLICE-3c/HEY-124 merged in PR #24 at `5789b42`, HEY-122/SLICE-4 merged in
-PR #27, HEY-123/SLICE-5 merged in PR #28 at `061e72c`, HEY-77 triage dispatcher merged
-in PR #29 at `a947600`, HEY-12 hook registry merged in PR #31 at `1b180ef`, and HEY-78
-ToolDispatcher + per-trigger ACL enforcement merged in PR #33 at `600fb34`. HEY-17 merged in
-PR #34 at `0aae766`; HEY-136 merged in PR #35 at `3d336c7`; HEY-139 merged in PR #38 at
-`b736470`; HEY-10 merged in PR #37 at `7980aad`; HEY-111 merged in PR #39 at `61eb3c7`;
-HEY-142 merged in PR #42 at `d896500`.
-
-HEY-136 proved the fake-first run-loop skeleton. HEY-139 hardened the runtime driver, HEY-10 landed
-the context schema root, HEY-111 added replayable local evidence, and HEY-142 added the fake-first
-governed multi-iteration `plan -> act -> observe` loop. HEY-143 now owns real-provider flip
-readiness.
-
-## HEY-143 Review State
-
-[observed] The review branch moves fake adapters and permissive callbacks behind explicit
-configuration, adds a metadata-only Cloudflare gateway adapter, requires a Secrets Store-style
-credential binding, sanitises before provider egress, and fails closed for absent spend state or
-non-local ingress.
-
-[verified] `npx -y pnpm@10.34.4 verify` passed with 1,168 contract tests, 182 runtime tests, and
-all guards. `git diff --check` passed. No live provider, credential, channel, Cloudflare, or
-Supabase side effect occurred.
-
-[blocked] A real gateway RunLoop call remains disabled until HEY-13 provides the safety callbacks,
-HEY-99 provides an auditable daily-spend reader, and a Cloudflare Secrets Store binding plus
-explicit staging-smoke approval exist. See `docs/foundation/HEY-143-PHASE-HANDOFF.md`.
+Baseline: `origin/main` at `b311d54`; PR #44 is merged. HEY-143 remains In Progress because the
+merged provider-readiness work is fake-first/fail-closed and has no real context, provider, sink,
+staging, or Alpha proof.
 
 ## Start Here
 
@@ -43,149 +16,219 @@ Read in this order:
 4. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
 5. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
 6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-7. `docs/foundation/HEY-142-PHASE-HANDOFF.md`
-8. `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` when touching DO SQLite context schema scope.
-9. `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` when touching deferred DO SQLite tables.
-10. The Waldo Brain source files listed in the runtime build plan for the seam being reviewed.
+7. `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md`
+8. `docs/foundation/HEY-143-PHASE-HANDOFF.md`
+9. Target-pending Brain ADR-0081 before health-derived computation or public health fields.
+10. Target-pending Brain ADR-0082 before persistent device-local sensitive cache or account/consent
+    lifecycle work.
+11. The accepted ADRs and Waldo Brain source pages for the seam being changed.
 
-Then run the baseline gate before planning claims or edits:
+Authority promotion note: the ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are approved
+target decisions in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17), but are
+not yet on `waldo-brain/main`. PR #17 may advance during review; its eventual merge result governs.
+It is an explicit merge dependency, and the target-pending qualifier remains until it merges.
+
+Then run the baseline gate:
 
 ```bash
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-## Current Truth
+## Promoted Product And Repository Boundary
 
-- The Waldo Brain architecture is no longer an open research problem for V1. It calls for a
-  per-user Cloudflare Durable Object running a resumable, journaled, deterministically governed
-  agent loop.
-- The backend contract spine is broad and real: contracts exist for runtime run/session/schedule/
-  goal/outbox/policy, tools, memory, prompt, model routing, adapters, public DTO/OpenAPI,
-  telemetry, and evidence lanes.
-- The runtime spine now includes journal/outbox, DeliveryGate, Loop Governor, scheduler/alarm
-  multiplexer, triage dispatcher, hook registry, ToolDispatcher/ACL runtime, fake-first
-  LLMProvider routing, fake-first `RunLoopDO`, replay/evidence, and a governed multi-iteration
-  model/tool/observe loop.
-- HEY-136 is intentionally fake-first: it proves loop anatomy and durable resume, not production
-  provider/channel/memory behavior.
-- HEY-142 is still fake-first. It does not prove production provider, channel, context, memory, or
-  live health-data behavior.
-- HEY-143 may prepare real-provider readiness, but live channel delivery, Scribe writes, and raw
-  health/private data remain out of scope unless explicitly re-scoped with staging safeguards.
-- Split work by runtime seam, not by product pillar. Brief, Fetch, Spots, and Chat all converge on
-  the same DO loop, journal, scheduler, dispatcher, memory, model, and delivery files.
+- The canonical deployable app repository is
+  [`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app). The audited promotion snapshot is
+  `c8b3b4555de076339554391da4dbf5fbe2dac0ae`.
+- `Pin4sf/Waldo.git/waldo-app` is historical, nondeployable lineage. It is evidence only and must
+  not receive new app integration work.
+- `waldo-backend` owns agent execution, provider routing, tools, Governor, journal/outbox,
+  DeliveryGate, public schemas, and the committed OpenAPI contract. The app owns UI, protected
+  navigation, generated-client consumption, and device adapters.
+- Home composes separately owned projections for the current Brief, Spots, relevant threads, and
+  Patrol/audit. There is no persistent generic Feed entity, global Feed ordering, or Feed read-state
+  store in this plan.
 
-## Exact Current Slice
+## Alpha Boundary
 
-Review **HEY-143 provider-readiness hardening** while the context lane continues from HEY-10.
+Alpha requires all of the following on a real authenticated staging path:
 
-Goal:
+- an in-app morning Brief;
+- shadow Fetch candidate/label evaluation with every delivery path off;
+- real Spots generation, projection, evidence, and dismissal;
+- persistent text Chat;
+- the privacy, identity, journal/outbox, source, approval, Governor, and DeliveryGate spine;
+- real context, recall, provider, and one accepted source seam;
+- one asynchronous idempotent in-app delivery adapter.
 
-- Preserve the HEY-142 fake-first multi-iteration loop and HEY-111 replay/evidence surface.
-- Make the provider flip safe to test behind explicit staging-only configuration, spend limits,
-  kill switches, and fake-first defaults.
-- Prove provider response/error parsing at the adapter seam without storing prompts, raw health,
-  provider bodies, credentials, or channel payloads.
-- Keep live channel delivery, committed Scribe memory writes, and production Cloudflare/Supabase
-  side effects out of the default verification path.
-- Carry forward the HEY-142 P3 notes: iteration-cap semantics are explicit today, and future real
-  tools need semantic observation canonicalizers for duplicate/no-progress detection.
+Alpha explicitly excludes:
 
-Out of scope for this iteration slice unless explicitly re-scoped:
+- Telegram, APNs, WhatsApp, or other external-channel breadth;
+- live Fetch delivery or completed Fetch cards;
+- Handoff and live actions;
+- voice;
+- message branching or soft delete/recovery;
+- live interventions;
+- the generative-card subset;
+- full Constellations;
+- direct Apple Watch/watchOS/WatchConnectivity work;
+- proposed production SLO, RPO, RTO, partitioning, or DR thresholds.
 
-- Production live-provider calls or unmanaged API credentials.
-- Scribe memory writes or committed memory mutation.
-- Production context/prompt hydration beyond the HEY-15/HEY-14/HEY-16 seams.
-- Channel delivery and app feed integration.
-- Multi-loop arbitration across simultaneous product loops.
+The first read-only Brief projection below is an integration slice. It is not asynchronous
+delivery, HEY-110 completion, HEY-143 completion, or Alpha proof.
 
-Acceptance:
+## Current Implementation Truth
 
-- Failing tests first for provider adapter readiness, response/error classification, spend-cap or
-  kill-switch behavior before live calls, and replay evidence privacy.
-- Fake-first local runtime tests still pass, including HEY-142 multi-pass loop coverage.
-- Existing contracts and runtime tests still pass.
-- `/check-contract`: runtime remains on contract-owned run states, model routes, tool schemas, and
-  governor decisions.
-- `/break-feature`: the PR must not imply production channel/memory readiness or uncontrolled live
-  provider use.
-- `npx -y pnpm@10.34.4 verify` and `git diff --check` pass.
+Built and merged:
 
-## Async Pillars
+- the local contract spine;
+- SQLite Durable Object test substrate;
+- run journal and fake-sink outbox crash/replay proof;
+- DeliveryGate, Loop Governor, alarm multiplexer, triage, hooks, ToolDispatcher, and trigger ACL;
+- fake-first LLM routing and Cloudflare gateway parsing/fail-closed configuration;
+- fake-first `RunLoopDO`, governed multi-iteration `plan -> act -> observe`, and local replay
+  evidence;
+- the HEY-10 ten-table context schema artifact.
 
-| Pillar | Can start? | Main owner | Notes |
-| --- | --- | --- | --- |
-| Run Journal + Outbox | Complete through PR #23 | Codex/runtime | Preserve; expand only if a slice exposes a real gap. |
-| DeliveryGate Runtime | Complete through PR #24 | Codex/runtime | Residue is archived in `docs/foundation/archive/SLICE-3C-HANDOFF.md`; do not use it as a current plan. |
-| Scheduler Multiplexer | Complete through PR #28 | Codex/scheduler | Alarm pop, recurrence, retry, quarantine, stale-run wake proof. |
-| Loop Governor Runtime | Complete through PR #27 | Codex/policy runtime | Deterministic admission, budget kill, stuck-loop guard. |
-| Dispatcher + Hooks + ACL + Sanitiser | Complete through PR #33 | Codex/security runtime | HEY-77, HEY-12, and HEY-78 are merged; do not re-own this seam in HEY-17. |
-| Context + Memory + Prompt Hydration | Fake-backed design now | Claude memory/context + Codex integration | Keep raw health out of DO/R2/prompts/logs. |
-| LLMProvider + Routing + Eval | HEY-143 hardening in review | Codex/eval | Live provider remains fail-closed pending HEY-13, HEY-99 spend data, Secrets Store binding, and approved staging smoke. |
-| Channels + App Surfaces | Fake sinks now | Codex/channel + app team | Production delivery waits on outbox, feed/channel contracts, and explicit adapter work. |
-| Auth/Data Plane/Adapters | Now | Claude/Supabase + Codex adapters | ADR-0066 ES256 Supabase issuer spike remains parallel. |
-| Observability/Conformance | HEY-111 merged; HEY-142 reused it | Codex/infra | Trace event shape, replay fixture, and local eval are available for fake-first loop proof; standalone eval suite is still absent. |
+Not built or not proven:
 
-## Coordination Rules
+- a public authenticated product route; the default Worker still returns 404;
+- verified ES256 subject to owner-bound DO routing and two-user negative proof;
+- merged Supabase migrations, RLS, Vault, R2, consent middleware, or all-store deletion runtime;
+- a wired production context schema, recall, prompt builder, or real Scribe path;
+- a real provider RunLoop call, atomic provider-spend reservation, or staging smoke;
+- an asynchronous idempotent in-app adapter; the current runtime sink is synchronous/fake;
+- the morning Brief public projection/OpenAPI/generated client;
+- shadow Fetch, real Spots, or persistent text Chat end to end;
+- native-device, staging, dogfood, Alpha, or production evidence.
 
-Every lane must declare this before work starts:
+Schema, contract, local test, ticket, or configuration evidence must not be described as a live
+product capability.
 
-```text
-Owner:
-Pillar:
-Source ADR/docs:
-Files owned:
-Files explicitly out of scope:
-Invariant:
-Tests:
-Merge dependency:
+## Next Backend Harness Slice - HEY-13
+
+HEY-13 is Todo/ready-for-agent. Its structured Scribe/sanitiser runtime is the next backend harness
+execution slice after this documentation promotion. It is required before real context-bearing
+Brief, Spots, or Chat content can reach a provider, durable state, trace, cache, or public
+projection.
+
+Required outcome:
+
+- recursively classify keys and string, number, object, and array values;
+- reject or quarantine health-shaped numeric/structured values instead of accepting non-string
+  leaves unchanged;
+- sanitise before compression, persistence, provider egress, public projection, and delivery;
+- preserve external-source taint/provenance across iterations and crash/resume;
+- cover nested, intervening-word, CSV, synonym, and benign-key/sensitive-value cases;
+- prove denial writes no outbox row and no forbidden value to trace/eval/log/cache;
+- preserve the accepted nine-event hook contract: seven inner lifecycle events plus invocation
+  start/end.
+
+Keep live providers, credentials, app traffic, channel delivery, production data, and cloud
+side effects out of the default HEY-13 verification path.
+
+Parallel backend work:
+
+- HEY-110 is Backlog in Phase 5 and owns the separate async idempotent in-app delivery interface and
+  adapter proof.
+- HEY-15/14/16 continue recall, skill loading, and prompt hydration from the HEY-10 schema root.
+- HEY-125/134/114 prepare issuer, data-plane, and environment proof.
+- HEY-137/138/135/141 harden DeliveryGate, timezone, watchdog, and egress paths.
+- HEY-158 is Backlog in Phase 5 and owns the backend Spots generation/provenance/idempotency,
+  public list/order/filter projection, safe evidence references, dismissal to engagement/Scribe,
+  and two-user/privacy/Alpha proof.
+
+## First Cross-Repo Seam
+
+The first public operation is:
+
+```http
+GET /public/v1/briefs/morning/current
+Authorization: Bearer <Woof ES256 access token>
+Accept: application/vnd.waldo.morning-brief.v1+json
+If-None-Match: "<optional subject-bound opaque ETag>"
 ```
 
-Single-writer surfaces:
+Contract:
 
-- `packages/runtime/src/*`
-- `packages/contracts/src/runtime/*`
-- `packages/contracts/src/tools/*`
-- `packages/contracts/src/memory/sanitise.ts`
-- `packages/contracts/src/core/trigger.ts`
-- `packages/contracts/src/model/roster.ts`
-- `packages/contracts/src/index.ts`
-- Foundation truth docs when updating status.
+- no request body;
+- no `userId`, tenant, account, DO, thread, run, model, provider, or other routing selector;
+- version parse, ES256 signature/claim/session validation, canonical subject derivation, and exactly
+  one owner-bound DO resolution happen before projection access;
+- GET reads an already committed projection and never starts/resumes a run, calls a model/tool,
+  mutates read state, writes journal/outbox, or sends;
+- the strict success union is `ready | pending | empty`;
+- `ready` owns stable opaque IDs, monotonic revision, morning variant, ordered static cards, UTC
+  generation/source/stale timestamps, server freshness, and safe opaque source references;
+- failures use strict content-free `WaldoProblemV1`;
+- the ETag is opaque and subject-bound; a user-A ETag cannot produce 304 or content for user B;
+- the committed OpenAPI document is the only app contract and generates HEY-132's runtime-validating
+  client;
+- a session/build uses one runtime path. There is no per-request legacy fallback, dual read, or dual
+  writer.
 
-Safe parallel lanes:
+Persistent app caching depends on target-pending Brain ADR-0082 and HEY-159. Until both are proven,
+first-slice responses remain memory-only. Any health-derived field or computation depends on
+target-pending Brain ADR-0081; the first public contract must not invent health authority.
 
-- Read-only source rechecks.
-- Adversarial review.
-- Fixture/eval/scenario scaffolding.
-- Fake channel sink tests.
-- Supabase ES256 staging spike.
-- Live-chat/feed spike notes, without production implementation.
+## Ownership And Integration DAG
 
-## Week Plan
+HEY-149 is the integration umbrella, not a serial prerequisite. The exact current live Linear
+relations are:
 
-Immediate plan:
+| Node | Live Linear `blockedBy` |
+| --- | --- |
+| HEY-151 | HEY-150 |
+| HEY-152 | HEY-150 |
+| HEY-157 | None |
+| HEY-159 | None |
+| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
+| HEY-154 | HEY-13; HEY-151; HEY-153 |
+| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
+| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
+| HEY-47 | HEY-28; HEY-132; HEY-151 |
+| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
+| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
+| HEY-155 | HEY-132; HEY-156 |
 
-1. Work from `origin/main` at or after `d896500` (`HEY-142 governed runtime loop`, PR #42).
-2. Start HEY-143 on the runtime lane: real-provider flip readiness, keeping fake-first defaults and
-   staging-only live-provider safeguards.
-3. Continue the context lane from the HEY-10 schema root: HEY-15 recall-before-act, HEY-14 skill
-   loader, and HEY-16 prompt builder. Full goal hydration still waits for HEY-144.
-4. Keep live providers, Scribe runtime, memory writes, app feed, and live channels out
-   unless explicitly re-scoped.
+HEY-149 and HEY-150 are In Progress; producing the matrix does not make HEY-150 Done before review
+acceptance. HEY-150 directly gates only HEY-151 and HEY-152. HEY-157 and HEY-159 run in parallel.
+HEY-151-159 otherwise remain Backlog in their documented lanes. HEY-13 gates real HEY-154 content.
+HEY-110 async delivery and HEY-158 Spots are separate Alpha gates. HEY-126 is a parallel spike;
+HEY-127 remains off-path conditional/deferred. The adopted dogfood gate follows HEY-156 and
+precedes HEY-155 as an acceptance gate, not a Linear `blockedBy` relation.
 
-Next build step for the actual agent harness:
+## Surface Decisions
 
-1. Build HEY-143 so the fake-first multi-iteration loop can be prepared for real-provider dogfood
-   without uncontrolled credentials, spend, provider logs, or channel side effects.
-2. Wire real context/recall/prompt/skill registry into `RunLoopDO` behind fake provider and fake
-   delivery adapters.
-3. Add Scribe proposal lifecycle after context/prompt hydration is testable and redaction proof is
-   green.
-4. Keep opt-in live-provider dogfood behind spend cap, kill switch, replay evidence privacy, and no
-   live channel delivery by default.
+- **Home:** composition only. Do not create a `feed` table, global `OutboxKind`, cross-surface
+  ordering, or persistent read state. HEY-127 is conditional/deferred and is not an Alpha
+  prerequisite.
+- **Chat:** HEY-126 owns a bounded transport/replay spike before the target-pending ADR-0077
+  amendment merges. Compare authenticated command POST plus durable cursor replay with SSE and
+  active-only WebSocket behavior. Do not add a second authoritative transcript or freeze transport
+  before evidence.
+- **Health:** target-pending ADR-0081 owns derived-field destinations, computation authority,
+  version, freshness/missingness/provenance, and public eligibility.
+- **Device lifecycle:** target-pending ADR-0082 and HEY-159 own account/consent epoch, SQLCipher
+  partition/key, signout, deletion/restore, key loss, and corruption behavior.
+- **Watch:** direct Apple Watch/watchOS work is deferred. Phone-side HealthKit may receive
+  Apple Watch-originated samples without a Waldo watch app.
 
-## Archived Docs
+## Verification And Promotion Gates
 
-Historical phase handoffs, old build plans, and benchmark reports are under `docs/foundation/archive/`.
-They are useful for archaeology, not current planning. Do not use them as the active next-session plan.
+The Brief seam is not complete until:
+
+- valid/invalid strict schema and problem tests pass;
+- wrong signature, key, issuer, audience, expiry, revocation, and owner mismatch fail before DO
+  projection access;
+- synthetic users A and B cannot cross-read, share an ETag/cache entry, or infer internal IDs;
+- repeated GET/304/crash retry changes no run, journal, outbox, or read-state count;
+- freshness transitions are deterministic and invalid/future timestamps reject;
+- the HEY-13 privacy corpus proves no forbidden value in response, cache, trace, log, or outbox;
+- generated-client regeneration is byte-identical and the committed schema hash matches;
+- the app renders loading, pending, empty, fresh, stale, denied, offline, rate-limit, service, and
+  terminal error states without samples or fabricated effects;
+- HEY-156 proves one-path staging cutover and rollback with no legacy fallback.
+
+For this docs promotion, run the docs/guard wall and inspect the complete diff. Do not mark any
+runtime ticket complete.

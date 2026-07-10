@@ -558,14 +558,42 @@ Waldo differs from coding agents because its hard guarantees are stateful, priva
 
 ## Near-Term Build Order
 
-1. Prove the post-PR7 contract branch with `npx -y pnpm@10.34.4 verify` and `git diff --check`.
-2. After it lands, reconcile the Phase C reduced FSM into full runtime run/session/working-memory contracts.
-3. Add scheduler/goal contracts that consume the trigger, hook, tool, auth, and memory-skill seams.
-4. Expand delivery beyond the `fetch_alert` tracer path: counted budget, priority arbitration,
-   recurrence, quarantine, and cross-run no-progress guards.
-5. Add telemetry/public/OpenAPI once the internal contracts are stable.
-6. Add deterministic scenario artifacts, property tests, and targeted mutation for deterministic core.
-7. Add live/dogfood lanes after hermetic gates are stable.
+Authority promotion dependency: the ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are
+approved target decisions in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17)
+but are not yet on `waldo-brain/main`. The PR may advance during review; its eventual merge result
+governs. Keep target-pending labels until that PR merges.
+
+1. Build HEY-13 (Todo/ready-for-agent) structured Scribe/sanitizer runtime with
+   nested/numeric/taint rejection proof. Keep HEY-15/14/16 context hydration parallel where files
+   do not overlap.
+2. Review HEY-150's matrix. Its acceptance directly gates only HEY-151 and HEY-152. Run HEY-157,
+   HEY-159, HEY-125, and HEY-134/114 in parallel; do not put HEY-157 or HEY-159 below HEY-150.
+3. Under HEY-151, commit the first strict public contract:
+   `GET /public/v1/briefs/morning/current`, `ready|pending|empty`, `WaldoProblemV1`, no tenant
+   selector, and generated-client freshness. HEY-152 owns the parallel whole-path cutover/rollback
+   contract.
+4. Prove HEY-153 only after HEY-125, HEY-134/114, HEY-152, and HEY-157. Require verified subject to
+   owner-bound DO and two-user RLS/cache/ETag rejection.
+5. HEY-154 is directly blocked by HEY-13, HEY-151, and HEY-153; HEY-13 semantically gates real
+   health/model content even though fixture-only projection work can start earlier. HEY-132 live
+   integration requires HEY-151/153/154/157. HEY-35 requires HEY-28/132/151/154; HEY-47 requires
+   HEY-28/132/151.
+6. Keep HEY-110 async delivery and HEY-158 Spots as separate Alpha gates. Run HEY-126's bounded
+   Chat transport/replay spike in parallel before the target-pending ADR-0077 amendment merges;
+   HEY-127 remains off-path conditional/deferred.
+7. Run HEY-156 only after HEY-132, HEY-154, HEY-28, HEY-35, HEY-47, HEY-13, and HEY-159. HEY-159
+   also blocks HEY-56. Keep native-device, Alpha, and production labels at their lower proof level
+   until their own gates pass.
+8. HEY-155's live blockers are HEY-132 and HEY-156. Pass the adopted dogfood acceptance gate after
+   HEY-156 before executing HEY-155 decommission and residue removal; dogfood is not a Linear
+   blocker relation.
+
+Home is tested as composition of Brief, Spots, relevant threads, and Patrol/audit. HEY-127 is
+conditional/deferred; do not add a generic Feed fixture/schema or make it an Alpha prerequisite.
+The Brief GET is a read path, not HEY-110 async delivery.
+
+Persistent app-cache tests depend on target-pending Brain ADR-0082 and HEY-159. Health-derived
+computation/public-field tests depend on target-pending Brain ADR-0081.
 
 ## Definition Of Done
 
@@ -579,5 +607,8 @@ Harness work is done only when:
 - evidence artifacts exist for scenario/runtime work
 - skipped target gates are named honestly
 - no raw health/secrets/internal-only DTOs leak into public artifacts or logs
+- public contracts generate downstream clients reproducibly and reject stale/handwritten parallel
+  shapes
+- proof labels distinguish contract, local runtime, native device, staging, Alpha, and production
 
 Green terminal output is necessary. It is not sufficient.

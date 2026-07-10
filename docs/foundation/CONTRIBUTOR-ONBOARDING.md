@@ -10,9 +10,14 @@ fake-first but durable: scheduler, governor, run journal, ToolDispatcher, hooks,
 runtime driver hardening, context schema root, local replay/evidence, and governed multi-iteration
 runtime looping are merged.
 
-HEY-143 provider-readiness hardening is in review. Do not describe the runtime as
-production-provider/channel/memory ready: a real safety implementation, auditable spend reader,
-Secrets Store binding, staging smoke, and the context lane still remain.
+PR #44 merged HEY-143 provider-readiness/fail-closed hardening at `b311d54`. HEY-143 remains In
+Progress: no real context/provider/source/sink/staging path has been proved. HEY-13 structured
+Scribe/sanitizer runtime is the next backend harness slice.
+
+The canonical deployable app is
+[`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app), audited at
+`c8b3b4555de076339554391da4dbf5fbe2dac0ae`.
+`Pin4sf/Waldo.git/waldo-app` is historical, nondeployable lineage.
 
 ## Read This First
 
@@ -23,7 +28,13 @@ Secrets Store binding, staging smoke, and the context lane still remain.
 5. `docs/foundation/NEXT-SESSION-PLAN.md`
 6. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
 7. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-8. The accepted ADRs and Waldo Brain source files named by the seam you are touching
+8. `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` for any app/backend path or cutover work
+9. The accepted ADRs and Waldo Brain source files named by the seam you are touching
+
+Authority promotion note: the ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are approved
+target decisions in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17), but are
+not yet on `waldo-brain/main`. The PR may advance during review; its eventual merge result governs.
+Treat it as a merge dependency and retain the target-pending qualifier until it merges.
 
 Use `docs/foundation/archive/` for archaeology only. Archived files may mention old branches,
 closed tickets, retired package names, or pre-HEY-142 sequencing.
@@ -32,12 +43,14 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 
 | Lane | Next work | Notes |
 | --- | --- | --- |
-| Runtime | HEY-143 provider-readiness hardening in review | Single-writer over runtime/provider seams; live gateway calls remain fail-closed. |
+| Runtime safety | HEY-13 structured Scribe/sanitizer runtime | Todo/ready-for-agent and next backend harness slice; single-writer over sanitizer/hook/egress seams. |
 | Context | HEY-15 recall, HEY-14 skills, HEY-16 prompt builder | Starts from HEY-10's merged DO SQLite schema root. Full goal hydration waits for HEY-144. |
-| Safety/Scribe | HEY-13 sanitiser runtime and Scribe proposal lifecycle | No direct committed-memory writes from the LLM. |
+| Provider | HEY-143 remains In Progress | PR #44 is merged; real context/provider/spend/secret/staging proof remains. |
 | Evidence | HEY-111/HEY-142 local evidence is available | Reuse `readRunEvidence`, `replayFixture`, and `scoreRun`; do not create a parallel trace path. |
-| Provider flip | HEY-143 | No unmanaged live provider calls; staging-only readiness must keep replay privacy. |
-| Product surfaces | Brief, Fetch, Chat, Spots after shared harness | Product loops should use the shared runtime spine, not bespoke paths. |
+| Public Brief seam | HEY-151 -> 153 -> 154 -> 132 -> 28/35/47 -> 156 -> 155 | Side-effect-free GET first; generated client only; no legacy fallback. |
+| Delivery | HEY-110 async idempotent in-app adapter | Backlog/Phase 5; separate from the Brief GET and required for Alpha. |
+| Product surfaces | Home composition, shadow Fetch-off, HEY-158 Spots, HEY-126 text Chat spike | HEY-127 generic Feed is conditional/deferred, not an Alpha prerequisite. |
+| App lifecycle | Target-pending Brain ADR-0082 plus HEY-159 | Account/consent-bound device state gates persistent caching, HEY-156, and HEY-56. |
 
 ## Detailed Track Build Order
 
@@ -46,21 +59,23 @@ and avoid editing another track's single-writer surfaces without coordination.
 
 ### 0. Foundation / Dev Loop
 
-Status: mostly done. This is a support lane now.
+Status: contract/runtime foundation exists; the canonical data plane does not.
 
 Order:
 
-`HEY-6 -> HEY-7 -> HEY-8 -> HEY-9`
+`HEY-6 -> HEY-7 -> HEY-8 -> HEY-134/114`
 
-Done:
+Merged evidence:
 
 - `HEY-6` repo/org/branch setup.
 - `HEY-7` type/contract foundation.
-- `HEY-8` Worker and Durable Object scaffold.
-- `HEY-9` Supabase canonical schema/RLS baseline.
+- `HEY-8` hermetic Worker and Durable Object scaffold only.
 
 Next / parallel:
 
+- `HEY-134` owns the canonical Supabase/RLS/Vault re-land; `HEY-9` is historical unmerged
+  evidence, not a baseline capability.
+- `HEY-114` owns environment migration/rollback validation.
 - `HEY-103 -> HEY-104 -> HEY-105 -> HEY-106 -> HEY-107`.
 - Highest leverage: `HEY-107` CI/branch-protection verification wall if still open.
 
@@ -68,15 +83,15 @@ Suggested owner: infra/dev-loop.
 
 ### 1. Durable Runtime Spine
 
-Status: done as the core durability spine.
+Status: local durability spine merged; real asynchronous delivery remains open.
 
 Order:
 
 `HEY-120 -> HEY-121 -> HEY-124`
 
-Done:
+Merged evidence:
 
-- `HEY-120` durable DeliveryGate/outbox exactly-once proof.
+- `HEY-120` durable DeliveryGate/outbox crash proof with an idempotent fake sink.
 - `HEY-121` promoted journal/outbox runtime interface.
 - `HEY-124` DeliveryGate runtime policy state.
 
@@ -84,6 +99,7 @@ Next / parallel:
 
 - `HEY-100` DO-only conformance guard.
 - `HEY-125` ES256 issuer staging spike.
+- `HEY-110` asynchronous idempotent in-app delivery interface and adapter proof.
 
 Suggested owner: runtime/infra. Do not reopen the spine unless a later slice exposes a real gap.
 
@@ -95,7 +111,7 @@ Order:
 
 `HEY-122 -> HEY-123 -> HEY-77 -> HEY-12`
 
-Done:
+Merged evidence:
 
 - `HEY-122` Loop Governor.
 - `HEY-123` scheduler/alarm multiplexer.
@@ -112,13 +128,13 @@ Suggested owner: runtime/control-plane.
 
 ### 3. Main Runtime Loop
 
-Status: critical path.
+Status: fake-first loop merged; privacy/context/live-path work remains.
 
 Order:
 
 `HEY-78 -> HEY-17 -> HEY-136 -> HEY-139 -> HEY-111 -> HEY-142 -> HEY-143`
 
-Done:
+Merged evidence:
 
 - `HEY-78` ToolDispatcher + per-trigger ACL.
 - `HEY-17` fake-first LLMProvider.
@@ -126,33 +142,29 @@ Done:
 - `HEY-139` runtime driver hardening.
 - `HEY-111` local runtime evidence/replay spine.
 - `HEY-142` governed multi-iteration `plan -> act -> observe` loop.
-
-In review:
-
-- `HEY-143` provider adapter/configuration hardening.
+- `HEY-143` provider adapter/configuration hardening merged in PR #44.
 
 Next:
 
-- HEY-13 safety callback implementation, HEY-99-backed daily-spend reader, and a Secrets Store
-  binding before an approved staging smoke.
+- `HEY-13` structured Scribe/sanitizer runtime.
 
 After:
 
-- Production context/prompt hydration, Scribe proposal lifecycle, product/channel surfaces, and
-  standalone eval/live evidence runners.
+- Real context/recall/prompt hydration, atomic spend, Secrets Store binding, a bounded provider
+  smoke, async delivery, product projections, and standalone eval/live evidence runners.
 
-Suggested owner: Codex/runtime. This is single-writer over `packages/runtime/src/*` and provider
-seams; do not parallelize `HEY-143` implementation with other runtime-loop/provider edits.
+Suggested owner: safety/context with Codex runtime integration. Keep sanitizer, hooks, run loop,
+provider egress, public projection, and delivery files single-writer when HEY-13 touches them.
 
 ### 4. Context / Memory / Prompt
 
-Status: can run parallel to `HEY-143`.
+Status: active in parallel with auth/public-contract lanes.
 
 Order:
 
 `HEY-10 -> HEY-15 -> HEY-14 -> HEY-16`
 
-Done:
+Merged evidence:
 
 - `HEY-10` DO SQLite context schema root.
 
@@ -173,6 +185,8 @@ Needed / related:
 - `HEY-134` Supabase schema re-land.
 - `HEY-133` ADR-0024 vocabulary sync.
 - `HEY-102`, `HEY-75`, `HEY-79`, `HEY-74` as context/safety support.
+- Target-pending Brain ADR-0081 before health-derived computation authority or public health
+  fields.
 
 Suggested owner: Claude/context plus Codex integration. Hard rule: no raw health in DO SQLite,
 prompts, logs, traces, or fixtures.
@@ -206,11 +220,11 @@ sanitiser gates.
 
 ### 6. Delivery / Product Loops
 
-Status: after the shared harness loop is real.
+Status: contracts and local policies exist; product verticals are not end to end.
 
 Order:
 
-`HEY-18 -> HEY-19 -> HEY-127 -> HEY-126 -> product loop skills/threading`
+`HEY-110 async delivery || HEY-151/153/154 Brief seam || HEY-158 Spots || HEY-126 Chat spike`
 
 Channels:
 
@@ -220,8 +234,14 @@ Channels:
 
 Product surfaces:
 
-- `HEY-127` in-app feed; needs founder/Suyash input.
-- `HEY-126` live-chat transport spike.
+- Home composes current Brief, Spots, relevant threads, and Patrol/audit. Do not create a persistent
+  generic Feed entity.
+- `HEY-151` owns the first current morning-Brief public contract.
+- `HEY-158` owns backend generation/provenance/idempotency, public projection, evidence, dismissal,
+  and two-user/privacy proof.
+- `HEY-126` owns the bounded Chat transport/replay spike before the target-pending ADR-0077
+  amendment merges; HEY-149 is the integration umbrella.
+- `HEY-127` is conditional/deferred. Do not add a generic Feed to the Alpha critical path.
 - `HEY-131` Telegram privacy/product residue.
 
 Skills / threading:
@@ -230,8 +250,8 @@ Skills / threading:
 - `HEY-25` through `HEY-27`.
 - `HEY-32`, `HEY-46`, `HEY-66`, `HEY-67`, `HEY-43`.
 
-Suggested owner: channel/product plus app team. Product loops must use the shared harness, not
-bespoke paths.
+Suggested owner: backend product-loop plus app team. Product loops use public projections and the
+shared harness, not bespoke app runtime/provider/table paths.
 
 ### 7. Eval / Launch Hardening
 
@@ -241,7 +261,7 @@ Order:
 
 `HEY-111 -> HEY-53 -> HEY-54 -> HEY-55`
 
-Done:
+Merged evidence:
 
 - `HEY-111` local runtime evidence/replay spine.
 
@@ -263,20 +283,52 @@ mutation evidence.
 
 ### 8. App Track
 
-Status: parallel, but depends on backend contracts and delivery surfaces.
+Status: canonical deployable app is `Pin4sf/waldo-app`; live integration is not proved.
 
-Order:
+HEY-149 is the integration umbrella. Use the exact current live Linear relations, not a false
+serial order:
 
-`HEY-132 -> iOS surfaces -> channel/feed integration`
+| Node | Live Linear `blockedBy` |
+| --- | --- |
+| HEY-151 | HEY-150 |
+| HEY-152 | HEY-150 |
+| HEY-157 | None |
+| HEY-159 | None |
+| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
+| HEY-154 | HEY-13; HEY-151; HEY-153 |
+| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
+| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
+| HEY-47 | HEY-28; HEY-132; HEY-151 |
+| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
+| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
+| HEY-155 | HEY-132; HEY-156 |
 
 Next:
 
-- `HEY-132` generated client refresh from committed OpenAPI artifact.
+- HEY-149 integration umbrella and HEY-150 matrix review; both are In Progress.
+- HEY-151 strict current morning-Brief schema/OpenAPI.
+- HEY-152 whole-path route assignment, cutover, and rollback.
+- HEY-153 verified ES256 subject to one owner-bound DO.
+- HEY-154 side-effect-free committed projection.
+- HEY-132 generated runtime-validating client.
 
 After:
 
-- iOS/chat/feed surfaces as backend contracts stabilize.
-- Push/feed surfaces after `HEY-18`, `HEY-19`, and `HEY-127`.
+- HEY-28 protected shell and HEY-35/47 honest renderer/degraded states.
+- HEY-156 two-user staging parity and whole-path rollback.
+- HEY-155 legacy app runtime/direct-path decommission.
+
+Parallel prerequisite:
+
+- Target-pending Brain ADR-0082 plus HEY-159 before persistent caching.
+- Target-pending Brain ADR-0081 before health-derived computation becomes authoritative.
+
+Status rule: HEY-150 directly gates only HEY-151 and HEY-152. HEY-157 and HEY-159 run in parallel.
+HEY-151-159 otherwise remain Backlog in their documented lanes. Supplying
+`docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` does not mark HEY-150 Done; acceptance is
+still pending. HEY-110 and HEY-158 are separate Alpha gates, HEY-126 is a parallel spike, and
+HEY-127 remains off-path conditional/deferred. The adopted dogfood gate follows HEY-156 and
+precedes HEY-155 as an acceptance gate, not a Linear `blockedBy` relation.
 
 Suggested owner: app team.
 
@@ -289,17 +341,21 @@ Deferred:
 - `HEY-49`, `HEY-37`, `HEY-58`, `HEY-59`.
 - `HEY-80` through `HEY-97`.
 - `HEY-76`, `HEY-108`, `HEY-60`, `HEY-61`, `HEY-62`.
+- Direct Apple Watch/watchOS/WatchConnectivity work, plus Handoff/live actions, voice, soft
+  delete/recovery, live intervention, generative cards, full Constellations, and live Fetch.
 
 Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open.
 
 ## What To Assign Now
 
-1. Runtime single writer: review/merge `HEY-143`; do not enable gateway execution until HEY-13
-   and an auditable HEY-99 spend reader land.
-2. Context parallel: `HEY-15`, `HEY-11`, `HEY-13`.
-3. Safe parallel: `HEY-137`, `HEY-141`, `HEY-100`, `HEY-125`, `HEY-104` through `HEY-107`.
-4. Human/external: `HEY-128`, `HEY-130`, `HEY-127`, `HEY-131`.
-5. App parallel: `HEY-132`.
+1. Backend next slice: `HEY-13` structured Scribe/sanitizer runtime.
+2. Context parallel: `HEY-15`, `HEY-11`, then `HEY-14/16`.
+3. Delivery parallel: `HEY-110` Backlog/Phase 5 async idempotent in-app adapter.
+4. Auth/data parallel: `HEY-125`, `HEY-134`, `HEY-114`, `HEY-141`.
+5. Product contract lane: HEY-151/153/154 first Brief seam, HEY-158 Spots, and the HEY-126 bounded
+   Chat spike.
+6. App lane: HEY-157 and target-pending ADR-0082/HEY-159 run in parallel; HEY-132/28/35/47 follow
+   their live blockers above.
 
 ## How We Use Skills, Agents, And Coding Rules
 
@@ -420,7 +476,8 @@ Session rules:
   and the ticket body/comments.
 - The session declares owned files and out-of-scope files before editing.
 - Runtime-loop/provider sessions are single-writer. Do not run another Codex session that edits
-  `packages/runtime/src/run-loop/*` or provider seams while `HEY-143` is active.
+  `packages/runtime/src/run-loop/*`, sanitizer/hooks, or provider seams when the active slice owns
+  those files.
 - Parallel Codex sessions are allowed for context, safety, docs, app, eval, and read-only review when
   their write sets do not overlap.
 - Each session works on its own branch/worktree and opens a PR or reports why it is blocked.
@@ -442,9 +499,9 @@ Session lifecycle:
 
 Good parallel session examples:
 
-- `HEY-143` provider-readiness/runtime lane: one Codex session only.
+- `HEY-13` sanitizer/Scribe/egress lane: one declared writer for shared safety files.
 - `HEY-15` recall runtime: separate context session if it avoids runtime-loop files.
-- `HEY-13` sanitiser/Scribe placement: separate safety session if it declares boundaries.
+- `HEY-110` async delivery: separate runtime session if it avoids HEY-13 files.
 - `HEY-137` DeliveryGate tests: separate test-hardening session.
 - `HEY-132` app generated client: separate app session.
 
@@ -453,7 +510,7 @@ Bad parallel session examples:
 - Two sessions both editing `RunLoopDO`.
 - One session changing `packages/contracts/src/index.ts` while another changes public contract exports.
 - A channel session wiring live delivery before the fake harness loop is verified.
-- A provider session using real credentials before `HEY-143`.
+- A provider session using real credentials before HEY-13, spend, secret, and staging gates.
 
 ### Example Codex Session Prompt
 
@@ -574,11 +631,12 @@ For harness/runtime changes, include focused runtime or contract tests and evide
 
 Start from Linear and the active docs, not from archived plans:
 
-- Runtime builder: review HEY-143 hardening; its remaining live-flip dependencies are HEY-13,
-  HEY-99 spend metering, Secrets Store binding, and approved staging smoke.
+- Runtime/safety builder: HEY-13 structured sanitizer/Scribe path is next.
 - Context builder: HEY-15, then HEY-14 and HEY-16.
-- Safety builder: HEY-13 / HEY-141 where scoped.
-- Infra/provider builder: HEY-143 now that HEY-142 has merged.
+- Delivery builder: HEY-110 async idempotent in-app adapter.
+- Infra/provider builder: HEY-125/134/114 and the remaining HEY-143 live-path dependencies.
+- Product-loop builder: first Brief seam, HEY-158 Spots vertical, or HEY-126 bounded Chat spike
+  according to the ownership map above.
 
 When in doubt, post the current -> ideal -> gap and ask for the lane owner before editing shared
 runtime files.

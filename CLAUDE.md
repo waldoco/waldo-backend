@@ -1,6 +1,6 @@
 # waldo-backend — Claude Code Instructions
 
-## Current Foundation Status (2026-07-09)
+## Current Foundation Status (2026-07-10)
 
 Current work is governed by the local rule index, active foundation docs, accepted ADRs, and
 Waldo Brain source pages. Archived foundation docs are archaeology, not onboarding.
@@ -13,20 +13,33 @@ Before any implementation:
 4. Read `docs/foundation/NEXT-SESSION-PLAN.md`.
 5. Read `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`.
 6. Read `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`.
-7. Read the relevant Waldo Brain source pages and accepted ADRs.
+7. Read `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` for app/backend path or cutover work.
+8. Read the relevant Waldo Brain source pages and accepted ADRs.
 
 Current facts:
 
 - Collaboration model: Claude Code builds; Codex audits adversarially.
-- Runtime foundation through HEY-139 is merged: scheduler, Loop Governor, journal/outbox,
+- Runtime foundation through HEY-142 is merged: scheduler, Loop Governor, journal/outbox,
   DeliveryGate, hooks, ToolDispatcher/ACL, fake-first LLM provider, fake-first `RunLoopDO`,
-  ingress/idempotency/gate/failure hardening.
+  ingress/idempotency/gate/failure hardening, governed multi-iteration looping, and local replay.
 - HEY-10 is merged: DO SQLite context schema root.
 - HEY-111 is merged: typed local runtime evidence, replay fixtures, and local rule-based eval.
-- The next runtime work is HEY-142: governed multi-iteration `plan -> act -> observe`.
+- PR #44 merged bounded provider-readiness/fail-closed hardening; HEY-143 remains In Progress because
+  real context/provider/sink/staging/Alpha proof is absent.
+- The next executable safety slice is HEY-13 structured Scribe/sanitizer runtime
+  (Todo/ready-for-agent).
+- HEY-150 matrix review and HEY-151/152 contract/cutover work can proceed alongside HEY-125;
+  HEY-157 and HEY-159 are parallel roots, not children of HEY-150.
 - The next context work is HEY-15 recall, HEY-14 skill loader, and HEY-16 prompt builder.
-- Do not call the harness a complete Pi/Hermes-style agent loop until HEY-142 and context
-  hydration are wired and verified.
+- Do not call the harness a complete Pi/Hermes-style agent loop until real context/recall/provider,
+  Scribe, delivery, staging, and Alpha proof are wired and verified.
+- The 16-table Supabase/RLS data plane is intended/contracted, not merged or staging-proven.
+  HEY-134 owns the canonical migration/RLS/Vault re-land; HEY-114 owns environment and rollback
+  proof.
+- The ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are approved target decisions in
+  [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17), but are not yet on
+  `waldo-brain/main`. PR #17 may advance during review; its eventual merge result governs. Keep
+  these decisions target-pending until merge.
 - Retired external contract package references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
@@ -37,9 +50,11 @@ Current facts:
 
 ## What this repo is
 
-**Supabase + Cloudflare** = Waldo's brain.
+**Supabase + Cloudflare** is Waldo's intended production brain. The current repo contains a broad
+local contract/runtime spine, not the complete deployed data plane below.
 
-- Supabase Postgres (16 tables · RLS on every one) — health data layer
+- Supabase Postgres (intended 16 tables with RLS on every one; not merged/staging-proven) — health
+  data layer; HEY-134/114 own canonical migration/environment proof
 - Supabase Edge Functions (Deno) — webhook ingestion, OAuth, cron triggers
 - Cloudflare Worker — agent runtime entry router
 - Cloudflare Durable Object — per-user agent brain with built-in SQLite (10 tables: memory_blocks, episodes, procedures, ...)
@@ -100,7 +115,7 @@ Same set as the other repos (P0-P3 · ready-for-agent/human · type:* · repo:*)
 ## Domain docs (waldo-brain)
 
 - **[01-Waldo/planning/WALDO_V1_MASTER_PLAN.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md)** — build plan
-- **[01-Waldo/Architecture Decision Records (ADR)](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29)** — accepted ADRs
+- **[01-Waldo/Architecture Decision Records (ADR)](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29)** — ADRs merged to `waldo-brain/main`; approved target amendments in PR #17 remain pending merge
 - **[04-Agent-Harness](https://github.com/Pin4sf/waldo-brain/tree/main/04-Agent-Harness)** — agent runtime master notes
 - **[03-References/ADL](https://github.com/Pin4sf/waldo-brain/tree/main/03-References/ADL)** — research grounding (Hermes, Cursor, MemPalace, Cognee, agentic-stack, Fowler SPDD, squad, federated learning)
 - **[05-Team/suyash/app-task-flows](https://github.com/Pin4sf/waldo-brain/tree/main/05-Team/suyash/app-task-flows)** — UX flow specs (read these BEFORE building any tool that affects user-facing surface)

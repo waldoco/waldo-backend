@@ -1,281 +1,412 @@
 # Harness Runtime Build Plan
 
-Status: active planning source for the next Waldo backend runtime build.
-Date: 2026-07-07.
-Purpose: convert Waldo Brain's final harness architecture and the backend contract-spine audit into an assignable runtime build plan.
+Status: active source for the promoted Waldo backend and app-integration build.
+Date: 2026-07-10.
+Baseline: `origin/main` at `b311d54` after PR #44.
 
 ## Source Map
-
-GitHub links are the canonical collaborator source links. If a local companion
-checkout exists at `../waldo-brain`, use the same repo-relative paths locally for
-fast grep and source reading.
-
-Primary Waldo Brain sources:
-
-| Source | Why it matters |
-| --- | --- |
-| [01-Waldo/planning/WALDO_ARCHITECTURE_OVERVIEW.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_ARCHITECTURE_OVERVIEW.md) | Canonical architecture summary; Waldo is a persistent general-purpose agent, not only a wellness feature. |
-| [01-Waldo/planning/WALDO_AGENTIC_HARNESS_LAYER_MAP.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_AGENTIC_HARNESS_LAYER_MAP.md) | Layer map for runtime, context, memory, tools, safety, model fabric, evals, and delivery. |
-| [04-Agent-Harness/harness-final-build-image-2026-06-27.md](https://github.com/Pin4sf/waldo-brain/blob/main/04-Agent-Harness/harness-final-build-image-2026-06-27.md) | Most concrete final build image: per-user DO, Loop Governor, run journal, DeliveryGate, Scribe, memory, tools, evals. |
-| [04-Agent-Harness/harness-runtime-architecture-decided-vs-gap.md](https://github.com/Pin4sf/waldo-brain/blob/main/04-Agent-Harness/harness-runtime-architecture-decided-vs-gap.md) | Settled-vs-open runtime map; says architecture is no longer open design, execution is the gap. |
-| [04-Agent-Harness/harness-finalization-blockers-2026-06-28.md](https://github.com/Pin4sf/waldo-brain/blob/main/04-Agent-Harness/harness-finalization-blockers-2026-06-28.md) | Remaining Agent-Ready blockers: proof gates, privacy/deletion, live chat, app feed, Google verification. |
-| [04-Agent-Harness/agent-harness-build-readiness-consolidation-2026-06-26.md](https://github.com/Pin4sf/waldo-brain/blob/main/04-Agent-Harness/agent-harness-build-readiness-consolidation-2026-06-26.md) | Build-ready control plane: Loop Governor, Think adapter caution, conformance suite. |
-| [04-Agent-Harness/loop-governor-restructure.md](https://github.com/Pin4sf/waldo-brain/blob/main/04-Agent-Harness/loop-governor-restructure.md) | Deterministic loop-governance rationale: priority, budgets, kill, no-progress, Art-9 egress floor. |
-| [04-Agent-Harness/state-of-the-art-memory-system-2026-06-26.md](https://github.com/Pin4sf/waldo-brain/blob/main/04-Agent-Harness/state-of-the-art-memory-system-2026-06-26.md) | Memory control-plane updates: memory_class, prospective intents, procedural split, retrieval gateway, evals. |
-| [04-Agent-Harness/harness-devx-teardown-2026-06-29.md](https://github.com/Pin4sf/waldo-brain/blob/main/04-Agent-Harness/harness-devx-teardown-2026-06-29.md) | DevX and observability plan: journal is the trajectory; emit one event per transition. |
-| [01-Waldo/WALDO_HARNESS_DEEPWIKI.html](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/WALDO_HARNESS_DEEPWIKI.html) | Generated build bible and module atlas; useful as a source map, not higher authority than accepted ADRs. |
 
 Primary backend sources:
 
 | Source | Why it matters |
 | --- | --- |
-| `docs/foundation/CONTRIBUTOR-ONBOARDING.md` | Short path for new contributors and lane ownership. |
-| `docs/foundation/NEXT-SESSION-PLAN.md` | Current HEY-143 entrypoint and acceptance bar. |
-| `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md` | Verification wall and runtime/evidence testing standard. |
-| `docs/foundation/AGENT-OPERATING-WORKFLOW.md` | Session loop, skill map, plugin boundaries, and verification wall. |
-| `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` | HEY-10 deferred DO table coverage: ADR/Linear ownership for goals, memory edges, commitments, handoff state, and compaction. |
-| `docs/foundation/HEY-111-EVIDENCE-SPINE.md` | Merged fake-first replay/evidence surface reused by HEY-142 and still required for HEY-143. |
-| `docs/foundation/HEY-142-PHASE-HANDOFF.md` | Post-merge HEY-142 evidence, residual risks, and HEY-143 prerequisites. |
-| `packages/contracts/src/index.ts` | Barrel for the implemented contract spine. |
-| `packages/runtime/src/run-loop/do.ts` | Fake-first hardened runtime driver. |
-| `packages/runtime/test/run-loop.test.ts` | Current runtime proof and replay/evidence assertions. |
+| `docs/foundation/NEXT-SESSION-PLAN.md` | Current execution slice, promoted Alpha boundary, first app seam, and DAG. |
+| `docs/foundation/CONTRIBUTOR-ONBOARDING.md` | Contributor lanes and assignable work. |
+| `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md` | Verification wall and proof ladder. |
+| `docs/foundation/AGENT-OPERATING-WORKFLOW.md` | Session loop, skills, external-system policy, and merge discipline. |
+| `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` | HEY-150 commit-pinned app path ownership, cutover, residue, and removal matrix. |
+| `docs/foundation/HEY-143-PHASE-HANDOFF.md` | Merged provider-readiness evidence and remaining live-provider blockers. |
+| `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` | Merged schema artifact and its exact limits. |
+| `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` | Deferred/proposed DO table ownership. |
+| `packages/contracts/src/index.ts` | Current local contract barrel. |
+| `packages/runtime/src/run-loop/do.ts` | Fake-first governed runtime implementation. |
+| `packages/runtime/test/run-loop.test.ts` | Workerd/replay proof for the current runtime. |
 
-Research inputs used:
+Primary Waldo Brain authorities:
 
-- Read-only Brain-intent subagent: final harness goal, source map, runtime components, non-negotiables.
-- Read-only backend-state subagent: contract spine vs skeletal runtime audit, missing surfaces, first next slice.
-- Read-only pillar-decomposition subagent: async runtime seam split, dependencies, collision risk.
+- ADRs already merged to `waldo-brain/main` and the mirrored universal rules;
+- the approved ADR-0001/0071/0077 amendment set and new ADR-0081/0082 as target-pending decisions
+  in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17);
+- the current architecture overview, final build image, decided-vs-gap map, and finalization
+  blockers.
 
-## Final Harness Goal
+PR #17 is an explicit promotion dependency: those amendments and ADR-0081/0082 are not yet on
+`waldo-brain/main`. The PR may advance during review; its eventual merge result governs. Keep the
+target-pending qualifier until it merges; the ownership/DAG below does not change on merge.
 
-Waldo's V1 harness should become a first-party, persistent, body-and-life-aware agent runtime:
+The canonical deployable app repository is
+[`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app). The audited promotion snapshot is
+`c8b3b4555de076339554391da4dbf5fbe2dac0ae`.
+`Pin4sf/Waldo.git/waldo-app` is historical, nondeployable lineage.
 
-1. One per-user Cloudflare Durable Object owns the hot runtime brain.
-2. Schedules, app events, Telegram/app messages, and future channel events enter through authenticated Worker routes or DO alarms.
-3. A deterministic Loop Governor admits, drops, holds, degrades, or kills work before any model loop.
-4. A durable run journal records each transition so crashes and hibernation resume from committed state.
-5. Context is built from derived body state, recall, R2 workspace files, working memory, skills, thread/channel hints, and REASONS prompt layers.
-6. Models route behind `LLMProvider` policy and fake-first adapters.
-7. Typed tools execute under trigger ACL, taint, approval, autonomy, and sanitiser gates.
-8. Memory writes go through Scribe/proposal paths; committed memory is never written directly by the LLM.
-9. Delivery passes through DeliveryGate and an idempotent transactional outbox.
-10. Verification is a layer: trace, conformance, eval, replay, redaction, privacy, and deletion proof.
+## Goal
 
-V1 product proof runs through Brief, shadow Fetch, Pre-Activity Spots, and Chat. The runtime should be horizontal enough that later verticals swap tools, policies, skills, and prompts without replacing the harness.
+Build one first-party, persistent agent harness in `waldo-backend`:
+
+1. a verified user maps to one owner-bound Durable Object;
+2. the DO owns hot runtime state, scheduling, journal, Governor, context orchestration, and
+   delivery decisions;
+3. Supabase owns raw health and user-scoped relational data under RLS;
+4. model calls cross the `LLMProvider`/Gateway seam;
+5. tools execute under trigger ACL, taint, approval, autonomy, and sanitizer gates;
+6. memory writes cross Scribe;
+7. DeliveryGate and an idempotent outbox own every delivery candidate;
+8. public projections are strict backend-owned contracts consumed through generated clients;
+9. trace, replay, conformance, privacy, deletion, and rollback evidence determine proof level.
+
+The V1 product proof is Brief, shadow Fetch, Spots, and text Chat on this shared spine. Product
+verticals must not introduce alternate agent runtimes or direct app-owned provider/data paths.
 
 ## Non-Negotiables
 
-- Runtime is DO-only; no L1 invoke-agent Edge Function owns agent execution.
-- Raw health data stays in Supabase. DO/R2/logs/prompts/public API/Telegram receive only derived or redacted forms.
-- Sessions never resume. Authorization, canaries, pending approvals, and tool permissions reset on every wake. Runs may resume from the journal.
-- Loop Governor is deterministic and outside the LLM.
-- Tools derive from typed contracts and per-trigger permissions. Fixed prose tool counts are stale.
-- `execute_code`, browser use, and image analysis are not V1 runtime powers.
-- MCP is a narrow client escape hatch, not the integration layer. Waldo-as-MCP-server is deferred.
-- Cloudflare Agents SDK/Think can be studied or spiked as plumbing, not adopted as the owner of Waldo's trust, memory, or side-effect idempotency boundary.
+- Agent execution is DO-only; no app or Edge Function owns a second agent loop.
+- Raw health remains Supabase/RLS-only.
+- Health-derived computation and destination authority depend on target-pending Brain ADR-0081.
+- Persistent device-local sensitive cache and account/consent lifecycle depend on target-pending
+  Brain ADR-0082 and HEY-159.
+- Session authorization, canaries, approvals, and ACL rebuild on every wake; runs may resume only
+  from committed journal state.
+- Governor is deterministic and outside the model.
+- Scribe is the only committed-memory write path.
+- DeliveryGate chooses delivery; the Governor does not write outbox rows.
+- The app uses committed OpenAPI/generated-client contracts only. It supplies no user, tenant, DO,
+  model, or provider selector.
+- Home composes Brief, Spots, relevant threads, and Patrol/audit projections. There is no
+  persistent generic Feed entity.
+- The first Brief GET is a side-effect-free read, not async delivery. HEY-110 owns asynchronous
+  idempotent in-app delivery.
+- HEY-126 owns the bounded Chat transport/replay spike; production transport waits for the
+  target-pending ADR-0077 amendment to merge.
+- HEY-127 is conditional/deferred. No generic Feed is an Alpha prerequisite.
+- Direct Apple Watch/watchOS/WatchConnectivity work is deferred.
+- No configuration, ticket, schema, local test, or merged source is called staging, Alpha, or
+  production evidence without the corresponding runtime proof.
+
+## Alpha Acceptance Boundary
+
+Alpha requires:
+
+- authenticated in-app morning Brief;
+- shadow Fetch candidate/label evaluation with delivery disabled;
+- real Spots generation, public projection, evidence, and dismissal;
+- persistent text Chat;
+- privacy, identity, source, approval, journal/outbox, Governor, and DeliveryGate proof;
+- real context, recall, provider, and one accepted source seam;
+- one asynchronous idempotent in-app adapter;
+- two-user isolation, privacy-safe traces, deletion/consent gates, and whole-path rollback.
+
+Alpha excludes:
+
+- external-channel breadth;
+- live Fetch;
+- Handoff and live actions;
+- voice;
+- branching or soft delete/recovery;
+- live intervention;
+- generative cards;
+- full Constellations;
+- direct Watch work;
+- proposed production SLO/RPO/RTO/partitioning/DR thresholds.
 
 ## Current Backend Reality
 
-Built:
+### Built And Merged
 
-- Contract spine across core, runtime, tools, memory, prompt, model, adapters, auth, telemetry, public DTO/OpenAPI, and evidence lanes.
-- Workers/DO test substrate with `@cloudflare/vitest-pool-workers`.
-- One scheduled `fetch_alert` tracer path proving `DO alarm -> Governor -> journal -> DeliveryGate -> outbox -> fake sink -> DONE`.
-- SLICE-3a/HEY-120 durable outbox proof: crash after sink send and before local ack resumes across DO eviction without duplicate physical delivery, with an explicit idempotent sink contract.
-- SLICE-3b/HEY-121 landed in PR #23 at `f47127f`: journal/outbox behavior is promoted into `RunJournalOutbox` with
-  `startRun`, `tickRun`, `resumeRun`, `enqueueOutbox`, and `flushOutbox`.
-- HEY-122/SLICE-4 Loop Governor runtime enforcement landed in PR #27.
-- HEY-123/SLICE-5 scheduler/alarm multiplexer landed in PR #28 at `061e72c`.
-- HEY-77 triage dispatcher landed in PR #29 at `a947600`.
-- HEY-12 hook registry landed in PR #31 at `1b180ef`.
-- HEY-78 ToolDispatcher + per-trigger ACL enforcement landed in PR #33 at `600fb34`.
-- HEY-17 LLMProvider routing seam landed in PR #34 at `0aae766`, fake-first and contract-owned.
-- HEY-136 fake-first `RunLoopDO` integration landed in PR #35 at `3d336c7`.
-- HEY-139 runtime driver hardening landed in PR #38 at `b736470`.
-- HEY-10 DO SQLite context schema root landed in PR #37 at `7980aad`.
-- HEY-111 runtime evidence spine landed in PR #39 at `61eb3c7`.
-- HEY-142 governed multi-iteration `plan -> act -> observe` loop landed in PR #42 at `d896500`.
-- Static guard wall and pinned verification command.
+- broad local contracts across runtime, tools, memory, prompts, routing, adapters, auth, telemetry,
+  public scaffolding, and evidence;
+- SQLite DO/workerd test substrate;
+- durable journal/outbox interfaces and fake-sink crash/resume proof;
+- DeliveryGate policy state;
+- Loop Governor;
+- alarm multiplexer;
+- triage, nine-event hook registry, ToolDispatcher, and per-trigger ACL;
+- fake-first LLM routing and gateway adapter parsing/configuration;
+- fake-first `RunLoopDO`, runtime hardening, governed multi-iteration loop, and local replay;
+- HEY-10 ten-table context schema artifact;
+- PR #44 provider-readiness/fail-closed hardening at `b311d54`.
 
-Not built:
+HEY-143 remains In Progress. PR #44 proves configuration, parsing, privacy, and fail-closed
+behavior with fakes/mocks. It does not prove a real context/provider/channel path or Alpha.
 
-- Real-provider flip readiness; HEY-143 owns this next runtime slice.
-- Production context builder, recall-before-act, skill loading, and prompt hydration; HEY-15/HEY-14/HEY-16 own this lane.
-- Scribe/sanitiser runtime and committed-memory proposal lifecycle beyond injected hook callbacks.
-- Multi-kind production channel delivery and app feed surfaces.
-- Live provider calls, real channel sinks, Telegram ingress, app feed, live chat.
-- Scenario/property/mutation/live evidence runners.
+### Not Built Or Not Proven
 
-## Build Strategy
+- public authenticated product ingress; the default Worker returns 404;
+- verified ES256 subject to owner-bound DO routing;
+- merged canonical Supabase/RLS/Vault migrations or R2;
+- consent middleware, all-store deletion, and restore/re-delete proof;
+- wired production context DDL, recall, skills, prompt hydration, or real Scribe;
+- real provider RunLoop execution, atomic spend reservation, fleet kill, or staging smoke;
+- asynchronous idempotent in-app delivery;
+- current morning Brief projection/OpenAPI/generated app client;
+- shadow Fetch, real Spots, or persistent text Chat end to end;
+- standalone eval, property, mutation, load, native-device, staging, dogfood, Alpha, or production
+  evidence.
 
-Split by runtime seam, not product feature. Product features should wait until the shared spine exists because Brief, Fetch, Spots, and Chat all need the same DO loop, journal, scheduler, dispatcher, memory, model, and delivery seams.
+## Workstream Map
 
-### Pillars
+| Phase | Workstream | Current truth | Next proof |
+| ---: | --- | --- | --- |
+| 1 | Journal/outbox | Local workerd/fake-sink proof merged | Preserve; real async adapter proof is HEY-110 |
+| 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
+| 3 | Context/memory/safety | HEY-10 schema artifact merged; runtime unwired | HEY-13, then HEY-15/14/16 and accepted goal scope |
+| 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
+| 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
+| 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
+| App | generated consumer | canonical app has UI/native shell plus legacy bypass inventory | HEY-132 client, protected shell, honest renderer, staged cutover |
 
-| # | Pillar | Scope | Can start | Verification | Collision risk |
-| --- | --- | --- | --- | --- | --- |
-| 1 | Run Journal + Outbox | Durable run FSM, transactional outbox, retry/ack, exactly-once delivery. | Now | Workerd eviction/crash tests; duplicate-send tests. | High |
-| 2 | DeliveryGate Runtime | Budget, cooldown, held candidates, `GATED` step, class policy. | After Pillar 1 transaction shape | Property tests for day boundaries, cooldowns, exempt-but-counted behavior. | Medium-high |
-| 3 | Scheduler Multiplexer | Single alarm slot, seven schedule kinds, recurrence, watchdog/liveness. | Design now; runtime after Pillar 1 | DST/recurrence/lost-alarm tests; `setAlarm` guard stays green. | High |
-| 4 | Loop Governor Runtime | Priority, budgets, kill, dedup, no-progress, Art-9 floor. | Comparator tests now | Fetch-over-Brief, budget kill, stuck-loop, health egress tests. | Medium-high |
-| 5 | Dispatcher + Hooks + ACL + Sanitiser | Hook runner, session reset, typed dispatcher, taint provenance, sanitiser placement. | Isolated tests now | Prompt-injection fixtures, ACL denial, canary/health leak tests. | High |
-| 6 | Context + Memory + Prompt Hydration | Recall, Scribe write path, REASONS builder, goals, skills, working memory. | Fake-backed design now | Recall fail-open tests, prompt fencing, no raw-health persistence. | High |
-| 7 | LLMProvider + Routing + Eval | Fake-first provider, routing, fallback, shadow eval. | Now | Model roster guard, fallback tests, trace assertions. | Low-medium |
-| 8 | Channels + App Surfaces | Fake APNs/Telegram sinks, Telegram gate tests, live-chat/feed spike. | Fake sinks now | Secret-header tests, update dedupe, no health logs. | Medium-high |
-| 9 | Auth/Data Plane/Adapters | ES256 Supabase issuer, `db.forUser`, Vault OAuth, provider adapters. | Now | RLS cross-tenant tests, token expiry, no service-role in DO. | High in migrations/EFs |
-| 10 | Observability/Conformance | Trace event shape, scenario artifacts, replay/eval scaffolding. | Now | Scenario replay, property seeds, mutation reports, redaction checks. | Low |
+## Next Backend Slice - HEY-13
 
-## Completed Runtime Slices
+HEY-13 structured Scribe/sanitizer runtime is next.
 
-**SLICE-3a/HEY-120: durable DeliveryGate/outbox proof** landed in PR #21.
+Interface outcome:
 
-The PR proved exactly-once delivery at the durable layer, not only exactly-once enqueue and not only process-local fake-sink dedupe.
+- one typed sanitizer/taint result consumed by hook, prompt, memory, provider-egress, projection,
+  trace, and delivery paths;
+- recursive key/value classification across strings, numbers, objects, and arrays;
+- fail-closed handling for unknown health-shaped content;
+- bounded, content-free denial evidence;
+- no direct committed-memory mutation.
 
-Proof covered:
+First failing tests:
 
-- Start a run.
-- Commit the outbox intent.
-- Simulate sink send.
-- Crash before ack is recorded.
-- Evict/reconstruct the Durable Object.
-- Resume.
-- Assert the side effect is not delivered twice.
-- Assert durable state records the ack/retry outcome.
-- Assert the sink declares idempotency by key and the fake cannot hide re-key bugs.
+- a health-shaped numeric value under a benign key rejects;
+- nested, array, CSV, synonym, and intervening-word shapes reject;
+- external taint survives iteration and crash/resume;
+- sanitizer failure prevents provider call, projection response, trace payload, and outbox row;
+- the nine-event hook order remains deterministic.
 
-**SLICE-3b/HEY-121: promoted journal/outbox runtime interface** landed in PR #23 at `f47127f`.
+Verification:
 
-The slice promoted the tracer-proven behavior behind `RunJournalOutbox`, preserves the SLICE-3a
-exactly-once delivery proof, adds Workers tests for the promoted interface across eviction, and
-enforces durable row parsing plus sink request/ack parsing at the runtime seam.
+- focused contract/runtime tests;
+- health-leak and fake-callback guards;
+- workerd proof where durable state/outbox is involved;
+- `npx -y pnpm@10.34.4 verify`;
+- `git diff --check`.
 
-**SLICE-3c/HEY-124: DeliveryGate runtime policy state** landed in PR #24 at `5789b42`.
+Live provider calls, credentials, channel delivery, app traffic, production data, and cloud side
+effects remain out of the default HEY-13 path.
 
-The slice promoted ADR-0068 policy state onto the promoted journal/outbox seam: per-class daily
-caps, counted APNs budget keyed by local date, exempt-but-counted telemetry, event-scoped
-cooldowns, adjustment sub-kind caps, held-candidate freeze plus a callable `releaseHeld`, a closed
-`gate_reason` vocabulary on every non-send verdict, and DO-local schema migration — with the GATED
-commit atomic and the SLICE-3a/3b proofs preserved. Verify green at merge: contracts 1,163 /
-runtime 46 / 10 guards.
+## First Public Seam
 
-Acceptance residue from HEY-124 is archived in
-`docs/foundation/archive/SLICE-3C-HANDOFF.md`. Do not use that handoff as the current slice plan.
+```http
+GET /public/v1/briefs/morning/current
+Authorization: Bearer <Woof ES256 access token>
+Accept: application/vnd.waldo.morning-brief.v1+json
+If-None-Match: "<optional subject-bound opaque ETag>"
+```
 
-Remaining after HEY-142: real-provider flip readiness, production context/prompt hydration, Scribe
-proposal lifecycle, multi-kind production delivery, app/channel surfaces, and standalone eval/live
-evidence runners.
+The contract:
 
-## Next Slice
+- accepts no body or routing selector;
+- verifies version, ES256 signature/claims/session, and owner-bound DO before read;
+- reads one committed current-morning projection;
+- is side-effect-free;
+- returns a strict `ready | pending | empty` union;
+- uses strict content-free `WaldoProblemV1` failures;
+- returns server-owned freshness and opaque subject-bound cache identity;
+- is committed in OpenAPI and generates HEY-132's runtime-validating client;
+- never falls back to the app's embedded Worker, Functions, direct tables, provider code, or
+  handwritten DTOs.
 
-Build **HEY-143: real-provider flip readiness**.
+This seam does not generate a Brief or satisfy HEY-110 delivery.
 
-HEY-143 must preserve the fake-first default while making the provider flip safe to test. The
-runtime loop can now iterate under governor control; the next gap is provider-readiness at the
-adapter/routing seam with explicit staging configuration, spend/kill safeguards, and replay evidence
-that excludes prompts, raw health, provider bodies, credentials, and channel payloads.
+## Home, Spots, Chat, And Watch
 
-Required first failing test:
+### Home
 
-- Real-provider adapter responses are parsed into the same contract-owned LLM response shape as the
-  fake provider.
-- Provider errors, malformed provider output, spend-cap/kill-switch decisions, and fallback
-  degradation are deterministic and replay-visible without raw provider bodies.
-- Prove fallback order: configured model full context, configured model reduced context, gateway
-  fallback chain, then route floor behavior.
-- Prove circuit breaker scope/cooldown, spend-cap degradation, template fallback, and PostLLMCall
-  sanitise/halt behavior.
-- Assert existing SLICE-3a/3b/3c/4/5, HEY-77, and HEY-12 tests still pass.
+Home is composition:
 
-Review carry-forward from SLICE-3a/3b/3c/4:
+- current Brief projection;
+- real Spots projection;
+- relevant thread projection;
+- Patrol/audit projection.
 
-- Promote only production-shaped code; leave crash knobs and fixture helpers in tests.
-- The Art-9 egress floor reuses `RAW_SENSOR_PATTERNS` from `packages/contracts/src/memory/sanitise.ts`;
-  do not declare another copy.
-- Keep `enqueueOutbox` as the gate-owned commit boundary; the governor never reaches the outbox.
-- Date-scoped counters and cross-date cooldown timestamps have different storage semantics; keep
-  them separate (SLICE-3c lesson).
-- Keep HEY-136, Scribe runtime writes, memory/context hydration, live provider calls, and live
-  channel delivery out of the LLMProvider PR.
+Do not create a generic Feed table, global ordering, generic read-state authority, or global
+OutboxKind. If product later requires a distinct persistent Feed source of truth, that requires a
+separate decision before schema work.
 
-## Slice Ladder To First Agent Run
+### HEY-158 Backend Spots Vertical - Phase 5
 
-Finalized 2026-07-08 (founder-directed). The target event is **SLICE-6/HEY-136**: one journaled run
-walking the full contract FSM (`PENDING -> CONTEXT_BUILT -> LLM_CALLED -> TOOLS_DONE -> GATED ->
-DELIVERED -> DONE`, pinned in `packages/contracts/src/runtime/run.ts`) from a scheduled wake to a
-fake-sink delivery with a trace assertion — loop-anatomy parity with pi/Hermes on the DO substrate.
-HEY-17 installs the fake-first provider seam before SLICE-6; the live provider flip remains gated
-by the HEY-99 spend-cap decision and explicit credential work.
+Add explicit Phase 5 ownership for:
 
-2026-07-09 update: HEY-17 and HEY-136 have merged. HEY-136 should now be described as the
-fake-first run-loop skeleton, not the production agent loop. The follow-up Runtime hardening slice
-adds the missing integration guardrails before Agent Harness Alpha: spend cap avoids gateway calls,
-governor deny decisions become durable runtime `FAILED` outcomes, and the loop performs
-plan -> act -> observe/synthesise before gate/outbox.
+- Spot candidate generation across accepted source domains;
+- source provenance, freshness, confidence band, and occurrence idempotency;
+- public list/order/filter projection with stable opaque IDs;
+- safe evidence references;
+- dismissal to bounded engagement plus Scribe candidate, never direct memory mutation;
+- source-missing, duplicate, stale, cross-user, raw-health, and deletion tests;
+- Alpha staging proof.
 
-Codex runtime lane (strict order — one runtime writer at a time on `packages/runtime/src/*`):
+HEY-158 owns backend Spot semantics. HEY-132 owns only the generated consumer.
 
-1. HEY-122 · SLICE-4 Loop Governor — merged via PR #27.
-2. HEY-123 · SLICE-5 scheduler/alarm multiplexer — merged via PR #28 at `061e72c`.
-3. HEY-77 · triage dispatcher single entry — merged via PR #29 at `a947600`.
-4. HEY-12 · hook registry (9 lifecycle events) — merged via PR #31 at `1b180ef`.
-5. HEY-78 · ToolDispatcher + per-trigger ACL — merged via PR #33 at `600fb34`.
-6. HEY-17 · LLMProvider via CF AI Gateway, fake-first — merged via PR #34 at `0aae766`.
-7. HEY-136 · SLICE-6 run-loop integration — merged via PR #35 at `3d336c7`.
-8. HEY-139 · Runtime hardening follow-up — merged via PR #38 at `b736470`.
-9. HEY-111 · Runtime evidence spine — merged via PR #39 at `61eb3c7`.
-10. HEY-142 · governed multi-iteration `plan -> act -> observe` loop — merged via PR #42 at
-   `d896500`. It reused HEY-111 evidence; repeated event families remain unique across distinct
-   runtime state steps.
-11. HEY-143 · real-provider flip readiness — next runtime slice, after HEY-142 proved loop
-   iteration with fake provider/sinks.
+### Chat
 
-Claude context lane (parallel; fake-backed start allowed now):
+HEY-126 owns the bounded transport/replay spike before the target-pending ADR-0077 amendment
+merges:
 
-- HEY-10 (DO SQLite base tables) merged via PR #37 at `7980aad` -> HEY-15
-  (recall-before-act) -> HEY-14 (skill loader) -> HEY-16 (REASONS prompt builder). HEY-11
-  (AuditedDB) rides HEY-10. HEY-13 (sanitiser runtime) runs parallel — the governor egress floor
-  and Scribe both consume it. HEY-102 (CRS) may stay faked through SLICE-6.
-- HEY-10 landed the exact 10-table base schema in
-  `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md`. `goals` is intentionally excluded and owned by
-  HEY-144, which blocks full HEY-16 goal hydration. Deferred tables remain mapped in
-  `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md`.
+- authenticated command POST with client idempotency;
+- server-owned thread/message IDs;
+- durable cursor replay;
+- SSE versus active-only WebSocket measurement;
+- background, reconnect, cancellation, and offline-draft behavior;
+- no second authoritative transcript.
 
-Safe-parallel at any point: HEY-137 (DeliveryGate test hardening, `ready-for-agent`), HEY-100,
-HEY-125, HEY-141, and channel/fake-sink prep that does not trigger live delivery.
+Do not freeze the production transport before the spike evidence.
 
-Ordered follow-ups, not on the critical path: HEY-138 (ADR-0068 D4 timezone/quiet-hours — after
-HEY-10), HEY-135 (fleet watchdog — after HEY-123), HEY-18/HEY-19 channels (after HEY-136; they make
-the loop user-visible), Scribe memory-write slice (after HEY-136).
+### Watch
 
-Explicitly not on this path, by decision: session resume and always-on sockets (ADR-0033 trust
-reset; ADR-0074 socket residency), mid-run steering (HEY-126 live-chat spike owns that seam),
-`execute_code`/browser powers (non-negotiables), LLM-written committed memory (Scribe-only, ever).
+Direct Apple Watch/watchOS/WatchConnectivity work is deferred. Phone-side HealthKit work may
+ingest Apple Watch-originated data without a Waldo watch app.
 
-## Parallel Assignment Packet
+## Integration Ownership And DAG
 
-Use this template for each developer/agent assignment:
+| Owner | Contract |
+| --- | --- |
+| HEY-149 | cross-repo integration umbrella and one-runtime rule |
+| HEY-150 | commit-pinned path ownership/migration matrix; In Progress until accepted |
+| HEY-151 | current morning-Brief public contract/OpenAPI |
+| HEY-152 | whole-path route assignment, cutover, global kill, and rollback |
+| HEY-153 | verified subject, fresh trust, owner-bound DO, two-user rejection |
+| HEY-154 | side-effect-free committed morning-Brief projection |
+| HEY-132 | generated runtime-validating app client |
+| HEY-28 | protected app shell and generated-client CI |
+| HEY-35/47 | honest renderer, static cards, and degraded states |
+| HEY-156 | cross-repo staging parity and whole-path rollback |
+| HEY-155 | legacy app runtime/direct-path decommission and removal |
+| HEY-13 | privacy-safe real content, parallel |
+| HEY-110 | async idempotent in-app delivery, parallel |
+| HEY-126 | bounded Chat transport/replay spike, then target-pending ADR-0077 amendment merge |
+| HEY-127 | conditional/deferred persistent Feed decision; not Alpha-critical |
+| HEY-158 | backend Spots generation/projection/engagement/privacy, Phase 5 |
+| HEY-159 | per-account sensitive cache and consent-epoch lifecycle, App Track |
+| HEY-56 | TestFlight/release gate; HEY-159 is a direct blocker among its existing prerequisites |
+
+HEY-149 is the integration umbrella. It does not create a serial dependency edge. The exact current
+live Linear relations are:
+
+| Node | Live Linear `blockedBy` |
+| --- | --- |
+| HEY-151 | HEY-150 |
+| HEY-152 | HEY-150 |
+| HEY-157 | None |
+| HEY-159 | None |
+| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
+| HEY-154 | HEY-13; HEY-151; HEY-153 |
+| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
+| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
+| HEY-47 | HEY-28; HEY-132; HEY-151 |
+| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
+| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
+| HEY-155 | HEY-132; HEY-156 |
+
+HEY-149 and HEY-150 are In Progress. HEY-150 directly gates only HEY-151 and HEY-152 and is not
+Done until the matrix is reviewed and accepted. HEY-151-159 otherwise remain Backlog in their
+documented lanes. HEY-13 is Todo/ready-for-agent and gates real HEY-154 content. HEY-110 async
+delivery and HEY-158 Spots remain separate Alpha gates; neither is replaced by the GET. HEY-126 is
+a parallel spike, and HEY-127 is off-path conditional/deferred. HEY-13 is a direct live blocker of
+HEY-154 because it gates real health/model content, even though fixture-only projection work can
+start earlier. The adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate,
+not a Linear `blockedBy` relation.
+
+## Parallel Lanes
+
+Safe parallel work:
+
+- HEY-13 structured sanitizer and taint proof;
+- HEY-15/14/16 context hydration;
+- HEY-110 async delivery with fake adapters;
+- HEY-158 backend Spots vertical;
+- HEY-125/134/114 auth/data/environment proof;
+- HEY-137/138/135/141 reliability and egress;
+- strict Brief contract fixtures and generated-client scaffolding after contract approval;
+- HEY-126 Chat transport/replay spike;
+- HEY-159 app account/consent lifecycle alongside target-pending ADR-0082 promotion;
+- read-only review, failure mapping, and conformance guards.
+
+Single-writer surfaces remain:
+
+- `packages/runtime/src/*`;
+- `packages/contracts/src/runtime/*`;
+- `packages/contracts/src/tools/*`;
+- `packages/contracts/src/memory/*`;
+- public schema/OpenAPI barrels;
+- migrations, model roster, trigger vocabulary, budgets, and policies;
+- these foundation truth docs.
+
+## Runtime Slice Ledger
+
+Merged:
+
+1. HEY-120/121/124 journal, outbox, and DeliveryGate local runtime proof.
+2. HEY-122 Loop Governor.
+3. HEY-123 alarm multiplexer.
+4. HEY-77 triage.
+5. HEY-12 nine-event hooks.
+6. HEY-78 ToolDispatcher/ACL.
+7. HEY-17 fake-first provider.
+8. HEY-136 fake-first run loop.
+9. HEY-139 runtime hardening.
+10. HEY-10 context schema artifact.
+11. HEY-111 local evidence/replay.
+12. HEY-142 governed multi-iteration loop.
+13. PR #44 HEY-143 provider-readiness/fail-closed hardening.
+
+Next:
+
+14. HEY-13 real Scribe/sanitizer runtime.
+
+Do not infer HEY ticket completion beyond the bounded merged capability named above.
+
+## Proof Ladder
+
+### Contract
+
+- strict success/problem valid and invalid pairs;
+- incompatible v1 drift rejected;
+- byte-identical generated-client regeneration;
+- no internal schema derivation or handwritten parallel DTO.
+
+### Identity And Tenancy
+
+- wrong signature/key/issuer/audience/expiry/revocation fails before DO lookup;
+- user A and B resolve separate owner-bound DOs;
+- caller identity selectors reject;
+- RLS, service-role owner check, response, ETag, cache, log, and trace isolation.
+
+### Read, Privacy, And Idempotency
+
+- repeated GET/304/crash retry changes no run/journal/outbox/read-state count;
+- scheduled generation deduplicates separately by occurrence/journal;
+- deterministic fresh/stale transition;
+- HEY-13 corpus proves no forbidden value in response/cache/log/trace/outbox.
+
+### App And Staging
+
+- protected routes and generated-client-only network path;
+- loading/pending/empty/fresh/stale/denied/offline/429/503/500/malformed UI states;
+- no sample or fabricated effect fallback;
+- one runtime path per session/build;
+- HEY-156 redacted two-user staging trace and whole-path rollback;
+- zero reachable legacy route/binding/callback/job/grant/secret custody before HEY-155 removal.
+
+Production remains a separate proof level. Exact proposed production SLO/DR numbers are not Alpha
+law.
+
+## Assignment Template
 
 ```text
 Owner:
-Pillar:
-Primary sources:
+Phase/workstream:
+Primary ADRs/docs:
 Files owned:
-Out-of-scope files:
-Runtime invariant:
+Files explicitly out of scope:
+Invariant:
 First failing test:
-Verification command:
+Degraded/security cases:
+Verification:
 Merge dependency:
+Rollback:
 ```
 
-## What To Grill Next
-
-Before opening or merging HEY-143, grill these decisions:
-
-1. Does every trigger resolve through contract-owned routing data, including provider swaps?
-2. Does fallback degrade context/model deterministically without logging raw prompts or raw health?
-3. Does spend-cap degradation stay separate from provider health and prompt-injection failure?
-4. Do PostLLMCall hooks gate and sanitise before the model text becomes a tool-call source?
-5. Did the PR avoid Scribe memory writes, live channel delivery, production credentials, and
-   provider body logging?
-6. Which files are single-writer for HEY-143, and which eval/trace fixtures can run in parallel
-   without touching them?
+Every assignment must state whether it proves a contract, local runtime, staging path, or
+production behavior. “Implemented” without that proof level is not an acceptable status.
