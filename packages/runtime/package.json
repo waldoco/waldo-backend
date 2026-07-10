@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:property": "vitest run --config vitest.scribe.config.ts",
+    "test:mutation": "stryker run stryker.config.mjs"
   },
   "dependencies": {
     "@waldo/contracts": "workspace:*"
