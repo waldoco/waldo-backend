@@ -5,6 +5,7 @@ import {
   buildSessionState,
   triggerTypeSchema,
   type AdapterResult,
+  type HookHandler,
   type LLMResponse,
   type ModelName,
   type TriggerType,
@@ -18,6 +19,8 @@ import {
   type LLMGatewayRequest,
 } from '../src/llm/provider';
 import type { HookRuntimeContext } from '../src/hooks/registry';
+import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
+import { sanitise } from '../src/scribe/sanitiser';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
 
@@ -31,8 +34,10 @@ function runtimeCtx(overrides: Partial<HookRuntimeContext> = {}): HookRuntimeCon
       canary_tokens: canaryTokens,
       started_at: 1_700_000_000_000,
     }),
-    sanitise: ({ text }) => ({ ok: true, output: text, redactions: [] }),
-    medicalGate: () => true,
+    sourceTaint: null,
+    toolArgSourceTaint: null,
+    sanitise,
+    medicalGate: evaluateMedicalClaim,
     ...overrides,
   };
 }
@@ -366,7 +371,11 @@ describe('RuntimeLLMProvider', () => {
         renderTemplate: () => 'template fallback',
       },
       runtimeCtx({
-        sanitise: () => ({ ok: false, reason: 'untrusted_instruction' }),
+        sanitise: () => ({
+          ok: false,
+          check: 'instruction_pattern',
+          reason: 'untrusted_instruction',
+        }),
       }),
     );
 
@@ -405,7 +414,7 @@ describe('RuntimeLLMProvider', () => {
           },
         }),
       ),
-    ).resolves.toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
+    ).resolves.toMatchObject({ ok: false, reason: 'hook_halt', code: 'transient' });
     expect(gateway.requests).toEqual([]);
   });
 
@@ -435,7 +444,7 @@ describe('RuntimeLLMProvider', () => {
           },
         }),
       ),
-    ).resolves.toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
+    ).resolves.toMatchObject({ ok: false, reason: 'hook_halt', code: 'transient' });
     expect(gateway.requests).toEqual([]);
   });
 
@@ -460,18 +469,14 @@ describe('RuntimeLLMProvider', () => {
         renderTemplate: () => 'template fallback',
       },
       runtimeCtx({
-        sanitise: ({ text }) => ({
-          ok: true,
-          output: text.replace('user@example.com', '[redacted]'),
-          redactions: text.includes('user@example.com') ? [{ kind: 'email', count: 1 }] : [],
-        }),
+        sanitise: (input) => sanitise(input),
       }),
     );
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.response.text).toBe('email [redacted]');
-    expect(result.tool_call_source).toEqual({ text: 'email [redacted]' });
+    expect(result.response.text).toBe('email [REDACTED_EMAIL]');
+    expect(result.tool_call_source).toEqual({ text: 'email [REDACTED_EMAIL]' });
   });
 
   it('halts through PostLLMCall hooks before returning unsafe model text', async () => {
@@ -503,6 +508,371 @@ describe('RuntimeLLMProvider', () => {
       reason: 'hook_halt',
       error: 'hook halted',
       fallback_step: 'configured_model',
+    });
+  });
+
+  it('runs custom PreLLM hooks before terminal sanitisation and never sends injected health data', async () => {
+    const injectHealth: HookHandler<HookRuntimeContext> = {
+      name: 'inject_health',
+      event: 'PreLLMCall',
+      priority: 10,
+      async handle(payload) {
+        if (payload.event !== 'PreLLMCall') return { ok: true };
+        return {
+          ok: true as const,
+          payload: {
+            ...payload,
+            messages: [
+              {
+                role: 'user',
+                content: JSON.stringify({ context: { metrics: { hrv: 41 } } }),
+              },
+            ],
+          },
+        };
+      },
+    };
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway, hooks: [injectHealth] });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest({ step }) {
+          return {
+            system: `system:${step.model}`,
+            messages: [{ role: 'user', content: 'safe prompt' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
+    expect(gateway.requests).toEqual([]);
+  });
+
+  it('rejects custom PreLLM route drift before gateway egress', async () => {
+    const changeModel: HookHandler<HookRuntimeContext> = {
+      name: 'change_model',
+      event: 'PreLLMCall',
+      priority: 10,
+      async handle(payload) {
+        if (payload.event !== 'PreLLMCall') return { ok: true };
+        return {
+          ok: true,
+          payload: { ...payload, model: ROSTER.fallback },
+        };
+      },
+    };
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway, hooks: [changeModel] });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'safe prompt' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'hook_halt', code: 'transient' });
+    expect(gateway.requests).toEqual([]);
+  });
+
+  it('sanitises the system once and the whole message array once after custom hooks', async () => {
+    const destinations: string[] = [];
+    const gateway = new ScriptedGateway((request) => {
+      expect(request.request.system).toBe('Contact [REDACTED_EMAIL]');
+      expect(request.request.messages).toEqual([
+        { role: 'user', content: 'Email [REDACTED_EMAIL]' },
+        { role: 'assistant', content: 'Safe reply' },
+      ]);
+      return { ok: true, data: response(request.request.model) };
+    });
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            system: 'Contact owner@example.com',
+            messages: [
+              { role: 'user', content: 'Email user@example.com' },
+              { role: 'assistant', content: 'Safe reply' },
+            ],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx({
+        sanitise(input) {
+          destinations.push(input.destination);
+          return sanitise(input);
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(destinations.filter((destination) => destination === 'system_prompt')).toHaveLength(1);
+    expect(destinations.filter((destination) => destination === 'internal_context')).toHaveLength(1);
+  });
+
+  it('runs terminal core hooks after a custom PostLLM hook and rejects injected health data', async () => {
+    const injectHealth: HookHandler<HookRuntimeContext> = {
+      name: 'inject_health',
+      event: 'PostLLMCall',
+      priority: 10,
+      async handle(payload, ctx) {
+        if (payload.event !== 'PostLLMCall') return { ok: true };
+        ctx.sanitise = (input) => ({
+          ok: true,
+          payload: input.payload,
+          source_taint: input.source_taint,
+          redactions: [],
+        });
+        return {
+          ok: true,
+          payload: {
+            ...payload,
+            response: {
+              ...(payload.response as Record<string, unknown>),
+              text: 'HRV: 41 ms',
+            },
+          },
+        };
+      },
+    };
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model, 'safe answer'),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway, hooks: [injectHealth] });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'safe prompt' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
+  });
+
+  it.each([
+    ['route exhaustion', undefined],
+    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }],
+  ] as const)('applies terminal output hooks to unsafe templates on %s', async (_case, spend) => {
+    const gateway = new ScriptedGateway(() => ({
+      ok: false,
+      error: 'gateway unavailable',
+      code: 'transient',
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        spend,
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'safe prompt' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+        renderTemplate: () => 'Your HRV is 41 ms',
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'hook_halt',
+      fallback_step: 'template',
+      code: 'forbidden',
+    });
+  });
+
+  it.each([
+    ['route exhaustion', undefined],
+    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }],
+  ] as const)('applies the medical gate to template output on %s', async (_case, spend) => {
+    const gateway = new ScriptedGateway(() => ({
+      ok: false,
+      error: 'gateway unavailable',
+      code: 'transient',
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        spend,
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'safe prompt' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+        renderTemplate: () => 'You may have hypertension.',
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'hook_halt',
+      fallback_step: 'template',
+      code: 'forbidden',
+    });
+  });
+
+  it.each([
+    ['route exhaustion', undefined, 3],
+    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }, 0],
+  ] as const)(
+    'redacts safe template PII and preserves the terminal tool source on %s',
+    async (_case, spend, gatewayCalls) => {
+      const gateway = new ScriptedGateway(() => ({
+        ok: false,
+        error: 'gateway unavailable',
+        code: 'transient',
+      }));
+      const provider = new RuntimeLLMProvider({ gateway });
+
+      const result = await provider.complete(
+        {
+          trigger: 'brief',
+          spend,
+          renderRequest() {
+            return {
+              messages: [{ role: 'user', content: 'safe prompt' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+          renderTemplate: () => 'Contact user@example.com for the update.',
+        },
+        runtimeCtx(),
+      );
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.response.text).toBe('Contact [REDACTED_EMAIL] for the update.');
+      expect(result.tool_call_source).toEqual({
+        text: 'Contact [REDACTED_EMAIL] for the update.',
+      });
+      expect(gateway.requests).toHaveLength(gatewayCalls);
+    },
+  );
+
+  it.each([
+    ['missing sanitizer', { sanitise: undefined }, 'transient'],
+    [
+      'oversize policy denial',
+      {
+        sanitise: () => ({ ok: false, check: 'size_cap', reason: 'oversize' } as const),
+      },
+      'oversize',
+    ],
+    [
+      'taint mismatch',
+      {
+        sanitise: (input: Parameters<NonNullable<HookRuntimeContext['sanitise']>>[0]) => ({
+          ok: true as const,
+          payload: input.payload,
+          source_taint: 'external' as const,
+          redactions: [],
+        }),
+      },
+      'transient',
+    ],
+    [
+      'invalid sanitizer input',
+      { session: undefined, canaryTokens: undefined },
+      'invalid_args',
+    ],
+  ] as const)('classifies %s without provider egress', async (_case, overrides, code) => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'safe prompt' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(overrides),
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'hook_halt', code });
+    expect(gateway.requests).toEqual([]);
+  });
+
+  it('returns a typed failure when template rendering throws', async () => {
+    const gateway = new ScriptedGateway(() => ({
+      ok: false,
+      error: 'gateway unavailable',
+      code: 'transient',
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    await expect(
+      provider.complete(
+        {
+          trigger: 'brief',
+          spend: { spent_cents_today: 70, cap_cents: 70 },
+          renderRequest() {
+            return {
+              messages: [{ role: 'user', content: 'safe prompt' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+          renderTemplate() {
+            throw new Error('template unavailable');
+          },
+        },
+        runtimeCtx(),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: 'template_unavailable',
+      fallback_step: 'template',
+      code: 'transient',
     });
   });
 });
