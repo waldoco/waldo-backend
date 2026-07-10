@@ -7,3 +7,4 @@ supabase/.branches/
 supabase/.temp/
 *.local
 docs/context/
+.superpowers/
