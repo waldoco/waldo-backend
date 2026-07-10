@@ -28,7 +28,8 @@ The canonical deployable app is
 5. `docs/foundation/NEXT-SESSION-PLAN.md`
 6. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
 7. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-8. The accepted ADRs and Waldo Brain source files named by the seam you are touching
+8. `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` for any app/backend path or cutover work
+9. The accepted ADRs and Waldo Brain source files named by the seam you are touching
 
 Use `docs/foundation/archive/` for archaeology only. Archived files may mention old branches,
 closed tickets, retired package names, or pre-HEY-142 sequencing.
@@ -37,14 +38,14 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 
 | Lane | Next work | Notes |
 | --- | --- | --- |
-| Runtime safety | HEY-13 structured Scribe/sanitizer runtime | Next backend harness slice; single-writer over sanitizer/hook/egress seams. |
+| Runtime safety | HEY-13 structured Scribe/sanitizer runtime | Todo/ready-for-agent and next backend harness slice; single-writer over sanitizer/hook/egress seams. |
 | Context | HEY-15 recall, HEY-14 skills, HEY-16 prompt builder | Starts from HEY-10's merged DO SQLite schema root. Full goal hydration waits for HEY-144. |
 | Provider | HEY-143 remains In Progress | PR #44 is merged; real context/provider/spend/secret/staging proof remains. |
 | Evidence | HEY-111/HEY-142 local evidence is available | Reuse `readRunEvidence`, `replayFixture`, and `scoreRun`; do not create a parallel trace path. |
 | Public Brief seam | HEY-151 -> 153 -> 154 -> 132 -> 28/35/47 -> 156 -> 155 | Side-effect-free GET first; generated client only; no legacy fallback. |
-| Delivery | HEY-110 async idempotent in-app adapter | Separate from the Brief GET and required for Alpha. |
-| Product surfaces | Home composition, shadow Fetch-off, Spots, text Chat | No persistent Feed entity; backend Spots vertical is explicit Phase 5 work. |
-| App lifecycle | Brain ADR-0082 plus the app lifecycle ticket | Account/consent-bound device state gates persistent caching and HEY-156. |
+| Delivery | HEY-110 async idempotent in-app adapter | Backlog/Phase 5; separate from the Brief GET and required for Alpha. |
+| Product surfaces | Home composition, shadow Fetch-off, HEY-158 Spots, HEY-126 text Chat spike | HEY-127 generic Feed is conditional/deferred, not an Alpha prerequisite. |
+| App lifecycle | Brain ADR-0082 plus HEY-159 | Account/consent-bound device state gates persistent caching and HEY-156. |
 
 ## Detailed Track Build Order
 
@@ -217,7 +218,7 @@ Status: contracts and local policies exist; product verticals are not end to end
 
 Order:
 
-`HEY-110 async delivery || HEY-151/153/154 Brief seam || backend Spots vertical || Chat spike`
+`HEY-110 async delivery || HEY-151/153/154 Brief seam || HEY-158 Spots || HEY-126 Chat spike`
 
 Channels:
 
@@ -230,9 +231,11 @@ Product surfaces:
 - Home composes current Brief, Spots, relevant threads, and Patrol/audit. Do not create a persistent
   generic Feed entity.
 - `HEY-151` owns the first current morning-Brief public contract.
-- The new backend Spots vertical owns generation/provenance/idempotency, public projection,
-  evidence, dismissal, and two-user/privacy proof.
-- `HEY-126`/HEY-149 run the bounded Chat transport/replay spike before ADR-0077 amendment.
+- `HEY-158` owns backend generation/provenance/idempotency, public projection, evidence, dismissal,
+  and two-user/privacy proof.
+- `HEY-126` owns the bounded Chat transport/replay spike before the ADR-0077 amendment; HEY-149 is
+  the integration umbrella.
+- `HEY-127` is conditional/deferred. Do not add a generic Feed to the Alpha critical path.
 - `HEY-131` Telegram privacy/product residue.
 
 Skills / threading:
@@ -278,11 +281,13 @@ Status: canonical deployable app is `Pin4sf/waldo-app`; live integration is not 
 
 Order:
 
-`HEY-151 -> HEY-153 -> HEY-154 -> HEY-132 -> HEY-28/35/47 -> HEY-156 -> HEY-155`
+`HEY-149/150 -> HEY-151/152/157 -> HEY-153 -> HEY-154 -> HEY-132 -> HEY-28/35/47 -> HEY-156 -> HEY-155`
 
 Next:
 
+- HEY-149 integration umbrella and HEY-150 matrix review; both are In Progress.
 - HEY-151 strict current morning-Brief schema/OpenAPI.
+- HEY-152 whole-path route assignment, cutover, and rollback.
 - HEY-153 verified ES256 subject to one owner-bound DO.
 - HEY-154 side-effect-free committed projection.
 - HEY-132 generated runtime-validating client.
@@ -295,8 +300,12 @@ After:
 
 Parallel prerequisite:
 
-- Brain ADR-0082 plus the app account/consent-epoch lifecycle ticket before persistent caching.
+- Brain ADR-0082 plus HEY-159 before persistent caching.
 - Brain ADR-0081 before health-derived computation becomes authoritative.
+
+Status rule: HEY-151-159 otherwise remain Backlog in their documented lanes. Supplying
+`docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` does not mark HEY-150 Done; acceptance is
+still pending. HEY-158 runs in Phase 5 parallel to this App Track chain.
 
 Suggested owner: app team.
 
@@ -318,11 +327,11 @@ Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open
 
 1. Backend next slice: `HEY-13` structured Scribe/sanitizer runtime.
 2. Context parallel: `HEY-15`, `HEY-11`, then `HEY-14/16`.
-3. Delivery parallel: rescope `HEY-110` to the real async idempotent in-app adapter.
+3. Delivery parallel: `HEY-110` Backlog/Phase 5 async idempotent in-app adapter.
 4. Auth/data parallel: `HEY-125`, `HEY-134`, `HEY-114`, `HEY-141`.
-5. Product contract lane: HEY-151/153/154 first Brief seam, the backend Spots vertical, and the
-   bounded Chat spike.
-6. App lane: HEY-132/28/35/47 after the committed contract, plus ADR-0082 lifecycle work.
+5. Product contract lane: HEY-151/153/154 first Brief seam, HEY-158 Spots, and the HEY-126 bounded
+   Chat spike.
+6. App lane: HEY-132/28/35/47 after the committed contract, plus ADR-0082/HEY-159 lifecycle work.
 
 ## How We Use Skills, Agents, And Coding Rules
 
@@ -602,8 +611,8 @@ Start from Linear and the active docs, not from archived plans:
 - Context builder: HEY-15, then HEY-14 and HEY-16.
 - Delivery builder: HEY-110 async idempotent in-app adapter.
 - Infra/provider builder: HEY-125/134/114 and the remaining HEY-143 live-path dependencies.
-- Product-loop builder: first Brief seam, backend Spots vertical, or bounded Chat spike according to
-  the ownership map above.
+- Product-loop builder: first Brief seam, HEY-158 Spots vertical, or HEY-126 bounded Chat spike
+  according to the ownership map above.
 
 When in doubt, post the current -> ideal -> gap and ask for the lane owner before editing shared
 runtime files.

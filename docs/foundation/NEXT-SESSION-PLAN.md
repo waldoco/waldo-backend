@@ -16,10 +16,11 @@ Read in this order:
 4. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
 5. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
 6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-7. `docs/foundation/HEY-143-PHASE-HANDOFF.md`
-8. Brain ADR-0081 before health-derived computation or public health fields.
-9. Brain ADR-0082 before persistent device-local sensitive cache or account/consent lifecycle work.
-10. The accepted ADRs and Waldo Brain source pages for the seam being changed.
+7. `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md`
+8. `docs/foundation/HEY-143-PHASE-HANDOFF.md`
+9. Brain ADR-0081 before health-derived computation or public health fields.
+10. Brain ADR-0082 before persistent device-local sensitive cache or account/consent lifecycle work.
+11. The accepted ADRs and Waldo Brain source pages for the seam being changed.
 
 Then run the baseline gate:
 
@@ -100,9 +101,10 @@ product capability.
 
 ## Next Backend Harness Slice - HEY-13
 
-HEY-13 structured Scribe/sanitiser runtime is the next backend harness execution slice after this
-documentation promotion. It is required before real context-bearing Brief, Spots, or Chat content
-can reach a provider, durable state, trace, cache, or public projection.
+HEY-13 is Todo/ready-for-agent. Its structured Scribe/sanitiser runtime is the next backend harness
+execution slice after this documentation promotion. It is required before real context-bearing
+Brief, Spots, or Chat content can reach a provider, durable state, trace, cache, or public
+projection.
 
 Required outcome:
 
@@ -121,11 +123,12 @@ side effects out of the default HEY-13 verification path.
 
 Parallel backend work:
 
-- HEY-110 owns the separate async idempotent in-app delivery interface and adapter proof.
+- HEY-110 is Backlog in Phase 5 and owns the separate async idempotent in-app delivery interface and
+  adapter proof.
 - HEY-15/14/16 continue recall, skill loading, and prompt hydration from the HEY-10 schema root.
 - HEY-125/134/114 prepare issuer, data-plane, and environment proof.
 - HEY-137/138/135/141 harden DeliveryGate, timezone, watchdog, and egress paths.
-- The new backend Spots vertical belongs in Phase 5 and owns generation/provenance/idempotency,
+- HEY-158 is Backlog in Phase 5 and owns the backend Spots generation/provenance/idempotency,
   public list/order/filter projection, safe evidence references, dismissal to engagement/Scribe,
   and two-user/privacy/Alpha proof.
 
@@ -158,46 +161,47 @@ Contract:
 - a session/build uses one runtime path. There is no per-request legacy fallback, dual read, or dual
   writer.
 
-Persistent app caching depends normatively on Brain ADR-0082. Until that dependency and its
-app-lifecycle ticket are proven, first-slice responses remain memory-only. Any health-derived
-field or computation depends normatively on Brain ADR-0081; the first public contract must not
-invent health authority.
+Persistent app caching depends normatively on Brain ADR-0082 and HEY-159. Until both are proven,
+first-slice responses remain memory-only. Any health-derived field or computation depends
+normatively on Brain ADR-0081; the first public contract must not invent health authority.
 
 ## Ownership And Integration DAG
 
 ```text
-HEY-151 morning-Brief contract
+HEY-149 integration umbrella
         |
-HEY-125/134/114 + HEY-157 auth prerequisites
+HEY-150 matrix artifact accepted
         |
-HEY-153 verified subject -> owner-bound DO
+HEY-151 contract || HEY-152 route/cutover || HEY-157 identity || HEY-159 lifecycle
+        |
+HEY-125/134/114 + HEY-153 verified subject -> owner-bound DO
         |
 HEY-154 committed morning-Brief projection
         |
-HEY-132 generated client + HEY-28 protected shell
-        |
-HEY-35/47 honest renderer and degraded states
+HEY-132 generated client + HEY-28 protected shell + HEY-35/47 renderer
         |
 HEY-156 two-user staging parity and whole-path rollback
         |
 HEY-155 legacy app-runtime removal
 ```
 
-HEY-13 gates real content and runs in parallel with the contract/auth lanes. HEY-110 gates async
-in-app delivery and runs in parallel with the read projection. HEY-156 follows an integrated path;
-it cannot substitute for one.
+HEY-149 and HEY-150 are In Progress; producing the matrix does not make HEY-150 Done before review
+acceptance. HEY-151-159 otherwise remain Backlog in their documented lanes. HEY-13 gates real
+content and runs in parallel with the contract/auth lanes. HEY-110 and HEY-158 are Phase 5 parallel
+lanes. HEY-156 follows an integrated path; it cannot substitute for one.
 
 ## Surface Decisions
 
 - **Home:** composition only. Do not create a `feed` table, global `OutboxKind`, cross-surface
-  ordering, or persistent read state.
-- **Chat:** run a bounded transport/replay spike before amending ADR-0077. Compare authenticated
-  command POST plus durable cursor replay with SSE and active-only WebSocket behavior. Do not add a
-  second authoritative transcript or freeze transport before evidence.
+  ordering, or persistent read state. HEY-127 is conditional/deferred and is not an Alpha
+  prerequisite.
+- **Chat:** HEY-126 owns a bounded transport/replay spike before the ADR-0077 amendment. Compare
+  authenticated command POST plus durable cursor replay with SSE and active-only WebSocket
+  behavior. Do not add a second authoritative transcript or freeze transport before evidence.
 - **Health:** ADR-0081 owns derived-field destinations, computation authority, version,
   freshness/missingness/provenance, and public eligibility.
-- **Device lifecycle:** ADR-0082 owns account/consent epoch, SQLCipher partition/key, signout,
-  deletion/restore, key loss, and corruption behavior.
+- **Device lifecycle:** ADR-0082 and HEY-159 own account/consent epoch, SQLCipher partition/key,
+  signout, deletion/restore, key loss, and corruption behavior.
 - **Watch:** direct Apple Watch/watchOS work is deferred. Phone-side HealthKit may receive
   Apple Watch-originated samples without a Waldo watch app.
 

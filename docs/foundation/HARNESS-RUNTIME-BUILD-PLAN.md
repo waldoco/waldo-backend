@@ -14,6 +14,7 @@ Primary backend sources:
 | `docs/foundation/CONTRIBUTOR-ONBOARDING.md` | Contributor lanes and assignable work. |
 | `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md` | Verification wall and proof ladder. |
 | `docs/foundation/AGENT-OPERATING-WORKFLOW.md` | Session loop, skills, external-system policy, and merge discipline. |
+| `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` | HEY-150 commit-pinned app path ownership, cutover, residue, and removal matrix. |
 | `docs/foundation/HEY-143-PHASE-HANDOFF.md` | Merged provider-readiness evidence and remaining live-provider blockers. |
 | `docs/foundation/HEY-10-DO-SQLITE-SCHEMA.md` | Merged schema artifact and its exact limits. |
 | `docs/foundation/DEFERRED-DO-SCHEMA-COVERAGE.md` | Deferred/proposed DO table ownership. |
@@ -59,7 +60,8 @@ verticals must not introduce alternate agent runtimes or direct app-owned provid
 - Agent execution is DO-only; no app or Edge Function owns a second agent loop.
 - Raw health remains Supabase/RLS-only.
 - Health-derived computation and destination authority depend on Brain ADR-0081.
-- Persistent device-local sensitive cache and account/consent lifecycle depend on Brain ADR-0082.
+- Persistent device-local sensitive cache and account/consent lifecycle depend on Brain ADR-0082
+  and HEY-159.
 - Session authorization, canaries, approvals, and ACL rebuild on every wake; runs may resume only
   from committed journal state.
 - Governor is deterministic and outside the model.
@@ -71,7 +73,9 @@ verticals must not introduce alternate agent runtimes or direct app-owned provid
   persistent generic Feed entity.
 - The first Brief GET is a side-effect-free read, not async delivery. HEY-110 owns asynchronous
   idempotent in-app delivery.
-- Chat transport remains spike-driven until ADR-0077 is amended.
+- HEY-126 owns the bounded Chat transport/replay spike; production transport waits for the
+  ADR-0077 amendment.
+- HEY-127 is conditional/deferred. No generic Feed is an Alpha prerequisite.
 - Direct Apple Watch/watchOS/WatchConnectivity work is deferred.
 - No configuration, ticket, schema, local test, or merged source is called staging, Alpha, or
   production evidence without the corresponding runtime proof.
@@ -144,7 +148,7 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 | 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
 | 3 | Context/memory/safety | HEY-10 schema artifact merged; runtime unwired | HEY-13, then HEY-15/14/16 and accepted goal scope |
 | 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
-| 5 | Delivery/product loops | Policies and generic contracts only | async in-app adapter, Brief seam, backend Spots vertical, Chat spike |
+| 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
 | 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
 | App | generated consumer | canonical app has UI/native shell plus legacy bypass inventory | HEY-132 client, protected shell, honest renderer, staged cutover |
 
@@ -219,7 +223,7 @@ Do not create a generic Feed table, global ordering, generic read-state authorit
 OutboxKind. If product later requires a distinct persistent Feed source of truth, that requires a
 separate decision before schema work.
 
-### Backend Spots Vertical - Phase 5
+### HEY-158 Backend Spots Vertical - Phase 5
 
 Add explicit Phase 5 ownership for:
 
@@ -231,11 +235,11 @@ Add explicit Phase 5 ownership for:
 - source-missing, duplicate, stale, cross-user, raw-health, and deletion tests;
 - Alpha staging proof.
 
-HEY-132 owns the generated consumer, not backend Spot semantics.
+HEY-158 owns backend Spot semantics. HEY-132 owns only the generated consumer.
 
 ### Chat
 
-Run a bounded transport/replay spike before amending ADR-0077:
+HEY-126 owns the bounded transport/replay spike before amending ADR-0077:
 
 - authenticated command POST with client idempotency;
 - server-owned thread/message IDs;
@@ -255,7 +259,10 @@ ingest Apple Watch-originated data without a Waldo watch app.
 
 | Owner | Contract |
 | --- | --- |
+| HEY-149 | cross-repo integration umbrella and one-runtime rule |
+| HEY-150 | commit-pinned path ownership/migration matrix; In Progress until accepted |
 | HEY-151 | current morning-Brief public contract/OpenAPI |
+| HEY-152 | whole-path route assignment, cutover, global kill, and rollback |
 | HEY-153 | verified subject, fresh trust, owner-bound DO, two-user rejection |
 | HEY-154 | side-effect-free committed morning-Brief projection |
 | HEY-132 | generated runtime-validating app client |
@@ -265,26 +272,31 @@ ingest Apple Watch-originated data without a Waldo watch app.
 | HEY-155 | legacy app runtime/direct-path decommission and removal |
 | HEY-13 | privacy-safe real content, parallel |
 | HEY-110 | async idempotent in-app delivery, parallel |
+| HEY-126 | bounded Chat transport/replay spike, then ADR-0077 amendment |
+| HEY-127 | conditional/deferred persistent Feed decision; not Alpha-critical |
+| HEY-158 | backend Spots generation/projection/engagement/privacy, Phase 5 |
+| HEY-159 | per-account sensitive cache and consent-epoch lifecycle, App Track |
 
 ```text
-HEY-151 contract
+HEY-149 umbrella
       |
-HEY-125/134/114 + HEY-157 auth/data prerequisites
+HEY-150 matrix accepted
       |
-HEY-153 verified ingress/owner DO
+HEY-151 contract || HEY-152 cutover || HEY-157 identity || HEY-159 lifecycle
       |
-HEY-154 committed projection
+HEY-125/134/114 + HEY-153 verified ingress/owner DO
       |
-HEY-132 client + HEY-28 shell
-      |
-HEY-35/47 renderer
+HEY-154 projection -> HEY-132 client -> HEY-28/35/47 app path
       |
 HEY-156 staging/rollback
       |
 HEY-155 removal
 ```
 
-HEY-13 gates real content. HEY-110 gates Alpha delivery. Neither is replaced by the GET.
+HEY-149 and HEY-150 are In Progress. HEY-150 is not Done until the matrix is reviewed and accepted.
+HEY-151-159 otherwise remain Backlog in their documented lanes. HEY-13 is Todo/ready-for-agent and
+gates real content. HEY-110 is Backlog in Phase 5 and gates Alpha delivery. Neither is replaced by
+the GET.
 
 ## Parallel Lanes
 
@@ -293,11 +305,12 @@ Safe parallel work:
 - HEY-13 structured sanitizer and taint proof;
 - HEY-15/14/16 context hydration;
 - HEY-110 async delivery with fake adapters;
+- HEY-158 backend Spots vertical;
 - HEY-125/134/114 auth/data/environment proof;
 - HEY-137/138/135/141 reliability and egress;
 - strict Brief contract fixtures and generated-client scaffolding after contract approval;
-- Chat transport spike;
-- app account/consent lifecycle after ADR-0082;
+- HEY-126 Chat transport/replay spike;
+- HEY-159 app account/consent lifecycle after ADR-0082;
 - read-only review, failure mapping, and conformance guards.
 
 Single-writer surfaces remain:

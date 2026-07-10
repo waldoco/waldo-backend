@@ -558,9 +558,10 @@ Waldo differs from coding agents because its hard guarantees are stateful, priva
 
 ## Near-Term Build Order
 
-1. Build HEY-13 structured Scribe/sanitizer runtime with nested/numeric/taint rejection proof.
-2. Keep HEY-15/14/16 context hydration and HEY-110 fake async-delivery proof parallel where their
-   files do not overlap.
+1. Build HEY-13 (Todo/ready-for-agent) structured Scribe/sanitizer runtime with
+   nested/numeric/taint rejection proof.
+2. Keep HEY-15/14/16 context hydration and HEY-110 (Backlog/Phase 5) fake async-delivery proof
+   parallel where their files do not overlap.
 3. Commit the first strict public contract only under HEY-151:
    `GET /public/v1/briefs/morning/current`, `ready|pending|empty`, `WaldoProblemV1`, no tenant
    selector, and generated-client freshness.
@@ -568,15 +569,16 @@ Waldo differs from coding agents because its hard guarantees are stateful, priva
    owner-bound DO and two-user RLS/cache/ETag rejection.
 5. Add HEY-154's side-effect-free committed projection, then HEY-132/28/35/47 generated-client,
    protected-shell, renderer, and degraded-state proof.
-6. Build the Phase 5 backend Spots vertical and run the bounded Chat transport/replay spike before
-   ADR-0077 amendment.
+6. Build HEY-158, the Phase 5 backend Spots vertical, and run HEY-126's bounded Chat
+   transport/replay spike before the ADR-0077 amendment.
 7. Run HEY-156 staging parity and whole-path rollback only after the integrated path exists; keep
    native-device, Alpha, and production labels at their lower proof level until their own gates pass.
 
-Home is tested as composition of Brief, Spots, relevant threads, and Patrol/audit. Do not add a
-generic Feed fixture/schema. The Brief GET is a read path, not HEY-110 async delivery.
+Home is tested as composition of Brief, Spots, relevant threads, and Patrol/audit. HEY-127 is
+conditional/deferred; do not add a generic Feed fixture/schema or make it an Alpha prerequisite.
+The Brief GET is a read path, not HEY-110 async delivery.
 
-Persistent app-cache tests depend on Brain ADR-0082 and the app lifecycle ticket. Health-derived
+Persistent app-cache tests depend on Brain ADR-0082 and HEY-159. Health-derived
 computation/public-field tests depend on Brain ADR-0081.
 
 ## Definition Of Done
