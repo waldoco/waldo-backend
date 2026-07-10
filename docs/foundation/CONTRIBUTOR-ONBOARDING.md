@@ -31,6 +31,11 @@ The canonical deployable app is
 8. `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` for any app/backend path or cutover work
 9. The accepted ADRs and Waldo Brain source files named by the seam you are touching
 
+Authority promotion note: the ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are approved
+target decisions in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17), but are
+not yet on `waldo-brain/main`. The PR may advance during review; its eventual merge result governs.
+Treat it as a merge dependency and retain the target-pending qualifier until it merges.
+
 Use `docs/foundation/archive/` for archaeology only. Archived files may mention old branches,
 closed tickets, retired package names, or pre-HEY-142 sequencing.
 
@@ -45,7 +50,7 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 | Public Brief seam | HEY-151 -> 153 -> 154 -> 132 -> 28/35/47 -> 156 -> 155 | Side-effect-free GET first; generated client only; no legacy fallback. |
 | Delivery | HEY-110 async idempotent in-app adapter | Backlog/Phase 5; separate from the Brief GET and required for Alpha. |
 | Product surfaces | Home composition, shadow Fetch-off, HEY-158 Spots, HEY-126 text Chat spike | HEY-127 generic Feed is conditional/deferred, not an Alpha prerequisite. |
-| App lifecycle | Brain ADR-0082 plus HEY-159 | Account/consent-bound device state gates persistent caching and HEY-156. |
+| App lifecycle | Target-pending Brain ADR-0082 plus HEY-159 | Account/consent-bound device state gates persistent caching, HEY-156, and HEY-56. |
 
 ## Detailed Track Build Order
 
@@ -180,7 +185,8 @@ Needed / related:
 - `HEY-134` Supabase schema re-land.
 - `HEY-133` ADR-0024 vocabulary sync.
 - `HEY-102`, `HEY-75`, `HEY-79`, `HEY-74` as context/safety support.
-- Brain ADR-0081 before health-derived computation authority or public health fields.
+- Target-pending Brain ADR-0081 before health-derived computation authority or public health
+  fields.
 
 Suggested owner: Claude/context plus Codex integration. Hard rule: no raw health in DO SQLite,
 prompts, logs, traces, or fixtures.
@@ -233,8 +239,8 @@ Product surfaces:
 - `HEY-151` owns the first current morning-Brief public contract.
 - `HEY-158` owns backend generation/provenance/idempotency, public projection, evidence, dismissal,
   and two-user/privacy proof.
-- `HEY-126` owns the bounded Chat transport/replay spike before the ADR-0077 amendment; HEY-149 is
-  the integration umbrella.
+- `HEY-126` owns the bounded Chat transport/replay spike before the target-pending ADR-0077
+  amendment merges; HEY-149 is the integration umbrella.
 - `HEY-127` is conditional/deferred. Do not add a generic Feed to the Alpha critical path.
 - `HEY-131` Telegram privacy/product residue.
 
@@ -279,9 +285,23 @@ mutation evidence.
 
 Status: canonical deployable app is `Pin4sf/waldo-app`; live integration is not proved.
 
-Order:
+HEY-149 is the integration umbrella. Use the exact current live Linear relations, not a false
+serial order:
 
-`HEY-149/150 -> HEY-151/152/157 -> HEY-153 -> HEY-154 -> HEY-132 -> HEY-28/35/47 -> HEY-156 -> HEY-155`
+| Node | Live Linear `blockedBy` |
+| --- | --- |
+| HEY-151 | HEY-150 |
+| HEY-152 | HEY-150 |
+| HEY-157 | None |
+| HEY-159 | None |
+| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
+| HEY-154 | HEY-13; HEY-151; HEY-153 |
+| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
+| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
+| HEY-47 | HEY-28; HEY-132; HEY-151 |
+| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
+| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
+| HEY-155 | HEY-132; HEY-156 |
 
 Next:
 
@@ -300,12 +320,15 @@ After:
 
 Parallel prerequisite:
 
-- Brain ADR-0082 plus HEY-159 before persistent caching.
-- Brain ADR-0081 before health-derived computation becomes authoritative.
+- Target-pending Brain ADR-0082 plus HEY-159 before persistent caching.
+- Target-pending Brain ADR-0081 before health-derived computation becomes authoritative.
 
-Status rule: HEY-151-159 otherwise remain Backlog in their documented lanes. Supplying
+Status rule: HEY-150 directly gates only HEY-151 and HEY-152. HEY-157 and HEY-159 run in parallel.
+HEY-151-159 otherwise remain Backlog in their documented lanes. Supplying
 `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md` does not mark HEY-150 Done; acceptance is
-still pending. HEY-158 runs in Phase 5 parallel to this App Track chain.
+still pending. HEY-110 and HEY-158 are separate Alpha gates, HEY-126 is a parallel spike, and
+HEY-127 remains off-path conditional/deferred. The adopted dogfood gate follows HEY-156 and
+precedes HEY-155 as an acceptance gate, not a Linear `blockedBy` relation.
 
 Suggested owner: app team.
 
@@ -331,7 +354,8 @@ Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open
 4. Auth/data parallel: `HEY-125`, `HEY-134`, `HEY-114`, `HEY-141`.
 5. Product contract lane: HEY-151/153/154 first Brief seam, HEY-158 Spots, and the HEY-126 bounded
    Chat spike.
-6. App lane: HEY-132/28/35/47 after the committed contract, plus ADR-0082/HEY-159 lifecycle work.
+6. App lane: HEY-157 and target-pending ADR-0082/HEY-159 run in parallel; HEY-132/28/35/47 follow
+   their live blockers above.
 
 ## How We Use Skills, Agents, And Coding Rules
 

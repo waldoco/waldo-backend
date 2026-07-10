@@ -24,13 +24,15 @@ Primary backend sources:
 
 Primary Waldo Brain authorities:
 
-- accepted ADRs and the mirrored universal rules;
-- ADR-0071 for scope;
-- ADR-0077 for public projection/Chat ownership;
-- ADR-0081 for health-derived fields and Form/CRS computation authority;
-- ADR-0082 for device-local sensitive-cache account/consent lifecycle;
+- ADRs already merged to `waldo-brain/main` and the mirrored universal rules;
+- the approved ADR-0001/0071/0077 amendment set and new ADR-0081/0082 as target-pending decisions
+  in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17);
 - the current architecture overview, final build image, decided-vs-gap map, and finalization
   blockers.
+
+PR #17 is an explicit promotion dependency: those amendments and ADR-0081/0082 are not yet on
+`waldo-brain/main`. The PR may advance during review; its eventual merge result governs. Keep the
+target-pending qualifier until it merges; the ownership/DAG below does not change on merge.
 
 The canonical deployable app repository is
 [`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app). The audited promotion snapshot is
@@ -59,9 +61,9 @@ verticals must not introduce alternate agent runtimes or direct app-owned provid
 
 - Agent execution is DO-only; no app or Edge Function owns a second agent loop.
 - Raw health remains Supabase/RLS-only.
-- Health-derived computation and destination authority depend on Brain ADR-0081.
-- Persistent device-local sensitive cache and account/consent lifecycle depend on Brain ADR-0082
-  and HEY-159.
+- Health-derived computation and destination authority depend on target-pending Brain ADR-0081.
+- Persistent device-local sensitive cache and account/consent lifecycle depend on target-pending
+  Brain ADR-0082 and HEY-159.
 - Session authorization, canaries, approvals, and ACL rebuild on every wake; runs may resume only
   from committed journal state.
 - Governor is deterministic and outside the model.
@@ -74,7 +76,7 @@ verticals must not introduce alternate agent runtimes or direct app-owned provid
 - The first Brief GET is a side-effect-free read, not async delivery. HEY-110 owns asynchronous
   idempotent in-app delivery.
 - HEY-126 owns the bounded Chat transport/replay spike; production transport waits for the
-  ADR-0077 amendment.
+  target-pending ADR-0077 amendment to merge.
 - HEY-127 is conditional/deferred. No generic Feed is an Alpha prerequisite.
 - Direct Apple Watch/watchOS/WatchConnectivity work is deferred.
 - No configuration, ticket, schema, local test, or merged source is called staging, Alpha, or
@@ -239,7 +241,8 @@ HEY-158 owns backend Spot semantics. HEY-132 owns only the generated consumer.
 
 ### Chat
 
-HEY-126 owns the bounded transport/replay spike before amending ADR-0077:
+HEY-126 owns the bounded transport/replay spike before the target-pending ADR-0077 amendment
+merges:
 
 - authenticated command POST with client idempotency;
 - server-owned thread/message IDs;
@@ -272,31 +275,38 @@ ingest Apple Watch-originated data without a Waldo watch app.
 | HEY-155 | legacy app runtime/direct-path decommission and removal |
 | HEY-13 | privacy-safe real content, parallel |
 | HEY-110 | async idempotent in-app delivery, parallel |
-| HEY-126 | bounded Chat transport/replay spike, then ADR-0077 amendment |
+| HEY-126 | bounded Chat transport/replay spike, then target-pending ADR-0077 amendment merge |
 | HEY-127 | conditional/deferred persistent Feed decision; not Alpha-critical |
 | HEY-158 | backend Spots generation/projection/engagement/privacy, Phase 5 |
 | HEY-159 | per-account sensitive cache and consent-epoch lifecycle, App Track |
+| HEY-56 | TestFlight/release gate; HEY-159 is a direct blocker among its existing prerequisites |
 
-```text
-HEY-149 umbrella
-      |
-HEY-150 matrix accepted
-      |
-HEY-151 contract || HEY-152 cutover || HEY-157 identity || HEY-159 lifecycle
-      |
-HEY-125/134/114 + HEY-153 verified ingress/owner DO
-      |
-HEY-154 projection -> HEY-132 client -> HEY-28/35/47 app path
-      |
-HEY-156 staging/rollback
-      |
-HEY-155 removal
-```
+HEY-149 is the integration umbrella. It does not create a serial dependency edge. The exact current
+live Linear relations are:
 
-HEY-149 and HEY-150 are In Progress. HEY-150 is not Done until the matrix is reviewed and accepted.
-HEY-151-159 otherwise remain Backlog in their documented lanes. HEY-13 is Todo/ready-for-agent and
-gates real content. HEY-110 is Backlog in Phase 5 and gates Alpha delivery. Neither is replaced by
-the GET.
+| Node | Live Linear `blockedBy` |
+| --- | --- |
+| HEY-151 | HEY-150 |
+| HEY-152 | HEY-150 |
+| HEY-157 | None |
+| HEY-159 | None |
+| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
+| HEY-154 | HEY-13; HEY-151; HEY-153 |
+| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
+| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
+| HEY-47 | HEY-28; HEY-132; HEY-151 |
+| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
+| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
+| HEY-155 | HEY-132; HEY-156 |
+
+HEY-149 and HEY-150 are In Progress. HEY-150 directly gates only HEY-151 and HEY-152 and is not
+Done until the matrix is reviewed and accepted. HEY-151-159 otherwise remain Backlog in their
+documented lanes. HEY-13 is Todo/ready-for-agent and gates real HEY-154 content. HEY-110 async
+delivery and HEY-158 Spots remain separate Alpha gates; neither is replaced by the GET. HEY-126 is
+a parallel spike, and HEY-127 is off-path conditional/deferred. HEY-13 is a direct live blocker of
+HEY-154 because it gates real health/model content, even though fixture-only projection work can
+start earlier. The adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate,
+not a Linear `blockedBy` relation.
 
 ## Parallel Lanes
 
@@ -310,7 +320,7 @@ Safe parallel work:
 - HEY-137/138/135/141 reliability and egress;
 - strict Brief contract fixtures and generated-client scaffolding after contract approval;
 - HEY-126 Chat transport/replay spike;
-- HEY-159 app account/consent lifecycle after ADR-0082;
+- HEY-159 app account/consent lifecycle alongside target-pending ADR-0082 promotion;
 - read-only review, failure mapping, and conformance guards.
 
 Single-writer surfaces remain:

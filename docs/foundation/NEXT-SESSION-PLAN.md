@@ -18,9 +18,15 @@ Read in this order:
 6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
 7. `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md`
 8. `docs/foundation/HEY-143-PHASE-HANDOFF.md`
-9. Brain ADR-0081 before health-derived computation or public health fields.
-10. Brain ADR-0082 before persistent device-local sensitive cache or account/consent lifecycle work.
+9. Target-pending Brain ADR-0081 before health-derived computation or public health fields.
+10. Target-pending Brain ADR-0082 before persistent device-local sensitive cache or account/consent
+    lifecycle work.
 11. The accepted ADRs and Waldo Brain source pages for the seam being changed.
+
+Authority promotion note: the ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are approved
+target decisions in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17), but are
+not yet on `waldo-brain/main`. PR #17 may advance during review; its eventual merge result governs.
+It is an explicit merge dependency, and the target-pending qualifier remains until it merges.
 
 Then run the baseline gate:
 
@@ -161,47 +167,50 @@ Contract:
 - a session/build uses one runtime path. There is no per-request legacy fallback, dual read, or dual
   writer.
 
-Persistent app caching depends normatively on Brain ADR-0082 and HEY-159. Until both are proven,
-first-slice responses remain memory-only. Any health-derived field or computation depends
-normatively on Brain ADR-0081; the first public contract must not invent health authority.
+Persistent app caching depends on target-pending Brain ADR-0082 and HEY-159. Until both are proven,
+first-slice responses remain memory-only. Any health-derived field or computation depends on
+target-pending Brain ADR-0081; the first public contract must not invent health authority.
 
 ## Ownership And Integration DAG
 
-```text
-HEY-149 integration umbrella
-        |
-HEY-150 matrix artifact accepted
-        |
-HEY-151 contract || HEY-152 route/cutover || HEY-157 identity || HEY-159 lifecycle
-        |
-HEY-125/134/114 + HEY-153 verified subject -> owner-bound DO
-        |
-HEY-154 committed morning-Brief projection
-        |
-HEY-132 generated client + HEY-28 protected shell + HEY-35/47 renderer
-        |
-HEY-156 two-user staging parity and whole-path rollback
-        |
-HEY-155 legacy app-runtime removal
-```
+HEY-149 is the integration umbrella, not a serial prerequisite. The exact current live Linear
+relations are:
+
+| Node | Live Linear `blockedBy` |
+| --- | --- |
+| HEY-151 | HEY-150 |
+| HEY-152 | HEY-150 |
+| HEY-157 | None |
+| HEY-159 | None |
+| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
+| HEY-154 | HEY-13; HEY-151; HEY-153 |
+| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
+| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
+| HEY-47 | HEY-28; HEY-132; HEY-151 |
+| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
+| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
+| HEY-155 | HEY-132; HEY-156 |
 
 HEY-149 and HEY-150 are In Progress; producing the matrix does not make HEY-150 Done before review
-acceptance. HEY-151-159 otherwise remain Backlog in their documented lanes. HEY-13 gates real
-content and runs in parallel with the contract/auth lanes. HEY-110 and HEY-158 are Phase 5 parallel
-lanes. HEY-156 follows an integrated path; it cannot substitute for one.
+acceptance. HEY-150 directly gates only HEY-151 and HEY-152. HEY-157 and HEY-159 run in parallel.
+HEY-151-159 otherwise remain Backlog in their documented lanes. HEY-13 gates real HEY-154 content.
+HEY-110 async delivery and HEY-158 Spots are separate Alpha gates. HEY-126 is a parallel spike;
+HEY-127 remains off-path conditional/deferred. The adopted dogfood gate follows HEY-156 and
+precedes HEY-155 as an acceptance gate, not a Linear `blockedBy` relation.
 
 ## Surface Decisions
 
 - **Home:** composition only. Do not create a `feed` table, global `OutboxKind`, cross-surface
   ordering, or persistent read state. HEY-127 is conditional/deferred and is not an Alpha
   prerequisite.
-- **Chat:** HEY-126 owns a bounded transport/replay spike before the ADR-0077 amendment. Compare
-  authenticated command POST plus durable cursor replay with SSE and active-only WebSocket
-  behavior. Do not add a second authoritative transcript or freeze transport before evidence.
-- **Health:** ADR-0081 owns derived-field destinations, computation authority, version,
-  freshness/missingness/provenance, and public eligibility.
-- **Device lifecycle:** ADR-0082 and HEY-159 own account/consent epoch, SQLCipher partition/key,
-  signout, deletion/restore, key loss, and corruption behavior.
+- **Chat:** HEY-126 owns a bounded transport/replay spike before the target-pending ADR-0077
+  amendment merges. Compare authenticated command POST plus durable cursor replay with SSE and
+  active-only WebSocket behavior. Do not add a second authoritative transcript or freeze transport
+  before evidence.
+- **Health:** target-pending ADR-0081 owns derived-field destinations, computation authority,
+  version, freshness/missingness/provenance, and public eligibility.
+- **Device lifecycle:** target-pending ADR-0082 and HEY-159 own account/consent epoch, SQLCipher
+  partition/key, signout, deletion/restore, key loss, and corruption behavior.
 - **Watch:** direct Apple Watch/watchOS work is deferred. Phone-side HealthKit may receive
   Apple Watch-originated samples without a Waldo watch app.
 

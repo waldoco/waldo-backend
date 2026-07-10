@@ -9,14 +9,26 @@ Date: 2026-07-10 IST.
 
 - Canonical deployable app repository: `Pin4sf/waldo-app`.
 - Audited app snapshot: `c8b3b4555de076339554391da4dbf5fbe2dac0ae`.
-- Current-path evidence: routed APP-R2 at
-  `/tmp/waldo-harness-audit-bus/app-current-evidence-packet.md`.
+- Canonical durable APP-R2 evidence:
+  [`Pin4sf/waldo-app@d2d20ac08bbe1f6b86f0f968a589a135d16c72f8/Docs/audits/APP-R2-current-app-evidence-2026-07-10.md`](https://github.com/Pin4sf/waldo-app/blob/d2d20ac08bbe1f6b86f0f968a589a135d16c72f8/Docs/audits/APP-R2-current-app-evidence-2026-07-10.md).
+- Canonical APP-R2 SHA-256:
+  `049502f3249378fa7484afeff50307f01cb1bd8693be3ed094d8d3b8d56b752b`.
+- Review provenance: [`Pin4sf/waldo-app` PR #5](https://github.com/Pin4sf/waldo-app/pull/5).
+- Local generation provenance only: `/tmp/waldo-harness-audit-bus/app-current-evidence-packet.md`.
+  Its SHA-256 matches the canonical checksum, but `/tmp` is not durable evidence.
 - Merged backend implementation baseline: `waldo-backend` `origin/main` at
   `b311d548a91b3c71f65004833621f5f4cdb6fab5`.
 - PR #45 supplies and amends this HEY-150 artifact for review; the PR number is review provenance,
   not an implementation baseline.
 - Historical `Pin4sf/Waldo.git/waldo-app` is nondeployable lineage and is not a migration source of
   truth.
+
+Authority promotion dependency: the ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are
+approved target decisions in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17)
+but are not yet on `waldo-brain/main`. PR #17 may advance during review; its eventual merge result
+governs. Until it merges, this plan labels the decisions target-pending and treats the merge as a
+promotion dependency. After merge, the pending qualifier can be removed without changing the
+ownership or DAG.
 
 This plan classifies APP-R2's known source paths. APP-R2 intentionally did not query deployed
 Supabase, Cloudflare, callback, scheduler, binding, secret, or provider state. Every deployed-residue
@@ -60,10 +72,11 @@ configuration file, migration, or ticket must not be promoted above that evidenc
 | `src/home/backendHome.ts:42-110` -> `patrol_log` | App direct table read; `local-functional`, remote/RLS unproved | Patrol/audit public projection in `waldo-backend`; generated client HEY-132 | Guard new app `.from(` calls and forbid internal table names in app network code | HEY-152 selects backend projection globally; rollback reverts the build/route, never retries this table per request | Inventory deployed RLS, grants, views, clients, and logs using `patrol_log` | HEY-156 A/B parity and rollback; zero reachable readers/grants before HEY-155 deletes source |
 | `src/home/backendHome.ts:42-110` -> `handoffs` | App direct table read; `local-functional`, Handoff product behavior deferred | No Alpha public Handoff projection; future accepted backend state owner only | Guard `handoffs` and Handoff DTO imports; hide deferred UI | Remove from Alpha composition; rollback restores only non-action UI behind an off flag | Inventory table/view/grants/jobs/callbacks that read or write `handoffs` | Accepted future Handoff decision or deletion after HEY-156 confirms no Alpha dependency; HEY-155 removes current read |
 | `src/home/backendHome.ts:42-110` -> `spots` | App direct table read; `local-functional`, authority/provenance unproved | HEY-158 generation, provenance, projection, engagement, and privacy; HEY-132 generated consumer | Guard direct `spots` table strings and handwritten Spot DTOs | Cut to HEY-158 public projection; whole-build rollback only | Inventory RLS, grants, Functions, jobs, views, callbacks, and clients touching `spots` | HEY-158 contract/staging proof plus HEY-156 parity; zero direct readers before HEY-155 removal |
-| `src/connectors/useGmail.ts:16-25` connector-account read | App direct internal-account read; `local-functional`, deployed RLS unproved | Backend connector status projection and OAuth custody; app renders generated DTO | Guard connector table names and `.from(` outside the generated client | HEY-152 switches connector status route; rollback switches the whole route/build | Inventory account tables, Vault grants, callback allowlists, Function callers, and service-role readers | Callback/refresh/revoke parity, two-user denial, and zero direct readers before HEY-155 |
-| `src/agent/agentClient.ts:74-121` -> Function `agent` | App-owned agent Function invocation; `local-functional`, provider path unproved | Backend authenticated command/Chat seam after HEY-126 and ADR-0077 amendment | Guard `functions.invoke("agent")` and app-owned model/provider DTOs | Cut only after backend Chat command/replay parity; rollback selects one prior route globally | Inventory deployed Function, URL, logs, secrets, service-role grants, schedules, and callers | HEY-126 evidence + amended ADR-0077 + HEY-156 parity; HEY-155 removes invocation/Function |
+| `src/connectors/useGmail.ts:16-25` -> `connector_accounts` | App direct internal-account read; `local-functional`, deployed RLS unproved | Backend connector status projection and OAuth custody; app renders generated DTO | Guard `connector_accounts` and `.from(` outside the generated client | HEY-152 switches connector status route; rollback switches the whole route/build | Inventory the table, RLS/grants, Vault grants, callback allowlists, Function callers, and service-role readers | Callback/refresh/revoke parity, two-user denial, and zero direct readers before HEY-155 |
+| `src/agent/agentClient.ts:74-121` -> Function `agent` | App-owned agent Function invocation; `local-functional`, provider path unproved | Backend authenticated command/Chat seam after HEY-126 and target-pending ADR-0077 amendment merge | Guard `functions.invoke("agent")` and app-owned model/provider DTOs | Cut only after backend Chat command/replay parity; rollback selects one prior route globally | Inventory deployed Function, URL, logs, secrets, service-role grants, schedules, and callers | HEY-126 evidence + merged ADR-0077 amendment + HEY-156 parity; HEY-155 removes invocation/Function |
 | `src/agent/agentClient.ts:74-121` -> Function `calendar` | App-owned calendar invocation; `local-functional`, external write proof absent | Backend calendar adapter/OAuth custody and signed approval path | Guard `functions.invoke("calendar")` and direct calendar writes | Cut adapter after fake/staging read-write-confirm-deny parity; rollback disables writes and selects one route | Inventory deployed Function, Google OAuth client, Vault tokens, callbacks, cron refresh, and grants | Restricted-scope verification, approval/journal/idempotency proof, revoke parity, then HEY-155 |
-| `src/health/sync/healthSyncClient.ts:17-42` -> Function `health-sync` | App-owned health upload; `local-functional`, consent/RLS/device proof absent | Versioned backend health ingestion under ADR-0081 plus HEY-159 lifecycle gates | Guard direct Function name, pre-consent network start, raw-health logs, and caller identity fields | Cut after consent/source/cursor/idempotency contract; rollback stops sync and retains device data per policy | Inventory deployed Function, tables, RLS, service-role grants, jobs, buckets, logs, and deletion hooks | Two-user/consent/revocation/deletion/device proof; HEY-155 removes legacy upload only after rollback window |
+| `src/agent/agentClient.ts:147-155` -> direct `fetch` of `/functions/v1/oauth-google/authorize` | App-owned direct Supabase OAuth authorization URL; `local-functional` source path, callback/client/deployment proof absent | Canonical backend OAuth/Vault authorization endpoint with verified initiating subject; app owns browser UX only | Guard the legacy path, raw `/functions/v1/` URLs, direct OAuth provider calls, and caller-supplied identity in authorization requests | HEY-152 switches the entire authorize/callback route and OAuth client registration; rollback disables refresh/write jobs and selects one whole path, never per-request fallback | Inventory the deployed authorize Function, Supabase URLs, callback allowlists, Google OAuth clients, secrets, Vault rows/grants, tokens, refresh jobs, released app URLs, and callers | Initiating-subject, single-use state, redirect allowlist, callback, refresh/revoke/delete, and HEY-156 parity proof; zero legacy clients/tokens/callers before HEY-155 |
+| `src/health/sync/healthSyncClient.ts:17-42` -> Function `health-sync` | App-owned health upload; `local-functional`, consent/RLS/device proof absent | Versioned backend health ingestion under target-pending ADR-0081 plus HEY-159 lifecycle gates | Guard direct Function name, pre-consent network start, raw-health logs, and caller identity fields | Cut after consent/source/cursor/idempotency contract; rollback stops sync and retains device data per policy | Inventory deployed Function, tables, RLS, service-role grants, jobs, buckets, logs, and deletion hooks | Two-user/consent/revocation/deletion/device proof; HEY-155 removes legacy upload only after rollback window |
 | `src/insights/insightsClient.ts:33-52` -> Function `insights` | App-owned derived insight invocation; `local-functional`, remote/provider proof absent | Backend committed Brief/Spot/health projection as applicable; no app model call | Guard Function name and handwritten insight response | Cut surface-by-surface to generated projections; rollback selects one prior build/route | Inventory deployed Function, provider calls, tables, schedules, caches, and clients | Contract parity, no-fabrication degraded states, HEY-156 staging, then HEY-155 |
 
 ## B. Embedded Supabase, KAIROS, Providers, And DTOs
@@ -72,7 +85,7 @@ configuration file, migration, or ticket must not be promoted above that evidenc
 | --- | --- | --- | --- | --- | --- | --- |
 | `supabase/migrations/**` | App-owned schema/RLS migration tree; `static/mock`, root checks exclude it and merge/deploy state is unproved | Canonical Supabase/RLS/Vault migrations in `waldo-backend` under HEY-134/114 | Freeze new app migrations; require a guard that app contains no authoritative migration owner | Re-land reviewed schema in backend with forward/rollback plan; never run two writers | Compare deployed migration ledger, schemas, policies, grants, triggers, functions, buckets, extensions, and ownership | HEY-134/114 accepted migration/rollback plus zero app-owned deployment dependency; archive/delete under HEY-155 |
 | `supabase/functions/**` | App-owned Edge Function tree; `static/mock` to `local-functional` by caller, deployment unproved | Typed backend Worker/DO/adapters only | Freeze new app Functions and ensure CI scans/typechecks the tree until removal | Route each caller through HEY-152; global rollback per route, no request fallback | Enumerate deployed Functions, versions, routes, JWT settings, env, secrets, logs, cron/webhooks, and callers | Every Function has a mapped replacement or explicit deletion; HEY-156 parity and zero deployed callers before HEY-155 |
-| `supabase/functions/agent/chat.ts:47-83,85-115,137-138` | App-owned Chat/OpenAI runtime; `local-functional` source path with latent thread BOLA, provider/deploy proof absent | Backend Chat transport after HEY-126/ADR-0077; backend provider/Governor/journal/Scribe | Guard service-role thread access, OpenAI imports, and app Function Chat entrypoint | Migrate transcript/command semantics once, then switch global Chat route; rollback disables new writes before route revert | Inventory Function deployment, thread/message tables, service-role grants, provider secrets, logs, queues, and callers | Ownership/BOLA negative tests, replay/idempotency, provider/privacy proof, HEY-156 parity, then HEY-155 |
+| `supabase/functions/agent/chat.ts:47-83,85-115,137-138` | App-owned Chat/OpenAI runtime; `local-functional` source path with latent thread BOLA, provider/deploy proof absent | Backend Chat transport after HEY-126 and target-pending ADR-0077 amendment merge; backend provider/Governor/journal/Scribe | Guard service-role thread access, OpenAI imports, and app Function Chat entrypoint | Migrate transcript/command semantics once, then switch global Chat route; rollback disables new writes before route revert | Inventory Function deployment, thread/message tables, service-role grants, provider secrets, logs, queues, and callers | Ownership/BOLA negative tests, replay/idempotency, provider/privacy proof, HEY-156 parity, then HEY-155 |
 | `supabase/functions/agent/commit.ts:23-198` | App-owned external calendar commit path; `local-functional` source, real write/deploy proof absent | Backend signed-approval tool/adapter with journal and idempotency | Guard external write SDK/REST calls in app-owned Functions | Cut only after dry-run/confirm/deny/retry parity; rollback kills writes before selecting old build | Inventory deployed Function, OAuth/Vault tokens, external webhook/jobs, grants, logs, and idempotency records | External verification, approval/replay proof, revoke/rollback drill, then HEY-155 |
 | `supabase/functions/_shared/google.ts` | App-owned Google token/provider/Vault helper; `static/mock` source, deployment/custody unproved | Backend connector/OAuth/Vault module | Guard Google token exchange/refresh and Vault RPCs outside backend | Migrate custody only after callback/refresh/revoke parity; rollback disables callbacks and refresh jobs first | Inventory OAuth clients, redirect URIs, Vault rows/functions/grants, secret env, cron refresh, and active tokens | Initiating-subject binding, single-use state, revoke/delete proof, zero active legacy tokens/jobs, then HEY-155 |
 | `supabase/functions/_shared/contracts.ts:12-347` | Handwritten Function contracts; `static/mock`, separate from app client DTOs | Committed backend OpenAPI/contracts; generated runtime-validating HEY-132 client | Hash/freshness guard rejects handwritten duplicate public schemas | Consumers switch with one schema version and rollback-compatible artifact | Search deployed Functions/bundles and app releases for the old schema hash | Byte-identical regeneration, compatibility fixtures, no imports/callers, then HEY-155 |
@@ -91,15 +104,16 @@ configuration file, migration, or ticket must not be promoted above that evidenc
 | Current path/category | Current owner and APP-R2 proof | Canonical destination/owner | Freeze guard | Cutover and rollback | Deployed-residue check | Removal gate |
 | --- | --- | --- | --- | --- | --- | --- |
 | `app/(app)/_layout.tsx` protected route group | App currently lacks a group guard; `absent` protection | App protected navigation HEY-28 plus server auth HEY-153 | Route test requires denied/no-session state for every protected route | Land guard before live client; rollback must not expose protected UI | Check deep links, universal links, cached navigation, and released builds | HEY-28 route matrix and HEY-156 denied-session staging proof |
-| `src/supabase/client.ts:10-17` | App PKCE/Supabase client; `local-functional`, remote auth unproved | Retain app auth UX while HEY-157 migrates to Woof session contract | Freeze issuer/audience/base URL and disallow service-role material | Versioned session migration; global logout/kill rollback | Inventory auth projects, redirect allowlists, publishable identifiers, released configs, and session issuers | HEY-157 issuer/expiry/revocation/account-switch proof and HEY-156 staging |
+| `src/supabase/client.ts:7-17` | App PKCE/Supabase client and hard-coded project URL; `local-functional`, remote auth unproved | Retain app auth UX while HEY-157 migrates to Woof session contract | Freeze issuer/audience/base URL and disallow service-role material | Versioned session migration; global logout/kill rollback | Inventory auth projects, project/base URLs, redirect allowlists, publishable identifiers, released configs, and session issuers | HEY-157 issuer/expiry/revocation/account-switch proof and HEY-156 staging |
 | `src/supabase/auth.ts:32-76` (`:15-85` in APP-R2 evidence key) | App auth/session helpers; `local-functional` | Retain behind HEY-157 Woof lifecycle; backend trusts only verified subject | Guard implicit fallback, identity selectors, URL/PII logging, and stale issuer | One session format per build; forced signout on incompatible migration | Inventory redirect URLs, sessions, callback initiators, logs, and released builds | HEY-157 callback subject/expiry/revocation tests and no old-session acceptance |
+| `src/supabase/useSession.ts:24-28` | App auth-state subscription and `getSession`; `local-functional`, issuer/remote behavior unproved | Retain app session observation behind HEY-157; it conveys no backend routing authority | Guard stale issuer/session acceptance and any identity selector derived from local session state | Switch observer/session parser with the versioned Woof migration; rollback forces signout rather than accepting two formats | Inventory shipped session adapters, auth projects, released configs, cached sessions, and auth-event telemetry schemas | HEY-157 expiry/revocation/account-switch/forced-signout proof and zero old-session parser reachability |
 | `src/supabase/storage.ts:3-38` | Chunked SecureStore with surplus-chunk residue; `local-functional` | HEY-159 account/consent-epoch session/cache cleanup | Property tests for shorter replacement, remove, account switch, and epoch invalidation | Migrate with forced cleanup; rollback preserves isolation and can force signout | Check Keychain/SecureStore namespaces in upgrade/account-switch/device fixtures | Zero surplus chunks and HEY-159 signout/delete/restore proof |
-| `src/db/database.ts:6-27` and `src/db/encryptionKey.ts:10-30` | App SQLCipher direction; `local-functional`, no device/recovery proof | Retain under HEY-159 and normative ADR-0082 | Fail closed on no SQLCipher, wrong account/epoch, key loss, or corruption | Migrate only after layout decision; rollback never opens another account's DB | Device upgrade/account switch/reinstall/restore/keychain residue checks | HEY-159 fake + physical-device partition/key/corruption tests; blocks HEY-156 |
+| `src/db/database.ts:6-27` and `src/db/encryptionKey.ts:10-30` | App SQLCipher direction; `local-functional`, no device/recovery proof | Retain under HEY-159 and target-pending ADR-0082 | Fail closed on no SQLCipher, wrong account/epoch, key loss, or corruption | Migrate only after layout decision; rollback never opens another account's DB | Device upgrade/account switch/reinstall/restore/keychain residue checks | HEY-159 fake + physical-device partition/key/corruption tests; blocks HEY-156 |
 | `src/db/migrations.ts:16-35` | One global local DB/table without account/consent epoch; `local-functional` | HEY-159 account/epoch schema and migration | Migration tests reject global rows without owner/epoch | Transactional local migration with export/rollback or fail-closed purge per ADR | Inspect old DB files, WAL/SHM, backups/restores, and migration markers | A/B isolation, rollback, deletion/restore/re-delete, and corruption proof |
 | `src/health/sync/syncPrefs.ts:8-24` and `src/health/sync/watermark.ts:9-63` | Global sync preference/watermark; `local-functional` | HEY-159 account+consent epoch state; backend cursor contract | Guard unscoped keys and pre-consent sync start | Re-key/migrate per account+epoch; rollback stops sync rather than sharing cursor | Device/account-switch/restore inspection plus backend cursor residue | HEY-159 start/stop/signout/revoke/delete proof and no cross-account cursor |
-| `src/chat/threads.store.ts:3-6` | Memory-only app Chat authority; `local-functional`, not durable | App renderer/cache only; backend transcript/IDs after HEY-126 and ADR-0077 amendment | Guard app-generated authoritative thread/message IDs | Replace store with reducer over backend IDs/cursor; offline drafts remain non-authoritative | Check AsyncStorage/Query/Zustand/released bundle residue and duplicate transcript stores | Replay/reconnect/offline/cancel parity; one authoritative transcript; HEY-156 staging |
+| `src/chat/threads.store.ts:3-6` | Memory-only app Chat authority; `local-functional`, not durable | App renderer/cache only; backend transcript/IDs after HEY-126 and target-pending ADR-0077 amendment merge | Guard app-generated authoritative thread/message IDs | Replace store with reducer over backend IDs/cursor; offline drafts remain non-authoritative | Check AsyncStorage/Query/Zustand/released bundle residue and duplicate transcript stores | Replay/reconnect/offline/cancel parity; one authoritative transcript; HEY-156 staging |
 | `src/stores/onboarding.store.ts:1-4` | Memory-only onboarding answers; `local-functional` | App draft UX plus versioned consent/profile/Scribe owners; HEY-159 for lifecycle | Guard health read/upload before durable consent and age/purpose gates | Persist only accepted fields after policy; rollback clears incomplete state | Inspect device stores, auth metadata, backend profile/consent rows, and released builds | Durable versioned consent, no pre-consent egress, signout/delete proof |
-| `modules/health/ios/*`, `modules/health/android/*`, `src/health/**` | App native/device and local health seams; source exists, zero `native-device` proof | Retain device adapters; ADR-0081 owns computation/destination and HEY-159 owns lifecycle | Guard broad purpose grants, false `granted`, unscoped cache, and unversioned source batches | Fake adapter first; staged backend after contract; device rollback stops reads/uploads | Check permissions, observers/cursors, local DB/key, background jobs, backend rows, and device logs | Physical-device permission/background/revocation plus HEY-159/ADR-0081 proof |
+| `modules/health/ios/*`, `modules/health/android/*`, `src/health/**` | App native/device and local health seams; source exists, zero `native-device` proof | Retain device adapters; target-pending ADR-0081 owns computation/destination and HEY-159 owns lifecycle | Guard broad purpose grants, false `granted`, unscoped cache, and unversioned source batches | Fake adapter first; staged backend after contract; device rollback stops reads/uploads | Check permissions, observers/cursors, local DB/key, background jobs, backend rows, and device logs | Physical-device permission/background/revocation plus HEY-159/merged ADR-0081 proof |
 
 ## D. Callbacks, Jobs, Secrets, Bindings, And URLs
 
@@ -117,7 +131,7 @@ configuration file, migration, or ticket must not be promoted above that evidenc
 | --- | --- | --- | --- | --- | --- | --- |
 | `src/mocks/waldo.ts`, `app/(app)/home.tsx`, `app/(app)/brief.tsx` sample scores/completed effects | App mock/UI; `static/mock` | Honest Brief/Home projections under HEY-151/154/35/47; no fabricated fallback | Guard production imports of mocks and completed-action copy without evidence | Replace with strict loading/pending/empty/stale/error fixtures and generated client; rollback remains honest/offline | Search release bundles, OTA updates, screenshots, flags, and analytics schemas for sample payloads | Zero production-reachable mock/fabricated effect; HEY-156 degraded-state proof |
 | `src/home/backendHome.ts:42-110` Handoff read plus Brief/Home Handoff/completed-move UI | App direct read/UI; `static/mock`/`local-functional`; Handoff/live actions excluded from Alpha | Hide/defer; future accepted approval/state/runtime only | Guard Handoff/action kinds in Alpha public DTO and UI | Disable/hide before Brief cutover; rollback does not enable external effects | Search tables, Functions, jobs, callbacks, routes, flags, and release bundles for Handoff actions | HEY-127 does not own this; accepted future decision required, otherwise HEY-155 removes legacy path |
-| Chat archive/delete, mic, fake confirmation/action UI on the Chat route and `src/chat/threads.store.ts:3-6` | App UI/local state; `static/mock`/`local-functional`; branching/delete/voice/actions deferred | HEY-126 owns bounded text transport spike; final text contract follows ADR-0077 amendment; deferred controls hidden | UI inventory guard rejects deferred controls in Alpha builds | Hide controls; text transport cutover follows spike evidence; rollback keeps offline drafts only | Search release bundles, feature flags, local state, backend routes/tables, and provider/tool callers | HEY-126 replay/transport evidence + amended ADR-0077 for text; separate future decisions for deferred controls |
+| Chat archive/delete, mic, fake confirmation/action UI on the Chat route and `src/chat/threads.store.ts:3-6` | App UI/local state; `static/mock`/`local-functional`; branching/delete/voice/actions deferred | HEY-126 owns bounded text transport spike; final text contract follows the target-pending ADR-0077 amendment merge; deferred controls hidden | UI inventory guard rejects deferred controls in Alpha builds | Hide controls; text transport cutover follows spike evidence; rollback keeps offline drafts only | Search release bundles, feature flags, local state, backend routes/tables, and provider/tool callers | HEY-126 replay/transport evidence + merged ADR-0077 amendment for text; separate future decisions for deferred controls |
 | Constellations route/teaser identified by APP-R2 | App static teaser; `static/mock`; full feature deferred | Retain only truthful static teaser; no persistent graph/progress authority | Guard hardcoded progress and generative/full Constellation kinds | Replace “Day 3 of 30”/progress claims with neutral teaser; rollback remains static | Search release bundles, tables, graph stores, jobs, routes, and generated card kinds | No full feature until accepted re-entry gate; HEY-155 removes any legacy backend path |
 | `app/(app)/settings.tsx:95-117` inert deletion/export and other deferred settings claims | App UI; `static/mock`, deletion explicitly unwired | Honest unavailable state until HEY-101/159 and backend export/deletion owners are real | Guard success copy/actions without journaled result and all-store proof | Hide/disable or label unavailable; rollback never fabricates success | Inventory device DB/key/cache, Supabase/DO/R2/Vault/provider/push/connector residue | All-store delete/restore/re-delete and export proof; no deferred voice/skill claim in Alpha |
 | `modules/wear/ios/WearModule.swift:3-19` iOS stub and direct Watch claims | Empty iOS stub; `static/mock`; no watchOS target/WatchConnectivity/native-device proof | Direct Apple Watch/watchOS deferred; phone HealthKit may ingest Watch-origin samples | Guard present-tense Watch support claims and watchOS/WatchConnectivity dependencies in Alpha | Hide claims; no cutover dependency for Alpha | Search targets, entitlements, bundle IDs, sessions, routes, device stores, and release metadata | Accepted future Watch scope plus device proof; otherwise retain only harmless stub or remove separately |
@@ -130,7 +144,7 @@ This is a documentation snapshot of the coordinator-promoted state. It does not 
 | --- | --- | --- |
 | HEY-13 | Todo, ready-for-agent | Next backend slice; structured Scribe/sanitizer and taint proof. |
 | HEY-110 | Backlog, Phase 5 | Async idempotent in-app delivery; not replaced by the Brief GET. |
-| HEY-126 | Existing Chat spike owner | Bounded transport/replay spike, then amend ADR-0077 before production transport. |
+| HEY-126 | Existing Chat spike owner | Bounded transport/replay spike, then merge the target-pending ADR-0077 amendment before production transport. |
 | HEY-127 | Conditional/deferred | No generic Feed is an Alpha prerequisite; activate only if a distinct persistent Feed is accepted. |
 | HEY-143 | In Progress | Merged fake-first/fail-closed hardening is not real provider/staging/Alpha proof. |
 | HEY-149 | In Progress | Cross-repo integration umbrella and one-runtime rule. |
@@ -143,31 +157,32 @@ This is a documentation snapshot of the coordinator-promoted state. It does not 
 | HEY-156 | Backlog, App Track | Cross-repo staging parity, two-user/privacy proof, and whole-path rollback. |
 | HEY-157 | Backlog, App Track | Woof identity/session migration and callback/account-switch lifecycle. |
 | HEY-158 | Backlog, Phase 5 | Real Spots vertical: provenance, projection, engagement, and privacy. |
-| HEY-159 | Backlog, App Track | Per-account sensitive cache and consent-epoch lifecycle under ADR-0082. |
+| HEY-159 | Backlog, App Track | Per-account sensitive cache and consent-epoch lifecycle under target-pending ADR-0082. |
 
-```text
-HEY-149 integration umbrella
-        |
-HEY-150 matrix artifact accepted
-        |
-        +--> HEY-151 Brief contract -------------------+
-        +--> HEY-152 route/cutover --------------------+----> HEY-153 auth/owner DO
-        +--> HEY-157 Woof session migration ----------+              |
-        +--> HEY-159 app lifecycle (parallel)                         v
-                                                           HEY-154 Brief projection
-                                                                     |
-                                                           HEY-132 generated client
-                                                                     |
-                                                           HEY-28/35/47 app path
-                                                                     |
-                                                           HEY-156 staging/rollback
-                                                                     |
-                                                           HEY-155 decommission
-```
+HEY-149 is the integration umbrella, not a false serial prerequisite. The exact current live Linear
+relations are:
 
-HEY-125/134/114 also gate HEY-153. HEY-13 gates real content. HEY-110 and HEY-158 are Phase 5
-parallel lanes. HEY-126 can spike text transport in parallel but production Chat waits for the
-ADR-0077 amendment. HEY-127 remains conditional/deferred and is not on this critical path.
+| Node | Live Linear `blockedBy` |
+| --- | --- |
+| HEY-151 | HEY-150 |
+| HEY-152 | HEY-150 |
+| HEY-157 | None |
+| HEY-159 | None |
+| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
+| HEY-154 | HEY-13; HEY-151; HEY-153 |
+| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
+| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
+| HEY-47 | HEY-28; HEY-132; HEY-151 |
+| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
+| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
+| HEY-155 | HEY-132; HEY-156 |
+
+HEY-150 directly gates only HEY-151 and HEY-152. HEY-110 async delivery and HEY-158 Spots are
+separate Alpha gates. HEY-126 is a parallel spike; production Chat waits for the target-pending
+ADR-0077 amendment to merge. HEY-127 remains off-path and conditional/deferred. HEY-13 is a direct
+live blocker of HEY-154 because it gates real health/model content, even though fixture-only
+projection work can start earlier. The adopted dogfood gate follows HEY-156 and precedes HEY-155 as
+an acceptance gate; it is not a Linear `blockedBy` relation.
 
 ## Zero-Unclassified-Path Checklist
 
@@ -175,7 +190,8 @@ Known APP-R2 source categories:
 
 - [x] Direct `patrol_log`, `handoffs`, and `spots` reads are classified.
 - [x] Connector-account direct reads are classified.
-- [x] `agent`, `calendar`, `health-sync`, and `insights` Function invocations are classified.
+- [x] `agent`, `calendar`, direct `oauth-google/authorize`, `health-sync`, and `insights` network or
+  Function paths are classified.
 - [x] Embedded `supabase/migrations/**` and `supabase/functions/**` are classified.
 - [x] KAIROS client, URL, caller `userId`, Worker/DO, and unlocked package island are classified.
 - [x] OpenAI, Google token/provider, calendar commit, and deprecated device Google REST paths are
@@ -188,7 +204,14 @@ Known APP-R2 source categories:
 - [x] Fabricated samples/effects and deferred Handoff, Chat controls, Constellations, Settings, and
   Watch claims are classified.
 
-Known APP-R2 categories remaining `unclassified`: **0**.
+A focused source scan at app snapshot `c8b3b4555de076339554391da4dbf5fbe2dac0ae` covered the
+network-facing `src/agent`, `src/health/sync`, `src/insights`, `src/home`, `src/connectors`,
+`src/kairos`, and `src/supabase` trees for Supabase Function/table calls, raw `fetch`, Function
+URLs, alternate HTTP clients, and Supabase auth use. It confirmed the existing rows, added the
+OAuth authorize path and `useSession` seam, and found no other direct network/Function category
+without a row. This was not a full repository or deployed-state scan; both remain required below.
+
+Known APP-R2 plus independent-review categories remaining `unclassified`: **0**.
 
 Promotion/decommission checks still open:
 
