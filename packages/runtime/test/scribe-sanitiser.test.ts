@@ -3,6 +3,7 @@ import type {
   SanitiseDestination,
   SanitiseInput,
 } from '@waldo/contracts';
+import { ROSTER } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { sanitise } from '../src/scribe/sanitiser';
 
@@ -108,16 +109,16 @@ describe('Scribe sanitiser', () => {
 
   it('allows strict content-free RunLoop scratch across repeated tool passes', () => {
     const payload: SanitiseInput['payload'] = {
-        tool_calls: [{ id: 'call-get-crs-2', name: 'get_crs', args: { range_days: 2 } }],
-        tool_results: [{ tool: 'get_crs', ok: true }],
-        llm: {
-          model: '@cf/google/gemma-4-26b-a4b-it',
-          fallback_step: 'configured_model',
-          degraded: false,
-          tool_call_count: 1,
-        },
-        source_taint: null,
-      };
+      tool_calls: [{ id: 'call-get-crs-2', name: 'get_crs', args: { range_days: 2 } }],
+      tool_results: [{ tool: 'get_crs', ok: true }],
+      llm: {
+        model: ROSTER.primary,
+        fallback_step: 'configured_model',
+        degraded: false,
+        tool_call_count: 1,
+      },
+      source_taint: null,
+    };
     expect(inspect(payload)).toMatchObject({ ok: true, payload });
   });
 
