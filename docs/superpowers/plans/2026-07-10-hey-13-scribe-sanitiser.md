@@ -225,6 +225,7 @@ git commit -m "feat: implement deterministic scribe sanitiser"
 
 **Files:**
 - Modify: `packages/contracts/src/core/hooks.ts` and `.test.ts`
+- Modify: `packages/contracts/src/tools/handler.ts` and `.test.ts`
 - Modify: `packages/contracts/src/tools/schemas/reads.ts` and `.test.ts`
 - Modify: `packages/contracts/src/tools/schemas/writes.ts` and `.test.ts`
 - Modify: `packages/runtime/src/hooks/registry.ts`
@@ -236,8 +237,8 @@ git commit -m "feat: implement deterministic scribe sanitiser"
 
 **Interfaces:**
 - Consumes: production `sanitise()` and `evaluateMedicalClaim()`.
-- Produces: pre-side-effect sanitized tool args, taint-preserving results, and mandatory provider
-  request/response/template safety.
+- Produces: pre-side-effect sanitized tool args, contract-required taint-preserving results, and
+  terminal provider request/response/template safety.
 
 - [ ] **Step 1: Write a failing handler non-invocation test**
 
@@ -258,19 +259,25 @@ type DispatchToolResult =
   | DispatchFailure;
 ```
 
-Require `external` for external-origin handlers and use `null` for internal handlers. Add a test that
-missing external taint fails.
+Require `source_taint` on the contract-owned successful `ToolResult`: `external` for external-origin
+handlers and `null` for internal handlers. Preserve it through PostTool replacement and the public
+dispatcher result. Add a test that a missing stamp fails rather than being inferred.
 
 - [ ] **Step 4: Remove model-selected identities**
 
 Delete `user_id` from `executeActionArgsSchema` and `sendMessageArgsSchema`. Add rejection tests for
 the now-unknown key. Handler contexts continue to use `authenticatedUserId`.
 
-- [ ] **Step 5: Make provider safety non-bypassable**
+- [ ] **Step 5: Make custom hooks and provider safety non-bypassable**
 
-Change custom hook registration to append required safety hooks. Convert template fallback to the
-same asynchronous PostLLM Scribe/medical path as gateway output. Add counted-gateway and unsafe-
-template tests.
+Do not concatenate custom and required registries into one priority-sorted list: a later custom hook
+could restore unsafe args/output after Scribe. Run custom transformations first, then the immutable
+core registry as the terminal pass. At PreTool, core ACL/Zod/Scribe/autonomy/egress validates the
+final custom payload; at PostTool, core Scribe sees the final custom result. For provider requests,
+sanitize the final post-custom request immediately before gateway egress; for provider/template
+responses, run the final custom response through core PostLLM Scribe then medical. Convert template
+fallback to this same asynchronous path. Add malicious late-custom-hook, counted-handler,
+counted-gateway, and unsafe-template tests.
 
 - [ ] **Step 6: Run focused tests and commit**
 

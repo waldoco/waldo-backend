@@ -77,6 +77,26 @@ ADR-0081 grants cannot be implicit:
 There is no R2 or channel implementation in this PR. Their destination policy is fail-closed contract
 coverage for future writers.
 
+The contract-owned structural policies are:
+
+| Destination | Kind | Chars | Depth | Fields | Array items | Key chars |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `memory_block` | text or structured | 2,048 | 4 | 8 | 10 | 64 |
+| `system_prompt` | text | 32,768 | 0 | 0 | 0 | 0 |
+| `internal_context` | structured | 32,768 | 16 | 64 | 128 | 128 |
+| `draft_document` | text or structured | 51,200 | 4 | 8 | 16 | 128 |
+| `draft_email` | text or structured | 10,240 | 4 | 12 | 50 | 128 |
+| `send_message` | text or structured | 4,096 | 4 | 8 | 16 | 128 |
+| `sandbox_stdout` | text or structured | 10,240 | 8 | 64 | 128 | 128 |
+| `skill_body` | text or structured | 5,120 | 8 | 64 | 128 | 128 |
+| `audit_log` | structured | 65,536 | 12 | 32 | 128 | 128 |
+| `r2_summary` | structured | 16,384 | 8 | 32 | 128 | 128 |
+| `outbox` | text or structured | 4,096 | 4 | 16 | 32 | 128 |
+
+Exact field names remain owned by the strict schema at each side-effect owner; this table prevents
+aggregate/depth/cardinality bypasses. The historical `SIZE_CAPS` export is derived from these values
+for its five ADR-pinned destinations so cap numbers still have one owner.
+
 ## Structured Health View
 
 HEY-13 does not implement `HealthComputationAuthority` or alter Form math. It adds a nonnumeric,
@@ -131,12 +151,17 @@ closed low-cardinality schemas. Replay failures reuse the finite run reason rath
 
 ## Provider and Tool Ordering
 
-- Requests: Scribe system/messages, then PreLLM hooks, then gateway.
-- Gateway results: PostLLM canary/Scribe/medical chain before returning.
-- Template results: the same PostLLM chain; no early return.
-- Tool args: ACL and strict tool schema, then Scribe, autonomy/taint/egress, then handler.
-- Tool results: validate result and taint, then Scribe before model/context use.
-- A custom hook registry extends required safety hooks; it cannot replace them.
+- Requests: custom PreLLM transforms, then a final Scribe pass, then immutable core PreLLM gates,
+  then gateway.
+- Gateway results: custom PostLLM transforms, then the immutable core canary/Scribe/medical chain
+  before returning.
+- Template results: the same terminal PostLLM chain; no early return.
+- Tool args: custom transforms first, then immutable core ACL and strict tool schema, Scribe,
+  autonomy/taint/egress, then handler.
+- Tool results: validate result and taint, run custom transforms, then terminal core Scribe before
+  model/context use.
+- Custom and core registries are not concatenated into one priority-sorted list. A custom hook cannot
+  replace or run after the terminal gates.
 
 ## Medical Gate
 
@@ -162,4 +187,3 @@ claims. The immutable Brain examples are golden tests. It does not become a sixt
 - **LLM judge:** nondeterministic, circular, costly, and prohibited by ADR-0024.
 - **Block all numbers:** breaks ordinary counts/times and was rejected by ADR-0024.
 - **Invent R2/channel/memory product writers:** expands HEY-13 into other tickets and creates fake proof.
-
