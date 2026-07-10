@@ -262,20 +262,43 @@ export class RuntimeLLMProvider {
         attempt: attempts.length,
       });
       const request = llmRequestSchema.parse({ ...rendered, model: plan.step.model });
+      const sanitisedRequest = await sanitiseRequest(request, ctx);
+      if (sanitisedRequest === null) {
+        return failFromHook(
+          new HookHaltError('llm_provider', 'pre-llm sanitisation failed', 'forbidden'),
+          plan.fallback_step,
+          attempts,
+          routingLog,
+        );
+      }
 
-      const preHook = await this.runPreLlmHook(request, ctx);
+      const preHook = await this.runPreLlmHook(sanitisedRequest, ctx);
       if (preHook !== null) {
         return failFromHook(preHook, plan.fallback_step, attempts, routingLog);
       }
 
-      const gatewayResult = await this.gateway.complete({
-        request,
-        route,
-        step: plan.step,
-        context: plan.context,
-        fallback_step: plan.fallback_step,
-        headers: GATEWAY_CONSTANT_HEADERS,
-      });
+      let gatewayResult: AdapterResult<LLMResponse>;
+      try {
+        gatewayResult = await this.gateway.complete({
+          request: sanitisedRequest,
+          route,
+          step: plan.step,
+          context: plan.context,
+          fallback_step: plan.fallback_step,
+          headers: GATEWAY_CONSTANT_HEADERS,
+        });
+      } catch {
+        this.circuitBreaker.recordFailure(plan.step.provider);
+        attempts.push({
+          outcome: 'failure',
+          model: plan.step.model,
+          provider: plan.step.provider,
+          context: plan.context,
+          fallback_step: plan.fallback_step,
+          code: 'transient',
+        });
+        continue;
+      }
 
       if (!gatewayResult.ok) {
         this.circuitBreaker.recordFailure(plan.step.provider);
@@ -287,11 +310,14 @@ export class RuntimeLLMProvider {
           fallback_step: plan.fallback_step,
           code: gatewayResult.code,
         });
+        if (gatewayResult.code === 'invalid_args') {
+          return invalidResponseFailure(plan.fallback_step, attempts, routingLog);
+        }
         continue;
       }
 
       const parsedResponse = llmResponseSchema.safeParse(gatewayResult.data);
-      if (!parsedResponse.success || parsedResponse.data.model !== request.model) {
+      if (!parsedResponse.success || parsedResponse.data.model !== sanitisedRequest.model) {
         this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
@@ -299,9 +325,9 @@ export class RuntimeLLMProvider {
           provider: plan.step.provider,
           context: plan.context,
           fallback_step: plan.fallback_step,
-          code: 'transient',
+          code: 'invalid_args',
         });
-        continue;
+        return invalidResponseFailure(plan.fallback_step, attempts, routingLog);
       }
 
       const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
@@ -394,6 +420,22 @@ export class RuntimeLLMProvider {
   }
 }
 
+function invalidResponseFailure(
+  fallbackStep: RuntimeFallbackStep,
+  attempts: LLMAttempt[],
+  routingLog: RoutingLogEvent | null,
+): RuntimeLLMFailure {
+  return {
+    ok: false,
+    error: 'invalid gateway response',
+    code: 'invalid_args',
+    reason: 'invalid_response',
+    fallback_step: fallbackStep,
+    attempts,
+    routing_log: routingLog,
+  };
+}
+
 function attemptPlan(route: ModelRoute): readonly {
   step: GatewayStep;
   context: LLMContextMode;
@@ -482,4 +524,40 @@ function spendCapExceeded(spend: RouteSpendState | undefined): boolean {
     spend.cap_cents !== null &&
     spend.spent_cents_today >= spend.cap_cents
   );
+}
+
+async function sanitiseRequest(
+  request: LLMRequest,
+  ctx: HookRuntimeContext,
+): Promise<LLMRequest | null> {
+  const sanitise = ctx.sanitise;
+  if (sanitise === undefined) return null;
+  const system =
+    request.system === undefined
+      ? undefined
+      : await sanitiseText(request.system, 'system_prompt', sanitise);
+  if (request.system !== undefined && system === null) return null;
+  const messages = await Promise.all(request.messages.map(async (message) => {
+    const content = await sanitiseText(message.content, 'internal_context', sanitise);
+    return content === null ? null : { ...message, content };
+  }));
+  if (messages.some((message) => message === null)) return null;
+  return llmRequestSchema.parse({
+    ...request,
+    system,
+    messages,
+  });
+}
+
+async function sanitiseText(
+  text: string,
+  destination: 'system_prompt' | 'internal_context',
+  sanitise: NonNullable<HookRuntimeContext['sanitise']>,
+): Promise<string | null> {
+  try {
+    const result = await sanitise({ text, destination });
+    return result.ok ? result.output : null;
+  } catch {
+    return null;
+  }
 }

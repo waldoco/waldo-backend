@@ -54,7 +54,10 @@ type CrashableRunLoopInstance = {
     loopType: 'brief' | null;
     active: boolean;
   }): void;
-  __runLoopSetTestOverrides(input: { gateway?: LLMGatewayAdapter }): void;
+  __runLoopSetTestOverrides(input: {
+    gateway?: LLMGatewayAdapter;
+    providerMode?: 'fake' | 'gateway';
+  }): void;
   alarm(): Promise<void>;
 };
 
@@ -96,6 +99,33 @@ function getCrsToolCallText(id: string, rangeDays: number): string {
     ],
   });
 }
+
+it('stops before provider egress when gateway-mode spend state is unavailable', async () => {
+  const stub = freshStub();
+  const dueAt = soon();
+  const gateway = new ScriptedRunLoopGateway((request) =>
+    response(request.request.model, getCrsToolCallText('call-spend-preflight', 1)),
+  );
+  const runId = await stub.scheduleFakeRun({
+    scheduleId: 'brief:spend-preflight',
+    userId: USER + '-spend-preflight',
+    dueAt,
+    occurrenceAt: dueAt,
+  });
+  await runInDurableObject(stub, (instance) => {
+    (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({
+      gateway,
+      providerMode: 'gateway',
+    });
+  });
+
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect((await stub.readRunProof(runId)).current).toEqual({
+    state: 'FAILED',
+    failure_reason: 'llm:spend_state_unavailable',
+  });
+  expect(gateway.requests).toEqual([]);
+});
 
 function runtimePassSystems(gateway: ScriptedRunLoopGateway): string[] {
   return gateway.requests.map((request) =>

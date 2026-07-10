@@ -1,8 +1,9 @@
 # Next Session Plan - HEY-143 To Agent Harness Alpha
 
-Status: active entrypoint after HEY-142. The current runtime lane is HEY-143 real-provider flip
-readiness before the first honest agent-harness alpha.
-Date: 2026-07-09 IST.
+Status: HEY-143 provider-readiness hardening is implemented on
+`codex/hey-143-provider-readiness` and awaiting PR review. Full real-provider flip and alpha
+acceptance remain blocked by safety, spend, credential, context, and channel prerequisites.
+Date: 2026-07-10 IST.
 Baseline: SLICE-3a/HEY-120 merged in PR #21, SLICE-3b/HEY-121 merged in PR #23 at
 `f47127f`, SLICE-3c/HEY-124 merged in PR #24 at `5789b42`, HEY-122/SLICE-4 merged in
 PR #27, HEY-123/SLICE-5 merged in PR #28 at `061e72c`, HEY-77 triage dispatcher merged
@@ -16,6 +17,21 @@ HEY-136 proved the fake-first run-loop skeleton. HEY-139 hardened the runtime dr
 the context schema root, HEY-111 added replayable local evidence, and HEY-142 added the fake-first
 governed multi-iteration `plan -> act -> observe` loop. HEY-143 now owns real-provider flip
 readiness.
+
+## HEY-143 Review State
+
+[observed] The review branch moves fake adapters and permissive callbacks behind explicit
+configuration, adds a metadata-only Cloudflare gateway adapter, requires a Secrets Store-style
+credential binding, sanitises before provider egress, and fails closed for absent spend state or
+non-local ingress.
+
+[verified] `npx -y pnpm@10.34.4 verify` passed with 1,168 contract tests, 182 runtime tests, and
+all guards. `git diff --check` passed. No live provider, credential, channel, Cloudflare, or
+Supabase side effect occurred.
+
+[blocked] A real gateway RunLoop call remains disabled until HEY-13 provides the safety callbacks,
+HEY-99 provides an auditable daily-spend reader, and a Cloudflare Secrets Store binding plus
+explicit staging-smoke approval exist. See `docs/foundation/HEY-143-PHASE-HANDOFF.md`.
 
 ## Start Here
 
@@ -62,7 +78,7 @@ git diff --check
 
 ## Exact Current Slice
 
-Start **HEY-143 real-provider flip readiness** while the context lane continues from HEY-10.
+Review **HEY-143 provider-readiness hardening** while the context lane continues from HEY-10.
 
 Goal:
 
@@ -106,7 +122,7 @@ Acceptance:
 | Loop Governor Runtime | Complete through PR #27 | Codex/policy runtime | Deterministic admission, budget kill, stuck-loop guard. |
 | Dispatcher + Hooks + ACL + Sanitiser | Complete through PR #33 | Codex/security runtime | HEY-77, HEY-12, and HEY-78 are merged; do not re-own this seam in HEY-17. |
 | Context + Memory + Prompt Hydration | Fake-backed design now | Claude memory/context + Codex integration | Keep raw health out of DO/R2/prompts/logs. |
-| LLMProvider + Routing + Eval | Complete fake-first through HEY-142; HEY-143 next | Codex/eval | Real-provider readiness must stay staging-gated with no provider bodies in evidence. |
+| LLMProvider + Routing + Eval | HEY-143 hardening in review | Codex/eval | Live provider remains fail-closed pending HEY-13, HEY-99 spend data, Secrets Store binding, and approved staging smoke. |
 | Channels + App Surfaces | Fake sinks now | Codex/channel + app team | Production delivery waits on outbox, feed/channel contracts, and explicit adapter work. |
 | Auth/Data Plane/Adapters | Now | Claude/Supabase + Codex adapters | ADR-0066 ES256 Supabase issuer spike remains parallel. |
 | Observability/Conformance | HEY-111 merged; HEY-142 reused it | Codex/infra | Trace event shape, replay fixture, and local eval are available for fake-first loop proof; standalone eval suite is still absent. |
