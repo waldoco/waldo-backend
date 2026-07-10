@@ -10,6 +10,7 @@ import {
   scribeSanitisePostToolUseHook,
   type HookRuntimeContext,
 } from '../src/hooks/registry';
+import { sanitise } from '../src/scribe/sanitiser';
 
 type TestContext = {
   calls: string[];
@@ -33,10 +34,11 @@ describe('hook registry', () => {
       now: () => 1_700_000_000_000,
       rateLimitCheck: () => true,
       hasApproval: () => true,
-      sanitise: ({ text }) =>
+      sanitise: ({ payload, source_taint }) =>
         ({
           ok: true,
-          output: text,
+          payload,
+          source_taint,
           redactions: [],
         }) satisfies SanitiseResult,
       medicalGate: () => true,
@@ -173,6 +175,7 @@ describe('hook registry', () => {
       ['OnInvocationStart', 'session_reset', 400],
       ['PreToolUse', 'acl_check', 100],
       ['PreToolUse', 'tool_arg_zod_validate', 200],
+      ['PreToolUse', 'tool_arg_sanitise', 250],
       ['PreToolUse', 'autonomy_gate_check', 300],
       ['PreToolUse', 'egress_allowlist_check', 500],
       ['PostToolUse', 'scribe_sanitise', 100],
@@ -265,7 +268,6 @@ describe('hook registry', () => {
           tool: 'send_message',
           args: {
             channel: 'telegram',
-            user_id: 'user-1',
             content: 'hello',
             idempotency_key: 'a'.repeat(64),
           },
@@ -290,7 +292,6 @@ describe('hook registry', () => {
           tool: 'send_message',
           args: {
             channel: 'telegram',
-            user_id: 'user-1',
             content: 'hello',
             idempotency_key: 'b'.repeat(64),
           },
@@ -364,13 +365,22 @@ describe('hook registry', () => {
         {
           event: 'PostToolUse',
           tool: 'read_document',
-          result: 'email user@example.com',
+          result: {
+            ok: true,
+            data: { text: 'email user@example.com' },
+            source_taint: 'external',
+          },
           latency_ms: 5,
         },
         runtimeCtx({
-          sanitise: () => ({
+          sanitise: ({ source_taint }) => ({
             ok: true,
-            output: 'email [redacted]',
+            payload: {
+              ok: true,
+              data: { text: 'email [redacted]' },
+              source_taint: 'external',
+            },
+            source_taint,
             redactions: [{ kind: 'email', count: 1 }],
           }),
         }),
@@ -379,7 +389,11 @@ describe('hook registry', () => {
     ).resolves.toEqual({
       event: 'PostToolUse',
       tool: 'read_document',
-      result: 'email [redacted]',
+      result: {
+        ok: true,
+        data: { text: 'email [redacted]' },
+        source_taint: 'external',
+      },
       latency_ms: 5,
     });
   });
@@ -391,14 +405,21 @@ describe('hook registry', () => {
         {
           event: 'PostToolUse',
           tool: 'read_document',
-          result: { title: 'Report', body: ['email user@example.com'] },
+          result: {
+            ok: true,
+            data: { title: 'Report', body: ['email user@example.com'] },
+            source_taint: 'external',
+          },
           latency_ms: 5,
         },
         runtimeCtx({
-          sanitise: ({ text }) => ({
+          sanitise: ({ payload, source_taint }) => ({
             ok: true,
-            output: text.replace('user@example.com', '[redacted]'),
-            redactions: text.includes('user@example.com') ? [{ kind: 'email', count: 1 }] : [],
+            payload: JSON.parse(JSON.stringify(payload).replace('user@example.com', '[redacted]')),
+            source_taint,
+            redactions: JSON.stringify(payload).includes('user@example.com')
+              ? [{ kind: 'email', count: 1 }]
+              : [],
           }),
         }),
         { registry: [scribeSanitisePostToolUseHook] },
@@ -406,7 +427,11 @@ describe('hook registry', () => {
     ).resolves.toEqual({
       event: 'PostToolUse',
       tool: 'read_document',
-      result: { title: 'Report', body: ['email [redacted]'] },
+      result: {
+        ok: true,
+        data: { title: 'Report', body: ['email [redacted]'] },
+        source_taint: 'external',
+      },
       latency_ms: 5,
     });
   });
@@ -418,11 +443,19 @@ describe('hook registry', () => {
         {
           event: 'PostToolUse',
           tool: 'read_document',
-          result: 'health_value: blocked',
+          result: {
+            ok: true,
+            data: { text: 'health_value: blocked' },
+            source_taint: 'external',
+          },
           latency_ms: 5,
         },
         runtimeCtx({
-          sanitise: () => ({ ok: false, reason: 'health_value_leak' }),
+          sanitise: () => ({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          }),
         }),
         { registry: [scribeSanitisePostToolUseHook] },
       ),
@@ -464,10 +497,13 @@ describe('hook registry', () => {
           tokens_out: 1,
         },
         runtimeCtx({
-          sanitise: ({ text }) => ({
+          sanitise: ({ payload, source_taint }) => ({
             ok: true,
-            output: text.replace('user@example.com', '[redacted]'),
-            redactions: text.includes('user@example.com') ? [{ kind: 'email', count: 1 }] : [],
+            payload: JSON.parse(JSON.stringify(payload).replace('user@example.com', '[redacted]')),
+            source_taint,
+            redactions: JSON.stringify(payload).includes('user@example.com')
+              ? [{ kind: 'email', count: 1 }]
+              : [],
           }),
         }),
         { registry: [scribeSanitisePostLlmCallHook] },
@@ -478,6 +514,35 @@ describe('hook registry', () => {
       tokens_in: 1,
       tokens_out: 1,
     });
+  });
+
+  it('sanitises a whole structured payload once, including object keys', async () => {
+    let calls = 0;
+    const ctx = runtimeCtx({
+      sanitise(input) {
+        calls += 1;
+        return sanitise(input);
+      },
+    });
+    await expect(
+      runHooks(
+        'PostLLMCall',
+        {
+          event: 'PostLLMCall',
+          response: { 'alice@example.com': 'owner' },
+          tokens_in: 1,
+          tokens_out: 1,
+        },
+        ctx,
+        { registry: [scribeSanitisePostLlmCallHook] },
+      ),
+    ).resolves.toEqual({
+      event: 'PostLLMCall',
+      response: { '[REDACTED_EMAIL]': 'owner' },
+      tokens_in: 1,
+      tokens_out: 1,
+    });
+    expect(calls).toBe(1);
   });
 
   it('halts PostLLMCall when the Scribe sanitiser rejects generated text', async () => {
@@ -491,7 +556,11 @@ describe('hook registry', () => {
           tokens_out: 1,
         },
         runtimeCtx({
-          sanitise: () => ({ ok: false, reason: 'health_value_leak' }),
+          sanitise: () => ({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          }),
         }),
         { registry: [scribeSanitisePostLlmCallHook] },
       ),

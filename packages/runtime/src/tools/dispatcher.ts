@@ -1,16 +1,20 @@
 import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
+  GENERAL_AGENT_TOOLS,
   LAZY_DISCOVERY_TRIGGERS,
   errorCodeSchema,
   handlerAllowlistMatchesAcl,
   sessionToolAllowed,
+  sourceTaintSchema,
   toolNameSchema,
   triggerTypeSchema,
   waldoCardSchema,
   type ErrorCode,
   type HookPayload,
+  type HookEvent,
   type SessionState,
+  type SourceTaint,
   type ToolHandler,
   type ToolName,
   type TriggerType,
@@ -46,7 +50,14 @@ export type ToolDispatcherContext = HookRuntimeContext & {
 };
 
 export type DispatchToolResult =
-  | { ok: true; call_id: string; tool: ToolName; data: unknown; card?: WaldoCard }
+  | {
+      ok: true;
+      call_id: string;
+      tool: ToolName;
+      data: unknown;
+      source_taint: SourceTaint;
+      card?: WaldoCard;
+    }
   | {
       ok: false;
       call_id: string;
@@ -155,13 +166,28 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     );
   }
 
+  let preToolPayload: Extract<HookPayload, { event: 'PreToolUse' }> = {
+    event: 'PreToolUse',
+    tool: tool.data,
+    args: call.args,
+  };
   try {
-    await runHooks(
+    const nextPayload = await runTerminalHooks(
       'PreToolUse',
-      { event: 'PreToolUse', tool: tool.data, args: call.args },
+      preToolPayload,
       ctx,
-      hookOptions(options),
+      options.extraHooks,
     );
+    if (nextPayload.event !== 'PreToolUse' || nextPayload.tool !== tool.data) {
+      return failDispatch(
+        call.id,
+        tool.data,
+        'tool args failed validation',
+        'transient',
+        'invalid_args',
+      );
+    }
+    preToolPayload = nextPayload;
   } catch (error) {
     return hookFailure(call.id, tool.data, error);
   }
@@ -170,7 +196,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   const startedAt = Date.now();
   let args: unknown;
   try {
-    args = handler.schema.parse(call.args);
+    args = handler.schema.parse(preToolPayload.args);
   } catch {
     return failDispatch(
       call.id,
@@ -187,7 +213,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return failDispatch(call.id, tool.data, 'tool handler failed', 'transient', 'handler_failed');
   }
 
-  const parsedHandlerResult = parseToolResult(handlerResult);
+  const parsedHandlerResult = parseToolResult(handlerResult, tool.data);
   if (parsedHandlerResult === null) {
     return failDispatch(
       call.id,
@@ -205,8 +231,13 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     latency_ms: Math.max(0, Date.now() - startedAt),
   };
   try {
-    const nextPayload = await runHooks('PostToolUse', postToolPayload, ctx, hookOptions(options));
-    if (nextPayload.event !== 'PostToolUse') {
+    const nextPayload = await runTerminalHooks(
+      'PostToolUse',
+      postToolPayload,
+      ctx,
+      options.extraHooks,
+    );
+    if (nextPayload.event !== 'PostToolUse' || nextPayload.tool !== tool.data) {
       return failDispatch(
         call.id,
         tool.data,
@@ -220,7 +251,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     return hookFailure(call.id, tool.data, error);
   }
 
-  const finalResult = parseToolResult(postToolPayload.result);
+  const finalResult = parseToolResult(postToolPayload.result, tool.data);
   if (finalResult === null) {
     return failDispatch(
       call.id,
@@ -273,12 +304,19 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   }
 
   return finalResult.card === undefined
-    ? { ok: true, call_id: call.id, tool: tool.data, data: finalResult.data }
+    ? {
+        ok: true,
+        call_id: call.id,
+        tool: tool.data,
+        data: finalResult.data,
+        source_taint: finalResult.source_taint,
+      }
     : {
         ok: true,
         call_id: call.id,
         tool: tool.data,
         data: finalResult.data,
+        source_taint: finalResult.source_taint,
         card: finalResult.card,
       };
 }
@@ -462,14 +500,19 @@ function toolCallsFromChoices(choices: unknown): readonly unknown[] | null {
   });
 }
 
-function hookOptions<Ctx extends ToolDispatcherContext>(
-  options: DispatchToolOptions<Ctx>,
-): { registry: HookRegistry<Ctx> } {
-  const base = HOOK_REGISTRY as HookRegistry<Ctx>;
-  return {
-    registry:
-      options.extraHooks === undefined ? base : Object.freeze([...base, ...options.extraHooks]),
-  };
+async function runTerminalHooks<Ctx extends ToolDispatcherContext>(
+  event: HookEvent,
+  payload: HookPayload,
+  ctx: Ctx,
+  extraHooks: HookRegistry<Ctx> | undefined,
+): Promise<HookPayload> {
+  const transformed =
+    extraHooks === undefined
+      ? payload
+      : await runHooks(event, payload, ctx, { registry: extraHooks });
+  return runHooks(event, transformed, ctx, {
+    registry: HOOK_REGISTRY as HookRegistry<Ctx>,
+  });
 }
 
 function hookFailure(callId: string, tool: ToolName, error: unknown): DispatchToolResult {
@@ -514,6 +557,8 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
       return 'acl_denied';
     case 'tool_arg_zod_validate':
       return 'invalid_args';
+    case 'tool_arg_sanitise':
+      return 'sanitise_denied';
     case 'autonomy_gate_check':
       return 'approval_denied';
     case 'egress_allowlist_check':
@@ -526,30 +571,45 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
 }
 
 type ParsedToolResult =
-  | { ok: true; data: unknown; card?: WaldoCard }
+  | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
   | { ok: false; error: string; code: ErrorCode };
 
-function parseToolResult(value: unknown): ParsedToolResult | null {
+function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
     return null;
   }
 
   if (value.ok) {
-    if (!Object.prototype.hasOwnProperty.call(value, 'data')) {
+    if (
+      !hasOnlyKeys(value, ['ok', 'data', 'card', 'source_taint']) ||
+      !Object.prototype.hasOwnProperty.call(value, 'data')
+    ) {
       return null;
     }
+    const sourceTaint = sourceTaintSchema.safeParse(value.source_taint);
+    if (!sourceTaint.success) return null;
+    const expectsExternal = GENERAL_AGENT_TOOLS.includes(tool);
+    if (expectsExternal !== (sourceTaint.data === 'external')) return null;
     if (!Object.prototype.hasOwnProperty.call(value, 'card')) {
-      return { ok: true, data: value.data };
+      return { ok: true, data: value.data, source_taint: sourceTaint.data };
     }
 
     const card = waldoCardSchema.safeParse(value.card);
-    return card.success ? { ok: true, data: value.data, card: card.data } : null;
+    return card.success
+      ? { ok: true, data: value.data, source_taint: sourceTaint.data, card: card.data }
+      : null;
   }
 
+  if (!hasOnlyKeys(value, ['ok', 'error', 'code'])) return null;
   const code = errorCodeSchema.safeParse(value.code);
   if (typeof value.error !== 'string' || value.error.length === 0 || !code.success) {
     return null;
   }
 
   return { ok: false, error: value.error, code: code.data };
+}
+
+function hasOnlyKeys(value: Readonly<Record<string, unknown>>, allowed: readonly string[]): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every((key) => allowedKeys.has(key));
 }
