@@ -558,14 +558,26 @@ Waldo differs from coding agents because its hard guarantees are stateful, priva
 
 ## Near-Term Build Order
 
-1. Prove the post-PR7 contract branch with `npx -y pnpm@10.34.4 verify` and `git diff --check`.
-2. After it lands, reconcile the Phase C reduced FSM into full runtime run/session/working-memory contracts.
-3. Add scheduler/goal contracts that consume the trigger, hook, tool, auth, and memory-skill seams.
-4. Expand delivery beyond the `fetch_alert` tracer path: counted budget, priority arbitration,
-   recurrence, quarantine, and cross-run no-progress guards.
-5. Add telemetry/public/OpenAPI once the internal contracts are stable.
-6. Add deterministic scenario artifacts, property tests, and targeted mutation for deterministic core.
-7. Add live/dogfood lanes after hermetic gates are stable.
+1. Build HEY-13 structured Scribe/sanitizer runtime with nested/numeric/taint rejection proof.
+2. Keep HEY-15/14/16 context hydration and HEY-110 fake async-delivery proof parallel where their
+   files do not overlap.
+3. Commit the first strict public contract only under HEY-151:
+   `GET /public/v1/briefs/morning/current`, `ready|pending|empty`, `WaldoProblemV1`, no tenant
+   selector, and generated-client freshness.
+4. Prove HEY-125/134/114/157/153 identity and data prerequisites, including verified subject to
+   owner-bound DO and two-user RLS/cache/ETag rejection.
+5. Add HEY-154's side-effect-free committed projection, then HEY-132/28/35/47 generated-client,
+   protected-shell, renderer, and degraded-state proof.
+6. Build the Phase 5 backend Spots vertical and run the bounded Chat transport/replay spike before
+   ADR-0077 amendment.
+7. Run HEY-156 staging parity and whole-path rollback only after the integrated path exists; keep
+   native-device, Alpha, and production labels at their lower proof level until their own gates pass.
+
+Home is tested as composition of Brief, Spots, relevant threads, and Patrol/audit. Do not add a
+generic Feed fixture/schema. The Brief GET is a read path, not HEY-110 async delivery.
+
+Persistent app-cache tests depend on Brain ADR-0082 and the app lifecycle ticket. Health-derived
+computation/public-field tests depend on Brain ADR-0081.
 
 ## Definition Of Done
 
@@ -579,5 +591,8 @@ Harness work is done only when:
 - evidence artifacts exist for scenario/runtime work
 - skipped target gates are named honestly
 - no raw health/secrets/internal-only DTOs leak into public artifacts or logs
+- public contracts generate downstream clients reproducibly and reject stale/handwritten parallel
+  shapes
+- proof labels distinguish contract, local runtime, native device, staging, Alpha, and production
 
 Green terminal output is necessary. It is not sufficient.
