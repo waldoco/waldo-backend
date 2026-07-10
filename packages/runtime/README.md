@@ -45,7 +45,20 @@ pnpm --filter @waldo/runtime test
 
 ## Local bindings
 
+- `WALDO_ENV` is required before `RunLoopDO` resolves provider adapters. `test`
+  and `local` may default to fake adapters; any undeclared environment fails
+  closed instead of silently selecting fakes.
+- `RUN_LOOP_PROVIDER_MODE=fake` is allowed only with `WALDO_ENV=test|local`.
+  `RUN_LOOP_PROVIDER_MODE=gateway` is staging-only and additionally requires
+  `RUN_LOOP_PROVIDER_LIVE=1`, `CLOUDFLARE_ACCOUNT_ID`, `AI_GATEWAY_ID`, and an
+  `AI_GATEWAY_API_TOKEN` Cloudflare Secrets Store binding. The binding exposes
+  asynchronous `get()` access; no token string belongs in environment variables or source.
 - `RUN_LOOP_LOCAL_INGRESS_TOKEN` enables the fake-first `RunLoopDO` local ingress
-  test seam. Leave it unset outside local/test harnesses; ingress fails closed when
-  the binding is absent or shorter than 16 characters. The Vitest pool supplies a
+  test seam. It is accepted only with `WALDO_ENV=test|local`, and ingress fails closed
+  when the binding is absent or shorter than 16 characters. The Vitest pool supplies a
   non-secret synthetic value in `vitest.config.ts`.
+
+Gateway mode currently wires a metadata-only Cloudflare AI Gateway adapter and a
+fail-closed delivery/safety placeholder. It also fails before provider egress until HEY-99
+supplies an auditable daily-spend reader. It is an adapter-readiness seam, not live channel
+delivery or production dogfood.

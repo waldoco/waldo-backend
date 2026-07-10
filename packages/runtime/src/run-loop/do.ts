@@ -6,20 +6,16 @@ import {
   getCrsArgsSchema,
   runtimeRunCanAdvance,
   runtimeRunRecordSchema,
-  type AdapterResult,
   type DeliveryCandidate,
   type DeliverySink,
   type ErrorCode,
   type GetCrsArgs,
-  type LLMResponse,
   type RuntimeReplayFixture,
   type RuntimeRunRecord,
   type RuntimeRunState,
   type RuntimeTraceEval,
   type ScheduleEntry,
   type SessionState,
-  type SinkAck,
-  type SinkRequest,
   type ToolHandler,
   type ToolName,
   type TriggerType,
@@ -27,8 +23,6 @@ import {
 import { runHooks, type HookRuntimeContext } from '../hooks/registry';
 import {
   RuntimeLLMProvider,
-  type LLMGatewayAdapter,
-  type LLMGatewayRequest,
   type RouteSpendState,
 } from '../llm/provider';
 import {
@@ -37,7 +31,7 @@ import {
 } from '../run-journal/outbox-runtime';
 import type { GovernorDecision, SetLoopKillFlagInput } from '../loop-governor/governor';
 import { Scheduler, type ScheduleExecutors } from '../scheduler/multiplexer';
-import { productionDeps, type Deps } from '../seams/deps';
+import type { Deps } from '../seams/deps';
 import {
   dispatchTool,
   parseToolCalls,
@@ -47,6 +41,15 @@ import {
 } from '../tools/dispatcher';
 import { ensureSchema } from '../tracer/schema';
 import { triage } from '../triage/dispatcher';
+import {
+  RUN_LOOP_OBSERVE_SYSTEM_PREFIX,
+  RUN_LOOP_PLAN_SYSTEM_PREFIX,
+  fakeSinkStats,
+  isLocalRunLoopEnvironment,
+  resolveRunLoopAdapters,
+  type RunLoopAdapters,
+  type RunLoopTestOverrides,
+} from './adapters';
 import {
   buildRuntimeReplayFixture,
   normaliseRuntimeTraceDetail,
@@ -58,9 +61,6 @@ import {
 const TRIGGER = 'brief' satisfies TriggerType;
 const PUSH_CLASS = 'brief' as const;
 const CANARY_TOKENS = ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'];
-const DELIVERY_TEXT = 'Derived steady-state brief ready for delivery.';
-const PLAN_SYSTEM_PREFIX = 'run-loop:plan';
-const OBSERVE_SYSTEM_PREFIX = 'run-loop:observe';
 const LOCAL_RUN_TOKEN_HEADER = 'x-waldo-local-run-token';
 const LOCAL_INGRESS_RATE_WINDOW_MS = 60_000;
 const LOCAL_INGRESS_MAX_REQUESTS_PER_WINDOW = 32;
@@ -134,83 +134,9 @@ type ScratchState = {
   };
 };
 
-class FakeRunLoopGateway implements LLMGatewayAdapter {
-  async complete(request: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
-    if ((request.request.system ?? '').startsWith(OBSERVE_SYSTEM_PREFIX)) {
-      return {
-        ok: true,
-        data: {
-          model: request.request.model,
-          text: DELIVERY_TEXT,
-          input_tokens: 16,
-          output_tokens: 10,
-          cache_read_input_tokens: 0,
-          latency_ms: 1,
-        },
-      };
-    }
-
-    return {
-      ok: true,
-      data: {
-        model: request.request.model,
-        text: JSON.stringify({
-          tool_calls: [
-            {
-              id: 'call-get-crs',
-              name: 'get_crs',
-              arguments: { range_days: 1 },
-            },
-          ],
-        }),
-        input_tokens: 24,
-        output_tokens: 12,
-        cache_read_input_tokens: 0,
-        latency_ms: 1,
-      },
-    };
-  }
-}
-
-const runLoopAcks = new Map<string, SinkAck>();
-const runLoopAttempts = new Map<string, number>();
-
-class RunLoopFakeSink implements DeliverySink {
-  readonly idempotentOnKey = true;
-
-  send(req: SinkRequest): SinkAck {
-    runLoopAttempts.set(req.idempotency_key, (runLoopAttempts.get(req.idempotency_key) ?? 0) + 1);
-    const prior = runLoopAcks.get(req.idempotency_key);
-    if (prior !== undefined) return prior;
-    const ack: SinkAck = { idempotency_key: req.idempotency_key, accepted: true };
-    runLoopAcks.set(req.idempotency_key, ack);
-    return ack;
-  }
-}
-
-export type RunLoopTestOverrides = {
-  gateway?: LLMGatewayAdapter;
-  sink?: DeliverySink;
-  spend?: RouteSpendState | null;
-  deliveryTextFallback?: string;
-};
-
-type RunLoopAdapters = {
-  deps: Deps;
-  gateway: LLMGatewayAdapter;
-  sink: DeliverySink;
-  spend?: RouteSpendState;
-  deliveryTextFallback: string;
-};
-
-function defaultRunLoopAdapters(): RunLoopAdapters {
-  return {
-    deps: productionDeps(),
-    gateway: new FakeRunLoopGateway(),
-    sink: new RunLoopFakeSink(),
-    deliveryTextFallback: DELIVERY_TEXT,
-  };
-}
+type ProviderSpendPreflight =
+  | { ok: true; spend: RouteSpendState | undefined }
+  | { ok: false };
 
 export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   private adapters: RunLoopAdapters;
@@ -228,7 +154,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     ensureSchema(ctx.storage);
     ensureRunLoopSchema(ctx.storage.sql);
     this.envBindings = env;
-    this.adapters = defaultRunLoopAdapters();
+    this.adapters = resolveRunLoopAdapters(env);
     this.deps = this.adapters.deps;
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, this.deps);
     this.journalOutbox = this.createJournalOutbox(this.adapters.sink);
@@ -243,6 +169,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       gateway: overrides.gateway ?? this.adapters.gateway,
       sink: overrides.sink ?? this.adapters.sink,
       spend: overrides.spend === null ? undefined : (overrides.spend ?? this.adapters.spend),
+      spendReader: overrides.spendReader ?? this.adapters.spendReader,
+      providerMode: overrides.providerMode ?? this.adapters.providerMode,
       deliveryTextFallback:
         overrides.deliveryTextFallback ?? this.adapters.deliveryTextFallback,
     };
@@ -257,6 +185,9 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/local/runs')) {
+      return jsonResponse({ error: 'not_found' }, 404);
+    }
+    if (!isLocalRunLoopEnvironment(this.envBindings.WALDO_ENV)) {
       return jsonResponse({ error: 'not_found' }, 404);
     }
     const localToken = this.localIngressToken();
@@ -399,8 +330,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       context: run.context_json,
       outbox: outbox.map(({ kind, status, attempts }) => ({ kind, status, attempts })),
       sink: {
-        deliveries: sinkKeys.filter((key) => runLoopAcks.has(key)).length,
-        attempts: sinkKeys.reduce((sum, key) => sum + (runLoopAttempts.get(key) ?? 0), 0),
+        ...fakeSinkStats(sinkKeys),
       },
       delivery_journal: deliveryJournal,
       current: { state: run.state, failure_reason: run.failure_reason },
@@ -547,10 +477,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       trigger: run.trigger,
       canaryTokens: CANARY_TOKENS,
       now: this.deps.now,
-      rateLimitCheck: () => true,
-      hasApproval: () => true,
-      sanitise: ({ text }) => ({ ok: true, output: text, redactions: [] }),
-      medicalGate: () => true,
+      rateLimitCheck: this.adapters.safety.rateLimitCheck,
+      hasApproval: this.adapters.safety.hasApproval,
+      sanitise: this.adapters.safety.sanitise,
+      medicalGate: this.adapters.safety.medicalGate,
     };
     await runHooks(
       'OnInvocationStart',
@@ -590,14 +520,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       this.recordGovernorDenied(run.run_id, preflight);
       return this.failRun(run.run_id, governorFailureReason(preflight));
     }
+    const spend = await this.readSpendBeforeProvider();
+    if (!spend.ok) {
+      return this.failRun(run.run_id, 'llm:spend_state_unavailable');
+    }
 
     const result = await this.llm.complete(
       {
         trigger: run.trigger,
-        spend: this.adapters.spend,
+        spend: spend.spend,
         renderRequest({ step, context }) {
           return {
-            system: `${PLAN_SYSTEM_PREFIX}:${context}:${step.provider}`,
+            system: `${RUN_LOOP_PLAN_SYSTEM_PREFIX}:${context}:${step.provider}`,
             messages: [{ role: 'user', content: 'derived brief context only' }],
             max_tokens: 256,
             temperature: 0,
@@ -703,14 +637,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       this.recordGovernorDenied(run.run_id, preflight);
       return this.failRun(run.run_id, governorFailureReason(preflight));
     }
+    const spend = await this.readSpendBeforeProvider();
+    if (!spend.ok) {
+      return this.failRun(run.run_id, 'llm_observe:spend_state_unavailable');
+    }
 
     const result = await this.llm.complete(
       {
         trigger: run.trigger,
-        spend: this.adapters.spend,
+        spend: spend.spend,
         renderRequest({ step, context }) {
           return {
-            system: `${OBSERVE_SYSTEM_PREFIX}:${context}:${step.provider}`,
+            system: `${RUN_LOOP_OBSERVE_SYSTEM_PREFIX}:${context}:${step.provider}`,
             messages: [
               {
                 role: 'user',
@@ -1111,6 +1049,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       iterations: 0,
       subagentSpawns: 0,
     });
+  }
+
+  private async readSpendBeforeProvider(): Promise<ProviderSpendPreflight> {
+    if (this.adapters.providerMode !== 'gateway') {
+      return { ok: true, spend: this.adapters.spend };
+    }
+    try {
+      const result = await this.adapters.spendReader?.read();
+      return result?.ok ? { ok: true, spend: result.data } : { ok: false };
+    } catch {
+      return { ok: false };
+    }
   }
 
   private recordToolDispatchTrace(

@@ -255,6 +255,55 @@ describe('RuntimeLLMProvider', () => {
     expect(gateway.requests).toHaveLength(3);
   });
 
+  it('fails with invalid_response when the gateway returns a malformed success payload', async () => {
+    const gateway = new ScriptedGateway(() => ({
+      ok: true,
+      data: {
+        model: ROSTER.primary,
+        text: '',
+        input_tokens: 20,
+        output_tokens: 5,
+        cache_read_input_tokens: 0,
+        latency_ms: 11,
+      } as LLMResponse,
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest({ step, context }) {
+          return {
+            system: `${context}:${step.model}`,
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+        renderTemplate: () => 'template fallback',
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'invalid_args',
+      reason: 'invalid_response',
+      fallback_step: 'configured_model',
+      attempts: [
+        {
+          outcome: 'failure',
+          model: ROSTER.primary,
+          provider: 'workers_ai',
+          context: 'full_context',
+          fallback_step: 'configured_model',
+          code: 'invalid_args',
+        },
+      ],
+    });
+    expect(gateway.requests).toHaveLength(1);
+  });
+
   it('uses the deterministic floor without a gateway call when spend cap is reached', async () => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
@@ -293,6 +342,100 @@ describe('RuntimeLLMProvider', () => {
     expect(result.fallback_step).toBe('template');
     expect(result.degraded).toBe(true);
     expect(result.attempts).toEqual([]);
+    expect(gateway.requests).toEqual([]);
+  });
+
+  it('halts before gateway egress when request sanitisation rejects prompt text', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest({ step, context }) {
+          return {
+            system: `${context}:${step.model}`,
+            messages: [{ role: 'user', content: 'unsafe prompt text' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+        renderTemplate: () => 'template fallback',
+      },
+      runtimeCtx({
+        sanitise: () => ({ ok: false, reason: 'untrusted_instruction' }),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'hook_halt',
+      fallback_step: 'configured_model',
+    });
+    expect(gateway.requests).toEqual([]);
+  });
+
+  it('halts before gateway egress when system sanitisation throws', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    await expect(
+      provider.complete(
+        {
+          trigger: 'brief',
+          renderRequest({ step }) {
+            return {
+              system: `system:${step.model}`,
+              messages: [{ role: 'user', content: 'safe prompt text' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+          renderTemplate: () => 'template fallback',
+        },
+        runtimeCtx({
+          sanitise: async () => {
+            throw new Error('sanitiser unavailable');
+          },
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
+    expect(gateway.requests).toEqual([]);
+  });
+
+  it('halts before gateway egress when message sanitisation throws', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    await expect(
+      provider.complete(
+        {
+          trigger: 'brief',
+          renderRequest() {
+            return {
+              messages: [{ role: 'user', content: 'safe prompt text' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+          renderTemplate: () => 'template fallback',
+        },
+        runtimeCtx({
+          sanitise: async () => {
+            throw new Error('sanitiser unavailable');
+          },
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: false, reason: 'hook_halt', code: 'forbidden' });
     expect(gateway.requests).toEqual([]);
   });
 

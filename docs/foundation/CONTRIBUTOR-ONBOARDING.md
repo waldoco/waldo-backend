@@ -1,7 +1,7 @@
 # Waldo Harness Contributor Onboarding
 
 Status: active onboarding entrypoint for backend contributors.
-Date: 2026-07-09.
+Date: 2026-07-10.
 
 ## What You Are Joining
 
@@ -10,9 +10,9 @@ fake-first but durable: scheduler, governor, run journal, ToolDispatcher, hooks,
 runtime driver hardening, context schema root, local replay/evidence, and governed multi-iteration
 runtime looping are merged.
 
-The next honest runtime milestone is **HEY-143**: real-provider flip readiness. Do not describe the
-runtime as production-provider/channel/memory ready until HEY-143 and the context lane are wired and
-verified with staging safeguards.
+HEY-143 provider-readiness hardening is in review. Do not describe the runtime as
+production-provider/channel/memory ready: a real safety implementation, auditable spend reader,
+Secrets Store binding, staging smoke, and the context lane still remain.
 
 ## Read This First
 
@@ -32,7 +32,7 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 
 | Lane | Next work | Notes |
 | --- | --- | --- |
-| Runtime | HEY-143 real-provider flip readiness | Single-writer over runtime/provider seams and runtime evidence behavior. |
+| Runtime | HEY-143 provider-readiness hardening in review | Single-writer over runtime/provider seams; live gateway calls remain fail-closed. |
 | Context | HEY-15 recall, HEY-14 skills, HEY-16 prompt builder | Starts from HEY-10's merged DO SQLite schema root. Full goal hydration waits for HEY-144. |
 | Safety/Scribe | HEY-13 sanitiser runtime and Scribe proposal lifecycle | No direct committed-memory writes from the LLM. |
 | Evidence | HEY-111/HEY-142 local evidence is available | Reuse `readRunEvidence`, `replayFixture`, and `scoreRun`; do not create a parallel trace path. |
@@ -127,9 +127,14 @@ Done:
 - `HEY-111` local runtime evidence/replay spine.
 - `HEY-142` governed multi-iteration `plan -> act -> observe` loop.
 
+In review:
+
+- `HEY-143` provider adapter/configuration hardening.
+
 Next:
 
-- `HEY-143` real-provider flip readiness.
+- HEY-13 safety callback implementation, HEY-99-backed daily-spend reader, and a Secrets Store
+  binding before an approved staging smoke.
 
 After:
 
@@ -289,7 +294,8 @@ Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open
 
 ## What To Assign Now
 
-1. Runtime single writer: `HEY-143`.
+1. Runtime single writer: review/merge `HEY-143`; do not enable gateway execution until HEY-13
+   and an auditable HEY-99 spend reader land.
 2. Context parallel: `HEY-15`, `HEY-11`, `HEY-13`.
 3. Safe parallel: `HEY-137`, `HEY-141`, `HEY-100`, `HEY-125`, `HEY-104` through `HEY-107`.
 4. Human/external: `HEY-128`, `HEY-130`, `HEY-127`, `HEY-131`.
@@ -568,7 +574,8 @@ For harness/runtime changes, include focused runtime or contract tests and evide
 
 Start from Linear and the active docs, not from archived plans:
 
-- Runtime builder: HEY-143 next; HEY-142 is merged.
+- Runtime builder: review HEY-143 hardening; its remaining live-flip dependencies are HEY-13,
+  HEY-99 spend metering, Secrets Store binding, and approved staging smoke.
 - Context builder: HEY-15, then HEY-14 and HEY-16.
 - Safety builder: HEY-13 / HEY-141 where scoped.
 - Infra/provider builder: HEY-143 now that HEY-142 has merged.

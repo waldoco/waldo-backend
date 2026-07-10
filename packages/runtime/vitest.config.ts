@@ -11,6 +11,8 @@ export default defineConfig({
     cloudflareTest({
       miniflare: {
         bindings: {
+          WALDO_ENV: 'test',
+          RUN_LOOP_PROVIDER_MODE: 'fake',
           RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
         },
       },

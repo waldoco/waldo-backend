@@ -5,11 +5,12 @@
 // guards-dir skip keeps the fixture strings below out of repo scans.
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const GUARD = 'scripts/guards/guard-health-leak.mjs';
+const FAKE_CALLBACK_GUARD = 'scripts/guards/guard-fake-callbacks.mjs';
 
 const LEAK_CASES = [
   { name: 'same-line assignment', code: 'const hrv = 42;\n' },
@@ -33,10 +34,16 @@ function runGuardOn(root) {
   return spawnSync('node', [GUARD, '--root', root], { encoding: 'utf8' });
 }
 
+function runFakeCallbackGuardOn(root) {
+  return spawnSync('node', [FAKE_CALLBACK_GUARD, '--root', root], { encoding: 'utf8' });
+}
+
 function withFixture(fileName, code, fn) {
   const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
   try {
-    writeFileSync(join(root, fileName), code);
+    const fixturePath = join(root, fileName);
+    mkdirSync(dirname(fixturePath), { recursive: true });
+    writeFileSync(fixturePath, code);
     return fn(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -86,6 +93,46 @@ const basisPoints = withFixture(
 if (basisPoints.stderr.trim() !== '') {
   process.stderr.write(
     `guards-selftest: guard-health-leak FALSE POSITIVE on basis-points shorthand:\n${basisPoints.stderr}`,
+  );
+  failures += 1;
+}
+
+const fakeCallbackViolation = withFixture(
+  'packages/runtime/src/run-loop/do.ts',
+  `class RunLoopDO {
+  constructor() {
+    this.gateway = new FakeRunLoopGateway();
+  }
+  rebuildInvocationContext() {
+    return {
+      rateLimitCheck: () => true,
+      hasApproval: () => true,
+      sanitise: ({ text }) => ({ ok: true, output: text, redactions: [] }),
+      medicalGate: () => true,
+    };
+  }
+}
+`,
+  runFakeCallbackGuardOn,
+);
+if (!fakeCallbackViolation.stderr.includes('packages/runtime/src/run-loop/do.ts')) {
+  process.stderr.write('guards-selftest: guard-fake-callbacks MISSED production fake/stub wiring\n');
+  failures += 1;
+}
+
+const fakeCallbackClean = withFixture(
+  'packages/runtime/src/run-loop/do.ts',
+  `class RunLoopDO {
+  constructor(env) {
+    this.adapters = resolveRunLoopAdapters(env);
+  }
+}
+`,
+  runFakeCallbackGuardOn,
+);
+if (fakeCallbackClean.stderr.trim() !== '') {
+  process.stderr.write(
+    `guards-selftest: guard-fake-callbacks FALSE POSITIVE on resolver wiring:\n${fakeCallbackClean.stderr}`,
   );
   failures += 1;
 }

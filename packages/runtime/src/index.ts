@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { armAlarm } from './scheduler/alarm-slot';
+import type { GatewaySecretBinding } from './llm/gateway';
 
 export * from './hooks/registry';
 export * from './llm/provider';
@@ -17,8 +18,14 @@ declare global {
     interface Env {
       RUNTIME_DO: DurableObjectNamespace<RuntimeProbeDO>;
       RUN_LOOP_DO: DurableObjectNamespace<RunLoopDO>;
+      AI_GATEWAY_ID?: string;
+      AI_GATEWAY_API_TOKEN?: GatewaySecretBinding;
+      CLOUDFLARE_ACCOUNT_ID?: string;
+      RUN_LOOP_PROVIDER_LIVE?: string;
+      RUN_LOOP_PROVIDER_MODE?: string;
       RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
+      WALDO_ENV?: string;
     }
   }
 }
