@@ -32,6 +32,35 @@ export function formZoneOf(score: number): FormZone {
 export const crsPillarSchema = z.enum(['sleep', 'hrv', 'circadian', 'motion']);
 export type CrsPillar = z.infer<typeof crsPillarSchema>;
 
+// Purpose-prefixed digest shape prevents subject, provider-account, and database identifiers from
+// becoming provenance references while remaining opaque to every destination consumer.
+export const opaqueHealthProvenanceRefSchema = z.string().regex(/^hpr_[0-9a-f]{32}$/);
+export type OpaqueHealthProvenanceRef = z.infer<typeof opaqueHealthProvenanceRefSchema>;
+
+export const derivedHealthDestinationEligibilitySchema = z.enum([
+  'trigger_prompt',
+  'volatile_run',
+  'r2_today_summary',
+  'r2_baselines_summary',
+  'runtime_trace',
+]);
+export type DerivedHealthDestinationEligibility = z.infer<
+  typeof derivedHealthDestinationEligibilitySchema
+>;
+
+export const derivedHealthDestinationViewSchema = z.strictObject({
+  authority: z.literal('backend'),
+  algorithm_version: z.literal('form.safte-fast.v1'),
+  form_zone: formZoneSchema,
+  trend: z.enum(['improving', 'steady', 'declining', 'insufficient']),
+  freshness: z.enum(['fresh', 'stale']),
+  missing_components: z.array(crsPillarSchema),
+  confidence_band: z.enum(['high', 'medium', 'low']),
+  provenance_refs: z.array(opaqueHealthProvenanceRefSchema).max(4),
+  destination_eligibility: z.array(derivedHealthDestinationEligibilitySchema).min(1),
+});
+export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinationViewSchema>;
+
 // The sensor-named pillar key must never sit directly against a numeric literal in non-test
 // code (health-data firewall), so its coefficient lives behind a module const.
 const HRV_FORM_WEIGHT = 0.35;
