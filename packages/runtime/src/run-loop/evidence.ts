@@ -1,17 +1,26 @@
 import {
   RUNTIME_EVIDENCE_SCHEMA_VERSION,
+  parseRuntimeTraceDetail,
   runtimeReplayFixtureSchema,
-  runtimeTraceDetailSchema,
+  runtimeTraceDetailEnvelopeSchema,
   runtimeTraceEvalSchema,
   runtimeTraceEventSchema,
+  runtimeTraceEventNameSchema,
   traceDetailKeysArePublic,
+  type DeliveryVerdict,
+  type OutboxStatus,
+  type PushClass,
+  type RunState,
   type RuntimeReplayFixture,
   type RuntimeTraceDetail,
+  type RuntimeTraceDetailEnvelope,
   type RuntimeTraceEval,
   type RuntimeTraceEvent,
+  type RuntimeTraceEventName,
   type RuntimeTraceFamily,
   type RuntimeTracePrivacy,
   type RuntimeTraceStatus,
+  type RuntimeRunFailureReason,
   type RuntimeRunState,
 } from '@waldo/contracts';
 
@@ -27,33 +36,35 @@ export type RuntimeEvidenceInput = {
   runId: string;
   traceRows: RuntimeTraceSqlRow[];
   fsm: RuntimeRunState[];
-  outbox: { kind: string; status: string; attempts: number }[];
-  deliveryJournal: { state: string; verdict: string | null };
-  current: { state: RuntimeRunState; failure_reason: string | null };
+  outbox: { kind: PushClass; status: OutboxStatus; attempts: number }[];
+  deliveryJournal: { state: RunState; verdict: DeliveryVerdict | null };
+  current: { state: RuntimeRunState; failure_reason: RuntimeRunFailureReason | null };
 };
 
 export function runtimeTraceEventKey(input: {
   runId: string;
   event: string;
-  step: number;
+  seq: number;
 }): string {
-  return `${input.runId}:${traceFamilyFor(input.event)}:${input.event}:${input.step}`;
+  const event = runtimeTraceEventNameSchema.parse(input.event);
+  return `${input.runId}:${traceFamilyFor(event)}:${event}:${input.seq}`;
 }
 
 export function normaliseRuntimeTraceDetail(
   event: string,
   detail: Record<string, unknown>,
 ): RuntimeTraceDetail {
+  const parsedEvent = runtimeTraceEventNameSchema.parse(event);
   const withoutUndefined = stripUndefined(detail);
-  const publicDetail =
-    event === 'scheduled_wake' && typeof withoutUndefined.schedule_id === 'string'
+  const normalizedDetail =
+    parsedEvent === 'scheduled_wake' && typeof withoutUndefined.schedule_id === 'string'
       ? {
           ...withoutUndefined,
           schedule_ref: withoutUndefined.schedule_id,
           schedule_id: undefined,
         }
       : withoutUndefined;
-  return runtimeTraceDetailSchema.parse(stripUndefined(publicDetail));
+  return parseRuntimeTraceDetail(parsedEvent, stripUndefined(normalizedDetail));
 }
 
 export function buildRuntimeReplayFixture(input: RuntimeEvidenceInput): RuntimeReplayFixture {
@@ -90,7 +101,9 @@ export function scoreRuntimeFixture(fixture: RuntimeReplayFixture): RuntimeTrace
 
 function buildRuntimeTrace(input: RuntimeEvidenceInput): RuntimeTraceEvent[] {
   const trace = input.traceRows.map((row) => {
-    const detail = normaliseRuntimeTraceDetail(row.event, parseJsonObject(row.detail_json));
+    const event = runtimeTraceEventNameSchema.parse(row.event);
+    const detail = normaliseRuntimeTraceDetail(event, parseJsonObject(row.detail_json));
+    const detailEnvelope = runtimeTraceDetailEnvelopeSchema.parse({ event, detail });
     return runtimeTraceEventSchema.parse({
       schema_version: RUNTIME_EVIDENCE_SCHEMA_VERSION,
       trace_id: input.runId,
@@ -98,13 +111,13 @@ function buildRuntimeTrace(input: RuntimeEvidenceInput): RuntimeTraceEvent[] {
       seq: row.seq,
       event_key: row.event_key ?? runtimeTraceEventKey({
         runId: input.runId,
-        event: row.event,
-        step: row.seq,
+        event,
+        seq: row.seq,
       }),
-      family: traceFamilyFor(row.event),
-      event: row.event,
-      status: traceStatusFor(row.event, detail),
-      privacy: tracePrivacyFor(row.event),
+      family: traceFamilyFor(event),
+      event,
+      status: traceStatusFor(detailEnvelope),
+      privacy: tracePrivacyFor(event),
       detail,
       occurred_at: row.created_at,
     });
@@ -124,7 +137,7 @@ function buildRuntimeTrace(input: RuntimeEvidenceInput): RuntimeTraceEvent[] {
         event_key: runtimeTraceEventKey({
           runId: input.runId,
           event: 'failed',
-          step: (last?.seq ?? -1) + 1,
+          seq: (last?.seq ?? -1) + 1,
         }),
         family: 'outcome',
         event: 'failed',
@@ -143,7 +156,7 @@ function scoreRuntimeTrace(input: {
   runId: string;
   trace: RuntimeTraceEvent[];
   outbox: { status: string }[];
-  current: { state: RuntimeRunState; failure_reason: string | null };
+  current: { state: RuntimeRunState; failure_reason: RuntimeRunFailureReason | null };
 }): RuntimeTraceEval {
   const traceOrderOk = input.trace.every((event, index) => {
     const previous = input.trace[index - 1];
@@ -188,8 +201,8 @@ function scoreRuntimeTrace(input: {
       id: 'privacy_guard',
       status: privacyOk ? 'pass' : 'fail',
       evidence: privacyOk
-        ? 'trace details contain no forbidden private payload keys'
-        : 'trace details include forbidden private payload keys',
+        ? 'trace details match the closed event schemas'
+        : 'trace details do not match the closed event schemas',
     },
     {
       id: 'outbox_consistency',
@@ -224,39 +237,83 @@ function scoreRuntimeTrace(input: {
   });
 }
 
-function traceFamilyFor(event: string): RuntimeTraceFamily {
-  if (event === 'scheduled_wake') return 'wake';
-  if (event.startsWith('governor_')) return 'governor';
-  if (event === 'session_reset') return 'session';
-  if (event === 'context_built') return 'context';
-  if (event.startsWith('llm_')) return 'llm';
-  if (event.startsWith('tool_')) return 'tool';
-  if (event === 'gated') return 'gate';
-  if (event === 'delivered') return 'delivery';
-  if (event === 'done' || event === 'failed') return 'outcome';
-  return 'outbox';
-}
-
-function traceStatusFor(event: string, detail: RuntimeTraceDetail): RuntimeTraceStatus {
-  if (event === 'scheduled_wake') return 'scheduled';
-  if (event === 'governor_admitted') return 'admitted';
-  if (event === 'governor_denied') return 'denied';
-  if (event === 'gated' && detail.verdict === 'send') return 'send';
-  if (event === 'delivered') return 'acked';
-  if (event === 'done') return 'done';
-  if (event === 'failed') return 'failed';
-  if (event === 'tool_dispatched') {
-    const denied = detail.denied;
-    return Array.isArray(denied) && denied.length > 0 ? 'denied' : 'ok';
+function traceFamilyFor(event: RuntimeTraceEventName): RuntimeTraceFamily {
+  switch (event) {
+    case 'scheduled_wake':
+      return 'wake';
+    case 'governor_admitted':
+    case 'governor_denied':
+      return 'governor';
+    case 'session_reset':
+      return 'session';
+    case 'context_built':
+      return 'context';
+    case 'llm_called':
+    case 'llm_observed':
+      return 'llm';
+    case 'tool_parse_failed':
+    case 'tool_dispatched':
+      return 'tool';
+    case 'gated':
+      return 'gate';
+    case 'delivered':
+      return 'delivery';
+    case 'done':
+    case 'failed':
+    case 'scribe_denied':
+      return 'outcome';
   }
-  return 'ok';
 }
 
-function tracePrivacyFor(event: string): RuntimeTracePrivacy {
-  if (event === 'scheduled_wake') return 'operational_ref';
-  if (event.startsWith('governor_') || event === 'gated') return 'policy_metadata';
-  if (event === 'context_built') return 'derived_summary';
-  return 'operational_metadata';
+function traceStatusFor(envelope: RuntimeTraceDetailEnvelope): RuntimeTraceStatus {
+  switch (envelope.event) {
+    case 'scheduled_wake':
+      return 'scheduled';
+    case 'governor_admitted':
+      return 'admitted';
+    case 'governor_denied':
+    case 'scribe_denied':
+      return 'denied';
+    case 'tool_parse_failed':
+    case 'failed':
+      return 'failed';
+    case 'gated':
+      return envelope.detail.verdict === 'send' ? 'send' : 'ok';
+    case 'delivered':
+      return 'acked';
+    case 'done':
+      return 'done';
+    case 'tool_dispatched':
+      return envelope.detail.denied.length > 0 ? 'denied' : 'ok';
+    case 'session_reset':
+    case 'context_built':
+    case 'llm_called':
+    case 'llm_observed':
+      return 'ok';
+  }
+}
+
+function tracePrivacyFor(event: RuntimeTraceEventName): RuntimeTracePrivacy {
+  switch (event) {
+    case 'scheduled_wake':
+      return 'operational_ref';
+    case 'governor_admitted':
+    case 'governor_denied':
+    case 'gated':
+    case 'scribe_denied':
+      return 'policy_metadata';
+    case 'context_built':
+      return 'derived_summary';
+    case 'session_reset':
+    case 'llm_called':
+    case 'llm_observed':
+    case 'tool_parse_failed':
+    case 'tool_dispatched':
+    case 'delivered':
+    case 'done':
+    case 'failed':
+      return 'operational_metadata';
+  }
 }
 
 function stripUndefined(value: Record<string, unknown>): Record<string, unknown> {

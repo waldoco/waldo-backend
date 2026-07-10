@@ -76,5 +76,6 @@ describe('engagement telemetry', () => {
     expect(lowCardinalityMetricLabelSchema.safeParse({ sql_query: 'select 1' }).success).toBe(false);
     expect(lowCardinalityMetricLabelSchema.safeParse({ ip: '127.0.0.1' }).success).toBe(false);
     expect(lowCardinalityMetricLabelSchema.safeParse({ hostname: 'worker-1' }).success).toBe(false);
+    expect(lowCardinalityMetricLabelSchema.safeParse({ note: 'HRV 58 ms' }).success).toBe(false);
   });
 });
