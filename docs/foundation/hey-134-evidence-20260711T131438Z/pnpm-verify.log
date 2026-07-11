@@ -1,0 +1,216 @@
+npm notice run npx
+npm notice run 'pnpm' verify
+
+> waldo-backend@ verify /home/dev_086/Projects/waldo-backend
+> node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:workers && pnpm verify:guards
+
+guard-package-manager: ok
+Scope: all 4 workspace projects
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+╭ Warning ─────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│   Ignored build scripts: esbuild@0.28.1, sharp@0.34.5,                       │
+│   workerd@1.20260625.1.                                                      │
+│   Run "pnpm approve-builds" to pick which dependencies should be allowed     │
+│   to run scripts.                                                            │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+Done in 996ms using pnpm v10.34.4
+Scope: 3 of 4 workspace projects
+packages/contracts typecheck$ tsc --noEmit
+packages/mint-agent-jwt typecheck$ tsc --noEmit
+packages/mint-agent-jwt typecheck: Done
+packages/contracts typecheck: Done
+packages/runtime typecheck$ tsc --noEmit
+packages/runtime typecheck: Done
+
+> waldo-backend@ verify:node /home/dev_086/Projects/waldo-backend
+> pnpm --filter @waldo/contracts test
+
+
+> @waldo/contracts@0.0.0 test /home/dev_086/Projects/waldo-backend/packages/contracts
+> vitest run
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.9 [39m[90m/home/dev_086/Projects/waldo-backend/packages/contracts[39m
+
+ [32m✓[39m src/memory/sanitise.test.ts [2m([22m[2m55 tests[22m[2m)[22m[32m 74[2mms[22m[39m
+ [32m✓[39m src/memory/recall.test.ts [2m([22m[2m51 tests[22m[2m)[22m[32m 93[2mms[22m[39m
+ [32m✓[39m src/adapters/channel.test.ts [2m([22m[2m72 tests[22m[2m)[22m[32m 110[2mms[22m[39m
+ [32m✓[39m src/runtime/routing.test.ts [2m([22m[2m56 tests[22m[2m)[22m[32m 81[2mms[22m[39m
+ [32m✓[39m src/memory/hall.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 67[2mms[22m[39m
+ [32m✓[39m src/tools/schemas/writes.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/adapters/doc.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/runtime/delivery-policy.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/adapters/email.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/memory/trust.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/adapters/sheet.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 78[2mms[22m[39m
+ [32m✓[39m src/tools/permissions.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/tools/handler.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/runtime/loop-policy.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/core/hooks.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/tools/schemas/reads.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 70[2mms[22m[39m
+ [32m✓[39m src/adapters/llm.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/adapters/health.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/memory/skill.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/prompt/skill.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/adapters/calendar.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/auth/mint.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/health/crs.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/tools/schemas/threading.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/auth/consent.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/memory/pattern-id.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/prompt/reasons.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/memory/episode.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m src/runtime/outbox.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/ui/card.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/runtime/schedule.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/runtime/run.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/runtime/journal.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/ui/notification.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/runtime/working-memory.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/prompt/narrative.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/runtime/session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/runtime/evidence.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/telemetry/engagement.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/runtime/goal.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/runtime/class-state.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/runtime/sink.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/testing/evidence.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/core/trigger.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m src/public/dto.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/model/roster.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/public/openapi.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/core/error.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m48 passed[39m[22m[90m (48)[39m
+[2m      Tests [22m [1m[32m1168 passed[39m[22m[90m (1168)[39m
+[2m   Start at [22m 19:45:21
+[2m   Duration [22m 10.03s[2m (transform 1.93s, setup 0ms, import 10.98s, tests 2.14s, environment 13ms)[22m
+
+
+> waldo-backend@ verify:supabase /home/dev_086/Projects/waldo-backend
+> node scripts/verify-supabase.mjs
+
+canonical Supabase migration list verified (7 migrations)
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' db reset --local --no-seed
+Resetting local database...
+Recreating database...
+Initialising schema...
+Seeding globals from roles.sql...
+Applying migration 20260709171312_0001_identity.sql...
+Applying migration 20260709171336_0002_health.sql...
+Applying migration 20260709171359_0003_intelligence.sql...
+Applying migration 20260709171417_0004_comms.sql...
+Applying migration 20260709171953_0005_integrations.sql...
+Applying migration 20260709172043_0006_harden_rls_auto_enable_execute.sql...
+Applying migration 20260710182949_reconcile_contract_spine.sql...
+Restarting containers...
+Finished supabase db reset on branch hey-134-canonical-migrations.
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' test db
+Connecting to local database...
+psql:/home/dev_086/Projects/waldo-backend/supabase/tests/schema_contract.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/dev_086/Projects/waldo-backend/supabase/tests/schema_contract.sql .. ok
+All tests successful.
+Files=1, Tests=44,  0 wallclock secs ( 0.04 usr  0.01 sys +  0.02 cusr  0.00 csys =  0.07 CPU)
+Result: PASS
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' migration list --local
+Connecting to local database...
+
+  
+   Local            | Remote           | Time (UTC)            
+  ------------------|------------------|-----------------------
+   `20260709171312` | `20260709171312` | `2026-07-09 17:13:12` 
+   `20260709171336` | `20260709171336` | `2026-07-09 17:13:36` 
+   `20260709171359` | `20260709171359` | `2026-07-09 17:13:59` 
+   `20260709171417` | `20260709171417` | `2026-07-09 17:14:17` 
+   `20260709171953` | `20260709171953` | `2026-07-09 17:19:53` 
+   `20260709172043` | `20260709172043` | `2026-07-09 17:20:43` 
+   `20260710182949` | `20260710182949` | `2026-07-10 18:29:49` 
+
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' db query --local --file supabase/fixtures/assert-canonical-migration-history.sql
+Connecting to local database...
+DO
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' migration up --local
+Connecting to local database...
+Local database is up to date.
+
+> waldo-backend@ verify:workers /home/dev_086/Projects/waldo-backend
+> pnpm --filter @waldo/runtime test
+
+
+> @waldo/runtime@0.0.0 test /home/dev_086/Projects/waldo-backend/packages/runtime
+> vitest run
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.9 [39m[90m/home/dev_086/Projects/waldo-backend/packages/runtime[39m
+
+ [32m✓[39m test/run-loop.test.ts [2m([22m[2m38 tests[22m[2m)[22m[33m 1272[2mms[22m[39m
+ [32m✓[39m test/delivery-gate.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 337[2mms[22m[39m
+ [32m✓[39m test/loop-governor.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 284[2mms[22m[39m
+ [32m✓[39m test/tracer.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 362[2mms[22m[39m
+ [32m✓[39m test/hooks.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 125[2mms[22m[39m
+ [32m✓[39m test/run-journal-interface.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 250[2mms[22m[39m
+ [32m✓[39m test/tool-dispatcher.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m test/llm-provider.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m test/scheduler-alarm.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 700[2mms[22m[39m
+     [33m[2m✓[22m[39m advances daily local recurrence across DST gaps without double-firing a repeated hour [33m 449[2mms[22m[39m
+ [32m✓[39m test/outbox-delivery.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 168[2mms[22m[39m
+ [32m✓[39m test/llm-gateway.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m test/do-schema.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m test/schema-migration.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m test/triage.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m test/run-loop-adapters.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m test/runtime-probe.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m16 passed[39m[22m[90m (16)[39m
+[2m      Tests [22m [1m[32m182 passed[39m[22m[90m (182)[39m
+[2m   Start at [22m 19:46:11
+[2m   Duration [22m 29.48s[2m (transform 1.39s, setup 0ms, import 15.82s, tests 3.72s, environment 3ms)[22m
+
+
+> waldo-backend@ verify:guards /home/dev_086/Projects/waldo-backend
+> node scripts/guards/run-all.mjs
+
+guard-adr-status: ok
+guard-agent-surface-stale-refs: ok
+guard-health-leak: ok
+guard-model-ids: ok
+guard-no-passwithnotests: ok
+guard-openapi-fresh: ok
+guard-package-manager: ok
+guard-setalarm: ok
+guard-stale-types: ok
+guards-selftest: ok

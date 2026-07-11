@@ -143,3 +143,37 @@ alter table public.crs_scores
       and (circadian_score is null or circadian_score between 0 and 100)
       and (motion_score is null or motion_score between 0 and 100)
     );
+
+-- Supabase grants service_role ALL table privileges by default. Normalize the final
+-- contract after every canonical table exists so the explicit matrix is restrictive.
+revoke all privileges on all tables in schema public from service_role;
+grant select, insert, update, delete on public.users to service_role;
+grant select, insert on public.user_consents to service_role;
+grant update (status, withdrawn_at) on public.user_consents to service_role;
+grant select, insert, update, delete on public.health_daily to service_role;
+grant select, insert, update, delete on public.crs_scores to service_role;
+grant select, insert, update, delete on public.user_baselines to service_role;
+grant select, insert, update, delete on public.spots to service_role;
+grant select, insert, update, delete on public.patrol_entries to service_role;
+grant select, insert, delete on public.feedback_signals to service_role;
+grant select, insert on public.agent_logs to service_role;
+grant select, insert, update, delete on public.chat_threads to service_role;
+grant select, insert, update, delete on public.chat_messages to service_role;
+grant select, insert, delete on public.notification_log to service_role;
+grant select, insert, update, delete on public.user_devices to service_role;
+grant select, insert, update, delete on public.oauth_tokens to service_role;
+grant select, insert, update, delete on public.one_time_tokens to service_role;
+grant select, insert, update, delete on public.subscriptions to service_role;
+
+-- Repeat the transitional HEY-125 helper hardening after reconciliation so a local
+-- helper-present replay remains safe even if the fixture is installed between migrations.
+do $migration$
+begin
+  if to_regprocedure('public.rls_auto_enable()') is not null then
+    revoke execute on function public.rls_auto_enable() from public;
+    revoke execute on function public.rls_auto_enable() from anon;
+    revoke execute on function public.rls_auto_enable() from authenticated;
+    grant execute on function public.rls_auto_enable() to service_role;
+  end if;
+end
+$migration$;

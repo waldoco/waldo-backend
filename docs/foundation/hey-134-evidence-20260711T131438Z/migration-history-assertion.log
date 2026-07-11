@@ -1,0 +1,4 @@
+npm notice run npx
+npm notice run 'supabase' db query --local --file supabase/fixtures/assert-canonical-migration-history.sql
+Connecting to local database...
+DO

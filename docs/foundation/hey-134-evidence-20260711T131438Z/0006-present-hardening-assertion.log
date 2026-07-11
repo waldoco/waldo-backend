@@ -1,0 +1,5 @@
+npm notice run npx
+npm notice run 'supabase' db query --local --file supabase/fixtures/assert-legacy-rls-auto-enable-hardened.sql
+Connecting to local database...
+[31mfailed to execute query: error: function "public.rls_auto_enable()" does not exist[39m
+Try rerunning the command with --debug to troubleshoot the error.

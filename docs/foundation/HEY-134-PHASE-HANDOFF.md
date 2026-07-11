@@ -17,7 +17,8 @@ Next dependency: HEY-114 remains blocked until HEY-134 lands or a deliberate sta
   - exact source/purpose/18+ consent gating for health writes;
   - opaque text trace identifiers;
   - 64-character lowercase hexadecimal notification idempotency keys;
-  - Form/CRS composite, zone, confidence, and four-pillar constraints.
+  - Form/CRS composite, zone, confidence, and four-pillar constraints;
+  - final `service_role` grant normalization that revokes Supabase default `ALL` table privileges and re-grants the exact canonical matrix.
 - Added 44 pgTAP schema contract assertions covering exact tables, RLS enable/force, tenant isolation, grants, public-function exposure, service-only posture, constraints, cascades, consent failure cases, and cross-tenant FKs.
 - Added exact filesystem and database migration-history assertions.
 - Added CI-only fixtures that prove transitional `0006` is safe with the helper both absent and present.
@@ -42,6 +43,9 @@ Next dependency: HEY-114 remains blocked until HEY-134 lands or a deliberate sta
 | Adversarial QA | exact DB history, exact table/column/function grants, helper paths, and pgTAP plan hardened after review | Static findings resolved; dynamic evidence pending |
 | Project Woof read-only audit | Six recorded migrations, helper ACL, security/performance advisors inspected through authenticated Supabase MCP | PASS; no remote mutation |
 | Shared-environment safety | No `apply_migration`, linked CLI command, preview branch, staging change, or production change | PASS |
+| Arch pgTAP failure investigation | User's Arch runbook reached `supabase test db`; test 13 failed because `service_role` retained default `TRUNCATE`, `REFERENCES`, and `TRIGGER` table privileges on most tables | Root cause found; migration patched |
+| Patched local migrate-from-zero and pgTAP | `npx -y supabase@2.109.1 db reset --local --no-seed`; `npx -y supabase@2.109.1 test db`; `node scripts/verify-supabase-migrations.mjs`; `git diff --check` | PASS; 44/44 pgTAP tests |
+| Transitional `0006` helper-present fixture | Arch runbook step 11 exposed that `supabase db query --file` rejects multi-command SQL files with `cannot insert multiple commands into a prepared statement`; the fixture was converted to one top-level `DO` block, and reconciliation now repeats the helper ACL normalization idempotently | PASS; helper-present path applies `0006`, hardening assertion returns `DO`, final pgTAP still passes |
 
 ## What Does Not Work Yet
 
@@ -106,11 +110,17 @@ Fresh databases do not contain Supabase's opt-in `rls_auto_enable()` helper. Pro
 - preserves the intended service-role execution grant;
 - has separate present/absent verification paths.
 
+The forward reconciliation migration repeats this ACL normalization when the helper exists so partial local helper-present replays converge to the same safe privilege state.
+
 This produces documented environment drift: Project Woof alone retains the helper. HEY-114 owns a read-only drift audit and an explicitly approved convergence decision. HEY-134 does not change Project Woof.
 
 ### Keep consent history append-only
 
 ADR-0073 makes withdrawal a state transition, not deletion, and requires re-grant as a new record. The forward migration revokes table-level UPDATE/DELETE from `service_role`, grants column-level UPDATE only for `status` and `withdrawn_at`, and enforces exactly one `granted → withdrawn` transition. Parent account deletion still cascades through the audit rows as part of the separate deletion path.
+
+### Normalize service-role default privileges
+
+Supabase grants `service_role` `ALL` table privileges by default when public tables are created. The historical HEY-9 migrations often granted only the intended subset, but those grants were additive and therefore left `TRUNCATE`, `REFERENCES`, and `TRIGGER` in place. The forward reconciliation migration now revokes all `service_role` table privileges after every canonical table exists, then re-grants the exact table and column-level matrix asserted by pgTAP.
 
 ### Keep HEY-134 files-only and contract-scoped
 
@@ -121,6 +131,8 @@ The waldo-app schema inventory was used only to identify overlap. HEY-134 does n
 - Project migration history and repository filenames must be reconciled by timestamp version, not friendly migration name.
 - A hardening migration copied exactly from a configured staging project may fail on a fresh database because staging contains opt-in helpers outside migration history. Both environmental states need explicit tests.
 - RLS and grants are separate layers. Exact grant assertions must include every table privilege, column-level withdrawal grants, and execution inherited through PUBLIC.
+- PostgreSQL grants are additive. On Supabase, `service_role` may already have `ALL` table privileges, so restricted matrices must explicitly revoke defaults before re-granting the intended subset.
+- Supabase CLI `db query --file` can route file contents through prepared execution; CI/runbook fixture files should use one top-level SQL statement or a direct `psql` path.
 - Printing `supabase migration list --local` is useful evidence but not a gate. The repository now raises on any mismatch in `supabase_migrations.schema_migrations`.
 - Consent-shape checks alone do not preserve audit evidence. Privileges and transition enforcement are both necessary.
 - A CI workflow committed to a branch is not evidence until a runner actually executes it.

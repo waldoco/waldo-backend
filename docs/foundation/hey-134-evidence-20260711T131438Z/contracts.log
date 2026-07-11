@@ -1,0 +1,67 @@
+npm notice run npx
+npm notice run 'pnpm' verify:node
+
+> waldo-backend@ verify:node /home/dev_086/Projects/waldo-backend
+> pnpm --filter @waldo/contracts test
+
+
+> @waldo/contracts@0.0.0 test /home/dev_086/Projects/waldo-backend/packages/contracts
+> vitest run
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.9 [39m[90m/home/dev_086/Projects/waldo-backend/packages/contracts[39m
+
+ [32m✓[39m src/runtime/routing.test.ts [2m([22m[2m56 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/memory/recall.test.ts [2m([22m[2m51 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/adapters/channel.test.ts [2m([22m[2m72 tests[22m[2m)[22m[32m 110[2mms[22m[39m
+ [32m✓[39m src/adapters/sheet.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 71[2mms[22m[39m
+ [32m✓[39m src/memory/sanitise.test.ts [2m([22m[2m55 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/tools/schemas/reads.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 64[2mms[22m[39m
+ [32m✓[39m src/prompt/skill.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/auth/mint.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/memory/hall.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 47[2mms[22m[39m
+ [32m✓[39m src/tools/schemas/writes.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/health/crs.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/runtime/journal.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/testing/evidence.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/auth/consent.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m src/adapters/llm.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32m✓[39m src/runtime/loop-policy.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/runtime/delivery-policy.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m src/adapters/health.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/core/hooks.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/adapters/doc.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/adapters/email.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 57[2mms[22m[39m
+ [32m✓[39m src/runtime/run.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m src/memory/trust.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/runtime/schedule.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/ui/card.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m src/memory/skill.test.ts [2m([22m[2m32 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/core/trigger.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/runtime/working-memory.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 35[2mms[22m[39m
+ [32m✓[39m src/tools/schemas/threading.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/adapters/calendar.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/tools/permissions.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/memory/episode.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/runtime/session.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/runtime/outbox.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/memory/pattern-id.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m src/runtime/class-state.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/model/roster.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/tools/handler.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 45[2mms[22m[39m
+ [32m✓[39m src/runtime/evidence.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/runtime/goal.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/prompt/reasons.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/telemetry/engagement.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m src/ui/notification.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m src/prompt/narrative.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/public/dto.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/public/openapi.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/core/error.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/runtime/sink.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m48 passed[39m[22m[90m (48)[39m
+[2m      Tests [22m [1m[32m1168 passed[39m[22m[90m (1168)[39m
+[2m   Start at [22m 20:01:44
+[2m   Duration [22m 9.76s[2m (transform 1.88s, setup 0ms, import 10.68s, tests 2.09s, environment 14ms)[22m
+

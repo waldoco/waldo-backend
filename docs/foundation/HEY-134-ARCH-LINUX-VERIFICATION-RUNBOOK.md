@@ -264,7 +264,8 @@ Required assertion: `fresh canonical databases do not create the Project Woof RL
 
 ## 11. Test transitional `0006` with the helper present
 
-Reset only through historical migration `0005`:
+Reset only through historical migration `0005`. If you are retrying this section after
+any helper-present failure, always restart here; do not rerun only the failed assertion.
 
 ```bash
 "${SUPABASE[@]}" db reset --local --no-seed \
@@ -272,7 +273,9 @@ Reset only through historical migration `0005`:
   2>&1 | tee "$EVIDENCE/0006-present-reset-through-0005.log"
 ```
 
-Create the CI-only legacy fixture in this disposable database:
+Create the CI-only legacy fixture in this disposable database. The fixture is one
+top-level `DO` block because `supabase db query --file` can execute file contents
+through a prepared-statement path, which rejects multi-command SQL files.
 
 ```bash
 "${SUPABASE[@]}" db query --local \
@@ -280,14 +283,20 @@ Create the CI-only legacy fixture in this disposable database:
   2>&1 | tee "$EVIDENCE/0006-present-create-fixture.log"
 ```
 
-Apply `0006` and the reconciliation migration:
+Apply `0006` and the reconciliation migration. This command must report both pending
+migrations as applied. If it says `Local database is up to date`, stop and restart
+this section from the reset-through-`0005` command above; otherwise the helper was
+created after `0006` was already marked applied.
 
 ```bash
 "${SUPABASE[@]}" migration up --local \
   2>&1 | tee "$EVIDENCE/0006-present-migration-up.log"
 ```
 
-Assert that app roles lost execution while `service_role` retained the intended grant:
+Assert that app roles lost execution while `service_role` retained the intended grant.
+The reconciliation migration also repeats the helper ACL normalization idempotently,
+so the final schema converges to the same safe privilege state when the legacy helper
+exists.
 
 ```bash
 "${SUPABASE[@]}" db query --local \
@@ -303,6 +312,14 @@ Assert that app roles lost execution while `service_role` retained the intended 
 ```
 
 Every command must exit `0`. This fixture is deliberately `SECURITY DEFINER`, exists only inside the disposable local database, creates no event trigger, and must never be run with `--linked` or a hosted database URL.
+
+### 11.1 Runbook patch notes
+
+The Arch verification pass exposed three runbook/schema issues that are now patched:
+
+- `service_role` default `ALL` table privileges left `TRUNCATE`, `REFERENCES`, and `TRIGGER` outside the intended grant matrix. The reconciliation migration now revokes all default table privileges and re-grants the exact canonical matrix.
+- `supabase db query --file` rejected the original helper-present fixture because it contained multiple top-level SQL commands. The fixture now uses one top-level `DO` block.
+- Partial helper-present retries could leave `0006` marked applied before the helper existed. The reconciliation migration now repeats the helper ACL normalization when `public.rls_auto_enable()` exists.
 
 ## 12. Restore the canonical helper-absent state
 
