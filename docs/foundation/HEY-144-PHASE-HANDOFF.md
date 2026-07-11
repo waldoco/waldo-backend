@@ -1,7 +1,7 @@
 # HEY-144 Goals DO Schema Handoff
 
 Status: draft PR [#52](https://github.com/Pin4sf/waldo-backend/pull/52) is open from
-`codex/hey-144-goals-do-schema` at `4fb0ea4`; no deployment or live cloud action has been performed.
+`codex/hey-144-goals-do-schema`; no deployment or live cloud action has been performed.
 Date: 2026-07-11 IST.
 
 ## What Was Built
@@ -92,8 +92,8 @@ The branch was rebased onto remote `main` at `a257a175d0361df5c129d73144f95ff245
 and opened as draft [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52). GitHub compares 12
 commits and seven intended files against `main`; it does not reintroduce Wave 0 documentation.
 The final full verification wall was run on the rebased implementation before publication. GitHub
-reported no workflow runs for the draft head when checked, so retain draft status until human review
-and remote CI evidence are available.
+reports a skipped Supabase Preview check for the draft head, but no executable CI result; retain draft
+status until human review and applicable remote CI evidence are available.
 
 ## Files Changed
 

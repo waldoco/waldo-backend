@@ -124,8 +124,8 @@ or other-owner rows never become active-goal output.
   focused-suite run; the GoalStore tests passed in that run, an explicit diagnostic rerun and the final
   full wall passed, and root cause remains unverified.
 - The rebased implementation is published as draft
-  [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52); remote workflow evidence was not yet
-  present when checked, so it remains draft pending review.
+  [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52); the only reported remote check was a
+  skipped Supabase Preview, so it remains draft pending review and applicable CI evidence.
 
 ### Assumptions And Falsifier
 
