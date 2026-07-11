@@ -34,6 +34,10 @@ describe('medical claim gate', () => {
     'Take 20 units of insulin.',
     'Inject 12 IU of insulin tonight.',
     'This might be a symptom of pneumonia.',
+    'This appears to be a symptom of pneumonia.',
+    'Take a 20-unit dose of insulin.',
+    'Administer twenty units of insulin.',
+    'Inject 20 U of insulin.',
   ])('denies immutable medical claims and direct treatment instructions: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: false, reason: 'medical_claim' });
   });

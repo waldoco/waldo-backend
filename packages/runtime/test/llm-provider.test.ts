@@ -695,7 +695,7 @@ describe('RuntimeLLMProvider', () => {
   it('rejects an immutable medical claim returned by the gateway', async () => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
-      data: response(request.request.model, 'This might be a symptom of pneumonia.'),
+      data: response(request.request.model, 'This appears to be a symptom of pneumonia.'),
     }));
     const provider = new RuntimeLLMProvider({ gateway });
 
@@ -778,7 +778,7 @@ describe('RuntimeLLMProvider', () => {
             temperature: 0.3,
           };
         },
-        renderTemplate: () => 'Take 20 units of insulin.',
+        renderTemplate: () => 'Take a 20-unit dose of insulin.',
       },
       runtimeCtx(),
     );

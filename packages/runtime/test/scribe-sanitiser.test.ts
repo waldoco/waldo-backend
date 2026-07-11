@@ -39,6 +39,14 @@ const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
   encodeURIComponent('motion: active'),
   btoa('circadian: aligned'),
   'sleep\\u0020stage\\u003a\\u0020awake',
+  'sleep stage: slow-wave',
+  encodeURIComponent('motion: sedentary'),
+  btoa('circadian: delayed'),
+  { series: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 37, unit: '°C' }] },
+  { samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 12_345, unit: 'steps' }] },
+  'motion is active',
+  'sleep stage was awake',
+  'circadian rhythm is aligned',
 ];
 
 const INCOMPLETE_DERIVED_HEALTH_VIEWS: SanitiseInput['payload'][] = [
@@ -230,6 +238,8 @@ describe('Scribe sanitiser', () => {
     { provider_payload: { quantity: 42, unit: 'ms' } },
     { provider_payload: { vendor: 'synthetic' } },
     { hrv: '5.8e1' },
+    { hrv: '.58e2' },
+    { hrv: '+5.8e1' },
   ])('denies numeric health values under aliases and nested keys', (payload) => {
     expect(inspect(payload as unknown as SanitiseInput['payload'])).toEqual({
       ok: false,
@@ -245,6 +255,8 @@ describe('Scribe sanitiser', () => {
     { name: 'spo2', value: '96', unit: 'percent' },
     { label: 'form', amount: 72 },
     { metric: 'hrv', measurement: '5.8e1' },
+    { metric: 'hrv', measurement: '.58e2' },
+    { metric: 'hrv', measurement: '+5.8e1' },
     ['heartRate', 88, 'bpm'],
   ])('denies sibling and array health correlations', (payload) => {
     expect(inspect(payload as SanitiseInput['payload'])).toMatchObject({

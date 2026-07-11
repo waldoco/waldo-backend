@@ -28,10 +28,9 @@ const metricArbitrary = fc.constantFrom(
 );
 const unitArbitrary = fc.constantFrom('ms', 'bpm', '%', 'mmHg', 'kg', 'minutes');
 const numericArbitrary = fc.integer({ min: 1, max: 240 });
-const categoricalHealthArbitrary = fc.constantFrom(
-  ['motion', 'active'] as const,
-  ['circadian', 'aligned'] as const,
-  ['sleep_stage', 'awake'] as const,
+const categoricalHealthArbitrary = fc.tuple(
+  fc.constantFrom('motion', 'circadian', 'sleep_stage'),
+  fc.stringMatching(/^[a-z]{1,12}(?:-[a-z]{1,12})?$/),
 );
 
 function inspect(payload: SanitiseInput['payload']) {
@@ -87,16 +86,17 @@ describe('Scribe sanitiser properties', () => {
         numericArbitrary,
         fc.integer({ min: 0, max: 6 }),
         (metric, value, depth) => {
-          const scientific = `${value}.5e1`;
-          for (const hostile of [
-            { [metric]: scientific },
-            { metric, measurement: scientific },
-          ]) {
-            expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
-              ok: false,
-              check: 'health_value',
-              reason: 'health_value_leak',
-            });
+          for (const scientific of [`+${value}.5e1`, '.58e2', `-${value}E-1`]) {
+            for (const hostile of [
+              { [metric]: scientific },
+              { metric, measurement: scientific },
+            ]) {
+              expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+                ok: false,
+                check: 'health_value',
+                reason: 'health_value_leak',
+              });
+            }
           }
         },
       ),
@@ -163,8 +163,10 @@ describe('Scribe sanitiser properties', () => {
         categoricalHealthArbitrary,
         fc.integer({ min: 0, max: 6 }),
         fc.constantFrom('text', 'percent', 'base64', 'unicode'),
-        ([metric, value], depth, encoding) => {
-          const text = `${metric}: ${value}`;
+        fc.constantFrom(':', '=', ',', ' is ', ' was '),
+        ([metric, value], depth, encoding, separator) => {
+          const textMetric = metric === 'circadian' ? 'circadian rhythm' : metric;
+          const text = `${textMetric}${separator}${value}`;
           const encoded = (() => {
             switch (encoding) {
               case 'text':
@@ -194,7 +196,7 @@ describe('Scribe sanitiser properties', () => {
     fc.assert(
       fc.property(
         numericArbitrary,
-        unitArbitrary,
+        fc.oneof(unitArbitrary, fc.constantFrom('°C', '°F', 'steps')),
         fc.integer({ min: 0, max: 6 }),
         (value, unit, depth) => {
           const hostile = {
