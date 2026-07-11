@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 
 const GUARD = 'scripts/guards/guard-health-leak.mjs';
 const FAKE_CALLBACK_GUARD = 'scripts/guards/guard-fake-callbacks.mjs';
+const DO_ONLY_RUNTIME_GUARD = 'scripts/guards/guard-do-only-runtime.mjs';
 
 const LEAK_CASES = [
   { name: 'same-line assignment', code: 'const hrv = 42;\n' },
@@ -36,6 +37,18 @@ function runGuardOn(root) {
 
 function runFakeCallbackGuardOn(root) {
   return spawnSync('node', [FAKE_CALLBACK_GUARD, '--root', root], { encoding: 'utf8' });
+}
+
+function runDoOnlyRuntimeGuardOn(root) {
+  return spawnSync('node', [DO_ONLY_RUNTIME_GUARD, '--root', root], { encoding: 'utf8' });
+}
+
+function reportsOnlyPath(result, path) {
+  return result.status !== 0 && result.stderr.trim() === path && result.stdout.trim() === '';
+}
+
+function reportsClean(result) {
+  return result.status === 0 && result.stderr.trim() === '';
 }
 
 function withFixture(fileName, code, fn) {
@@ -133,6 +146,260 @@ const fakeCallbackClean = withFixture(
 if (fakeCallbackClean.stderr.trim() !== '') {
   process.stderr.write(
     `guards-selftest: guard-fake-callbacks FALSE POSITIVE on resolver wiring:\n${fakeCallbackClean.stderr}`,
+  );
+  failures += 1;
+}
+
+const invokeAgentViolation = withFixture(
+  'packages/runtime/src/run-loop/do.ts',
+  "const endpoint = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(invokeAgentViolation, 'packages/runtime/src/run-loop/do.ts')) {
+  process.stderr.write('guards-selftest: guard-do-only-runtime MISSED invoke-agent in runtime source\n');
+  failures += 1;
+}
+
+const packageSourceInvokeAgentViolation = withFixture(
+  'packages/other/src/worker.ts',
+  "const endpoint = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(packageSourceInvokeAgentViolation, 'packages/other/src/worker.ts')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED invoke-agent in package source\n',
+  );
+  failures += 1;
+}
+
+const packageNonSrcInvokeAgentViolation = withFixture(
+  'packages/other/scripts/worker.ts',
+  "const endpoint = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(packageNonSrcInvokeAgentViolation, 'packages/other/scripts/worker.ts')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED invoke-agent in non-src package source\n',
+  );
+  failures += 1;
+}
+
+const packageConfigInvokeAgentViolation = withFixture(
+  'packages/other/wrangler.jsonc',
+  '{ "entrypoint": "invoke-agent" }\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(packageConfigInvokeAgentViolation, 'packages/other/wrangler.jsonc')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED invoke-agent in package config\n',
+  );
+  failures += 1;
+}
+
+const rootSourceInvokeAgentViolation = withFixture(
+  'src/worker.ts',
+  "const endpoint = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(rootSourceInvokeAgentViolation, 'src/worker.ts')) {
+  process.stderr.write('guards-selftest: guard-do-only-runtime MISSED invoke-agent in root source\n');
+  failures += 1;
+}
+
+const rootConfigInvokeAgentViolation = withFixture(
+  'src/route.json',
+  '{ "entrypoint": "invoke-agent" }\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(rootConfigInvokeAgentViolation, 'src/route.json')) {
+  process.stderr.write('guards-selftest: guard-do-only-runtime MISSED invoke-agent in root config\n');
+  failures += 1;
+}
+
+const testSourceReference = withFixture(
+  'packages/other/src/worker.test.ts',
+  "const endpoint = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsClean(testSourceReference)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-only-runtime FALSE POSITIVE in a test source:\n${testSourceReference.stderr}`,
+  );
+  failures += 1;
+}
+
+const docsSourceReference = withFixture(
+  'packages/other/src/docs/example.ts',
+  "const endpoint = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsClean(docsSourceReference)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-only-runtime FALSE POSITIVE in docs:\n${docsSourceReference.stderr}`,
+  );
+  failures += 1;
+}
+
+const dependencySourceReference = withFixture(
+  'packages/other/src/node_modules/example/index.ts',
+  "const endpoint = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsClean(dependencySourceReference)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-only-runtime FALSE POSITIVE in node_modules:\n${dependencySourceReference.stderr}`,
+  );
+  failures += 1;
+}
+
+const nonRuntimeServiceRoleBinding = withFixture(
+  'packages/other/src/worker.ts',
+  'const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsClean(nonRuntimeServiceRoleBinding)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-only-runtime FALSE POSITIVE on non-runtime service-role binding:\n${nonRuntimeServiceRoleBinding.stderr}`,
+  );
+  failures += 1;
+}
+
+const invokeAgentCamelCaseViolation = withFixture(
+  'packages/runtime/src/run-loop/do.ts',
+  'const invokeAgent = () => undefined;\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(invokeAgentCamelCaseViolation, 'packages/runtime/src/run-loop/do.ts')) {
+  process.stderr.write('guards-selftest: guard-do-only-runtime MISSED invokeAgent in runtime source\n');
+  failures += 1;
+}
+
+const serviceRoleRuntimeViolation = withFixture(
+  'packages/runtime/src/run-loop/do.ts',
+  'const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(serviceRoleRuntimeViolation, 'packages/runtime/src/run-loop/do.ts')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED SUPABASE_SERVICE_ROLE_KEY in runtime source\n',
+  );
+  failures += 1;
+}
+
+const serviceRoleRuntimeNonSrcViolation = withFixture(
+  'packages/runtime/worker.ts',
+  'const serviceRoleKey = env.SUPABASE_SERVICE_ROLE_KEY;\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(serviceRoleRuntimeNonSrcViolation, 'packages/runtime/worker.ts')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED SUPABASE_SERVICE_ROLE_KEY in non-src runtime file\n',
+  );
+  failures += 1;
+}
+
+const serviceRoleConfigViolation = withFixture(
+  'packages/runtime/wrangler.toml',
+  '[vars]\nSUPABASE_SERVICE_ROLE_KEY = "fixture-only"\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(serviceRoleConfigViolation, 'packages/runtime/wrangler.toml')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED SUPABASE_SERVICE_ROLE_KEY in wrangler.toml\n',
+  );
+  failures += 1;
+}
+
+const serviceRoleJsoncConfigViolation = withFixture(
+  'packages/runtime/wrangler.jsonc',
+  '{ "vars": { "SUPABASE_SERVICE_ROLE_KEY": "fixture-only" } }\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(serviceRoleJsoncConfigViolation, 'packages/runtime/wrangler.jsonc')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED SUPABASE_SERVICE_ROLE_KEY in wrangler.jsonc\n',
+  );
+  failures += 1;
+}
+
+const serviceRoleJsonConfigViolation = withFixture(
+  'packages/runtime/wrangler.json',
+  '{ "vars": { "SUPABASE_SERVICE_ROLE_KEY": "fixture-only" } }\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsOnlyPath(serviceRoleJsonConfigViolation, 'packages/runtime/wrangler.json')) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED SUPABASE_SERVICE_ROLE_KEY in wrangler.json\n',
+  );
+  failures += 1;
+}
+
+const doOnlyRuntimeClean = withFixture(
+  'packages/runtime/src/run-loop/do.ts',
+  'export class RunLoopDO {}\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (doOnlyRuntimeClean.status !== 0 || doOnlyRuntimeClean.stderr.trim() !== '') {
+  process.stderr.write(
+    `guards-selftest: guard-do-only-runtime FALSE POSITIVE on clean runtime source:\n${doOnlyRuntimeClean.stderr}`,
+  );
+  failures += 1;
+}
+
+const retiredSupabaseFunctionPathViolation = withFixture(
+  'supabase/functions/invoke-agent/index.ts',
+  'Deno.serve(() => new Response("ok"));\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (
+  !reportsOnlyPath(
+    retiredSupabaseFunctionPathViolation,
+    'supabase/functions/invoke-agent/index.ts',
+  )
+) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED retired supabase/functions/invoke-agent route\n',
+  );
+  failures += 1;
+}
+
+const retiredSupabaseFunctionTestFile = withFixture(
+  'supabase/functions/invoke-agent/index.test.ts',
+  'Deno.serve(() => new Response("ok"));\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (!reportsClean(retiredSupabaseFunctionTestFile)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-only-runtime FALSE POSITIVE in retired-route test source:\n${retiredSupabaseFunctionTestFile.stderr}`,
+  );
+  failures += 1;
+}
+
+const retiredSupabaseFunctionReferenceViolation = withFixture(
+  'supabase/functions/mint-agent-jwt/index.ts',
+  "const retiredPath = 'invoke-agent';\n",
+  runDoOnlyRuntimeGuardOn,
+);
+if (
+  !reportsOnlyPath(
+    retiredSupabaseFunctionReferenceViolation,
+    'supabase/functions/mint-agent-jwt/index.ts',
+  )
+) {
+  process.stderr.write(
+    'guards-selftest: guard-do-only-runtime MISSED invoke-agent reference in supabase function\n',
+  );
+  failures += 1;
+}
+
+const legitimateSupabaseFunction = withFixture(
+  'supabase/functions/mint-agent-jwt/index.ts',
+  'Deno.serve(() => new Response("ok"));\n',
+  runDoOnlyRuntimeGuardOn,
+);
+if (legitimateSupabaseFunction.status !== 0 || legitimateSupabaseFunction.stderr.trim() !== '') {
+  process.stderr.write(
+    `guards-selftest: guard-do-only-runtime FALSE POSITIVE on mint-agent-jwt:\n${legitimateSupabaseFunction.stderr}`,
   );
   failures += 1;
 }
