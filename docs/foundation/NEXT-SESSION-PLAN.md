@@ -2,7 +2,8 @@
 
 Status: Wave 0 merged in PR #49. The verified post-Wave-0 order is PR #50 -> PR #52 -> PR #51.
 HEY-14 preflight passed the baseline but found no typed WorkspaceMount/R2 seam; contract-only
-HEY-163 and bounded-admission HEY-166 are now the prerequisites before HEY-14.
+HEY-163, bounded-admission HEY-166, and canonical-decision HEY-167 are now the prerequisites before
+HEY-14.
 Date: 2026-07-12 IST.
 Baseline: `2fd798f818213b344e700d98def006e80e0d56ae`; PR #47 merged HEY-13, and PR #52 merged the
 V2 goals storage foundation. HEY-143 remains In Progress because provider-readiness is fail-closed
@@ -122,14 +123,15 @@ execution slice.
    PR #52 (HEY-144), and PR #51 (HEY-75).
 2. **Current:** HEY-14 preflight passed the `2fd798f8` baseline but found no typed
    WorkspaceMount/R2 seam. HEY-163 is the contract-only ADR-0029/0076 fulfillment; HEY-166 owns
-   bounded reader/admission policy and also blocks HEY-14 implementation.
-3. **Remaining context:** HEY-163 -> HEY-166 -> HEY-14 -> HEY-15 -> HEY-16. HEY-15 retains its serialized
+   proposed bounded reader/admission policy; HEY-167 owns the required canonical reader-Scribe and
+   model-token-counter decision. All three block HEY-14 implementation.
+3. **Remaining context:** HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15 -> HEY-16. HEY-15 retains its serialized
    schema/rebase discipline, and HEY-16 composes merged HEY-14/15 interfaces; its full
    goal-hydration path still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
    static-only, and HEY-160 separately owns any future production per-user JWT/`db.forUser()`
    custody path.
 4. **Wave 3:** HEY-141 requires its own Agent-Ready admission even though HEY-100 is merged.
-5. **Convergence:** HEY-163 and HEY-166 must land before the remaining HEY-14, HEY-15, HEY-16, and HEY-141
+5. **Convergence:** HEY-163, HEY-166, and HEY-167 must land before the remaining HEY-14, HEY-15, HEY-16, and HEY-141
    work. A fresh clean `origin/main` must prove those results alongside the already merged HEY-100,
    HEY-144, and HEY-75 before HEY-143 closure planning. This authorizes planning only.
 6. **Reliability parallel root:** HEY-165 owns diagnosis of the recurring unchanged

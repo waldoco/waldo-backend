@@ -35,12 +35,13 @@ Current facts:
   PR #50 (`7d02b173`, HEY-100) -> PR #52 (`4e1cac30`, HEY-144) -> PR #51 (`2fd798f8`, HEY-75).
 - HEY-14's fresh preflight passed the `2fd798f8` baseline but found no typed WorkspaceMount/R2 seam.
   HEY-163 is the contract-only ADR-0029/0076 fulfillment; HEY-166 now owns the proposed bounded
-  blob/admission policy, and both block HEY-14 implementation.
+  blob/admission policy; HEY-167 owns the required canonical reader-Scribe/token-budget decision.
+  All three block HEY-14 implementation.
 - HEY-150 matrix review and HEY-151/152 contract/cutover work can proceed alongside HEY-125;
   HEY-157 and HEY-159 are parallel roots, not children of HEY-150.
 - HEY-144's V2 goals storage foundation is merged. The remaining context sequence is HEY-163 ->
-  HEY-166 -> HEY-14 -> HEY-15 -> HEY-16; HEY-15 retains its admission/rebase discipline. Full
-  goal hydration still awaits HEY-162's Scribe-backed admission boundary.
+  HEY-166 -> HEY-167 -> HEY-14 -> HEY-15 -> HEY-16; HEY-15 retains its admission/rebase discipline.
+  Full goal hydration still awaits HEY-162's Scribe-backed admission boundary.
 - Do not call the harness a complete Pi/Hermes-style agent loop until real context/recall/provider,
   Scribe, delivery, staging, and Alpha proof are wired and verified.
 - The 16-table Supabase/RLS data plane is intended/contracted, not merged or staging-proven.
