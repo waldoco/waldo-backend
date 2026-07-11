@@ -30,5 +30,45 @@ jobs:
       - name: Install (frozen lockfile, release-age policy active)
         run: pnpm install --frozen-lockfile
 
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
+        with:
+          version: 2.109.1
+
+      - name: Start isolated Supabase database
+        run: supabase db start
+
       - name: Verify
         run: pnpm verify
+
+  verify-supabase:
+    name: Supabase migrate-from-zero and pgTAP
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
+        with:
+          version: 2.109.1
+
+      - name: Start isolated database and apply migrations from zero
+        run: supabase db start
+
+      - name: Run schema contract and pgTAP tests
+        run: supabase test db
+
+      - name: Verify canonical migration ordering
+        run: |
+          node scripts/verify-supabase-migrations.mjs
+          supabase migration list --local
+
+      - name: Verify transitional 0006 with Project Woof helper present
+        run: |
+          supabase db reset --local --no-seed --version 20260709171953
+          supabase db query --local --file supabase/fixtures/create-legacy-rls-auto-enable.sql
+          supabase migration up --local
+          supabase db query --local --file supabase/fixtures/assert-legacy-rls-auto-enable-hardened.sql
+          supabase migration list --local

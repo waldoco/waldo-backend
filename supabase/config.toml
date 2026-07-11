@@ -1,5 +1,16 @@
 project_id = "oqcjjcytjvrckvylagsl"
 
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+
+[db.seed]
+enabled = false
+
 [functions.mint-agent-jwt]
 verify_jwt = false
 
