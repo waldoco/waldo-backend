@@ -61,23 +61,30 @@ function seedGoalRow(sql: SqlStorage, goal: StoredGoal): void {
 }
 
 describe('GoalStore', () => {
-  it('reads a contract-valid committed goal only for its owner', async () => {
+  it('reads each populated owner\'s contract-valid committed goal without cross-owner leakage', async () => {
     const runtime = freshRuntimeStub();
+    const ownerA = 'owner-a';
+    const ownerB = "owner-b' OR 1=1 --";
+    const ownerAGoal = validGoal(ownerA, { id: 'goal-owner-a' });
+    const ownerBGoal = validGoal(ownerB, { id: 'goal-owner-b' });
     const rows = await runInDurableObject(runtime, (_instance, state) => {
       provisionDoSchema(state.storage);
       const sql = state.storage.sql;
       const store = new GoalStore(sql);
 
-      seedGoalRow(sql, validGoal('owner-a'));
+      seedGoalRow(sql, ownerAGoal);
+      seedGoalRow(sql, ownerBGoal);
 
       return {
-        ownerA: store.readActive('owner-a'),
-        ownerB: store.readActive('owner-b'),
+        ownerA: store.readActive(ownerA),
+        ownerB: store.readActive(ownerB),
       };
     });
 
-    expect(rows.ownerA).toEqual([validGoal('owner-a')]);
-    expect(rows.ownerB).toEqual([]);
+    expect(rows.ownerA).toEqual([ownerAGoal]);
+    expect(rows.ownerB).toEqual([ownerBGoal]);
+    expect(rows.ownerA).not.toContainEqual(ownerBGoal);
+    expect(rows.ownerB).not.toContainEqual(ownerAGoal);
   });
 
   it('round-trips nullable optional fields in deterministic id order', async () => {
