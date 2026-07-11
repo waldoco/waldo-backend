@@ -1,5 +1,5 @@
 export const DO_SCHEMA_METADATA_TABLE = 'do_schema_migrations' as const;
-export const DO_SCHEMA_VERSION = 1;
+export const DO_SCHEMA_VERSION = 2;
 
 export const DO_PRODUCT_TABLES = [
   'memory_blocks',
@@ -12,10 +12,10 @@ export const DO_PRODUCT_TABLES = [
   'sheet_commits',
   'thread_topic_index',
   'drafts',
+  'goals',
 ] as const;
 
 export const DEFERRED_DO_PRODUCT_TABLES = [
-  'goals',
   'runs',
   'outbox',
   'schedules',
@@ -53,7 +53,7 @@ export class DoSchemaDriftError extends Error {
 }
 
 export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = {
-  version: DO_SCHEMA_VERSION,
+  version: 1,
   name: 'hey10-base-context-schema',
   up: [
     `
@@ -292,6 +292,33 @@ export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+export const HEY144_GOALS_SCHEMA_MIGRATION: DoMigration = {
+  version: 2,
+  name: 'hey144-goals-schema',
+  up: [
+    `
+      CREATE TABLE IF NOT EXISTS goals (
+        id           TEXT PRIMARY KEY,
+        user_id      TEXT NOT NULL,
+        description  TEXT NOT NULL CHECK (length(description) BETWEEN 1 AND 500),
+        baseline     TEXT CHECK (baseline IS NULL OR length(baseline) BETWEEN 1 AND 500),
+        target       TEXT CHECK (target IS NULL OR length(target) BETWEEN 1 AND 500),
+        progress     TEXT CHECK (progress IS NULL OR length(progress) BETWEEN 1 AND 500),
+        deadline     TEXT,
+        active       INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+    `,
+  ],
+  down: ['DROP TABLE IF EXISTS goals;'],
+};
+
+export const DO_SCHEMA_MIGRATIONS = [
+  HEY10_BASE_SCHEMA_MIGRATION,
+  HEY144_GOALS_SCHEMA_MIGRATION,
+] as const;
+
 const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
   memory_blocks: [
     'id',
@@ -410,12 +437,26 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'recipient_count',
     'idempotency_key',
   ],
+  goals: [
+    'id',
+    'user_id',
+    'description',
+    'baseline',
+    'target',
+    'progress',
+    'deadline',
+    'active',
+    'created_at',
+    'updated_at',
+  ],
 };
 
 export function provisionDoSchema(storage: DurableObjectStorage): DoSchemaAssertResult {
   ensureMigrationMetadata(storage.sql);
-  if (getSchemaVersion(storage.sql) < DO_SCHEMA_VERSION) {
-    applyDoMigration(storage, HEY10_BASE_SCHEMA_MIGRATION);
+  for (const migration of DO_SCHEMA_MIGRATIONS) {
+    if (getSchemaVersion(storage.sql) < migration.version) {
+      applyDoMigration(storage, migration);
+    }
   }
   return assertDoSchema(storage.sql);
 }
