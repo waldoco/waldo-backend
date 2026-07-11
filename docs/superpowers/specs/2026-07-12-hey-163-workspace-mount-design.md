@@ -19,11 +19,20 @@ HEY-14 must read selected user skill files and cache their opaque versions. The 
 - `WorkspaceFile`, a strict closed union of `{ kind: 'today' }`, `{ kind: 'baselines' }`, `{ kind: 'patterns' }`, and `{ kind: 'user_skill', name: SkillName }`.
 - `WorkspacePrefix`, exactly `{ kind: 'user_skills' }`.
 - `WorkspaceVersion` and `WorkspaceWriteId`, non-empty branded opaque tokens.
-- `WorkspaceBlob`, a strict `{ bytes: Uint8Array, version: WorkspaceVersion }` read result.
+- `WorkspaceBlob`, a strict `{ bytes: Uint8Array, version: WorkspaceVersion }` versioned content
+  value used for read results and staged write input.
 - `WorkspaceWriteOptions` with optional `expected_version`, and `StagedWorkspaceWrite` with a staged opaque id.
-- `WorkspaceMount` with `readFile`, `writeFile`, `list`, `commit`, and `discard` methods. No method receives a user id, raw path, bucket name, object key, or R2 client.
+- `WorkspaceMount` with `readFile`, `writeFile(file, content: WorkspaceBlob, options?)`, `list`,
+  `commit`, and `discard` methods. No method receives a user id, raw path, bucket name, object key,
+  or R2 client.
 
 The write-related types faithfully preserve the ADR-0076 staged protocol but add no runtime writer, sanitizer destination, R2 binding, or commit implementation. Existing `skill_body` sanitation remains the only relevant H14 prompt-admission protection; `workspace_file` remains deliberately absent from the current sanitiser vocabulary until a separate writer-policy decision.
+
+This initial closed vocabulary admits the HEY-14 files only. ADR-0076 also anticipates a typed
+cold-archive manifest when `retrieve()` needs one, but neither the current H14 loader nor the
+planned H15 V1 recall source has defined that manifest shape. We therefore do not invent an archive
+descriptor or re-open the vocabulary with a generic string; a later retrieve slice must add one
+explicit descriptor and conformance fixture through the contracts owner.
 
 ## Data flow
 

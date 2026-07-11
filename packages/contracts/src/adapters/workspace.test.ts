@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorkspaceMount } from '../index';
+import type { WorkspaceFile, WorkspaceMount } from '../index';
 import {
   stagedWorkspaceWriteSchema,
   workspaceBlobSchema,
@@ -21,20 +21,44 @@ describe('workspace contract', () => {
 
   it('lets a fake owner-bound mount use opaque versions and staged ids', async () => {
     const version = workspaceVersionSchema.parse('v-test-1');
+    const content = workspaceBlobSchema.parse({ bytes: Uint8Array.of(2), version });
+    const readResult = workspaceBlobSchema.parse({ bytes: Uint8Array.of(1), version });
+    const committedWriteId = workspaceWriteIdSchema.parse('stage-commit');
+    const discardedWriteId = workspaceWriteIdSchema.parse('stage-discard');
     const fakeMount: WorkspaceMount = {
-      readFile: async () => workspaceBlobSchema.parse({ bytes: Uint8Array.of(1), version }),
-      writeFile: async () => stagedWorkspaceWriteSchema.parse({ write_id: 'stage-1' }),
+      readFile: async (file) => {
+        expect(file).toEqual({ kind: 'today' });
+        return readResult;
+      },
+      writeFile: async (_file, receivedContent, options) => {
+        expect(receivedContent).toEqual(content);
+        expect(options).toEqual({ expected_version: version });
+        return stagedWorkspaceWriteSchema.parse({ write_id: 'stage-1' });
+      },
       list: async () => [{ kind: 'user_skill', name: 'weekly-review' }],
-      commit: async () => undefined,
-      discard: async () => undefined,
+      commit: async (writeId) => {
+        expect(writeId).toBe(committedWriteId);
+      },
+      discard: async (writeId) => {
+        expect(writeId).toBe(discardedWriteId);
+      },
     };
 
-    expect(await fakeMount.list(workspacePrefixSchema.parse({ kind: 'user_skills' }))).toEqual([
+    await expect(fakeMount.readFile({ kind: 'today' })).resolves.toEqual(readResult);
+    const listed: WorkspaceFile[] = await fakeMount.list(
+      workspacePrefixSchema.parse({ kind: 'user_skills' }),
+    );
+    expect(listed).toEqual([
       { kind: 'user_skill', name: 'weekly-review' },
     ]);
     expect(workspaceWriteOptionsSchema.parse({ expected_version: version })).toEqual({
       expected_version: version,
     });
+    await expect(
+      fakeMount.writeFile({ kind: 'today' }, content, { expected_version: version }),
+    ).resolves.toEqual({ write_id: 'stage-1' });
+    await expect(fakeMount.commit(committedWriteId)).resolves.toBeUndefined();
+    await expect(fakeMount.discard(discardedWriteId)).resolves.toBeUndefined();
   });
 
   it('rejects raw paths, traversal-like names, unknown kinds, and hidden object keys', () => {

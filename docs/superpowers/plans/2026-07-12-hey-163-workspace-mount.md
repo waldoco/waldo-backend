@@ -32,7 +32,7 @@
 - Consumes: skillNameSchema and SkillName from packages/contracts/src/prompt/skill.ts.
 - Produces: typed descriptors/opaque values and the five-method WorkspaceMount interface.
 
-- [ ] **Step 1: Write the first failing public-contract test**
+- [x] **Step 1: Write the first failing public-contract test**
 
     import { describe, expect, it } from 'vitest';
     import { workspaceFileSchema } from './workspace';
@@ -45,13 +45,13 @@
       });
     });
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: npx -y pnpm@10.34.4 --filter @waldo/contracts test -- workspace
 
 Expected: FAIL because ./workspace does not exist.
 
-- [ ] **Step 3: Write the minimal public contract**
+- [x] **Step 3: Write the minimal public contract**
 
     import { z } from 'zod';
     import { skillNameSchema } from '../prompt/skill';
@@ -91,17 +91,19 @@ Expected: FAIL because ./workspace does not exist.
       readFile(file: WorkspaceFile): Promise<WorkspaceBlob>;
       writeFile(
         file: WorkspaceFile,
-        content: Uint8Array,
+        content: WorkspaceBlob,
         options?: WorkspaceWriteOptions,
       ): Promise<StagedWorkspaceWrite>;
-      list(prefix: WorkspacePrefix): Promise<readonly WorkspaceFile[]>;
+      list(prefix: WorkspacePrefix): Promise<WorkspaceFile[]>;
       commit(writeId: WorkspaceWriteId): Promise<void>;
       discard(writeId: WorkspaceWriteId): Promise<void>;
     }
 
-Use Uint8Array in writeFile: a caller supplies new bytes, not an old read version. Do not add a path string, owner argument, storage metadata field, or provider dependency.
+Use `WorkspaceBlob` in `writeFile` exactly as accepted ADR-0076 specifies. Its opaque version
+travels with the content value; `expected_version` remains the optional optimistic-concurrency
+guard. Do not add a path string, owner argument, storage metadata field, or provider dependency.
 
-- [ ] **Step 4: Export and run GREEN**
+- [x] **Step 4: Export and run GREEN**
 
 Append exactly this to packages/contracts/src/index.ts:
 
@@ -111,7 +113,7 @@ Run: npx -y pnpm@10.34.4 --filter @waldo/contracts test -- workspace
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit tracer slice**
+- [x] **Step 5: Commit tracer slice**
 
 Run: git add packages/contracts/src/adapters/workspace.ts packages/contracts/src/adapters/workspace.test.ts packages/contracts/src/index.ts && git commit -m "feat(contracts): add typed workspace mount seam"
 
@@ -141,9 +143,14 @@ Run: git add packages/contracts/src/adapters/workspace.ts packages/contracts/src
 
     it('lets a fake owner-bound mount use opaque versions and staged ids', async () => {
       const version = workspaceVersionSchema.parse('v-test-1');
+      const content = workspaceBlobSchema.parse({ bytes: Uint8Array.of(2), version });
       const fakeMount: WorkspaceMount = {
         readFile: async () => workspaceBlobSchema.parse({ bytes: Uint8Array.of(1), version }),
-        writeFile: async () => stagedWorkspaceWriteSchema.parse({ write_id: 'stage-1' }),
+        writeFile: async (_file, receivedContent, options) => {
+          expect(receivedContent).toEqual(content);
+          expect(options).toEqual({ expected_version: version });
+          return stagedWorkspaceWriteSchema.parse({ write_id: 'stage-1' });
+        },
         list: async () => [{ kind: 'user_skill', name: 'weekly-review' }],
         commit: async () => undefined,
         discard: async () => undefined,
@@ -154,6 +161,9 @@ Run: git add packages/contracts/src/adapters/workspace.ts packages/contracts/src
       expect(workspaceWriteOptionsSchema.parse({ expected_version: version })).toEqual({
         expected_version: version,
       });
+      await expect(
+        fakeMount.writeFile({ kind: 'today' }, content, { expected_version: version }),
+      ).resolves.toEqual({ write_id: 'stage-1' });
     });
 
 - [x] **Step 2: Add adversarial strict-schema tests**
@@ -210,6 +220,14 @@ a valid and invalid fixture. For non-vacuity, temporarily replacing `workspaceBl
 `z.strictObject` with `z.object` made the hidden `bucket` rejection assertion fail; strictness was
 restored before this commit. No schema correction was needed beyond the Task 1 implementation.
 
+**ADR correction record (2026-07-12):** Independent review against the accepted ADR-0076 source
+found that the original derived Task 1 brief had incorrectly narrowed `writeFile` content to bare
+`Uint8Array`. A new fake-mount invocation first made contracts typecheck fail against that signature,
+then the shared interface and design were corrected to the ADR-required `WorkspaceBlob` input.
+The same field-by-field check changed `list` from a readonly array to ADR-0076's
+`WorkspaceFile[]`; an invoked fake provides the compile-time proof. These corrections are recorded
+before Task 3 and must receive a fresh full verification wall and review.
+
 ### Task 3: Review and handoff
 
 **Files:**
@@ -222,13 +240,13 @@ restored before this commit. No schema correction was needed beyond the Task 1 i
 - Consumes: the complete contract.
 - Produces: an auditable HEY-14 handoff.
 
-- [ ] **Step 1: Run the boundary scan**
+- [x] **Step 1: Run the boundary scan**
 
 Run: rg -n "WorkspaceMount|WorkspaceFile|WorkspacePrefix|R2Bucket|object_key|owner_id" packages/contracts/src && git diff --check
 
 Expected: production contract code contains one workspace seam and no raw R2/bucket/object-key/owner field; test fixture names may mention forbidden fields only to prove rejection.
 
-- [ ] **Step 2: Independently review against ADR-0029/0076**
+- [x] **Step 2: Independently review against ADR-0029/0076**
 
 Confirm all five interface methods exist, no generic filesystem sneaks in, staged types do not imply a writer, workspace_file remains absent from sanitisation, and HEY-14 can only use list({ kind: 'user_skills' }) followed by readFile(file).
 
@@ -249,4 +267,5 @@ Run: git add docs/foundation/HEY-163-PHASE-HANDOFF.md && git commit -m "docs(con
 
 - Spec coverage: Task 1 delivers every required type/method; Task 2 proves fake-first usability and security boundary; Task 3 delivers the HEY-14 handoff.
 - Placeholder scan: no incomplete markers or undefined signature remains.
-- Type consistency: writeFile accepts Uint8Array plus WorkspaceWriteOptions; only readFile returns versioned WorkspaceBlob; list uses the sole WorkspacePrefix.
+- Type consistency: readFile and writeFile use the ADR-required versioned WorkspaceBlob; writeFile
+  also accepts WorkspaceWriteOptions, and list uses the sole WorkspacePrefix.

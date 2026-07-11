@@ -36,10 +36,10 @@ export interface WorkspaceMount {
   readFile(file: WorkspaceFile): Promise<WorkspaceBlob>;
   writeFile(
     file: WorkspaceFile,
-    content: Uint8Array,
+    content: WorkspaceBlob,
     options?: WorkspaceWriteOptions,
   ): Promise<StagedWorkspaceWrite>;
-  list(prefix: WorkspacePrefix): Promise<readonly WorkspaceFile[]>;
+  list(prefix: WorkspacePrefix): Promise<WorkspaceFile[]>;
   commit(writeId: WorkspaceWriteId): Promise<void>;
   discard(writeId: WorkspaceWriteId): Promise<void>;
 }
