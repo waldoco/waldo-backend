@@ -16,6 +16,7 @@ const USER = 'user-delivery-gate-01';
 
 type RuntimeStub = DurableObjectStub<TracerDO> & {
   startRun(input: StartRunInput): Promise<string>;
+  resumeRun(runId: string): Promise<unknown>;
   tickRun(runId: string): Promise<void>;
   releaseHeld(input: ReleaseHeldInput): Promise<string | null>;
 };
@@ -24,6 +25,7 @@ type StartRunInput = {
   userId: string;
   trigger: TriggerType;
   occurrenceAt: number;
+  occurrenceId?: string;
   candidate?: {
     push_class: PushClass;
     trigger: TriggerType;
@@ -268,6 +270,450 @@ async function readGateState(
 }
 
 describe('DeliveryGate runtime policy state', () => {
+  it('rejects a forbidden user identity before opening durable run state', async () => {
+    const runtime = freshRuntimeStub();
+
+    await expect(
+      runInDurableObject(runtime, (instance) =>
+        (instance as TracerDO).startRun({
+          userId: 'user:hrv:58',
+          trigger: FETCH_ALERT,
+          occurrenceAt: futureOccurrence(),
+        }),
+      ),
+    ).rejects.toThrow('scribe:health_value_leak');
+
+    const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
+      journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
+      governor: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM loop_governor_runs')
+        .one().n,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates')
+        .one().n,
+    }));
+    expect(durableRows).toEqual({ journal: 0, governor: 0, candidates: 0 });
+  });
+
+  it('rejects a secret occurrence identity before opening durable run state', async () => {
+    const runtime = freshRuntimeStub();
+
+    await expect(
+      runInDurableObject(runtime, (instance) =>
+        (instance as TracerDO).startRun({
+          userId: USER,
+          trigger: FETCH_ALERT,
+          occurrenceAt: futureOccurrence(),
+          occurrenceId: 'sb_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+        }),
+      ),
+    ).rejects.toThrow('scribe:secret_leak');
+
+    const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
+      journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
+      governor: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM loop_governor_runs')
+        .one().n,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates')
+        .one().n,
+    }));
+    expect(durableRows).toEqual({ journal: 0, governor: 0, candidates: 0 });
+  });
+
+  it('rejects forbidden candidate content before opening durable run state', async () => {
+    const runtime = freshRuntimeStub();
+
+    await expect(
+      runInDurableObject(runtime, (instance) =>
+        (instance as TracerDO).startRun({
+          userId: USER,
+          trigger: FETCH_ALERT,
+          occurrenceAt: futureOccurrence(),
+          candidate: {
+            push_class: FETCH_ALERT,
+            trigger: FETCH_ALERT,
+            event_id: 'HRV: 58 ms',
+            expires_at: null,
+          },
+        }),
+      ),
+    ).rejects.toThrow('scribe:health_value_leak');
+
+    const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
+      journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
+      governor: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM loop_governor_runs')
+        .one().n,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates')
+        .one().n,
+    }));
+    expect(durableRows).toEqual({ journal: 0, governor: 0, candidates: 0 });
+  });
+
+  it('rejects a candidate identity that Scribe would redact before persistence', async () => {
+    const runtime = freshRuntimeStub();
+
+    await expect(
+      runInDurableObject(runtime, (instance) =>
+        (instance as TracerDO).startRun({
+          userId: USER,
+          trigger: FETCH_ALERT,
+          occurrenceAt: futureOccurrence(),
+          candidate: {
+            push_class: FETCH_ALERT,
+            trigger: FETCH_ALERT,
+            event_id: 'alice@example.com',
+            expires_at: null,
+          },
+        }),
+      ),
+    ).rejects.toThrow('scribe:invalid_payload');
+
+    const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
+      journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
+      governor: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM loop_governor_runs')
+        .one().n,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates')
+        .one().n,
+    }));
+    expect(durableRows).toEqual({ journal: 0, governor: 0, candidates: 0 });
+  });
+
+  it.each([
+    ['canary', 'leaked 1111111111111111', 'canary_leak'],
+    ['secret', 'sb_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 'secret_leak'],
+  ] as const)('rejects a candidate containing a %s before persistence', async (_case, eventId, reason) => {
+    const runtime = freshRuntimeStub();
+    await expect(
+      runInDurableObject(runtime, (instance) =>
+        (instance as TracerDO).startRun({
+          userId: USER,
+          trigger: FETCH_ALERT,
+          occurrenceAt: futureOccurrence(),
+          candidate: {
+            push_class: FETCH_ALERT,
+            trigger: FETCH_ALERT,
+            event_id: eventId,
+            expires_at: null,
+          },
+        }),
+      ),
+    ).rejects.toThrow(`scribe:${reason}`);
+    expect(await runInDurableObject(runtime, (_instance, state) =>
+      state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates').one().n,
+    )).toBe(0);
+  });
+
+  it('scrubs a forbidden held candidate instead of reopening it', async () => {
+    const runtime = freshRuntimeStub();
+    const eventId = 'HRV: 58 ms';
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO held_candidates
+           (user_id, event_id, push_class, candidate_json, hold_until, expires_at)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+        USER,
+        eventId,
+        FETCH_ALERT,
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: eventId,
+          expires_at: null,
+        }),
+        futureOccurrence(),
+      );
+    });
+
+    await expect(
+      releaseHeld(runtime, { userId: USER, eventId, occurrenceAt: futureOccurrence() }),
+    ).rejects.toThrow('scribe:health_value_leak');
+
+    expect(await heldCount(runtime, eventId)).toBe(0);
+    const reopened = await runInDurableObject(runtime, (_instance, state) => ({
+      journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates')
+        .one().n,
+    }));
+    expect(reopened).toEqual({ journal: 0, candidates: 0 });
+  });
+
+  it('scrubs a held row addressed by a non-opaque user instead of reopening it', async () => {
+    const runtime = freshRuntimeStub();
+    const userId = 'person@example.com';
+    const eventId = 'safe-held-event';
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO held_candidates
+           (user_id, event_id, push_class, candidate_json, hold_until, expires_at)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+        userId,
+        eventId,
+        FETCH_ALERT,
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: eventId,
+          expires_at: null,
+        }),
+        futureOccurrence(),
+      );
+    });
+
+    await expect(
+      releaseHeld(runtime, { userId, eventId, occurrenceAt: futureOccurrence() }),
+    ).rejects.toThrow('releaseHeld userId must be an opaque operational reference');
+
+    expect(await heldCount(runtime, eventId)).toBe(0);
+    expect(
+      await runInDurableObject(runtime, (_instance, state) =>
+        state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM journal').one().n,
+      ),
+    ).toBe(0);
+  });
+
+  it.each([
+    ['malformed JSON', '{'],
+    ['schema-invalid JSON', JSON.stringify({ unexpected: 'field' })],
+  ])('scrubs a held row containing %s', async (_case, candidateJson) => {
+    const runtime = freshRuntimeStub();
+    const eventId = 'legacy-malformed-held-event';
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO held_candidates
+           (user_id, event_id, push_class, candidate_json, hold_until, expires_at)
+         VALUES (?, ?, ?, ?, ?, NULL)`,
+        USER,
+        eventId,
+        FETCH_ALERT,
+        candidateJson,
+        futureOccurrence(),
+      );
+    });
+
+    await expect(
+      releaseHeld(runtime, { userId: USER, eventId, occurrenceAt: futureOccurrence() }),
+    ).rejects.toThrow('scribe:invalid_payload');
+    expect(await heldCount(runtime, eventId)).toBe(0);
+  });
+
+  it('scrubs an unsafe legacy candidate before direct governor admission', async () => {
+    const runtime = freshRuntimeStub();
+    const runId = await runtime.startRun({
+      userId: USER,
+      trigger: FETCH_ALERT,
+      occurrenceAt: futureOccurrence(),
+    });
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: 'HRV: 58 ms',
+          expires_at: null,
+        }),
+        runId,
+      );
+    });
+
+    await expect(
+      runInDurableObject(runtime, (instance) => (instance as TracerDO).admitRun(runId)),
+    ).rejects.toThrow('scribe:health_value_leak');
+    const persisted = await runInDurableObject(runtime, (_instance, state) => ({
+      journalState: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+        .one().state,
+      candidateCount: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM run_candidates WHERE run_id = ?', runId)
+        .one().n,
+      verdict: state.storage.sql
+        .exec<{ verdict: string | null }>(
+          'SELECT verdict FROM loop_governor_runs WHERE run_id = ?',
+          runId,
+        )
+        .one().verdict,
+    }));
+    expect(persisted).toEqual({ journalState: 'FAILED', candidateCount: 0, verdict: null });
+  });
+
+  it('scrubs and closes an unsafe legacy candidate when resuming after eviction', async () => {
+    const runtime = freshRuntimeStub();
+    const runId = await runtime.startRun({
+      userId: USER,
+      trigger: FETCH_ALERT,
+      occurrenceAt: futureOccurrence(),
+    });
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: 'HRV: 58 ms',
+          expires_at: null,
+        }),
+        runId,
+      );
+    });
+    await evictDurableObject(runtime);
+
+    await expect(
+      runInDurableObject(runtime, (instance) => (instance as TracerDO).resumeRun(runId)),
+    ).rejects.toThrow('scribe:health_value_leak');
+
+    const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
+      journalState: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+        .one().state,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates WHERE run_id = ?', runId)
+        .one().n,
+      held: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM held_candidates')
+        .one().n,
+      outbox: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', runId)
+        .one().n,
+      classState: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM class_state')
+        .one().n,
+    }));
+    expect(durableRows).toEqual({
+      journalState: 'FAILED',
+      candidates: 0,
+      held: 0,
+      outbox: 0,
+      classState: 0,
+    });
+
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'INSERT INTO run_candidates (run_id, candidate_json) VALUES (?, ?)',
+        runId,
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: 'HRV: 58 ms',
+          expires_at: null,
+        }),
+      );
+    });
+    await expect(
+      runInDurableObject(runtime, (instance) => (instance as TracerDO).resumeRun(runId)),
+    ).rejects.toThrow('scribe:health_value_leak');
+    const terminalRepair = await runInDurableObject(runtime, (_instance, state) => ({
+      journalState: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+        .one().state,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM run_candidates WHERE run_id = ?', runId)
+        .one().n,
+    }));
+    expect(terminalRepair).toEqual({ journalState: 'FAILED', candidates: 0 });
+  });
+
+  it.each([
+    ['malformed JSON', '{'],
+    [
+      'schema-invalid JSON',
+      JSON.stringify({
+        push_class: FETCH_ALERT,
+        trigger: FETCH_ALERT,
+        event_id: 'safe-event-id',
+        expires_at: null,
+        unexpected: 'field',
+      }),
+    ],
+  ])('scrubs and closes a legacy candidate containing %s', async (_case, candidateJson) => {
+    const runtime = freshRuntimeStub();
+    const runId = await runtime.startRun({
+      userId: USER,
+      trigger: FETCH_ALERT,
+      occurrenceAt: futureOccurrence(),
+    });
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        candidateJson,
+        runId,
+      );
+    });
+
+    await expect(
+      runInDurableObject(runtime, (instance) => (instance as TracerDO).resumeRun(runId)),
+    ).rejects.toThrow('scribe:invalid_payload');
+
+    const repaired = await runInDurableObject(runtime, (_instance, state) => ({
+      journalState: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+        .one().state,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates WHERE run_id = ?', runId)
+        .one().n,
+      held: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM held_candidates')
+        .one().n,
+      outbox: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', runId)
+        .one().n,
+    }));
+    expect(repaired).toEqual({ journalState: 'FAILED', candidates: 0, held: 0, outbox: 0 });
+  });
+
+  it('scrubs a redaction-colliding legacy candidate before gate effects', async () => {
+    const runtime = freshRuntimeStub();
+    const runId = await runtime.startRun({
+      userId: USER,
+      trigger: FETCH_ALERT,
+      occurrenceAt: futureOccurrence(),
+    });
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: 'bob@example.com',
+          expires_at: null,
+        }),
+        runId,
+      );
+    });
+
+    await expect(tick(runtime, runId)).rejects.toThrow('scribe:invalid_payload');
+
+    const repaired = await runInDurableObject(runtime, (_instance, state) => ({
+      journalState: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+        .one().state,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates WHERE run_id = ?', runId)
+        .one().n,
+      held: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM held_candidates')
+        .one().n,
+      outbox: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', runId)
+        .one().n,
+      classState: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM class_state')
+        .one().n,
+    }));
+    expect(repaired).toEqual({
+      journalState: 'FAILED',
+      candidates: 0,
+      held: 0,
+      outbox: 0,
+      classState: 0,
+    });
+  });
+
   it('commits fetch_alert gate state and outbox intent atomically, then resumes without re-stamping', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
@@ -314,6 +760,44 @@ describe('DeliveryGate runtime policy state', () => {
     expect(resumed.lastSentAt).toBe(gated.lastSentAt);
     expect(sink.observedSendAttempts()).toBe(1);
     expect(sink.observedDeliveries()).toBe(1);
+  });
+
+  it('revalidates the committed candidate before a direct outbox flush', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const runId = await runtime.startRun({
+      userId: USER,
+      trigger: FETCH_ALERT,
+      occurrenceAt: futureOccurrence(),
+    });
+    await poke(runtime, 'post_gate_pre_flush');
+    await expect(tick(runtime, runId)).rejects.toThrow('post_gate_pre_flush');
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          push_class: FETCH_ALERT,
+          trigger: FETCH_ALERT,
+          event_id: 'HRV: 58 ms',
+          expires_at: null,
+        }),
+        runId,
+      );
+    });
+
+    await expect(
+      runInDurableObject(runtime, (instance) => (instance as TracerDO).flushOutbox(runId)),
+    ).rejects.toThrow('scribe:health_value_leak');
+    expect(sink.observedSendAttempts()).toBe(0);
+    const durable = await runInDurableObject(runtime, (_instance, state) => ({
+      journalState: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+        .one().state,
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM run_candidates WHERE run_id = ?', runId)
+        .one().n,
+    }));
+    expect(durable).toEqual({ journalState: 'FAILED', candidates: 0 });
   });
 
   it('freezes held fetch_alert candidates without outbox or counter mutation', async () => {

@@ -1,5 +1,5 @@
 // Owning ADRs: ADR-0011 (SAFTE-FAST grounding; HRV source confidence + device-priority
-// amendments) and ADR-0024 (zone-descriptor bands, 'energized' top-band reconciliation).
+// amendments), ADR-0024 (zone descriptors), and ADR-0081 (strict nonnumeric destination view).
 // Invariant under test: the Form mix covers exactly the four pillars and sums to 1; per-source
 // confidence stays authoritative with Oura above WHOOP and enum order carrying device
 // priority; CrsResult stays derived-only (strictObject rejects drifted-in raw sensor fields)
@@ -13,11 +13,14 @@ import {
   crsPillarSchema,
   crsResultSchema,
   crsScoreSchema,
+  derivedHealthDestinationEligibilitySchema,
+  derivedHealthDestinationViewSchema,
   formZoneOf,
   formZoneSchema,
   HRV_SOURCE_CONFIDENCE,
   hrvSourceSchema,
   loadZoneSchema,
+  opaqueHealthProvenanceRefSchema,
   pillarBreakdownSchema,
   recoveryZoneSchema,
 } from './crs';
@@ -30,6 +33,69 @@ const baseResult = {
   computed_at: '2026-07-01T07:00:00Z',
   component_count: 4,
 } as const;
+
+const baseDestinationView = {
+  authority: 'backend',
+  algorithm_version: 'form.safte-fast.v1',
+  form_zone: 'energized',
+  trend: 'steady',
+  freshness: 'fresh',
+  missing_components: [],
+  confidence_band: 'high',
+  provenance_refs: ['hpr_0123456789abcdef0123456789abcdef'],
+  destination_eligibility: ['trigger_prompt'],
+} as const;
+
+describe('derived health destination view', () => {
+  it('accepts only a strict nonnumeric view with explicit destination eligibility', () => {
+    expect(derivedHealthDestinationViewSchema.safeParse(baseDestinationView).success).toBe(true);
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({
+        ...baseDestinationView,
+        destination_eligibility: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({
+        ...baseDestinationView,
+        form_score: 85,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('pins the explicit destination eligibility vocabulary', () => {
+    expect(derivedHealthDestinationEligibilitySchema.options).toEqual([
+      'trigger_prompt',
+      'volatile_run',
+      'r2_today_summary',
+      'r2_baselines_summary',
+      'runtime_trace',
+    ]);
+  });
+
+  it('accepts only bounded opaque provenance references', () => {
+    expect(
+      opaqueHealthProvenanceRefSchema.safeParse('hpr_0123456789abcdef0123456789abcdef')
+        .success,
+    ).toBe(true);
+    expect(opaqueHealthProvenanceRefSchema.safeParse('user_123_oura').success).toBe(false);
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({
+        ...baseDestinationView,
+        provenance_refs: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({
+        ...baseDestinationView,
+        provenance_refs: Array.from(
+          { length: 5 },
+          (_, index) => `hpr_${index.toString(16).padStart(32, '0')}`,
+        ),
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe('zone descriptors', () => {
   it("Form/CRS top band is 'energized' — 'peak' fails Form but stays valid for Load", () => {

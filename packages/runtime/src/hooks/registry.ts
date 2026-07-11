@@ -7,6 +7,7 @@ import type {
   HookResult,
   SanitiseFailureReason,
   SanitiseDestination,
+  SanitiseInput,
   SanitiseResult,
   SessionState,
   SourceTaint,
@@ -42,6 +43,7 @@ import {
   readDocumentArgsSchema,
   readMemoryArgsSchema,
   restoreMessageArgsSchema,
+  sanitiseInputSchema,
   sanitiseResultSchema,
   searchEpisodesArgsSchema,
   searchToolsArgsSchema,
@@ -90,13 +92,11 @@ export type HookRuntimeContext = {
     args: unknown;
     session: SessionState | null;
   }) => MaybePromise<boolean>;
-  toolArgSourceTaint?: SourceTaint;
+  sourceTaint: SourceTaint;
+  toolArgSourceTaint: SourceTaint;
   egressAllowlist?: readonly string[];
-  sanitise?: (input: {
-    text: string;
-    destination: SanitiseDestination;
-  }) => MaybePromise<SanitiseResult>;
-  medicalGate?: (input: { text: string }) => MaybePromise<HookDecision>;
+  sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
+  medicalGate?: (text: string) => MaybePromise<HookDecision>;
 };
 
 const ok = (): HookResult => ({ ok: true });
@@ -267,6 +267,28 @@ export const toolArgZodValidateHook: HookHandler<HookRuntimeContext> = {
   },
 };
 
+export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
+  name: 'tool_arg_sanitise',
+  event: 'PreToolUse',
+  priority: PRE_TOOL_USE_PRIORITIES.tool_arg_sanitise,
+  async handle(payload, ctx) {
+    if (payload.event !== 'PreToolUse') return ok();
+    const tool = parseToolName(payload.tool);
+    if (!tool.parsed) return tool.result;
+    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
+    if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
+    const sanitized = await sanitiseCandidate(
+      payload.args,
+      ctx,
+      preToolUseDestination(tool.data),
+      sourceTaint.data,
+    );
+    return sanitized.ok
+      ? { ok: true, payload: { ...payload, args: sanitized.payload } }
+      : sanitized.result;
+  },
+};
+
 export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
   name: 'autonomy_gate_check',
   event: 'PreToolUse',
@@ -285,7 +307,7 @@ export const autonomyGateCheckHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint ?? null);
+    const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
     if (!sourceTaint.success) {
       return halt('tool argument taint invalid', 'invalid_args');
     }
@@ -346,7 +368,7 @@ export const scribeSanitisePostToolUseHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    return sanitiseHookText(payload, ctx, postToolUseDestination(payload.tool));
+    return sanitiseHookPayload(payload, ctx, postToolUseDestination(payload.tool));
   },
 };
 
@@ -379,7 +401,7 @@ export const scribeSanitisePostLlmCallHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    return sanitiseHookText(payload, ctx, 'send_message');
+    return sanitiseHookPayload(payload, ctx, 'send_message');
   },
 };
 
@@ -403,7 +425,7 @@ export const medicalGateHook: HookHandler<HookRuntimeContext> = {
 
     try {
       return decisionToHookResult(
-        await ctx.medicalGate({ text }),
+        await ctx.medicalGate(text),
         'medical gate denied output',
         'forbidden',
       );
@@ -419,6 +441,7 @@ export const HOOK_REGISTRY: HookRegistry<HookRuntimeContext> = Object.freeze([
   sessionResetHook,
   aclCheckHook,
   toolArgZodValidateHook,
+  scribeSanitisePreToolUseHook,
   autonomyGateCheckHook,
   egressAllowlistHook,
   scribeSanitisePostToolUseHook,
@@ -429,6 +452,7 @@ export const HOOK_REGISTRY: HookRegistry<HookRuntimeContext> = Object.freeze([
 
 export type RunHooksOptions<Ctx> = {
   registry?: HookRegistry<Ctx>;
+  commitContext?: boolean;
 };
 
 export class HookHaltError extends Error {
@@ -470,12 +494,13 @@ export async function runHooks<Ctx>(
   }
 
   const registry = options.registry ?? (HOOK_REGISTRY as unknown as HookRegistry<Ctx>);
+  const runContext = options.commitContext === false ? cloneHookContext(ctx) : ctx;
   const matching = [...registry]
     .filter((hook) => hook.event === parsedEvent)
     .sort((left, right) => left.priority - right.priority || left.name.localeCompare(right.name));
 
   for (const hook of matching) {
-    const hookCtx = cloneHookContext(ctx);
+    const hookCtx = cloneHookContext(runContext);
     const hookPayload = cloneHookValue(currentPayload);
     let result: HookResult;
     try {
@@ -503,7 +528,7 @@ export async function runHooks<Ctx>(
       }
     }
 
-    commitHookContext(ctx, hookCtx);
+    commitHookContext(runContext, hookCtx);
     currentPayload = nextPayload;
   }
 
@@ -761,97 +786,87 @@ function hostMatchesAllowlist(host: string, allowed: string): boolean {
   );
 }
 
-async function sanitiseHookText(
+async function sanitiseHookPayload(
   payload: HookPayload,
   ctx: HookRuntimeContext,
   destination: SanitiseDestination,
 ): Promise<HookResult> {
-  if (ctx.sanitise === undefined) {
-    return halt('scribe sanitiser unavailable', 'transient');
-  }
-
-  let sanitized: SanitisedUnknown;
   if (payload.event === 'PostToolUse') {
-    sanitized = await sanitiseUnknown(payload.result, ctx, destination);
-  } else if (payload.event === 'PostLLMCall') {
-    sanitized = await sanitiseUnknown(payload.response, ctx, destination);
-  } else {
-    sanitized = { sanitized: true, value: undefined };
-  }
-
-  if (!sanitized.sanitized) {
-    return sanitized.result;
-  }
-
-  if (payload.event === 'PostToolUse') {
-    return { ok: true, payload: { ...payload, result: sanitized.value } };
+    const sourceTaint = successfulResultTaint(payload.result);
+    if (!sourceTaint.parsed) return sourceTaint.result;
+    const sanitized = await sanitiseCandidate(payload.result, ctx, destination, sourceTaint.data);
+    return sanitized.ok
+      ? { ok: true, payload: { ...payload, result: sanitized.payload } }
+      : sanitized.result;
   }
 
   if (payload.event === 'PostLLMCall') {
-    return { ok: true, payload: { ...payload, response: sanitized.value } };
+    const sourceTaint = sourceTaintSchema.safeParse(ctx.sourceTaint);
+    if (!sourceTaint.success) return halt('model output taint invalid', 'transient');
+    const sanitized = await sanitiseCandidate(
+      payload.response,
+      ctx,
+      destination,
+      sourceTaint.data,
+    );
+    return sanitized.ok
+      ? { ok: true, payload: { ...payload, response: sanitized.payload } }
+      : sanitized.result;
   }
 
   return ok();
 }
 
-type SanitisedUnknown =
-  | { sanitized: true; value: unknown }
-  | { sanitized: false; result: HookResult };
-
-async function sanitiseUnknown(
+async function sanitiseCandidate(
   value: unknown,
   ctx: HookRuntimeContext,
   destination: SanitiseDestination,
-): Promise<SanitisedUnknown> {
-  if (typeof value === 'string') {
-    if (value.length === 0) {
-      return { sanitized: true, value };
-    }
-
-    try {
-      const result = sanitiseResultSchema.parse(await ctx.sanitise?.({ text: value, destination }));
-      if (!result.ok) {
-        return {
-          sanitized: false,
-          result: halt('scribe sanitise rejected output', sanitiseFailureCode(result.reason)),
-        };
-      }
-
-      return { sanitized: true, value: result.output };
-    } catch {
-      return { sanitized: false, result: halt('scribe sanitiser failed', 'transient') };
-    }
+  sourceTaint: SourceTaint,
+): Promise<
+  | { ok: true; payload: Extract<SanitiseResult, { ok: true }>['payload'] }
+  | { ok: false; result: HookResult }
+> {
+  if (ctx.sanitise === undefined) {
+    return { ok: false, result: halt('scribe sanitiser unavailable', 'transient') };
   }
-
-  if (Array.isArray(value)) {
-    const sanitizedItems: unknown[] = [];
-    for (const item of value) {
-      const sanitized = await sanitiseUnknown(item, ctx, destination);
-      if (!sanitized.sanitized) {
-        return sanitized;
-      }
-      sanitizedItems.push(sanitized.value);
-    }
-    return { sanitized: true, value: sanitizedItems };
+  const input = sanitiseInputSchema.safeParse({
+    payload: value,
+    destination,
+    canary_tokens: ctx.session?.canary_tokens ?? ctx.canaryTokens,
+    source_taint: sourceTaint,
+  });
+  if (!input.success) {
+    return { ok: false, result: halt('scribe candidate invalid', 'invalid_args') };
   }
-
-  if (isPlainRecord(value)) {
-    const sanitizedEntries: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) {
-      const sanitized = await sanitiseUnknown(item, ctx, destination);
-      if (!sanitized.sanitized) {
-        return sanitized;
-      }
-      sanitizedEntries[key] = sanitized.value;
+  try {
+    const result = sanitiseResultSchema.parse(await ctx.sanitise(input.data));
+    if (!result.ok) {
+      return {
+        ok: false,
+        result: halt(`scribe:${result.reason}`, sanitiseFailureCode(result.reason)),
+      };
     }
-    return { sanitized: true, value: sanitizedEntries };
+    if (result.source_taint !== sourceTaint) {
+      return { ok: false, result: halt('scribe sanitiser changed taint', 'transient') };
+    }
+    return { ok: true, payload: result.payload };
+  } catch {
+    return { ok: false, result: halt('scribe sanitiser failed', 'transient') };
   }
-
-  return { sanitized: true, value };
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype;
+function successfulResultTaint(value: unknown): Parsed<SourceTaint> {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.ok !== true && !Object.hasOwn(record, 'source_taint')) {
+      return { parsed: true, data: null };
+    }
+    const parsed = sourceTaintSchema.safeParse(record.source_taint);
+    return parsed.success
+      ? { parsed: true, data: parsed.data }
+      : { parsed: false, result: halt('tool result taint invalid', 'transient') };
+  }
+  return { parsed: true, data: null };
 }
 
 function collectText(value: unknown): string[] {
@@ -872,6 +887,21 @@ function collectText(value: unknown): string[] {
 
 function postToolUseDestination(tool: string): SanitiseDestination {
   return tool === 'execute_code' ? 'sandbox_stdout' : 'internal_context';
+}
+
+function preToolUseDestination(tool: ToolName): SanitiseDestination {
+  switch (tool) {
+    case 'update_memory':
+      return 'memory_block';
+    case 'draft_document':
+      return 'draft_document';
+    case 'draft_email':
+      return 'draft_email';
+    case 'send_message':
+      return 'send_message';
+    default:
+      return 'internal_context';
+  }
 }
 
 function sanitiseFailureCode(reason: SanitiseFailureReason): ErrorCode {

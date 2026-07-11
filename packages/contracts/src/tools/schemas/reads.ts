@@ -97,7 +97,6 @@ export type SearchEpisodesArgs = z.infer<typeof searchEpisodesArgsSchema>;
 export const executeActionArgsSchema = z.strictObject({
   action_id: z.string().min(1),
   confirmation_token: z.string().min(1),
-  user_id: z.string().min(1),
 });
 export type ExecuteActionArgs = z.infer<typeof executeActionArgsSchema>;
 

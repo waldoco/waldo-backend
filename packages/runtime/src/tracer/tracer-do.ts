@@ -10,6 +10,7 @@ import type {
 import {
   type EnqueueOutboxInput,
   type ReleaseHeldInput,
+  prepareOperationalIdentity,
   RunJournalOutbox,
   type RunJournalOutboxCrashPoint,
   type StartRunInput,
@@ -100,12 +101,17 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
     dueAt: number;
     occurrenceAt: number;
   }): Promise<void> {
+    const id = prepareOperationalIdentity(input.id, 'scheduleProactiveWake id');
+    const userId = prepareOperationalIdentity(
+      input.userId,
+      'scheduleProactiveWake userId',
+    );
     await this.scheduler.schedule({
-      id: input.id,
+      id,
       kind: input.kind,
       occurrenceAt: input.occurrenceAt,
       dueAt: input.dueAt,
-      payloadRefs: { id: input.id, user_id: input.userId },
+      payloadRefs: { id, user_id: userId },
     });
   }
 

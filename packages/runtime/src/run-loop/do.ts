@@ -1,24 +1,46 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   TOOL_PERMISSIONS,
+  buildSessionState,
   canonicalRuntimeRunIdempotencySerialization,
+  deliveryVerdictSchema,
   deliveryCandidateSchema,
   getCrsArgsSchema,
+  outboxStatusSchema,
+  pushClassSchema,
+  runStateSchema,
+  runtimeOperationalRefSchema,
   runtimeRunCanAdvance,
+  runtimeRunContextSchema,
+  runtimeRunFailureReasonSchema,
   runtimeRunRecordSchema,
+  runtimeRunScratchSchema,
+  runtimeRunToolCallSchema,
+  runtimeTraceDetailSchema,
+  sanitiseFailureReasonSchema,
+  webSearchArgsSchema,
+  writeTaskArgsSchema,
   type DeliveryCandidate,
   type DeliverySink,
   type ErrorCode,
   type GetCrsArgs,
   type RuntimeReplayFixture,
+  type RuntimeRunContext,
+  type RuntimeRunFailureReason,
   type RuntimeRunRecord,
+  type RuntimeRunScratch,
   type RuntimeRunState,
+  type SanitiseDestination,
+  type SanitiseFailureReason,
+  type SourceTaint,
   type RuntimeTraceEval,
   type ScheduleEntry,
   type SessionState,
   type ToolHandler,
   type ToolName,
   type TriggerType,
+  type WebSearchArgs,
+  type WriteTaskArgs,
 } from '@waldo/contracts';
 import { runHooks, type HookRuntimeContext } from '../hooks/registry';
 import {
@@ -32,6 +54,7 @@ import {
 import type { GovernorDecision, SetLoopKillFlagInput } from '../loop-governor/governor';
 import { Scheduler, type ScheduleExecutors } from '../scheduler/multiplexer';
 import type { Deps } from '../seams/deps';
+import { prepareWithScribe, type StrictSchema } from '../scribe/prepare';
 import {
   dispatchTool,
   parseToolCalls,
@@ -61,6 +84,7 @@ import {
 const TRIGGER = 'brief' satisfies TriggerType;
 const PUSH_CLASS = 'brief' as const;
 const CANARY_TOKENS = ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'];
+const RUNTIME_RUN_SCRIBE_AUDIT_VERSION = 1;
 const LOCAL_RUN_TOKEN_HEADER = 'x-waldo-local-run-token';
 const LOCAL_INGRESS_RATE_WINDOW_MS = 60_000;
 const LOCAL_INGRESS_MAX_REQUESTS_PER_WINDOW = 32;
@@ -121,22 +145,56 @@ type LocalIngressRateSqlRow = {
   count: number;
 };
 
-type ScratchState = {
-  tool_calls?: RuntimeToolCall[];
-  tool_results?: { tool: ToolName | null; ok: boolean; reason?: string }[];
-  delivery_text?: string;
-  delivery_text_source?: 'fallback' | 'llm';
-  llm?: {
-    model: string;
-    fallback_step: string;
-    degraded: boolean;
-    tool_call_count: number;
-  };
-};
+type ScratchState = RuntimeRunScratch;
+type ToolResultSummary = NonNullable<RuntimeRunScratch['tool_results']>[number];
 
 type ProviderSpendPreflight =
   | { ok: true; spend: RouteSpendState | undefined }
   | { ok: false };
+
+type ScheduleFakeRunIngress = {
+  schedule_id: string;
+  user_id: string;
+  candidate: DeliveryCandidate;
+};
+
+const scheduleFakeRunIngressSchema: StrictSchema<ScheduleFakeRunIngress> = {
+  safeParse(value) {
+    if (!isRecord(value)) return { success: false };
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== 3 ||
+      !Object.prototype.hasOwnProperty.call(value, 'schedule_id') ||
+      !Object.prototype.hasOwnProperty.call(value, 'user_id') ||
+      !Object.prototype.hasOwnProperty.call(value, 'candidate') ||
+      typeof value.schedule_id !== 'string' ||
+      value.schedule_id.length === 0 ||
+      typeof value.user_id !== 'string' ||
+      value.user_id.length === 0
+    ) {
+      return { success: false };
+    }
+    const candidate = deliveryCandidateSchema.safeParse(value.candidate);
+    return candidate.success
+      ? {
+          success: true,
+          data: {
+            schedule_id: value.schedule_id,
+            user_id: value.user_id,
+            candidate: candidate.data,
+          },
+        }
+      : { success: false };
+  },
+};
+
+const deliveryTextSchema: StrictSchema<string> = {
+  safeParse(value) {
+    return typeof value === 'string' && value.length >= 1 && value.length <= 4_096
+      ? { success: true, data: value }
+      : { success: false };
+  },
+};
 
 export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   private adapters: RunLoopAdapters;
@@ -152,7 +210,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
     ensureSchema(ctx.storage);
-    ensureRunLoopSchema(ctx.storage.sql);
+    ensureRunLoopSchema(ctx.storage);
     this.envBindings = env;
     this.adapters = resolveRunLoopAdapters(env);
     this.deps = this.adapters.deps;
@@ -180,6 +238,90 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   __runLoopSetKillFlag(input: SetLoopKillFlagInput): void {
     this.journalOutbox.setLoopKillFlag(input);
+  }
+
+  async __runLoopIngestExternalToolResultForTest(runId: string): Promise<DispatchToolResult> {
+    this.assertLocalTestSeam();
+    const run = this.requireRuntimeRun(runId);
+    const ctx = await this.rebuildInvocationContext(run);
+    ctx.trigger = 'handoff_explore';
+    ctx.session = buildSessionState({
+      trigger: 'handoff_explore',
+      canary_tokens: CANARY_TOKENS,
+      started_at: this.deps.now(),
+    });
+    ctx.sourceTaint = null;
+    ctx.toolArgSourceTaint = null;
+    const handler: ToolHandler<
+      WebSearchArgs,
+      { hits: string[] },
+      ToolDispatcherContext
+    > = {
+      name: 'web_search',
+      description: 'Synthetic external-result tracer.',
+      schema: webSearchArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('web_search'),
+      autonomy_gated: false,
+      async handle() {
+        return { ok: true, data: { hits: ['synthetic safe result'] }, source_taint: 'external' };
+      },
+    };
+    const result = await dispatchTool(
+      { id: 'call-external-result-tracer', name: 'web_search', args: { query: 'safe query' } },
+      toolContext(ctx),
+      { handlers: [handler] },
+    );
+    if (result.ok) {
+      const scratch = parseScratch(this.requireRuntimeRun(runId).scratch_json);
+      this.updateRunScratch(runId, {
+        ...scratch,
+        source_taint: mergeSourceTaint(scratch.source_taint, result.source_taint),
+      });
+    }
+    return result;
+  }
+
+  async __runLoopProbePrivilegedToolForTest(runId: string): Promise<{
+    result: DispatchToolResult;
+    handler_calls: number;
+  }> {
+    this.assertLocalTestSeam();
+    const ctx = await this.rebuildInvocationContext(this.requireRuntimeRun(runId));
+    ctx.trigger = 'user_message';
+    ctx.session = buildSessionState({
+      trigger: 'user_message',
+      canary_tokens: CANARY_TOKENS,
+      started_at: this.deps.now(),
+    });
+    let handlerCalls = 0;
+    const handler: ToolHandler<
+      WriteTaskArgs,
+      { queued: true },
+      ToolDispatcherContext
+    > = {
+      name: 'write_task',
+      description: 'Synthetic privileged-gate tracer.',
+      schema: writeTaskArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('write_task'),
+      autonomy_gated: true,
+      async handle() {
+        handlerCalls += 1;
+        return { ok: true, data: { queued: true }, source_taint: null };
+      },
+    };
+    const result = await dispatchTool(
+      {
+        id: 'call-privileged-gate-tracer',
+        name: 'write_task',
+        args: {
+          title: 'Synthetic safe task',
+          reasoning: 'Synthetic gate verification',
+        },
+      },
+      toolContext(ctx),
+      { handlers: [handler] },
+    );
+    return { result, handler_calls: handlerCalls };
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -227,32 +369,6 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   async scheduleFakeRun(input: ScheduleFakeRunInput): Promise<string> {
     const parsed = parseScheduleFakeRunInput(input);
-    const decision = triage({
-      kind: 'alarm',
-      alarmName: parsed.scheduleId,
-      scheduleKind: TRIGGER,
-    });
-    if (!decision.ok || decision.trigger !== TRIGGER) {
-      throw new Error('run-loop schedule requires a brief alarm');
-    }
-    const runNonce = await this.scheduledRunNonce({
-      userId: parsed.userId,
-      variant: decision.variant ?? null,
-      scheduleId: parsed.scheduleId,
-      occurrenceAt: parsed.occurrenceAt,
-    });
-    const existingRunId = this.findRuntimeRunByIdentity(parsed.userId, runNonce);
-    if (existingRunId !== null) {
-      await this.scheduler.schedule({
-        id: parsed.scheduleId,
-        kind: TRIGGER,
-        occurrenceAt: parsed.occurrenceAt,
-        dueAt: parsed.dueAt,
-        payloadRefs: { id: parsed.scheduleId, run_id: existingRunId, user_id: parsed.userId },
-      });
-      return existingRunId;
-    }
-
     const candidate =
       parsed.candidate ??
       ({
@@ -261,30 +377,83 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         event_id: parsed.scheduleId,
         expires_at: null,
       } satisfies DeliveryCandidate);
+    const ingress = prepareWithScribe(
+      {
+        schedule_id: parsed.scheduleId,
+        user_id: parsed.userId,
+        candidate,
+      },
+      scheduleFakeRunIngressSchema,
+      'internal_context',
+      null,
+      CANARY_TOKENS,
+    );
+    if (!ingress.ok) throw new Error(`scribe:${ingress.reason}`);
+    if (
+      ingress.value.schedule_id !== parsed.scheduleId ||
+      ingress.value.user_id !== parsed.userId ||
+      ingress.value.candidate.event_id !== candidate.event_id
+    ) {
+      throw new Error('scribe:invalid_payload');
+    }
+
+    const decision = triage({
+      kind: 'alarm',
+      alarmName: ingress.value.schedule_id,
+      scheduleKind: TRIGGER,
+    });
+    if (!decision.ok || decision.trigger !== TRIGGER) {
+      throw new Error('run-loop schedule requires a brief alarm');
+    }
+    const runNonce = await this.scheduledRunNonce({
+      userId: ingress.value.user_id,
+      variant: decision.variant ?? null,
+      scheduleId: ingress.value.schedule_id,
+      occurrenceAt: parsed.occurrenceAt,
+    });
+    const existingRunId = this.findRuntimeRunByIdentity(ingress.value.user_id, runNonce);
+    if (existingRunId !== null) {
+      await this.scheduler.schedule({
+        id: ingress.value.schedule_id,
+        kind: TRIGGER,
+        occurrenceAt: parsed.occurrenceAt,
+        dueAt: parsed.dueAt,
+        payloadRefs: {
+          id: ingress.value.schedule_id,
+          run_id: existingRunId,
+          user_id: ingress.value.user_id,
+        },
+      });
+      return existingRunId;
+    }
 
     const runId = this.journalOutbox.startRun({
-      userId: parsed.userId,
+      userId: ingress.value.user_id,
       trigger: TRIGGER,
       occurrenceAt: parsed.occurrenceAt,
       occurrenceId: runNonce,
-      candidate,
+      candidate: ingress.value.candidate,
     });
 
     this.openRuntimeRun({
       runId,
-      userId: parsed.userId,
+      userId: ingress.value.user_id,
       variant: decision.variant ?? null,
       runNonce,
-      scheduleId: parsed.scheduleId,
+      scheduleId: ingress.value.schedule_id,
       occurrenceAt: parsed.occurrenceAt,
     });
 
     await this.scheduler.schedule({
-      id: parsed.scheduleId,
+      id: ingress.value.schedule_id,
       kind: TRIGGER,
       occurrenceAt: parsed.occurrenceAt,
       dueAt: parsed.dueAt,
-      payloadRefs: { id: parsed.scheduleId, run_id: runId, user_id: parsed.userId },
+      payloadRefs: {
+        id: ingress.value.schedule_id,
+        run_id: runId,
+        user_id: ingress.value.user_id,
+      },
     });
 
     return runId;
@@ -370,6 +539,12 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     return typeof token === 'string' && token.length >= 16 ? token : null;
   }
 
+  private assertLocalTestSeam(): void {
+    if (!isLocalRunLoopEnvironment(this.envBindings.WALDO_ENV)) {
+      throw new Error('run-loop test seam is local-only');
+    }
+  }
+
   private admitLocalIngress(): boolean {
     const now = this.deps.now();
     const bucket = Math.floor(now / LOCAL_INGRESS_RATE_WINDOW_MS);
@@ -418,7 +593,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         case 'PENDING':
           let admissionDecision: GovernorDecision;
           {
-            admissionDecision = this.admitGovernor(run.run_id);
+            try {
+              admissionDecision = this.admitGovernor(run.run_id);
+            } catch (error) {
+              const scribeReason = scribeFailureReasonFromError(error);
+              if (scribeReason === null) throw error;
+              run = this.failFromScribe(run.run_id, 'internal_context', scribeReason);
+              break;
+            }
             if (admissionDecision.verdict === 'deny') {
               this.recordGovernorDenied(run.run_id, admissionDecision);
               run = this.failRun(run.run_id, governorFailureReason(admissionDecision));
@@ -456,7 +638,18 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           }
           break;
         case 'GATED':
-          await this.journalOutbox.tickRun(run.run_id);
+          try {
+            await this.journalOutbox.tickRun(run.run_id);
+          } catch (error) {
+            const scribeReason = scribeFailureReasonFromError(error);
+            if (scribeReason === null) throw error;
+            run = this.failFromScribe(run.run_id, 'outbox', scribeReason);
+            break;
+          }
+          if (this.journalOutbox.readRunState(run.run_id) === 'FAILED') {
+            run = this.failFromScribe(run.run_id, 'outbox', 'invalid_payload');
+            break;
+          }
           run = this.advanceRun(run.run_id, 'DELIVERED');
           this.recordTrace(run.run_id, 'delivered', { sink: 'fake', status: 'acked' });
           this.crashAfter('DELIVERED');
@@ -472,6 +665,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   private async rebuildInvocationContext(run: RuntimeRunRecord): Promise<HookRuntimeContext> {
+    const sourceTaint = parseScratch(run.scratch_json).source_taint;
     const ctx: HookRuntimeContext = {
       authenticatedUserId: run.user_id,
       trigger: run.trigger,
@@ -481,6 +675,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       hasApproval: this.adapters.safety.hasApproval,
       sanitise: this.adapters.safety.sanitise,
       medicalGate: this.adapters.safety.medicalGate,
+      sourceTaint,
+      toolArgSourceTaint: sourceTaint,
     };
     await runHooks(
       'OnInvocationStart',
@@ -500,15 +696,16 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   private buildFakeContext(
     run: RuntimeRunRecord,
     session: SessionState | undefined,
-  ): Record<string, unknown> {
+  ): RuntimeRunContext {
     if (session === undefined) throw new Error('buildFakeContext requires a session');
-    return {
+    return runtimeRunContextSchema.parse({
       source: 'fake-derived',
       trigger: run.trigger,
       body_state: 'steady',
       session_started_at: session.rate_limit_window.started_at,
       tool_permissions: session.tool_permissions,
-    };
+      source_taint: parseScratch(run.scratch_json).source_taint,
+    });
   }
 
   private async callLlm(
@@ -543,6 +740,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     );
 
     if (!result.ok) {
+      if (result.scribe !== undefined) {
+        this.recordTrace(run.run_id, 'scribe_denied', result.scribe);
+        return this.failRun(run.run_id, `scribe:${result.scribe.reason}`);
+      }
       return this.failRun(run.run_id, `llm:${result.reason}`);
     }
 
@@ -552,8 +753,19 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       return this.failRun(run.run_id, `tool_parse:${parsedCalls.code}`);
     }
 
+    const persistedCalls = parsedCalls.calls.map((call) => runtimeRunToolCallSchema.safeParse(call));
+    const invalidCallIndex = persistedCalls.findIndex((call) => !call.success);
+    if (invalidCallIndex >= 0) {
+      const invalidCall = parsedCalls.calls[invalidCallIndex];
+      const reason = checkpointCallFailure(invalidCall, ctx);
+      this.recordToolDispatchTrace(run.run_id, [
+        { tool: invalidCall?.name ?? null, ok: false, reason },
+      ]);
+      return this.failRun(run.run_id, `tool_dispatch:${reason}`);
+    }
+
     const scratch: ScratchState = {
-      tool_calls: parsedCalls.calls,
+      tool_calls: parsedCalls.calls.map((call) => runtimeRunToolCallSchema.parse(call)),
       tool_results: [],
       llm: {
         model: result.response.model,
@@ -561,6 +773,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         degraded: result.degraded,
         tool_call_count: parsedCalls.calls.length,
       },
+      source_taint: ctx.sourceTaint,
     };
     const usageDecision = this.journalOutbox.recordLoopUsage({
       runId: run.run_id,
@@ -587,15 +800,16 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   ): Promise<RuntimeRunRecord> {
     const scratch = parseScratch(run.scratch_json);
     const calls = scratch.tool_calls ?? [];
-    const results: { tool: ToolName | null; ok: boolean; reason?: string }[] = [];
+    const results: ToolResultSummary[] = [];
     for (const call of calls) {
+      ctx.toolArgSourceTaint = ctx.sourceTaint;
       const result = await dispatchTool(call, toolContext(ctx), {
         handlers: [getCrsHandler],
       });
       results.push(
         result.ok
-          ? { tool: result.tool, ok: true }
-          : { tool: result.tool, ok: false, reason: result.reason },
+          ? { tool: 'get_crs', ok: true }
+          : { tool: 'get_crs', ok: false, reason: result.reason },
       );
       const paramsHash = await this.deps.sha256Hex(stableJsonStringify(call.args));
       const resultHash = await this.deps.sha256Hex(
@@ -617,10 +831,15 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         this.recordToolDispatchTrace(run.run_id, results);
         return this.failRun(run.run_id, `tool_dispatch:${result.reason}`);
       }
+      ctx.sourceTaint = mergeSourceTaint(ctx.sourceTaint, result.source_taint);
     }
 
     const next = this.advanceRun(run.run_id, 'TOOLS_DONE', {
-      scratch: { ...scratch, tool_results: [...(scratch.tool_results ?? []), ...results] },
+      scratch: {
+        ...scratch,
+        tool_results: [...(scratch.tool_results ?? []), ...results],
+        source_taint: ctx.sourceTaint,
+      },
     });
     this.recordToolDispatchTrace(run.run_id, results);
     return next;
@@ -642,6 +861,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       return this.failRun(run.run_id, 'llm_observe:spend_state_unavailable');
     }
 
+    const invocationContext = ctx ?? (await this.rebuildInvocationContext(run));
     const result = await this.llm.complete(
       {
         trigger: run.trigger,
@@ -653,7 +873,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
               {
                 role: 'user',
                 content: JSON.stringify({
-                  context: run.context_json,
+                  context:
+                    run.context_json === null
+                      ? null
+                      : {
+                          source: run.context_json.source,
+                          trigger: run.context_json.trigger,
+                          body_state: run.context_json.body_state,
+                        },
                   tool_results: scratch.tool_results ?? [],
                 }),
               },
@@ -664,10 +891,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         },
         renderTemplate: () => this.adapters.deliveryTextFallback,
       },
-      ctx ?? (await this.rebuildInvocationContext(run)),
+      invocationContext,
     );
 
     if (!result.ok) {
+      if (result.scribe !== undefined) {
+        this.recordTrace(run.run_id, 'scribe_denied', result.scribe);
+        return this.failRun(run.run_id, `scribe:${result.scribe.reason}`);
+      }
       return this.failRun(run.run_id, `llm_observe:${result.reason}`);
     }
 
@@ -693,12 +924,27 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       return this.failRun(run.run_id, `tool_parse:${continuation.code}`);
     }
     if (continuation.kind === 'tool_calls') {
+      const {
+        delivery_text: _deliveryText,
+        delivery_text_source: _deliveryTextSource,
+        ...continuingScratch
+      } = scratch;
+      const persistedCalls = continuation.calls.map((call) =>
+        runtimeRunToolCallSchema.safeParse(call),
+      );
+      const invalidCallIndex = persistedCalls.findIndex((call) => !call.success);
+      if (invalidCallIndex >= 0) {
+        const invalidCall = continuation.calls[invalidCallIndex];
+        const reason = checkpointCallFailure(invalidCall, invocationContext);
+        this.recordToolDispatchTrace(run.run_id, [
+          { tool: invalidCall?.name ?? null, ok: false, reason },
+        ]);
+        return this.failRun(run.run_id, `tool_dispatch:${reason}`);
+      }
       return this.advanceRun(run.run_id, 'LLM_CALLED', {
         scratch: {
-          ...scratch,
-          tool_calls: continuation.calls,
-          delivery_text: undefined,
-          delivery_text_source: undefined,
+          ...continuingScratch,
+          tool_calls: continuation.calls.map((call) => runtimeRunToolCallSchema.parse(call)),
           llm: {
             model: result.response.model,
             fallback_step: result.fallback_step,
@@ -718,7 +964,37 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   private async gate(run: RuntimeRunRecord): Promise<RuntimeRunRecord> {
     const scratch = parseScratch(run.scratch_json);
-    const deliveryText = scratch.delivery_text ?? this.adapters.deliveryTextFallback;
+    const candidateText = scratch.delivery_text ?? this.adapters.deliveryTextFallback;
+    const outboxCandidate = prepareWithScribe(
+      candidateText,
+      deliveryTextSchema,
+      'outbox',
+      scratch.source_taint,
+      CANARY_TOKENS,
+    );
+    if (!outboxCandidate.ok) {
+      return this.failDeliveryFromScribe(run.run_id, scratch, 'outbox', outboxCandidate.reason);
+    }
+    const sendCandidate = prepareWithScribe(
+      outboxCandidate.value,
+      deliveryTextSchema,
+      'send_message',
+      scratch.source_taint,
+      CANARY_TOKENS,
+    );
+    if (!sendCandidate.ok) {
+      return this.failDeliveryFromScribe(
+        run.run_id,
+        scratch,
+        'send_message',
+        sendCandidate.reason,
+      );
+    }
+    const deliveryText = sendCandidate.value;
+    if (scratch.delivery_text !== undefined && scratch.delivery_text !== deliveryText) {
+      const updated = this.updateRunScratch(run.run_id, { ...scratch, delivery_text: deliveryText });
+      if (updated.state === 'FAILED') return updated;
+    }
     const egressDecision = this.journalOutbox.checkLoopEgress({
       runId: run.run_id,
       text: deliveryText,
@@ -798,19 +1074,45 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         record.state,
         record.created_at,
       );
-      this.recordTrace(record.run_id, 'scheduled_wake', {
-        schedule_id: input.scheduleId,
-        occurrence_at: input.occurrenceAt,
-        trigger: TRIGGER,
-      });
+      markRuntimeRunScribeAudited(this.ctx.storage.sql, record.run_id);
+    });
+    this.recordTrace(record.run_id, 'scheduled_wake', {
+      schedule_id: input.scheduleId,
+      occurrence_at: input.occurrenceAt,
+      trigger: TRIGGER,
     });
   }
 
   private advanceRun(
     runId: string,
     to: RuntimeRunState,
-    updates: { context?: Record<string, unknown>; scratch?: ScratchState } = {},
+    updates: { context?: RuntimeRunContext; scratch?: ScratchState } = {},
   ): RuntimeRunRecord {
+    let context = updates.context;
+    if (context !== undefined) {
+      const prepared = prepareWithScribe(
+        context,
+        runtimeRunContextSchema,
+        'internal_context',
+        context.source_taint,
+        CANARY_TOKENS,
+      );
+      if (!prepared.ok) return this.failFromScribe(runId, 'internal_context', prepared.reason);
+      context = prepared.value;
+    }
+    let scratch = updates.scratch;
+    if (scratch !== undefined) {
+      const prepared = prepareWithScribe(
+        scratch,
+        runtimeRunScratchSchema,
+        'internal_context',
+        scratch.source_taint,
+        CANARY_TOKENS,
+      );
+      if (!prepared.ok) return this.failFromScribe(runId, 'internal_context', prepared.reason);
+      scratch = prepared.value;
+    }
+
     let next: RuntimeRunRecord | null = null;
     this.ctx.storage.transactionSync(() => {
       const run = this.requireRuntimeRun(runId);
@@ -831,8 +1133,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           WHERE run_id = ?`,
         to,
         step,
-        jsonOrNull(updates.context ?? run.context_json),
-        jsonOrNull(updates.scratch ?? run.scratch_json),
+        jsonOrNull(context ?? run.context_json),
+        jsonOrNull(scratch ?? run.scratch_json),
         at,
         runId,
       );
@@ -850,6 +1152,15 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   private updateRunScratch(runId: string, scratch: ScratchState): RuntimeRunRecord {
+    const prepared = prepareWithScribe(
+      scratch,
+      runtimeRunScratchSchema,
+      'internal_context',
+      scratch.source_taint,
+      CANARY_TOKENS,
+    );
+    if (!prepared.ok) return this.failFromScribe(runId, 'internal_context', prepared.reason);
+
     let next: RuntimeRunRecord | null = null;
     this.ctx.storage.transactionSync(() => {
       const run = this.requireRuntimeRun(runId);
@@ -859,7 +1170,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
             SET scratch_json = ?,
                 updated_at = ?
           WHERE run_id = ?`,
-        jsonOrNull(scratch),
+        jsonOrNull(prepared.value),
         at,
         runId,
       );
@@ -870,6 +1181,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   private failRun(runId: string, reason: string): RuntimeRunRecord {
+    const failureReason = runtimeRunFailureReasonSchema.parse(reason);
     let next: RuntimeRunRecord | null = null;
     this.ctx.storage.transactionSync(() => {
       const run = this.requireRuntimeRun(runId);
@@ -887,7 +1199,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
           WHERE run_id = ?`,
         step,
         at,
-        reason,
+        failureReason,
         runId,
       );
       this.ctx.storage.sql.exec(
@@ -901,6 +1213,31 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     });
     if (next === null) throw new Error(`failRun failed for ${runId}`);
     return next;
+  }
+
+  private failFromScribe(
+    runId: string,
+    destination: SanitiseDestination,
+    reason: SanitiseFailureReason,
+  ): RuntimeRunRecord {
+    this.recordTrace(runId, 'scribe_denied', { destination, reason });
+    return this.failRun(runId, `scribe:${reason}`);
+  }
+
+  private failDeliveryFromScribe(
+    runId: string,
+    scratch: ScratchState,
+    destination: Extract<SanitiseDestination, 'outbox' | 'send_message'>,
+    reason: SanitiseFailureReason,
+  ): RuntimeRunRecord {
+    const {
+      delivery_text: _deliveryText,
+      delivery_text_source: _deliveryTextSource,
+      ...safeScratch
+    } = scratch;
+    const scrubbed = this.updateRunScratch(runId, safeScratch);
+    if (scrubbed.state === 'FAILED') return scrubbed;
+    return this.failFromScribe(runId, destination, reason);
   }
 
   private admitGovernor(runId: string): GovernorDecision {
@@ -982,7 +1319,12 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         'SELECT kind, status, attempts FROM outbox WHERE run_id = ? ORDER BY kind',
         runId,
       )
-      .toArray();
+      .toArray()
+      .map((row) => ({
+        kind: pushClassSchema.parse(row.kind),
+        status: outboxStatusSchema.parse(row.status),
+        attempts: row.attempts,
+      }));
     const deliveryJournal = this.ctx.storage.sql
       .exec<{ state: string; verdict: string | null }>(
         'SELECT state, verdict FROM journal WHERE run_id = ?',
@@ -994,7 +1336,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       traceRows,
       fsm,
       outbox,
-      deliveryJournal,
+      deliveryJournal: {
+        state: runStateSchema.parse(deliveryJournal.state),
+        verdict: deliveryVerdictSchema.nullable().parse(deliveryJournal.verdict),
+      },
       current: { state: run.state, failure_reason: run.failure_reason },
     });
   }
@@ -1006,25 +1351,46 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 
   private recordTrace(runId: string, event: string, detail: Record<string, unknown>): void {
-    const step = this.ctx.storage.sql
-      .exec<{ step: number }>('SELECT step FROM runtime_runs WHERE run_id = ?', runId)
-      .one().step;
-    const eventKey = runtimeTraceEventKey({ runId, event, step });
-    const safeDetail = normaliseRuntimeTraceDetail(event, detail);
+    const sourceTaint = parseScratch(this.requireRuntimeRun(runId).scratch_json).source_taint;
+    let storedEvent = event;
+    let storedDetail: Record<string, unknown>;
+    try {
+      const strictDetail = normaliseRuntimeTraceDetail(event, detail);
+      const prepared = prepareWithScribe(
+        strictDetail,
+        runtimeTraceDetailSchema,
+        'audit_log',
+        sourceTaint,
+        CANARY_TOKENS,
+      );
+      if (!prepared.ok) {
+        storedEvent = 'scribe_denied';
+        storedDetail = { destination: 'audit_log', reason: prepared.reason };
+      } else {
+        storedDetail = normaliseRuntimeTraceDetail(
+          event,
+          prepared.value as Record<string, unknown>,
+        ) as Record<string, unknown>;
+      }
+    } catch {
+      storedEvent = 'scribe_denied';
+      storedDetail = { destination: 'audit_log', reason: 'invalid_payload' };
+    }
     const nextSeq = this.ctx.storage.sql
       .exec<{ seq: number }>(
         'SELECT COALESCE(MAX(seq) + 1, 0) AS seq FROM runtime_trace WHERE run_id = ?',
         runId,
       )
       .one().seq;
+    const eventKey = runtimeTraceEventKey({ runId, event: storedEvent, seq: nextSeq });
     this.ctx.storage.sql.exec(
       `INSERT OR IGNORE INTO runtime_trace (run_id, seq, event_key, event, detail_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       runId,
       nextSeq,
       eventKey,
-      event,
-      JSON.stringify(safeDetail),
+      storedEvent,
+      JSON.stringify(storedDetail),
       this.deps.now(),
     );
   }
@@ -1079,7 +1445,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-function ensureRunLoopSchema(sql: SqlStorage): void {
+function ensureRunLoopSchema(storage: DurableObjectStorage): void {
+  const sql = storage.sql;
   sql.exec(`
     CREATE TABLE IF NOT EXISTS runtime_runs (
       run_id             TEXT PRIMARY KEY,
@@ -1126,12 +1493,204 @@ function ensureRunLoopSchema(sql: SqlStorage): void {
       updated_at INTEGER NOT NULL
     );
   `);
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS runtime_run_scribe_audit (
+      run_id  TEXT PRIMARY KEY,
+      version INTEGER NOT NULL
+    );
+  `);
   ensureRuntimeTraceEventKey(sql);
   sql.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS runtime_trace_event_key_idx
       ON runtime_trace (run_id, event_key)
       WHERE event_key IS NOT NULL;
   `);
+  storage.transactionSync(() => migrateLegacyRuntimeRows(sql));
+}
+
+function migrateLegacyRuntimeRows(sql: SqlStorage): void {
+  const rows = sql
+    .exec<{
+      run_id: string;
+      state: RuntimeRunState;
+      step: number;
+      updated_at: number;
+      failure_reason: string | null;
+      context_json: string | null;
+      scratch_json: string | null;
+    }>(
+      `SELECT runtime_runs.run_id, runtime_runs.state, runtime_runs.step,
+              runtime_runs.updated_at, runtime_runs.failure_reason,
+              runtime_runs.context_json, runtime_runs.scratch_json
+         FROM runtime_runs
+         LEFT JOIN runtime_run_scribe_audit
+           ON runtime_run_scribe_audit.run_id = runtime_runs.run_id
+        WHERE runtime_run_scribe_audit.run_id IS NULL
+           OR runtime_run_scribe_audit.version < ?`,
+      RUNTIME_RUN_SCRIBE_AUDIT_VERSION,
+    )
+    .toArray();
+
+  for (const row of rows) {
+    const context = auditPersistedRuntimePayload(row.context_json, runtimeRunContextSchema);
+    const scratch = auditPersistedRuntimePayload(row.scratch_json, runtimeRunScratchSchema);
+    if (!context.ok || !scratch.ok) {
+      scrubUnsafeRuntimeRow(sql, row);
+      markRuntimeRunScribeAudited(sql, row.run_id);
+      continue;
+    }
+    sql.exec(
+      'UPDATE runtime_runs SET context_json = ?, scratch_json = ? WHERE run_id = ?',
+      context.value === null ? null : JSON.stringify(context.value),
+      scratch.value === null ? null : JSON.stringify(scratch.value),
+      row.run_id,
+    );
+    markRuntimeRunScribeAudited(sql, row.run_id);
+  }
+}
+
+function auditPersistedRuntimePayload<T>(
+  text: string | null,
+  schema: StrictSchema<T>,
+): { ok: true; value: T | null } | { ok: false } {
+  if (text === null) return { ok: true, value: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return { ok: false };
+  }
+  const current = schema.safeParse(parsed);
+  const candidate = current.success
+    ? current.data
+    : isRecord(parsed) && !Object.prototype.hasOwnProperty.call(parsed, 'source_taint')
+      ? { ...parsed, source_taint: null }
+      : undefined;
+  if (candidate === undefined) return { ok: false };
+  const prepared = prepareWithScribe(
+    candidate,
+    schema,
+    'internal_context',
+    null,
+    CANARY_TOKENS,
+  );
+  return prepared.ok
+    ? { ok: true, value: prepared.value }
+    : { ok: false };
+}
+
+function scrubUnsafeRuntimeRow(
+  sql: SqlStorage,
+  row: {
+    run_id: string;
+    state: RuntimeRunState;
+    step: number;
+    updated_at: number;
+    failure_reason: string | null;
+  },
+): void {
+  appendRuntimeMigrationTrace(sql, row.run_id, 'scribe_denied', {
+    destination: 'internal_context',
+    reason: 'invalid_payload',
+  }, row.updated_at);
+
+  if (runtimeRunCanAdvance(row.state, 'FAILED')) {
+    const failedStep = row.step + 1;
+    sql.exec(
+      `INSERT INTO runtime_journal (run_id, step, state, created_at)
+       VALUES (?, ?, 'FAILED', ?)
+       ON CONFLICT(run_id, step)
+       DO UPDATE SET state = 'FAILED', created_at = excluded.created_at`,
+      row.run_id,
+      failedStep,
+      row.updated_at,
+    );
+    sql.exec(
+      `UPDATE runtime_runs
+          SET state = 'FAILED', step = ?, context_json = NULL, scratch_json = NULL,
+              next_expected_wake = NULL, failure_reason = 'scribe:invalid_payload'
+        WHERE run_id = ?`,
+      failedStep,
+      row.run_id,
+    );
+    appendRuntimeMigrationTrace(
+      sql,
+      row.run_id,
+      'failed',
+      { reason: 'scribe:invalid_payload' },
+      row.updated_at,
+    );
+    return;
+  }
+
+  sql.exec(
+    'UPDATE runtime_runs SET context_json = NULL, scratch_json = NULL WHERE run_id = ?',
+    row.run_id,
+  );
+  if (row.state === 'FAILED' && !runtimeTraceHasEvent(sql, row.run_id, 'failed')) {
+    const failureReason = runtimeRunFailureReasonSchema.safeParse(row.failure_reason);
+    appendRuntimeMigrationTrace(
+      sql,
+      row.run_id,
+      'failed',
+      { reason: failureReason.success ? failureReason.data : 'unknown' },
+      row.updated_at,
+    );
+  }
+}
+
+function appendRuntimeMigrationTrace(
+  sql: SqlStorage,
+  runId: string,
+  event: 'scribe_denied' | 'failed',
+  detail: Record<string, unknown>,
+  createdAt: number,
+): void {
+  const prepared = prepareWithScribe(
+    detail,
+    runtimeTraceDetailSchema,
+    'audit_log',
+    null,
+    CANARY_TOKENS,
+  );
+  if (!prepared.ok) throw new Error(`legacy runtime trace rejected: ${prepared.reason}`);
+  const seq = sql
+    .exec<{ seq: number }>(
+      'SELECT COALESCE(MAX(seq) + 1, 0) AS seq FROM runtime_trace WHERE run_id = ?',
+      runId,
+    )
+    .one().seq;
+  sql.exec(
+    `INSERT OR IGNORE INTO runtime_trace
+       (run_id, seq, event_key, event, detail_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    runId,
+    seq,
+    runtimeTraceEventKey({ runId, event, seq }),
+    event,
+    JSON.stringify(prepared.value),
+    createdAt,
+  );
+}
+
+function runtimeTraceHasEvent(sql: SqlStorage, runId: string, event: string): boolean {
+  return sql
+    .exec<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM runtime_trace WHERE run_id = ? AND event = ?',
+      runId,
+      event,
+    )
+    .one().n > 0;
+}
+
+function markRuntimeRunScribeAudited(sql: SqlStorage, runId: string): void {
+  sql.exec(
+    `INSERT INTO runtime_run_scribe_audit (run_id, version)
+     VALUES (?, ?)
+     ON CONFLICT(run_id) DO UPDATE SET version = excluded.version`,
+    runId,
+    RUNTIME_RUN_SCRIBE_AUDIT_VERSION,
+  );
 }
 
 function ensureRuntimeTraceEventKey(sql: SqlStorage): void {
@@ -1142,11 +1701,13 @@ function ensureRuntimeTraceEventKey(sql: SqlStorage): void {
 }
 
 function parseScheduleFakeRunInput(input: ScheduleFakeRunInput): ScheduleFakeRunInput {
-  if (typeof input.scheduleId !== 'string' || input.scheduleId.length === 0) {
-    throw new Error('scheduleFakeRun requires a scheduleId');
+  const scheduleId = runtimeOperationalRefSchema.safeParse(input.scheduleId);
+  if (!scheduleId.success) {
+    throw new Error('scheduleFakeRun requires an opaque scheduleId');
   }
-  if (typeof input.userId !== 'string' || input.userId.length === 0) {
-    throw new Error('scheduleFakeRun requires a userId');
+  const userId = runtimeOperationalRefSchema.safeParse(input.userId);
+  if (!userId.success) {
+    throw new Error('scheduleFakeRun requires an opaque userId');
   }
   if (!Number.isInteger(input.occurrenceAt) || input.occurrenceAt < 0) {
     throw new Error('scheduleFakeRun requires a non-negative occurrenceAt');
@@ -1156,6 +1717,8 @@ function parseScheduleFakeRunInput(input: ScheduleFakeRunInput): ScheduleFakeRun
   }
   return {
     ...input,
+    scheduleId: scheduleId.data,
+    userId: userId.data,
     candidate: input.candidate === undefined ? undefined : deliveryCandidateSchema.parse(input.candidate),
   };
 }
@@ -1177,7 +1740,11 @@ const getCrsHandler: ToolHandler<
   trigger_allowlist: triggerAllowlistFor('get_crs'),
   autonomy_gated: false,
   async handle() {
-    return { ok: true, data: { summary: 'derived steady', body_state: 'steady' } };
+    return {
+      ok: true,
+      data: { summary: 'derived steady', body_state: 'steady' },
+      source_taint: null,
+    };
   },
 };
 
@@ -1189,7 +1756,31 @@ function triggerAllowlistFor(tool: ToolName): TriggerType[] {
 
 function toolContext(ctx: HookRuntimeContext): ToolDispatcherContext {
   if (ctx.session === undefined) throw new Error('tool dispatch requires a session');
-  return { ...ctx, session: ctx.session };
+  if (
+    typeof ctx.authenticatedUserId !== 'string' ||
+    ctx.authenticatedUserId.trim().length === 0
+  ) {
+    throw new Error('tool dispatch requires an authenticated subject');
+  }
+  return {
+    ...ctx,
+    authenticatedUserId: ctx.authenticatedUserId,
+    session: ctx.session,
+  };
+}
+
+function checkpointCallFailure(
+  call: RuntimeToolCall | undefined,
+  ctx: HookRuntimeContext,
+): 'invalid_args' | 'acl_denied' | 'handler_unavailable' {
+  if (call === undefined || call.name === 'get_crs') return 'invalid_args';
+  return ctx.session?.tool_permissions.includes(call.name) === true
+    ? 'handler_unavailable'
+    : 'acl_denied';
+}
+
+function mergeSourceTaint(current: SourceTaint, next: SourceTaint): SourceTaint {
+  return current === 'external' || next === 'external' ? 'external' : null;
 }
 
 function toRuntimeRunRecord(row: RuntimeRunSqlRow): RuntimeRunRecord {
@@ -1212,12 +1803,17 @@ function toRuntimeRunRecord(row: RuntimeRunSqlRow): RuntimeRunRecord {
 }
 
 function parseScratch(value: RuntimeRunRecord['scratch_json']): ScratchState {
-  if (value === null) return {};
-  return value as ScratchState;
+  return runtimeRunScratchSchema.parse(value ?? { source_taint: null });
 }
 
 function parseNullableJsonObject(text: string | null): Record<string, unknown> | null {
   return text === null ? null : parseJsonObject(text);
+}
+
+function scribeFailureReasonFromError(error: unknown): SanitiseFailureReason | null {
+  if (!(error instanceof Error) || !error.message.startsWith('scribe:')) return null;
+  const parsed = sanitiseFailureReasonSchema.safeParse(error.message.slice('scribe:'.length));
+  return parsed.success ? parsed.data : null;
 }
 
 function jsonOrNull(value: Record<string, unknown> | ScratchState | null | undefined): string | null {

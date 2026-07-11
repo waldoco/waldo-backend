@@ -7,3 +7,6 @@ supabase/.branches/
 supabase/.temp/
 *.local
 docs/context/
+.superpowers/
+packages/runtime/.stryker-tmp/
+packages/runtime/reports/stryker/

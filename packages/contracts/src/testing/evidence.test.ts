@@ -67,4 +67,17 @@ describe('evidence lanes', () => {
       }).success,
     ).toBe(false);
   });
+
+  it('rejects arbitrary string-bearing metadata', () => {
+    expect(
+      evidenceRunSchema.safeParse({
+        lane: 'scenario',
+        status: 'pass',
+        hermetic: true,
+        live_provider: false,
+        opt_in: false,
+        metadata: { note: 'a@b.com' },
+      }).success,
+    ).toBe(false);
+  });
 });

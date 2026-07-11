@@ -70,6 +70,30 @@ describe('resolveRunLoopAdapters', () => {
     });
   });
 
+  it.each([
+    resolveRunLoopAdapters({ WALDO_ENV: 'test' }),
+    resolveRunLoopAdapters(gatewayEnv),
+  ])('uses the production Scribe and medical gate in every provider mode', async (adapters) => {
+    const input = {
+      payload: { hrv: 41 },
+      destination: 'internal_context' as const,
+      canary_tokens: ['aaaaaaaaaaaaaaaa', 'bbbbbbbbbbbbbbbb', 'cccccccccccccccc'],
+      source_taint: null,
+    };
+
+    await expect(Promise.resolve(adapters.safety.sanitise?.(input))).resolves.toMatchObject({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+    await expect(
+      Promise.resolve(adapters.safety.medicalGate?.('You may have hypertension.')),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'medical_claim',
+    });
+  });
+
   it('rejects a plaintext gateway token instead of a secret binding', () => {
     expect(() =>
       resolveRunLoopAdapters({

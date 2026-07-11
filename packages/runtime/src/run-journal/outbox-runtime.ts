@@ -1,4 +1,5 @@
 import type {
+  CanaryTokens,
   DeliveryCandidate,
   DeliverySink,
   DeliveryVerdict,
@@ -7,6 +8,7 @@ import type {
   OutboxIntent,
   OutboxRow,
   PushClass,
+  RunState,
   TriggerType,
 } from '@waldo/contracts';
 import {
@@ -15,6 +17,7 @@ import {
   deliveryCandidateSchema,
   deliveryVerdictSchema,
   outboxIntentSchema,
+  runtimeOperationalRefSchema,
   sinkAckSchema,
   sinkRequestSchema,
   triggerTypeSchema,
@@ -29,12 +32,39 @@ import type {
   SetLoopKillFlagInput,
 } from '../loop-governor/governor';
 import { LoopGovernor } from '../loop-governor/governor';
+import { prepareWithScribe, type StrictSchema } from '../scribe/prepare';
 import type { Deps } from '../seams/deps';
 import { Journal } from '../tracer/journal';
 import { Outbox } from '../tracer/outbox';
 
 const KIND = 'fetch_alert' as const;
 const PAYLOAD = 'synthetic-token-01';
+const PERSISTENCE_CANARY_TOKENS: CanaryTokens = [
+  'aaaaaaaaaaaaaaaa',
+  'bbbbbbbbbbbbbbbb',
+  'cccccccccccccccc',
+];
+
+type OperationalIdentityEnvelope = { value: string };
+const operationalIdentityEnvelopeSchema: StrictSchema<OperationalIdentityEnvelope> = {
+  safeParse(value) {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      Reflect.ownKeys(value).length !== 1 ||
+      !Object.prototype.hasOwnProperty.call(value, 'value')
+    ) {
+      return { success: false };
+    }
+    const identity = runtimeOperationalRefSchema.safeParse(
+      (value as { value?: unknown }).value,
+    );
+    return identity.success
+      ? { success: true, data: { value: identity.data } }
+      : { success: false };
+  },
+};
 
 export type RunJournalOutboxCrashPoint =
   | 'pre_gate_commit'
@@ -89,7 +119,10 @@ export class RunJournalOutbox {
   startRun(input: StartRunInput): string {
     const parsed = parseStartRunInput(input);
     const runId = this.deps.newRunId();
-    const candidate = parsed.candidate ?? defaultCandidateFor(parsed.trigger, runId);
+    const candidate =
+      parsed.candidate === undefined
+        ? prepareCandidateForPersistence(defaultCandidateFor(parsed.trigger, runId), runId)
+        : prepareCandidateForPersistence(parsed.candidate);
     this.storage.transactionSync(() => {
       this.journal.openRun({
         runId,
@@ -113,10 +146,17 @@ export class RunJournalOutbox {
   // Read and validate the committed journal row after eviction. Progress is driven by tickRun so
   // a caller can inspect durable state without accidentally sending.
   resumeRun(runId: string): JournalRow | null {
-    return this.journal.read(runId);
+    const run = this.journal.read(runId);
+    if (run !== null) this.readPreparedCandidate(runId);
+    return run;
+  }
+
+  readRunState(runId: string): RunState | null {
+    return this.journal.readState(runId);
   }
 
   admitRun(runId: string): GovernorDecision {
+    this.readPreparedCandidate(runId);
     let decision: GovernorDecision | null = null;
     this.storage.transactionSync(() => {
       const run = this.journal.read(runId);
@@ -238,28 +278,48 @@ export class RunJournalOutbox {
       throw new Error('releaseHeld requires a non-negative integer occurrenceAt');
     }
 
-    const held = this.store.readHeld(input.userId, input.eventId);
+    let held;
+    try {
+      held = this.store.readHeld(input.userId, input.eventId);
+    } catch {
+      this.store.deleteHeld(input.userId, input.eventId);
+      throw new Error('scribe:invalid_payload');
+    }
     if (held === null) return null;
+    let userId: string;
+    try {
+      userId = prepareOperationalIdentity(input.userId, 'releaseHeld userId');
+    } catch (error) {
+      this.store.deleteHeld(input.userId, input.eventId);
+      throw error;
+    }
     if (held.expires_at !== null && held.expires_at <= this.deps.now()) {
       this.store.deleteHeld(input.userId, input.eventId);
       return null;
+    }
+    let candidate: DeliveryCandidate;
+    try {
+      candidate = prepareCandidateForPersistence(held.candidate);
+    } catch (error) {
+      this.store.deleteHeld(input.userId, input.eventId);
+      throw error;
     }
 
     const runId = this.deps.newRunId();
     this.storage.transactionSync(() => {
       this.journal.openRun({
         runId,
-        userId: input.userId,
-        trigger: held.candidate.trigger,
+        userId,
+        trigger: candidate.trigger,
         occurrenceAt: input.occurrenceAt,
       });
       this.governor.startRun({
         runId,
-        userId: input.userId,
-        trigger: held.candidate.trigger,
+        userId,
+        trigger: candidate.trigger,
         occurrenceAt: input.occurrenceAt,
       });
-      this.store.writeCandidate(runId, held.candidate);
+      this.store.writeCandidate(runId, candidate);
       this.store.deleteHeld(input.userId, input.eventId);
     });
     return runId;
@@ -272,6 +332,7 @@ export class RunJournalOutbox {
     if (verdict !== 'send' && verdict !== 'degrade') {
       throw new Error('enqueueOutbox requires a send or degrade verdict');
     }
+    const candidate = this.readPreparedCandidate(input.run_id);
     const admissionAt = input.admissionAt ?? this.deps.now();
     const idempotencyKey = await this.deps.sha256Hex(
       canonicalDeliverySerialization({
@@ -289,7 +350,6 @@ export class RunJournalOutbox {
     });
     let row: OutboxRow | null = null;
     this.storage.transactionSync(() => {
-      const candidate = this.store.readCandidate(input.run_id);
       if (input.kind !== candidate.push_class) {
         throw new Error(
           `enqueueOutbox kind ${input.kind} does not match candidate ${candidate.push_class}`,
@@ -333,6 +393,7 @@ export class RunJournalOutbox {
   // kind is a single literal in SLICE-3b; the parameter keeps the call site ready for the deferred
   // multi-kind outbox without widening this slice.
   flushOutbox(runId: string, kind: PushClass = KIND): void {
+    this.readPreparedCandidate(runId);
     const run = this.journal.read(runId);
     if (run === null) throw new Error(`flushOutbox: no journal row for ${runId}`);
     if (run.state !== 'GATED' && run.state !== 'SINK_SENT') {
@@ -392,7 +453,7 @@ export class RunJournalOutbox {
   }
 
   private async runGate(run: JournalRow): Promise<void> {
-    const candidate = this.store.readCandidate(run.run_id);
+    const candidate = this.readPreparedCandidate(run.run_id);
     const gateAt = run.occurrence_at;
     const classState = this.store.readClassState(run.user_id, candidate, gateAt);
     const budget = this.store.readBudget(run.user_id, gateAt);
@@ -441,7 +502,30 @@ export class RunJournalOutbox {
   }
 
   private kindForRun(runId: string): PushClass {
-    return this.store.readCandidate(runId).push_class;
+    return this.readPreparedCandidate(runId).push_class;
+  }
+
+  private readPreparedCandidate(runId: string): DeliveryCandidate {
+    try {
+      const candidateJson = this.store.readCandidateJson(runId);
+      if (candidateJson === null) throw new Error('scribe:invalid_payload');
+      let candidate: unknown;
+      try {
+        candidate = JSON.parse(candidateJson);
+      } catch {
+        throw new Error('scribe:invalid_payload');
+      }
+      return prepareCandidateForPersistence(candidate);
+    } catch (error) {
+      this.storage.transactionSync(() => {
+        this.store.deleteCandidate(runId);
+        const state = this.journal.readState(runId);
+        if (state !== null && state !== 'DONE' && state !== 'FAILED') {
+          this.journal.advance(runId, 'FAILED');
+        }
+      });
+      throw error;
+    }
   }
 
   private finalize(runId: string): void {
@@ -464,9 +548,7 @@ function parseStartRunInput(input: StartRunInput): StartRunInput {
   if (typeof input !== 'object' || input === null) {
     throw new Error('startRun requires an input object');
   }
-  if (typeof input.userId !== 'string' || input.userId.length === 0) {
-    throw new Error('startRun requires a non-empty userId');
-  }
+  const userId = prepareOperationalIdentity(input.userId, 'startRun userId');
   const triggerResult = triggerTypeSchema.safeParse(input.trigger);
   if (!triggerResult.success) {
     throw new Error('startRun requires a known trigger');
@@ -480,7 +562,11 @@ function parseStartRunInput(input: StartRunInput): StartRunInput {
   if (candidate !== undefined && candidate.trigger !== trigger) {
     throw new Error('startRun candidate trigger must match run trigger');
   }
-  return { ...input, trigger, candidate };
+  const occurrenceId =
+    input.occurrenceId === undefined
+      ? undefined
+      : prepareOperationalIdentity(input.occurrenceId, 'startRun occurrenceId');
+  return { ...input, userId, occurrenceId, trigger, candidate };
 }
 
 function defaultCandidateFor(trigger: TriggerType, runId: string): DeliveryCandidate {
@@ -493,4 +579,47 @@ function defaultCandidateFor(trigger: TriggerType, runId: string): DeliveryCandi
     event_id: runId,
     expires_at: null,
   });
+}
+
+function prepareCandidateForPersistence(
+  candidate: unknown,
+  trustedGeneratedEventId?: string,
+): DeliveryCandidate {
+  const original = deliveryCandidateSchema.safeParse(candidate);
+  if (!original.success) throw new Error('scribe:invalid_payload');
+  const prepared = prepareWithScribe(
+    original.data,
+    deliveryCandidateSchema,
+    'internal_context',
+    null,
+    PERSISTENCE_CANARY_TOKENS,
+  );
+  if (!prepared.ok) throw new Error(`scribe:${prepared.reason}`);
+  if (prepared.value.event_id !== original.data.event_id) {
+    if (
+      trustedGeneratedEventId === original.data.event_id &&
+      runtimeOperationalRefSchema.safeParse(trustedGeneratedEventId).success
+    ) {
+      return original.data;
+    }
+    throw new Error('scribe:invalid_payload');
+  }
+  return prepared.value;
+}
+
+export function prepareOperationalIdentity(value: unknown, field: string): string {
+  const identity = runtimeOperationalRefSchema.safeParse(value);
+  if (!identity.success) throw new Error(`${field} must be an opaque operational reference`);
+  const prepared = prepareWithScribe(
+    { value: identity.data },
+    operationalIdentityEnvelopeSchema,
+    'internal_context',
+    null,
+    PERSISTENCE_CANARY_TOKENS,
+  );
+  if (!prepared.ok) throw new Error(`scribe:${prepared.reason}`);
+  if (prepared.value.value !== identity.data) {
+    throw new Error(`${field} must remain unchanged`);
+  }
+  return prepared.value.value;
 }

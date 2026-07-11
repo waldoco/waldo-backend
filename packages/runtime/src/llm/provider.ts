@@ -3,6 +3,10 @@ import {
   FALLBACK_LADDER,
   GATEWAY_CONSTANT_HEADERS,
   ROUTING_TABLE,
+  sanitiseFailureReasonSchema,
+  sanitiseInputSchema,
+  sanitiseResultSchema,
+  sourceTaintSchema,
   routingPolicySchema,
   llmRequestSchema,
   llmResponseSchema,
@@ -19,6 +23,8 @@ import {
   type Provider,
   type RoutingLogEvent,
   type RoutingPolicy,
+  type SanitiseDestination,
+  type SanitiseFailureReason,
 } from '@waldo/contracts';
 import {
   HookHaltError,
@@ -121,6 +127,10 @@ export type RuntimeLLMFailure = {
   fallback_step: RuntimeFallbackStep;
   attempts: LLMAttempt[];
   routing_log: RoutingLogEvent | null;
+  scribe?: {
+    destination: SanitiseDestination;
+    reason: SanitiseFailureReason;
+  };
 };
 
 export type RuntimeLLMResult = RuntimeLLMSuccess | RuntimeLLMFailure;
@@ -145,6 +155,18 @@ type CircuitState = {
 type PostLlmHookResult =
   | { ok: true; response: LLMResponse }
   | { ok: false; error: HookHaltError };
+
+type PreLlmHookResult =
+  | { ok: true; request: LLMRequest }
+  | { ok: false; error: HookHaltError };
+
+type SanitiseRequestResult =
+  | { ok: true; request: LLMRequest }
+  | {
+      ok: false;
+      error: HookHaltError;
+      scribeDestination?: Extract<SanitiseDestination, 'system_prompt' | 'internal_context'>;
+    };
 
 const DEFAULT_ROUTING_POLICY: RoutingPolicy = routingPolicySchema.parse({
   routes: Object.values(ROUTING_TABLE),
@@ -218,12 +240,12 @@ export function selectModelRoute(input: SelectModelRouteInput): ModelRoute {
 export class RuntimeLLMProvider {
   private readonly gateway: LLMGatewayAdapter;
   private readonly circuitBreaker: CircuitBreaker;
-  private readonly hooks: HookRegistry<HookRuntimeContext>;
+  private readonly customHooks: HookRegistry<HookRuntimeContext>;
 
   constructor(options: RuntimeLLMProviderOptions) {
     this.gateway = options.gateway;
     this.circuitBreaker = options.circuitBreaker ?? new InMemoryCircuitBreaker();
-    this.hooks = options.hooks ?? HOOK_REGISTRY;
+    this.customHooks = options.hooks ?? [];
   }
 
   selectModelRoute(input: SelectModelRouteInput): ModelRoute {
@@ -238,7 +260,7 @@ export class RuntimeLLMProvider {
     const attempts: LLMAttempt[] = [];
 
     if (routingLog === 'spend_cap_degrade') {
-      return templateOrFailure(input, route, attempts, routingLog);
+      return this.templateOrFailure(input, route, attempts, routingLog, ctx);
     }
 
     for (const plan of attemptPlan(route)) {
@@ -262,17 +284,23 @@ export class RuntimeLLMProvider {
         attempt: attempts.length,
       });
       const request = llmRequestSchema.parse({ ...rendered, model: plan.step.model });
-      const sanitisedRequest = await sanitiseRequest(request, ctx);
-      if (sanitisedRequest === null) {
+      const customPreHook = await this.runCustomPreLlmHooks(request, ctx);
+      if (!customPreHook.ok) {
+        return failFromHook(customPreHook.error, plan.fallback_step, attempts, routingLog);
+      }
+
+      const sanitisedRequest = await sanitiseRequest(customPreHook.request, ctx);
+      if (!sanitisedRequest.ok) {
         return failFromHook(
-          new HookHaltError('llm_provider', 'pre-llm sanitisation failed', 'forbidden'),
+          sanitisedRequest.error,
           plan.fallback_step,
           attempts,
           routingLog,
+          sanitisedRequest.scribeDestination,
         );
       }
 
-      const preHook = await this.runPreLlmHook(sanitisedRequest, ctx);
+      const preHook = await this.runCorePreLlmHooks(sanitisedRequest.request, ctx);
       if (preHook !== null) {
         return failFromHook(preHook, plan.fallback_step, attempts, routingLog);
       }
@@ -280,7 +308,7 @@ export class RuntimeLLMProvider {
       let gatewayResult: AdapterResult<LLMResponse>;
       try {
         gatewayResult = await this.gateway.complete({
-          request: sanitisedRequest,
+          request: sanitisedRequest.request,
           route,
           step: plan.step,
           context: plan.context,
@@ -317,7 +345,7 @@ export class RuntimeLLMProvider {
       }
 
       const parsedResponse = llmResponseSchema.safeParse(gatewayResult.data);
-      if (!parsedResponse.success || parsedResponse.data.model !== sanitisedRequest.model) {
+      if (!parsedResponse.success || parsedResponse.data.model !== sanitisedRequest.request.model) {
         this.circuitBreaker.recordFailure(plan.step.provider);
         attempts.push({
           outcome: 'failure',
@@ -332,7 +360,13 @@ export class RuntimeLLMProvider {
 
       const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
       if (!postHook.ok) {
-        return failFromHook(postHook.error, plan.fallback_step, attempts, routingLog);
+        return failFromHook(
+          postHook.error,
+          plan.fallback_step,
+          attempts,
+          routingLog,
+          'send_message',
+        );
       }
 
       this.circuitBreaker.recordSuccess(plan.step.provider);
@@ -362,10 +396,43 @@ export class RuntimeLLMProvider {
       };
     }
 
-    return templateOrFailure(input, route, attempts, routingLog);
+    return this.templateOrFailure(input, route, attempts, routingLog, ctx);
   }
 
-  private async runPreLlmHook(
+  private async runCustomPreLlmHooks(
+    request: LLMRequest,
+    ctx: HookRuntimeContext,
+  ): Promise<PreLlmHookResult> {
+    try {
+      const payload = await runHooks(
+        'PreLLMCall',
+        { event: 'PreLLMCall', messages: request.messages, model: request.model },
+        ctx,
+        { registry: this.customHooks, commitContext: false },
+      );
+      const parsed =
+        payload.event === 'PreLLMCall'
+          ? llmRequestSchema.safeParse({ ...request, messages: payload.messages, model: payload.model })
+          : null;
+      if (parsed === null || !parsed.success || parsed.data.model !== request.model) {
+        return {
+          ok: false,
+          error: new HookHaltError('llm_provider', 'custom pre-llm payload invalid', 'transient'),
+        };
+      }
+      return { ok: true, request: parsed.data };
+    } catch (error) {
+      return {
+        ok: false,
+        error:
+          error instanceof HookHaltError
+            ? error
+            : new HookHaltError('llm_provider', 'custom pre-llm hook failed', 'transient'),
+      };
+    }
+  }
+
+  private async runCorePreLlmHooks(
     request: LLMRequest,
     ctx: HookRuntimeContext,
   ): Promise<HookHaltError | null> {
@@ -374,7 +441,7 @@ export class RuntimeLLMProvider {
         'PreLLMCall',
         { event: 'PreLLMCall', messages: request.messages, model: request.model },
         ctx,
-        { registry: this.hooks },
+        { registry: HOOK_REGISTRY },
       );
       return null;
     } catch (error) {
@@ -389,7 +456,7 @@ export class RuntimeLLMProvider {
     ctx: HookRuntimeContext,
   ): Promise<PostLlmHookResult> {
     try {
-      const payload = await runHooks(
+      const customPayload = await runHooks(
         'PostLLMCall',
         {
           event: 'PostLLMCall',
@@ -398,7 +465,13 @@ export class RuntimeLLMProvider {
           tokens_out: response.output_tokens,
         },
         ctx,
-        { registry: this.hooks },
+        { registry: this.customHooks, commitContext: false },
+      );
+      const payload = await runHooks(
+        'PostLLMCall',
+        customPayload,
+        ctx,
+        { registry: HOOK_REGISTRY },
       );
       const parsed = payload.event === 'PostLLMCall' ? llmResponseSchema.safeParse(payload.response) : null;
       if (parsed === null || !parsed.success) {
@@ -417,6 +490,51 @@ export class RuntimeLLMProvider {
             : new HookHaltError('llm_provider', 'post-llm hook failed', 'transient'),
       };
     }
+  }
+
+  private async templateOrFailure(
+    input: RuntimeLLMRequest,
+    route: ModelRoute,
+    attempts: LLMAttempt[],
+    routingLog: RoutingLogEvent | null,
+    ctx: HookRuntimeContext,
+  ): Promise<RuntimeLLMResult> {
+    if (route.floor !== 'template' || input.renderTemplate === undefined) {
+      return templateUnavailableFailure(route, attempts, routingLog);
+    }
+
+    let parsedResponse: ReturnType<typeof llmResponseSchema.safeParse>;
+    try {
+      parsedResponse = llmResponseSchema.safeParse({
+        model: route.primary.model,
+        text: input.renderTemplate({ route, trigger: route.trigger }),
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_input_tokens: 0,
+        latency_ms: 0,
+      });
+    } catch {
+      return templateUnavailableFailure(route, attempts, routingLog);
+    }
+    if (!parsedResponse.success) {
+      return templateUnavailableFailure(route, attempts, routingLog);
+    }
+
+    const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
+    if (!postHook.ok) {
+      return failFromHook(postHook.error, 'template', attempts, routingLog, 'send_message');
+    }
+    const response = postHook.response;
+    return {
+      ok: true,
+      response,
+      tool_call_source: { text: response.text },
+      fallback_step: 'template',
+      degraded: true,
+      usage: usageFromResponse(response),
+      attempts,
+      routing_log: routingLog,
+    };
   }
 }
 
@@ -452,34 +570,11 @@ function attemptPlan(route: ModelRoute): readonly {
   ];
 }
 
-function templateOrFailure(
-  input: RuntimeLLMRequest,
+function templateUnavailableFailure(
   route: ModelRoute,
   attempts: LLMAttempt[],
   routingLog: RoutingLogEvent | null,
 ): RuntimeLLMResult {
-  if (route.floor === 'template' && input.renderTemplate !== undefined) {
-    const text = input.renderTemplate({ route, trigger: route.trigger });
-    const response = llmResponseSchema.parse({
-      model: route.primary.model,
-      text,
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_input_tokens: 0,
-      latency_ms: 0,
-    });
-    return {
-      ok: true,
-      response,
-      tool_call_source: { text },
-      fallback_step: 'template',
-      degraded: true,
-      usage: usageFromResponse(response),
-      attempts,
-      routing_log: routingLog,
-    };
-  }
-
   return {
     ok: false,
     error: route.floor === 'template' ? 'template fallback unavailable' : `route ${route.floor}`,
@@ -496,8 +591,13 @@ function failFromHook(
   fallbackStep: RuntimeFallbackStep,
   attempts: LLMAttempt[],
   routingLog: RoutingLogEvent | null,
+  scribeDestination?: SanitiseDestination,
 ): RuntimeLLMFailure {
-  return {
+  const scribeReason =
+    error.hook === 'scribe_sanitise' && error.reason.startsWith('scribe:')
+      ? sanitiseFailureReasonSchema.safeParse(error.reason.slice('scribe:'.length))
+      : null;
+  const failure: RuntimeLLMFailure = {
     ok: false,
     error: error.clientMessage,
     code: error.code,
@@ -506,6 +606,10 @@ function failFromHook(
     attempts,
     routing_log: routingLog,
   };
+  if (scribeDestination !== undefined && scribeReason?.success === true) {
+    failure.scribe = { destination: scribeDestination, reason: scribeReason.data };
+  }
+  return failure;
 }
 
 function usageFromResponse(response: LLMResponse): LLMUsage {
@@ -529,35 +633,96 @@ function spendCapExceeded(spend: RouteSpendState | undefined): boolean {
 async function sanitiseRequest(
   request: LLMRequest,
   ctx: HookRuntimeContext,
-): Promise<LLMRequest | null> {
+): Promise<SanitiseRequestResult> {
   const sanitise = ctx.sanitise;
-  if (sanitise === undefined) return null;
+  if (sanitise === undefined) {
+    return {
+      ok: false,
+      error: new HookHaltError('llm_provider', 'scribe sanitiser unavailable', 'transient'),
+    };
+  }
+  const sourceTaint = sourceTaintSchema.safeParse(ctx.sourceTaint);
+  const canaryTokens = ctx.session?.canary_tokens ?? ctx.canaryTokens;
+  if (!sourceTaint.success) {
+    return {
+      ok: false,
+      error: new HookHaltError('llm_provider', 'request taint invalid', 'invalid_args'),
+    };
+  }
+
+  const sanitiseValue = async (
+    payload: unknown,
+    destination: 'system_prompt' | 'internal_context',
+  ): Promise<{ ok: true; payload: unknown } | { ok: false; error: HookHaltError }> => {
+    const input = sanitiseInputSchema.safeParse({
+      payload,
+      destination,
+      canary_tokens: canaryTokens,
+      source_taint: sourceTaint.data,
+    });
+    if (!input.success) {
+      return {
+        ok: false,
+        error: new HookHaltError('llm_provider', 'scribe candidate invalid', 'invalid_args'),
+      };
+    }
+    try {
+      const result = sanitiseResultSchema.parse(await sanitise(input.data));
+      if (!result.ok) {
+        return {
+          ok: false,
+          error: new HookHaltError(
+            'scribe_sanitise',
+            `scribe:${result.reason}`,
+            result.reason === 'oversize' ? 'oversize' : 'forbidden',
+          ),
+        };
+      }
+      if (result.source_taint !== sourceTaint.data) {
+        return {
+          ok: false,
+          error: new HookHaltError('llm_provider', 'scribe sanitiser changed taint', 'transient'),
+        };
+      }
+      return { ok: true, payload: result.payload };
+    } catch {
+      return {
+        ok: false,
+        error: new HookHaltError('llm_provider', 'scribe sanitiser failed', 'transient'),
+      };
+    }
+  };
+
   const system =
     request.system === undefined
       ? undefined
-      : await sanitiseText(request.system, 'system_prompt', sanitise);
-  if (request.system !== undefined && system === null) return null;
-  const messages = await Promise.all(request.messages.map(async (message) => {
-    const content = await sanitiseText(message.content, 'internal_context', sanitise);
-    return content === null ? null : { ...message, content };
-  }));
-  if (messages.some((message) => message === null)) return null;
-  return llmRequestSchema.parse({
-    ...request,
-    system,
-    messages,
-  });
-}
-
-async function sanitiseText(
-  text: string,
-  destination: 'system_prompt' | 'internal_context',
-  sanitise: NonNullable<HookRuntimeContext['sanitise']>,
-): Promise<string | null> {
-  try {
-    const result = await sanitise({ text, destination });
-    return result.ok ? result.output : null;
-  } catch {
-    return null;
+      : await sanitiseValue(request.system, 'system_prompt');
+  if (system !== undefined && !system.ok) {
+    return { ...system, scribeDestination: 'system_prompt' };
   }
+  if (system !== undefined && typeof system.payload !== 'string') {
+    return {
+      ok: false,
+      error: new HookHaltError('llm_provider', 'sanitised system prompt invalid', 'transient'),
+    };
+  }
+  const messages = await sanitiseValue(request.messages, 'internal_context');
+  if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
+  if (!Array.isArray(messages.payload)) {
+    return {
+      ok: false,
+      error: new HookHaltError('llm_provider', 'sanitised messages invalid', 'transient'),
+    };
+  }
+  const parsed = llmRequestSchema.safeParse({
+    ...request,
+    system: system?.payload,
+    messages: messages.payload,
+  });
+  return parsed.success
+    ? { ok: true, request: parsed.data }
+    : {
+        ok: false,
+        error: new HookHaltError('llm_provider', 'sanitised request invalid', 'transient'),
+      };
 }

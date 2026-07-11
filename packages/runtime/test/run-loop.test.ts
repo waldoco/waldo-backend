@@ -58,6 +58,14 @@ type CrashableRunLoopInstance = {
     gateway?: LLMGatewayAdapter;
     providerMode?: 'fake' | 'gateway';
   }): void;
+  __runLoopIngestExternalToolResultForTest(runId: string): Promise<{
+    ok: boolean;
+    source_taint?: 'external' | null;
+  }>;
+  __runLoopProbePrivilegedToolForTest(runId: string): Promise<{
+    result: { ok: boolean; reason?: string };
+    handler_calls: number;
+  }>;
   alarm(): Promise<void>;
 };
 
@@ -145,6 +153,587 @@ class ScriptedRunLoopGateway implements LLMGatewayAdapter {
 }
 
 describe('RunLoopDO full contract FSM', () => {
+  it('rejects an email-shaped operational user id instead of rewriting it', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const before = await persistedRunRowCounts(stub);
+
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        (instance as unknown as { scheduleFakeRun: RunLoopStub['scheduleFakeRun'] }).scheduleFakeRun({
+          scheduleId: 'brief:opaque-user-id',
+          userId: 'person@example.com',
+          dueAt,
+          occurrenceAt: dueAt,
+        }),
+      ),
+    ).rejects.toThrow('scheduleFakeRun requires an opaque userId');
+
+    expect(await persistedRunRowCounts(stub)).toEqual(before);
+  });
+
+  it('rejects a candidate event id that Scribe would rewrite', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const before = await persistedRunRowCounts(stub);
+
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        (instance as unknown as { scheduleFakeRun: RunLoopStub['scheduleFakeRun'] }).scheduleFakeRun({
+          scheduleId: 'brief:pii-candidate-id',
+          userId: `${USER}-pii-candidate-id`,
+          dueAt,
+          occurrenceAt: dueAt,
+          candidate: {
+            push_class: 'brief',
+            trigger: 'brief',
+            event_id: 'alice@example.com',
+            expires_at: null,
+          },
+        }),
+      ),
+    ).rejects.toThrow('scribe:invalid_payload');
+
+    expect(await persistedRunRowCounts(stub)).toEqual(before);
+  });
+
+  it('upgrades recognized pre-Scribe run rows without changing operational identity', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const userId = `${USER}-legacy-row`;
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:legacy-row',
+      userId,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    const legacyContext = {
+      source: 'fake-derived',
+      trigger: 'brief',
+      body_state: 'steady',
+      session_started_at: dueAt,
+      tool_permissions: ['get_crs'],
+    };
+    const legacyScratch = { delivery_text: 'steady day', delivery_text_source: 'fallback' };
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET context_json = ?, scratch_json = ? WHERE run_id = ?',
+        JSON.stringify(legacyContext),
+        JSON.stringify(legacyScratch),
+        runId,
+      );
+      state.storage.sql.exec('DELETE FROM runtime_run_scribe_audit WHERE run_id = ?', runId);
+    });
+
+    await evictDurableObject(stub);
+    const proof = await stub.readRunProof(runId);
+    expect(proof.context).toEqual({ ...legacyContext, source_taint: null });
+    const persisted = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ user_id: string; context_json: string; scratch_json: string }>(
+          'SELECT user_id, context_json, scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one(),
+    );
+    expect(persisted.user_id).toBe(userId);
+    expect(JSON.parse(persisted.context_json)).toEqual({ ...legacyContext, source_taint: null });
+    expect(JSON.parse(persisted.scratch_json)).toEqual({ ...legacyScratch, source_taint: null });
+  });
+
+  it('upgrades a mixed legacy/current row as one canonical checkpoint', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:mixed-migration-row',
+      userId: `${USER}-mixed-migration-row`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    const legacyContext = {
+      source: 'fake-derived',
+      trigger: 'brief',
+      body_state: 'steady',
+      session_started_at: dueAt,
+      tool_permissions: ['get_crs'],
+    };
+    const currentScratch = {
+      delivery_text: 'steady day',
+      delivery_text_source: 'fallback',
+      source_taint: null,
+    };
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET context_json = ?, scratch_json = ? WHERE run_id = ?',
+        JSON.stringify(legacyContext),
+        JSON.stringify(currentScratch),
+        runId,
+      );
+      state.storage.sql.exec('DELETE FROM runtime_run_scribe_audit WHERE run_id = ?', runId);
+    });
+
+    await evictDurableObject(stub);
+    await stub.readRunProof(runId);
+    const persisted = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ context_json: string; scratch_json: string }>(
+          'SELECT context_json, scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one(),
+    );
+    expect(JSON.parse(persisted.context_json)).toEqual({ ...legacyContext, source_taint: null });
+    expect(JSON.parse(persisted.scratch_json)).toEqual(currentScratch);
+  });
+
+  it('scrubs and fails an unsafe pre-Scribe run row before resume', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:unsafe-legacy-row',
+      userId: `${USER}-unsafe-legacy-row`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          delivery_text: 'HRV: 58 ms',
+          delivery_text_source: 'fallback',
+        }),
+        runId,
+      );
+      state.storage.sql.exec('DELETE FROM runtime_run_scribe_audit WHERE run_id = ?', runId);
+    });
+
+    await evictDurableObject(stub);
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:invalid_payload',
+    });
+    expect(proof.fsm.at(-1)).toBe('FAILED');
+    const replay = await stub.replayFixture(runId);
+    expect(replay.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:invalid_payload',
+    });
+    expect(replay.trace.slice(-2).map((event) => event.event)).toEqual([
+      'scribe_denied',
+      'failed',
+    ]);
+    expect(replay.trace.at(-2)?.detail).toEqual({
+      destination: 'internal_context',
+      reason: 'invalid_payload',
+    });
+    expect(replay.trace.at(-1)?.detail).toEqual({ reason: 'scribe:invalid_payload' });
+    const persisted = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ context_json: string | null; scratch_json: string | null }>(
+          'SELECT context_json, scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one(),
+    );
+    expect(persisted).toEqual({ context_json: null, scratch_json: null });
+    const beforeSecondEviction = await runInDurableObject(stub, (_instance, state) => ({
+      journal: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM runtime_journal WHERE run_id = ?', runId)
+        .one().n,
+      trace: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM runtime_trace WHERE run_id = ?', runId)
+        .one().n,
+      audit: state.storage.sql
+        .exec<{ version: number }>(
+          'SELECT version FROM runtime_run_scribe_audit WHERE run_id = ?',
+          runId,
+        )
+        .one().version,
+    }));
+
+    await evictDurableObject(stub);
+    await stub.replayFixture(runId);
+    const afterSecondEviction = await runInDurableObject(stub, (_instance, state) => ({
+      journal: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM runtime_journal WHERE run_id = ?', runId)
+        .one().n,
+      trace: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM runtime_trace WHERE run_id = ?', runId)
+        .one().n,
+      audit: state.storage.sql
+        .exec<{ version: number }>(
+          'SELECT version FROM runtime_run_scribe_audit WHERE run_id = ?',
+          runId,
+        )
+        .one().version,
+    }));
+    expect(afterSecondEviction).toEqual(beforeSecondEviction);
+  });
+
+  it('audits already-current unmarked payloads instead of trusting their taint field', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:unsafe-current-row',
+      userId: `${USER}-unsafe-current-row`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          delivery_text: 'HRV: 58 ms',
+          delivery_text_source: 'fallback',
+          source_taint: null,
+        }),
+        runId,
+      );
+      state.storage.sql.exec('DELETE FROM runtime_run_scribe_audit WHERE run_id = ?', runId);
+    });
+
+    await evictDurableObject(stub);
+    const replay = await stub.replayFixture(runId);
+    expect(replay.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:invalid_payload',
+    });
+    expect(replay.trace.slice(-2).map((event) => event.event)).toEqual([
+      'scribe_denied',
+      'failed',
+    ]);
+  });
+
+  it('fails an unmarked row with a malformed source-taint stamp', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:malformed-taint-row',
+      userId: `${USER}-malformed-taint-row`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
+        JSON.stringify({ source_taint: 'trusted' }),
+        runId,
+      );
+      state.storage.sql.exec('DELETE FROM runtime_run_scribe_audit WHERE run_id = ?', runId);
+    });
+
+    await evictDurableObject(stub);
+    expect((await stub.replayFixture(runId)).current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:invalid_payload',
+    });
+  });
+
+  it('scrubs a poisoned legacy candidate and closes the owning runtime before work', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:unsafe-legacy-candidate',
+      userId: `${USER}-unsafe-legacy-candidate`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          push_class: 'brief',
+          trigger: 'brief',
+          event_id: 'HRV: 58 ms',
+          expires_at: null,
+        }),
+        runId,
+      );
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const replay = await stub.replayFixture(runId);
+    expect(replay.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:health_value_leak',
+    });
+    expect(replay.trace.slice(-2).map((event) => event.event)).toEqual([
+      'scribe_denied',
+      'failed',
+    ]);
+    const durable = await runInDurableObject(stub, (_instance, state) => ({
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM run_candidates WHERE run_id = ?', runId)
+        .one().n,
+      outbox: state.storage.sql
+        .exec<{ n: number }>('SELECT COUNT(*) AS n FROM outbox WHERE run_id = ?', runId)
+        .one().n,
+      runtimeState: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM runtime_runs WHERE run_id = ?', runId)
+        .one().state,
+    }));
+    expect(durable).toEqual({ candidates: 0, outbox: 0, runtimeState: 'FAILED' });
+  });
+
+  it('propagates a poisoned GATED candidate into runtime failure across retry', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const input = {
+      scheduleId: 'brief:poisoned-gated-candidate',
+      userId: `${USER}-poisoned-gated-candidate`,
+      dueAt,
+      occurrenceAt: dueAt,
+    };
+    const runId = await stub.scheduleFakeRun(input);
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'GATED';
+    });
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:GATED');
+    expect((await stub.readRunProof(runId)).current.state).toBe('GATED');
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          push_class: 'brief',
+          trigger: 'brief',
+          event_id: 'HRV: 58 ms',
+          expires_at: null,
+        }),
+        runId,
+      );
+    });
+
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as CrashableRunLoopInstance).alarm();
+    });
+
+    const failed = await stub.readRunProof(runId);
+    expect(failed.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:health_value_leak',
+    });
+    expect(failed.delivery_journal).toEqual({ state: 'FAILED', verdict: 'send' });
+    expect(failed.sink).toEqual({ deliveries: 0, attempts: 0 });
+    const failedReplay = await stub.replayFixture(runId);
+    expect(failedReplay.trace.slice(-2).map((event) => event.event)).toEqual([
+      'scribe_denied',
+      'failed',
+    ]);
+
+    expect(await stub.scheduleFakeRun(input)).toBe(runId);
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect((await stub.readRunProof(runId)).current).toEqual(failed.current);
+  });
+
+  it('recovers a persisted GATED runtime whose delivery journal already scrubbed its candidate', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:pre-scrubbed-gated-candidate',
+      userId: `${USER}-pre-scrubbed-gated-candidate`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'GATED';
+    });
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:GATED');
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.transactionSync(() => {
+        state.storage.sql.exec('DELETE FROM run_candidates WHERE run_id = ?', runId);
+        state.storage.sql.exec(
+          "UPDATE journal SET state = 'FAILED' WHERE run_id = ?",
+          runId,
+        );
+      });
+    });
+
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as CrashableRunLoopInstance).alarm();
+    });
+
+    const replay = await stub.replayFixture(runId);
+    expect(replay.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:invalid_payload',
+    });
+    expect(replay.trace.slice(-2).map((event) => event.event)).toEqual([
+      'scribe_denied',
+      'failed',
+    ]);
+    expect((await stub.readRunProof(runId)).sink).toEqual({ deliveries: 0, attempts: 0 });
+  });
+
+  it('scrubs an unsafe unmarked DONE row without changing terminal semantics', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:done-migration-row',
+      userId: `${USER}-done-migration-row`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const before = await stub.readRunProof(runId);
+    expect(before.current).toEqual({ state: 'DONE', failure_reason: null });
+    const terminalStep = before.fsm.length - 1;
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          delivery_text: 'HRV: 58 ms',
+          delivery_text_source: 'fallback',
+          source_taint: null,
+        }),
+        runId,
+      );
+      state.storage.sql.exec('DELETE FROM runtime_run_scribe_audit WHERE run_id = ?', runId);
+    });
+
+    await evictDurableObject(stub);
+    const replay = await stub.replayFixture(runId);
+    expect(replay.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(replay.fsm.at(-1)).toBe('DONE');
+    expect(replay.fsm).toHaveLength(terminalStep + 1);
+    expect(replay.trace.at(-1)?.event).toBe('scribe_denied');
+    const persisted = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ state: string; step: number; failure_reason: string | null; scratch_json: string | null }>(
+          'SELECT state, step, failure_reason, scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one(),
+    );
+    expect(persisted).toEqual({
+      state: 'DONE',
+      step: terminalStep,
+      failure_reason: null,
+      scratch_json: null,
+    });
+  });
+
+  it('scrubs an unsafe unmarked FAILED row without replacing its failure', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:failed-migration-row',
+      userId: `${USER}-failed-migration-row`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({
+        providerMode: 'gateway',
+      });
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const before = await stub.readRunProof(runId);
+    expect(before.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'llm:spend_state_unavailable',
+    });
+    const terminalStep = before.fsm.length - 1;
+    await runInDurableObject(stub, (_instance, state) => {
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          delivery_text: 'HRV: 58 ms',
+          delivery_text_source: 'fallback',
+          source_taint: null,
+        }),
+        runId,
+      );
+      state.storage.sql.exec('DELETE FROM runtime_run_scribe_audit WHERE run_id = ?', runId);
+    });
+
+    await evictDurableObject(stub);
+    const replay = await stub.replayFixture(runId);
+    expect(replay.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'llm:spend_state_unavailable',
+    });
+    expect(replay.fsm.at(-1)).toBe('FAILED');
+    expect(replay.fsm).toHaveLength(terminalStep + 1);
+    expect(replay.trace.filter((event) => event.event === 'failed')).toHaveLength(1);
+    expect(replay.trace.find((event) => event.event === 'failed')?.detail).toEqual({
+      reason: 'llm:spend_state_unavailable',
+    });
+    expect(replay.trace.some((event) => event.event === 'scribe_denied')).toBe(true);
+    const persisted = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ state: string; step: number; failure_reason: string; scratch_json: string | null }>(
+          'SELECT state, step, failure_reason, scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one(),
+    );
+    expect(persisted).toEqual({
+      state: 'FAILED',
+      step: terminalStep,
+      failure_reason: 'llm:spend_state_unavailable',
+      scratch_json: null,
+    });
+  });
+
+  it.each([
+    ['default candidate event id', { scheduleId: 'brief:hrv:58' }],
+    [
+      'explicit candidate event id',
+      {
+        candidate: {
+          push_class: 'brief',
+          trigger: 'brief',
+          event_id: 'event:hrv:58',
+          expires_at: null,
+        } satisfies DeliveryCandidate,
+      },
+    ],
+    ['user id', { userId: `${USER}-hrv:58` }],
+  ] as const)('rejects an unsafe %s before any run persistence', async (_case, unsafe) => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const before = await persistedRunRowCounts(stub);
+    const input = {
+      scheduleId: 'brief:safe-ingress',
+      userId: `${USER}-safe-ingress`,
+      dueAt,
+      occurrenceAt: dueAt,
+      ...unsafe,
+    };
+
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        (instance as unknown as { scheduleFakeRun: RunLoopStub['scheduleFakeRun'] }).scheduleFakeRun(
+          input,
+        ),
+      ),
+    ).rejects.toThrow('scribe:health_value_leak');
+
+    expect(await persistedRunRowCounts(stub)).toEqual(before);
+  });
+
+  async function persistedRunRowCounts(stub: RunLoopStub): Promise<Record<string, number>> {
+    return runInDurableObject(stub, (_instance, state) => {
+      const count = (table: string): number =>
+        state.storage.sql
+          .exec<RuntimeRunCountRow>(`SELECT COUNT(*) AS n FROM ${table}`)
+          .one().n;
+
+      return {
+        journal: count('journal'),
+        loop_governor_runs: count('loop_governor_runs'),
+        run_candidates: count('run_candidates'),
+        runtime_runs: count('runtime_runs'),
+        runtime_journal: count('runtime_journal'),
+        runtime_trace: count('runtime_trace'),
+        schedule: count('schedule'),
+      };
+    });
+  }
+
   it('walks a scheduled fake-backed run through the full FSM with trace and delivery proof', async () => {
     const stub = freshStub();
     const dueAt = soon();
@@ -627,6 +1216,183 @@ describe('RunLoopDO full contract FSM', () => {
       code: 'invalid_args',
     });
     expect(proof.outbox).toEqual([]);
+  });
+
+  it('denies hostile provider health output before any checkpoint, trace detail, outbox, or sink', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const gateway = new ScriptedRunLoopGateway((request) =>
+      response(
+        request.request.model,
+        JSON.stringify(JSON.stringify({ metric: 'hrv', measurement: 58 })),
+      ),
+    );
+
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:scribe-health-denial',
+      userId: `${USER}-scribe-health-denial`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+    const proof = await stub.readRunProof(runId);
+    const replay = await stub.replayFixture(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:health_value_leak',
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+    expect(gateway.requests).toHaveLength(1);
+
+    const persisted = await runInDurableObject(stub, (_instance, state) => ({
+      runs: state.storage.sql
+        .exec<{ context_json: string | null; scratch_json: string | null; failure_reason: string | null }>(
+          'SELECT context_json, scratch_json, failure_reason FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .toArray(),
+      trace: state.storage.sql
+        .exec<{ detail_json: string }>(
+          'SELECT detail_json FROM runtime_trace WHERE run_id = ? ORDER BY seq',
+          runId,
+        )
+        .toArray(),
+      outbox: state.storage.sql
+        .exec<{ payload: string }>('SELECT payload FROM outbox WHERE run_id = ?', runId)
+        .toArray(),
+    }));
+    const publicEvidence = JSON.stringify({ proof, replay, persisted }).toLowerCase();
+    expect(publicEvidence).not.toContain('hrv');
+    expect(publicEvidence).not.toContain('measurement');
+    expect(persisted.outbox).toEqual([]);
+  });
+
+  it.each([
+    ['canary', 'prefix aaaaaaaaaaaaaaaa suffix', 'aaaaaaaaaaaaaaaa'],
+    ['secret', 'Bearer abcdefghijklmnopqrstuvwxyz012345', 'abcdefghijklmnopqrstuvwxyz012345'],
+  ] as const)(
+    'denies hostile provider %s output without checkpoint, trace, replay, outbox, or sink residue',
+    async (label, hostileOutput, forbiddenNeedle) => {
+      const stub = freshStub();
+      const dueAt = soon();
+      const gateway = new ScriptedRunLoopGateway((request) =>
+        response(request.request.model, hostileOutput),
+      );
+
+      const runId = await stub.scheduleFakeRun({
+        scheduleId: `brief:scribe-${label}-denial`,
+        userId: `${USER}-scribe-${label}-denial`,
+        dueAt,
+        occurrenceAt: dueAt,
+      });
+      await runInDurableObject(stub, (instance) => {
+        (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+      });
+
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+      const proof = await stub.readRunProof(runId);
+      const replay = await stub.replayFixture(runId);
+      expect(proof.current.state).toBe('FAILED');
+      expect(proof.outbox).toEqual([]);
+      expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+      expect(gateway.requests).toHaveLength(1);
+
+      const persisted = await runInDurableObject(stub, (_instance, state) => ({
+        runs: state.storage.sql
+          .exec<{
+            context_json: string | null;
+            scratch_json: string | null;
+            failure_reason: string | null;
+          }>(
+            'SELECT context_json, scratch_json, failure_reason FROM runtime_runs WHERE run_id = ?',
+            runId,
+          )
+          .toArray(),
+        trace: state.storage.sql
+          .exec<{ detail_json: string }>(
+            'SELECT detail_json FROM runtime_trace WHERE run_id = ? ORDER BY seq',
+            runId,
+          )
+          .toArray(),
+        outbox: state.storage.sql
+          .exec<{ payload: string }>('SELECT payload FROM outbox WHERE run_id = ?', runId)
+          .toArray(),
+      }));
+      const serialized = JSON.stringify({ proof, replay, persisted }).toLowerCase();
+      expect(serialized).not.toContain(forbiddenNeedle.toLowerCase());
+      expect(persisted.outbox).toEqual([]);
+    },
+  );
+
+  it('scrubs a hostile resumed delivery before gate, outbox, replay, or sink', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:scribe-resume-delivery',
+      userId: `${USER}-scribe-resume-delivery`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'TOOLS_DONE';
+    });
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+
+    await runInDurableObject(stub, (_instance, state) => {
+      const row = state.storage.sql
+        .exec<{ scratch_json: string }>(
+          'SELECT scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one();
+      const scratch = JSON.parse(row.scratch_json) as Record<string, unknown>;
+      state.storage.sql.exec(
+        'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          ...scratch,
+          delivery_text: JSON.stringify(JSON.stringify({ metric: 'hrv', measurement: 58 })),
+          delivery_text_source: 'llm',
+        }),
+        runId,
+      );
+    });
+
+    await evictDurableObject(stub);
+    await runInDurableObject(stub, async (instance) => {
+      await (instance as unknown as CrashableRunLoopInstance).alarm();
+    });
+
+    const proof = await stub.readRunProof(runId);
+    const replay = await stub.replayFixture(runId);
+    expect(proof.current).toEqual({
+      state: 'FAILED',
+      failure_reason: 'scribe:health_value_leak',
+    });
+    expect(proof.trace.at(-1)).toEqual({
+      event: 'scribe_denied',
+      detail: { destination: 'outbox', reason: 'health_value_leak' },
+    });
+    expect(proof.outbox).toEqual([]);
+    expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+
+    const scratchJson = await runInDurableObject(stub, (_instance, state) =>
+      state.storage.sql
+        .exec<{ scratch_json: string }>(
+          'SELECT scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one().scratch_json,
+    );
+    const serialized = JSON.stringify({ proof, replay, scratchJson }).toLowerCase();
+    expect(serialized).not.toContain('hrv');
+    expect(serialized).not.toContain('measurement');
   });
 
   it('fails durably when a tool is denied by the trigger ACL', async () => {
@@ -1166,11 +1932,22 @@ describe('RunLoopDO full contract FSM', () => {
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
     const atCrash = await stub.readRunProof(runId);
     expect(atCrash.fsm).toEqual(['PENDING', 'CONTEXT_BUILT', 'LLM_CALLED', 'TOOLS_DONE']);
+    await runInDurableObject(stub, async (instance) => {
+      const result = await (
+        instance as unknown as CrashableRunLoopInstance
+      ).__runLoopIngestExternalToolResultForTest(runId);
+      expect(result).toMatchObject({ ok: true, source_taint: 'external' });
+    });
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
-      (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
-      await (instance as unknown as CrashableRunLoopInstance).alarm();
+      const runLoop = instance as unknown as CrashableRunLoopInstance;
+      runLoop.__runLoopSetTestOverrides({ gateway });
+      await expect(runLoop.__runLoopProbePrivilegedToolForTest(runId)).resolves.toMatchObject({
+        result: { ok: false, reason: 'approval_denied' },
+        handler_calls: 0,
+      });
+      await runLoop.alarm();
 
       const progress = state.storage.sql
         .exec<{ call_count: number }>(
@@ -1198,6 +1975,16 @@ describe('RunLoopDO full contract FSM', () => {
     ]);
     expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
     expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+    const restoredTaint = await runInDurableObject(stub, (_instance, state) => {
+      const row = state.storage.sql
+        .exec<{ scratch_json: string }>(
+          'SELECT scratch_json FROM runtime_runs WHERE run_id = ?',
+          runId,
+        )
+        .one();
+      return (JSON.parse(row.scratch_json) as { source_taint: unknown }).source_taint;
+    });
+    expect(restoredTaint).toBe('external');
   });
 
   it('honors a kill flag before the next observe LLM call after resume', async () => {

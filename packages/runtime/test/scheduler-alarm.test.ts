@@ -162,6 +162,44 @@ async function dispatchRecurringBrief(input: {
 }
 
 describe('scheduler alarm multiplexer', () => {
+  it('rejects a forbidden proactive schedule identity before persistence', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        (instance as TracerDO).scheduleProactiveWake({
+          id: 'brief:hrv:58',
+          kind: 'brief',
+          userId: 'user-scheduler-brief',
+          dueAt,
+          occurrenceAt: dueAt,
+        }),
+      ),
+    ).rejects.toThrow('scribe:health_value_leak');
+
+    expect(await readScheduleRows(stub)).toEqual([]);
+  });
+
+  it('rejects a forbidden proactive schedule user identity before persistence', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        (instance as TracerDO).scheduleProactiveWake({
+          id: 'brief:safe-schedule-id',
+          kind: 'brief',
+          userId: 'sb_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+          dueAt,
+          occurrenceAt: dueAt,
+        }),
+      ),
+    ).rejects.toThrow('scribe:secret_leak');
+
+    expect(await readScheduleRows(stub)).toEqual([]);
+  });
+
   it('dispatches due run resume, outbox retry, and scheduled proactive wake from one alarm', async () => {
     const sink = new FakeSink();
     const stub = freshStub();

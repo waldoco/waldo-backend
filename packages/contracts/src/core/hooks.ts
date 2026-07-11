@@ -110,6 +110,7 @@ export interface HookHandler<Ctx> {
 export const PRE_TOOL_USE_PRIORITIES = {
   tool_in_acl_check: 100,
   tool_arg_zod_validate: 200,
+  tool_arg_sanitise: 250,
   autonomy_gate_check: 300,
   rate_limit_per_tool: 400,
   egress_allowlist_check: 500,

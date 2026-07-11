@@ -5,6 +5,7 @@ import {
   runtimeRunCanAdvance,
   runtimeRunIdempotencyInputSchema,
   runtimeRunRecordSchema,
+  runtimeRunToolCallSchema,
   runtimeRunStateSchema,
   runtimeRunStateTransitions,
 } from './run';
@@ -66,6 +67,28 @@ describe('runtimeRunStateTransitions', () => {
 });
 
 describe('runtimeRunRecord', () => {
+  it('rejects arbitrary persisted context and failure text', () => {
+    expect(
+      runtimeRunRecordSchema.safeParse({
+        ...baseRecord,
+        context_json: { measurement: 'HRV 58 ms' },
+      }).success,
+    ).toBe(false);
+    expect(
+      runtimeRunRecordSchema.safeParse({
+        ...baseRecord,
+        scratch_json: { source_taint: null, note: 'HRV 58 ms' },
+      }).success,
+    ).toBe(false);
+    expect(
+      runtimeRunRecordSchema.safeParse({
+        ...baseRecord,
+        state: 'FAILED',
+        failure_reason: 'provider exploded for a@b.com',
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts a well-formed active run record', () => {
     expect(runtimeRunRecordSchema.safeParse(baseRecord).success).toBe(true);
   });
@@ -82,7 +105,7 @@ describe('runtimeRunRecord', () => {
       runtimeRunRecordSchema.safeParse({
         ...baseRecord,
         state: 'FAILED',
-        failure_reason: 'provider_unavailable',
+        failure_reason: 'llm:gateway_exhausted',
       }).success,
     ).toBe(true);
   });
@@ -92,6 +115,18 @@ describe('runtimeRunRecord', () => {
       false,
     );
     expect(runtimeRunRecordSchema.safeParse({ ...baseRecord, hrv_ms: 42 }).success).toBe(false);
+  });
+});
+
+describe('runtimeRunToolCall', () => {
+  it('rejects model-generated identifiers that can carry arbitrary content', () => {
+    expect(
+      runtimeRunToolCallSchema.safeParse({
+        id: 'HRV 58 ms',
+        name: 'get_crs',
+        args: { range_days: 1 },
+      }).success,
+    ).toBe(false);
   });
 });
 

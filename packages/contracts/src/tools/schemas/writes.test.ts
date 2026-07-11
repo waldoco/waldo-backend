@@ -108,7 +108,6 @@ describe('proposeActionArgs', () => {
 describe('sendMessageArgs', () => {
   const base = {
     channel: 'telegram',
-    user_id: 'user-1',
     content: 'nudge: recovery window starts in 20 min',
     idempotency_key: key,
   } as const;
@@ -146,8 +145,8 @@ describe('sendMessageArgs', () => {
     );
   });
 
-  it('rejects an empty user_id', () => {
-    expect(sendMessageArgsSchema.safeParse({ ...base, user_id: '' }).success).toBe(false);
+  it('rejects a model-supplied user_id (identity comes from trusted context)', () => {
+    expect(sendMessageArgsSchema.safeParse({ ...base, user_id: 'user-1' }).success).toBe(false);
   });
 });
 

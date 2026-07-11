@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { errorCodeSchema } from '../core/error';
 import { triggerTypeSchema } from '../core/trigger';
 import {
+  EXTERNAL_ORIGIN_TOOLS,
   externalToolResultSchema,
   GENERAL_AGENT_TOOLS,
   handlerAllowlistMatchesAcl,
@@ -33,7 +34,7 @@ const echoSchema = z.strictObject({ echo: z.string() });
 const resultSchema = toolResultSchema(echoSchema);
 const externalSchema = externalToolResultSchema(echoSchema);
 
-const baseOk = { ok: true, data: { echo: 'synthetic-token-01' } };
+const baseOk = { ok: true, data: { echo: 'synthetic-token-01' }, source_taint: null };
 const baseErr = { ok: false, error: 'provider unreachable', code: 'transient' };
 const baseCard = {
   kind: 'context_card',
@@ -42,8 +43,17 @@ const baseCard = {
 };
 
 describe('toolResultSchema', () => {
-  it('accepts a success result without a card', () => {
+  it('accepts an internal success stamped with null taint', () => {
     expect(resultSchema.safeParse(baseOk).success).toBe(true);
+  });
+
+  it('rejects a success with no taint stamp', () => {
+    const { source_taint: _sourceTaint, ...unstamped } = baseOk;
+    expect(resultSchema.safeParse(unstamped).success).toBe(false);
+  });
+
+  it("rejects an external stamp at the internal-result seam", () => {
+    expect(resultSchema.safeParse({ ...baseOk, source_taint: 'external' }).success).toBe(false);
   });
 
   it('accepts a success result carrying a render card', () => {
@@ -83,6 +93,10 @@ describe('toolResultSchema', () => {
     expect(resultSchema.safeParse({ ...baseErr, retriable: true }).success).toBe(false);
   });
 
+  it('rejects a taint stamp on the content-free failure branch', () => {
+    expect(resultSchema.safeParse({ ...baseErr, source_taint: null }).success).toBe(false);
+  });
+
   it('rejects a malformed card', () => {
     expect(resultSchema.safeParse({ ...baseOk, card: { kind: 'context_card' } }).success).toBe(
       false,
@@ -111,8 +125,9 @@ describe('externalToolResultSchema — ADR-0049 taint stamp', () => {
     expect(externalSchema.safeParse({ ...baseOk, source_taint: 'none' }).success).toBe(false);
   });
 
-  it('accepts a coded failure without a stamp — no content, nothing to taint', () => {
-    expect(externalSchema.safeParse(baseErr).success).toBe(true);
+  it('requires an external stamp on provider-controlled failure text', () => {
+    expect(externalSchema.safeParse(baseErr).success).toBe(false);
+    expect(externalSchema.safeParse({ ...baseErr, source_taint: 'external' }).success).toBe(true);
   });
 });
 
@@ -219,6 +234,20 @@ describe('taint gate — hostile path (ADR-0049)', () => {
 describe('general-agent tools — gate coupling (ADR-0049)', () => {
   it('is exactly the three tools that ship only with the taint gate', () => {
     expect(GENERAL_AGENT_TOOLS).toEqual(['web_search', 'read_document', 'call_mcp_tool']);
+  });
+});
+
+describe('external-origin tool classification — ADR-0049', () => {
+  it('covers every connector, calendar, communication, task, web, document, and MCP result', () => {
+    expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
+      'query_calendar',
+      'get_communication',
+      'get_tasks',
+      'web_search',
+      'read_document',
+      'call_mcp_tool',
+      'search_connector',
+    ]);
   });
 });
 

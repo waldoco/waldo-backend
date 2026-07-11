@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { canaryTokensSchema } from '../core/trigger';
 import { trustClassSchema } from './trust';
 
 // ADR-0024 canonical Scribe sanitiser contract: ONE seam every persistence and egress path
@@ -7,10 +8,8 @@ import { trustClassSchema } from './trust';
 // and failure codes pinned here ARE the spec; the runtime implements behind this vocabulary,
 // at memory_inbox write time AND as the merge-time re-check (ratified ADR-0024 amendment).
 
-// The nine destinations of the ADR-0024 destination-rule table, normalised to the singular
-// 'memory_block' the same ADR's seam signature uses — one concept, one representation.
-// 'sheet_cell' (seam-signature-only) and 'workspace_file' (legacy enum only) are deliberately
-// absent: neither appears in the rule table this contract encodes.
+// One destination vocabulary covers current persistence and egress owners, including fail-closed
+// R2 and outbox policies. Historical aliases remain deliberately absent.
 export const sanitiseDestinationSchema = z.enum([
   'memory_block',
   'system_prompt',
@@ -21,8 +20,111 @@ export const sanitiseDestinationSchema = z.enum([
   'sandbox_stdout',
   'skill_body',
   'audit_log',
+  'r2_summary',
+  'outbox',
 ]);
 export type SanitiseDestination = z.infer<typeof sanitiseDestinationSchema>;
+
+export const sanitiseDestinationPolicySchema = z.strictObject({
+  payload_kind: z.enum(['text', 'structured', 'text_or_structured']),
+  max_chars: z.int().positive(),
+  max_depth: z.int().nonnegative(),
+  max_object_fields: z.int().nonnegative(),
+  max_array_items: z.int().nonnegative(),
+  max_key_chars: z.int().nonnegative(),
+});
+export type SanitiseDestinationPolicy = z.infer<typeof sanitiseDestinationPolicySchema>;
+
+export const SANITISE_DESTINATION_POLICIES = {
+  memory_block: {
+    payload_kind: 'text_or_structured',
+    max_chars: 2_048,
+    max_depth: 4,
+    max_object_fields: 8,
+    max_array_items: 10,
+    max_key_chars: 64,
+  },
+  system_prompt: {
+    payload_kind: 'text_or_structured',
+    max_chars: 32_768,
+    max_depth: 4,
+    max_object_fields: 9,
+    max_array_items: 16,
+    max_key_chars: 128,
+  },
+  internal_context: {
+    payload_kind: 'structured',
+    max_chars: 32_768,
+    max_depth: 16,
+    max_object_fields: 64,
+    max_array_items: 128,
+    max_key_chars: 128,
+  },
+  draft_document: {
+    payload_kind: 'text_or_structured',
+    max_chars: 51_200,
+    max_depth: 4,
+    max_object_fields: 8,
+    max_array_items: 16,
+    max_key_chars: 128,
+  },
+  draft_email: {
+    payload_kind: 'text_or_structured',
+    max_chars: 10_240,
+    max_depth: 4,
+    max_object_fields: 12,
+    max_array_items: 50,
+    max_key_chars: 128,
+  },
+  send_message: {
+    payload_kind: 'text_or_structured',
+    max_chars: 4_096,
+    max_depth: 4,
+    max_object_fields: 8,
+    max_array_items: 16,
+    max_key_chars: 128,
+  },
+  sandbox_stdout: {
+    payload_kind: 'text_or_structured',
+    max_chars: 10_240,
+    max_depth: 8,
+    max_object_fields: 64,
+    max_array_items: 128,
+    max_key_chars: 128,
+  },
+  skill_body: {
+    payload_kind: 'text_or_structured',
+    max_chars: 5_120,
+    max_depth: 8,
+    max_object_fields: 64,
+    max_array_items: 128,
+    max_key_chars: 128,
+  },
+  audit_log: {
+    payload_kind: 'structured',
+    max_chars: 65_536,
+    max_depth: 12,
+    max_object_fields: 32,
+    max_array_items: 128,
+    max_key_chars: 128,
+  },
+  r2_summary: {
+    payload_kind: 'structured',
+    max_chars: 16_384,
+    max_depth: 8,
+    max_object_fields: 32,
+    max_array_items: 128,
+    max_key_chars: 128,
+  },
+  outbox: {
+    payload_kind: 'text_or_structured',
+    max_chars: 4_096,
+    max_depth: 4,
+    max_object_fields: 16,
+    max_array_items: 32,
+    max_key_chars: 128,
+  },
+} as const satisfies Readonly<Record<SanitiseDestination, SanitiseDestinationPolicy>>;
 
 // Enum order is execution order (ADR-0024): the five checks run 1 through 5, fail closed,
 // canary fail-fast first. 'pii' redacts and allows — it is the only check that never rejects.
@@ -37,9 +139,11 @@ export type SanitiseCheck = z.infer<typeof sanitiseCheckSchema>;
 
 export const sanitiseFailureReasonSchema = z.enum([
   'canary_leak',
+  'secret_leak',
   'health_value_leak',
   'oversize',
   'untrusted_instruction',
+  'invalid_payload',
 ]);
 export type SanitiseFailureReason = z.infer<typeof sanitiseFailureReasonSchema>;
 
@@ -61,14 +165,28 @@ export const redactionSchema = z.strictObject({
 });
 export type Redaction = z.infer<typeof redactionSchema>;
 
+export const EXTERNAL_SOURCE_TAINT = 'external' as const;
+export const sourceTaintSchema = z.literal(EXTERNAL_SOURCE_TAINT).nullable();
+export type SourceTaint = z.infer<typeof sourceTaintSchema>;
+
+export const sanitiseInputSchema = z.strictObject({
+  payload: z.json(),
+  destination: sanitiseDestinationSchema,
+  canary_tokens: canaryTokensSchema,
+  source_taint: sourceTaintSchema,
+});
+export type SanitiseInput = z.infer<typeof sanitiseInputSchema>;
+
 export const sanitiseResultSchema = z.discriminatedUnion('ok', [
   z.strictObject({
     ok: z.literal(true),
-    output: z.string(),
+    payload: z.json(),
+    source_taint: sourceTaintSchema,
     redactions: z.array(redactionSchema),
   }),
   z.strictObject({
     ok: z.literal(false),
+    check: sanitiseCheckSchema,
     reason: sanitiseFailureReasonSchema,
   }),
 ]);
@@ -109,7 +227,7 @@ const KV = String.raw`${QUOTE}\s*[:=\s]\s*${QUOTE}\s*`;
 // colon/equals key carrying a number) is a health value even without a unit; bare-whitespace prose is not.
 const KV_KEY = String.raw`${QUOTE}\s*[:=]\s*${QUOTE}\s*`;
 // Units that also appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg, oxygen…Percent).
-const UNIT = String.raw`ms|millisec|bpm|beats|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?`;
+const UNIT = String.raw`ms|millisec|bpm|beats|breaths?(?:[\s_-]*per[\s_-]*minute)?|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?|celsius|fahrenheit|mg(?:\/|[\s_-]*per[\s_-]*)dl|mmol(?:\/|[\s_-]*per[\s_-]*)l`;
 
 // SPECIFIC token: `\b(?:token)` anchors the WHOLE (possibly multi-word / snake_case) token so an
 // underscore inside `body_weight` cannot defeat it; an optional glued unit suffix follows, then the
@@ -150,6 +268,9 @@ export const RAW_SENSOR_PATTERNS: readonly RegExp[] = [
   specific(String.raw`systolic|diastolic|body[\s_-]?weight|body[\s_-]?mass`),
   specific(String.raw`calorie[\s_-]?burn|calories[\s_-]?burned|active[\s_-]?energy`),
   specific(String.raw`sleep[\s_-]?(?:hours?|duration|mins?|minutes?)`),
+  specific(
+    String.raw`steps|step[\s_-]?count|motion|circadian|sleep[\s_-]?efficiency|sleep[\s_-]?stages?|body[\s_-]?temperature|respiratory[\s_-]?rate|breathing[\s_-]?rate|blood[\s_-]?glucose|glucose|provider[\s_-]?payload|health[\s_-]?payload|raw[\s_-]?payload`,
+  ),
   // Blood pressure reads as a ratio (140/90) or a number with an mmHg unit; a bare `bp` plus an
   // integer (finance basis points) must not match, so `bp` alone requires the ratio or the unit.
   new RegExp(
@@ -168,16 +289,16 @@ export const RAW_SENSOR_PATTERNS: readonly RegExp[] = [
   ),
 ];
 
-// Derived CRS/Form/Recovery/Load scores stay raw on internal destinations because CRS is the
-// agent's biological-context signal (ADR-0011); external surfaces get zone words instead.
+// Numeric derived health is forbidden at every generic destination. Allowed nonnumeric health
+// context crosses only the strict destination view owned by health/crs.
 export const DERIVED_SCORE_PATTERNS: readonly RegExp[] = [
   /\b(crs|form|recovery|load)[:\s]+(\d{1,3})\b/gi,
 ];
 
-export const rawSensorActionSchema = z.enum(['reject', 'redact']);
+export const rawSensorActionSchema = z.enum(['reject']);
 export type RawSensorAction = z.infer<typeof rawSensorActionSchema>;
 
-export const derivedScoreActionSchema = z.enum(['keep_raw', 'redact_to_zone', 'redact']);
+export const derivedScoreActionSchema = z.enum(['reject']);
 export type DerivedScoreAction = z.infer<typeof derivedScoreActionSchema>;
 
 export const healthRuleSchema = z.strictObject({
@@ -186,18 +307,20 @@ export const healthRuleSchema = z.strictObject({
 });
 export type HealthRule = z.infer<typeof healthRuleSchema>;
 
-// The ADR-0024 destination-rule table, verbatim. audit_log redacts BOTH classes — an audit
-// row must never become the exfiltration channel it exists to police.
+// Generic persistence and egress destinations reject both raw and numeric-derived health.
+// Nonnumeric health context requires the strict, explicitly eligible health destination view.
 export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, HealthRule>> = {
-  memory_block: { raw_sensor: 'reject', derived_score: 'keep_raw' },
-  system_prompt: { raw_sensor: 'reject', derived_score: 'keep_raw' },
-  internal_context: { raw_sensor: 'reject', derived_score: 'keep_raw' },
-  draft_document: { raw_sensor: 'redact', derived_score: 'redact_to_zone' },
-  draft_email: { raw_sensor: 'redact', derived_score: 'redact_to_zone' },
-  send_message: { raw_sensor: 'redact', derived_score: 'redact_to_zone' },
-  sandbox_stdout: { raw_sensor: 'redact', derived_score: 'redact_to_zone' },
-  skill_body: { raw_sensor: 'redact', derived_score: 'redact_to_zone' },
-  audit_log: { raw_sensor: 'redact', derived_score: 'redact' },
+  memory_block: { raw_sensor: 'reject', derived_score: 'reject' },
+  system_prompt: { raw_sensor: 'reject', derived_score: 'reject' },
+  internal_context: { raw_sensor: 'reject', derived_score: 'reject' },
+  draft_document: { raw_sensor: 'reject', derived_score: 'reject' },
+  draft_email: { raw_sensor: 'reject', derived_score: 'reject' },
+  send_message: { raw_sensor: 'reject', derived_score: 'reject' },
+  sandbox_stdout: { raw_sensor: 'reject', derived_score: 'reject' },
+  skill_body: { raw_sensor: 'reject', derived_score: 'reject' },
+  audit_log: { raw_sensor: 'reject', derived_score: 'reject' },
+  r2_summary: { raw_sensor: 'reject', derived_score: 'reject' },
+  outbox: { raw_sensor: 'reject', derived_score: 'reject' },
 };
 
 // Check 3 — PII is redacted, never rejected (ADR-0024 false-positive policy: uncertainty
@@ -208,12 +331,13 @@ export const PII_PATTERNS = {
   phone: /\b(\+?1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g,
   cc: /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
   ipv4: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
+  ipv6: /(?<![0-9a-f:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?:(?::[0-9a-f]{1,4}){1,6})|:(?:(?::[0-9a-f]{1,4}){1,7}|:))(?![0-9a-f:])/gi,
 } as const;
 
 // Check 4 — memory and skill bodies are content, not instructions (ADR-0024). The
 // you-are-now pattern excludes Waldo naming itself.
 export const INSTRUCTION_PATTERNS: readonly RegExp[] = [
-  /ignore\s+(previous|all|prior)\s+(instruction|prompt|message)/i,
+  /ignore\s+(?:(?:all|any)\s+)?(?:previous|prior|all)\s+(?:instructions?|prompts?|messages?)/i,
   /you\s+are\s+(now|actually)\s+(?!waldo)/i,
   /system\s*[:\s]+/i,
   /assistant\s*[:\s]+/i,
@@ -228,17 +352,17 @@ export const INSTRUCTION_REJECT_THRESHOLD = 2;
 // ADR-0024's 2 KB memory-block cap in UTF-16 units — the single owner both the sanitiser
 // table below and memoryContentSchema (hall.ts) derive from, so the schema seam and the
 // sanitise seam cannot disagree on what fits in a block.
-export const MEMORY_BLOCK_CONTENT_MAX = 2_048;
+export const MEMORY_BLOCK_CONTENT_MAX = SANITISE_DESTINATION_POLICIES.memory_block.max_chars;
 
 // Check 5 — caps compare UTF-16 length, matching the ADR-0024 length comparison; a
 // destination absent here carries no pinned cap. Only sandbox stdout truncates on overflow;
 // every other capped destination rejects.
 export const SIZE_CAPS = {
-  memory_block: MEMORY_BLOCK_CONTENT_MAX,
-  sandbox_stdout: 10_240,
-  draft_document: 51_200,
-  draft_email: 10_240,
-  skill_body: 5_120,
+  memory_block: SANITISE_DESTINATION_POLICIES.memory_block.max_chars,
+  sandbox_stdout: SANITISE_DESTINATION_POLICIES.sandbox_stdout.max_chars,
+  draft_document: SANITISE_DESTINATION_POLICIES.draft_document.max_chars,
+  draft_email: SANITISE_DESTINATION_POLICIES.draft_email.max_chars,
+  skill_body: SANITISE_DESTINATION_POLICIES.skill_body.max_chars,
 } as const satisfies Partial<Record<SanitiseDestination, number>>;
 
 export const SIZE_CAPS_TRUNCATE: readonly SanitiseDestination[] = ['sandbox_stdout'];
@@ -268,10 +392,6 @@ export const SANDBOX_SANITISE_FAILURE_TEXT = '[output sanitisation failed: <reas
 // consumer — the tool gate (tools/handler) and the trust-escalation refines (this file +
 // hall.ts) — routes through them, so a rename of the constant can never leave a stale
 // hard-coded literal behind.
-export const EXTERNAL_SOURCE_TAINT = 'external' as const;
-export const sourceTaintSchema = z.literal(EXTERNAL_SOURCE_TAINT).nullable();
-export type SourceTaint = z.infer<typeof sourceTaintSchema>;
-
 // External-taint DETECTION, not a gate decision: it answers only "did this value originate
 // outside Waldo's trust boundary?" The privileged-action gate (ADR-0049) is tool-scoped and
 // lives in tools/handler; external taint alone never blocks a tool — a tainted read is always
