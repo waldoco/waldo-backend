@@ -18,4 +18,11 @@ const run = (args) => {
 run(['db', 'reset', '--local', '--no-seed']);
 run(['test', 'db']);
 run(['migration', 'list', '--local']);
+run([
+  'db',
+  'query',
+  '--local',
+  '--file',
+  'supabase/fixtures/assert-canonical-migration-history.sql',
+]);
 run(['migration', 'up', '--local']);

@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(43);
+select plan(44);
 
 select is(
   (select array_agg(table_name::text order by table_name)
@@ -56,19 +56,16 @@ select is(
 );
 
 select is_empty(
-  $$select table_name from information_schema.tables
-    where table_schema = 'public' and table_type = 'BASE TABLE'
-      and has_table_privilege('anon', format('%I.%I', table_schema, table_name),
-                              'SELECT,INSERT,UPDATE,DELETE')$$,
-  'anon has no public table privileges'
+  $$select table_name, privilege_type from information_schema.role_table_grants
+    where table_schema = 'public' and grantee = 'anon'$$,
+  'anon has no public table privileges of any kind'
 );
 
 select is_empty(
-  $$select table_name from information_schema.tables
-    where table_schema = 'public' and table_type = 'BASE TABLE'
-      and has_table_privilege('authenticated', format('%I.%I', table_schema, table_name),
-                              'INSERT,UPDATE,DELETE')$$,
-  'authenticated has no direct table mutation privileges'
+  $$select table_name, privilege_type from information_schema.role_table_grants
+    where table_schema = 'public' and grantee = 'authenticated'
+      and privilege_type <> 'SELECT'$$,
+  'authenticated has no non-SELECT table privileges'
 );
 
 select is_empty(
@@ -93,6 +90,20 @@ select ok(
   'only authenticated clients can execute app_user_id'
 );
 
+select is_empty(
+  $$with expected(grantee, routine_name, privilege_type) as (
+      values ('authenticated', 'app_user_id', 'EXECUTE')
+    ), actual as (
+      select grantee::text, routine_name::text, privilege_type::text
+      from information_schema.role_routine_grants
+      where routine_schema = 'public' and grantee in ('anon', 'authenticated')
+    )
+    (select * from actual except select * from expected)
+    union all
+    (select * from expected except select * from actual)$$,
+  'app-role execution grants match the exact public-function contract'
+);
+
 select is(
   to_regprocedure('public.rls_auto_enable()')::text,
   null::text,
@@ -100,12 +111,32 @@ select is(
 );
 
 select is_empty(
-  $$select table_name, privilege_type from (values
-      ('agent_logs', 'DELETE'), ('agent_logs', 'UPDATE'),
-      ('notification_log', 'UPDATE'), ('feedback_signals', 'UPDATE')
-    ) v(table_name, privilege_type)
-    where has_table_privilege('service_role', 'public.' || table_name, privilege_type)$$,
-  'write-once service grants exclude forbidden mutations'
+  $$with expected(table_name, privilege_type) as (values
+      ('users', 'SELECT'), ('users', 'INSERT'), ('users', 'UPDATE'), ('users', 'DELETE'),
+      ('user_consents', 'SELECT'), ('user_consents', 'INSERT'),
+      ('health_daily', 'SELECT'), ('health_daily', 'INSERT'), ('health_daily', 'UPDATE'), ('health_daily', 'DELETE'),
+      ('crs_scores', 'SELECT'), ('crs_scores', 'INSERT'), ('crs_scores', 'UPDATE'), ('crs_scores', 'DELETE'),
+      ('user_baselines', 'SELECT'), ('user_baselines', 'INSERT'), ('user_baselines', 'UPDATE'), ('user_baselines', 'DELETE'),
+      ('spots', 'SELECT'), ('spots', 'INSERT'), ('spots', 'UPDATE'), ('spots', 'DELETE'),
+      ('patrol_entries', 'SELECT'), ('patrol_entries', 'INSERT'), ('patrol_entries', 'UPDATE'), ('patrol_entries', 'DELETE'),
+      ('feedback_signals', 'SELECT'), ('feedback_signals', 'INSERT'), ('feedback_signals', 'DELETE'),
+      ('agent_logs', 'SELECT'), ('agent_logs', 'INSERT'),
+      ('chat_threads', 'SELECT'), ('chat_threads', 'INSERT'), ('chat_threads', 'UPDATE'), ('chat_threads', 'DELETE'),
+      ('chat_messages', 'SELECT'), ('chat_messages', 'INSERT'), ('chat_messages', 'UPDATE'), ('chat_messages', 'DELETE'),
+      ('notification_log', 'SELECT'), ('notification_log', 'INSERT'), ('notification_log', 'DELETE'),
+      ('user_devices', 'SELECT'), ('user_devices', 'INSERT'), ('user_devices', 'UPDATE'), ('user_devices', 'DELETE'),
+      ('oauth_tokens', 'SELECT'), ('oauth_tokens', 'INSERT'), ('oauth_tokens', 'UPDATE'), ('oauth_tokens', 'DELETE'),
+      ('one_time_tokens', 'SELECT'), ('one_time_tokens', 'INSERT'), ('one_time_tokens', 'UPDATE'), ('one_time_tokens', 'DELETE'),
+      ('subscriptions', 'SELECT'), ('subscriptions', 'INSERT'), ('subscriptions', 'UPDATE'), ('subscriptions', 'DELETE')
+    ), actual as (
+      select table_name::text, privilege_type::text
+      from information_schema.role_table_grants
+      where table_schema = 'public' and grantee = 'service_role'
+    )
+    (select * from actual except select * from expected)
+    union all
+    (select * from expected except select * from actual)$$,
+  'service-role table grants match the exact canonical matrix'
 );
 
 select ok(has_table_privilege('service_role', 'public.agent_logs', 'INSERT'),

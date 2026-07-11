@@ -65,6 +65,7 @@ jobs:
         run: |
           node scripts/verify-supabase-migrations.mjs
           supabase migration list --local
+          supabase db query --local --file supabase/fixtures/assert-canonical-migration-history.sql
 
       - name: Verify transitional 0006 with Project Woof helper present
         run: |
@@ -73,3 +74,4 @@ jobs:
           supabase migration up --local
           supabase db query --local --file supabase/fixtures/assert-legacy-rls-auto-enable-hardened.sql
           supabase migration list --local
+          supabase db query --local --file supabase/fixtures/assert-canonical-migration-history.sql
