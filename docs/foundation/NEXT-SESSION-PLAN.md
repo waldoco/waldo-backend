@@ -1,10 +1,11 @@
 # Next Session Plan - Harness Foundation Waves
 
-Status: Wave 0 reconciliation in progress; implementation is gated on its human-approved merge.
-Date: 2026-07-11 IST.
-Baseline: `82f582b5a28530c1fb7800b7fad889590b35e57d`; PR #47 merged HEY-13. HEY-143 remains In
-Progress because provider-readiness is fail-closed and has no real context, provider, sink, staging,
-or Alpha proof.
+Status: Wave 0 reconciliation merged in PR #49. PRs #50 (HEY-100), #52 (HEY-144 storage
+foundation), and #51 (HEY-75 scorer) are merged through `2fd798f`; draft PRs #53 (HEY-75 corpus
+correction) and #54 (HEY-141 egress hardening) remain pending review and merge.
+Date: 2026-07-12 IST.
+Baseline: `2fd798f818213b344e700d98def006e80e0d56ae`. HEY-143 remains In Progress because
+provider-readiness is fail-closed and has no real context, provider, sink, staging, or Alpha proof.
 
 ## Start Here
 
@@ -92,6 +93,11 @@ Built and merged:
   evidence;
 - the HEY-10 ten-table context schema artifact.
 - HEY-13's destination-aware Scribe/taint runtime and its final property/mutation proof.
+- PR #50's static DO-only runtime guard; it is not a production custody/data-plane claim.
+- PR #52's V2 goals storage foundation; it does not add a durable writer, admission path, or prompt
+  hydration.
+- PR #51's deterministic injection scorer; its independent held-out acceptance evidence remains
+  pending corrective PR #53.
 
 Not built or not proven:
 
@@ -113,19 +119,18 @@ product capability.
 HEY-13 is historical and Done. Its Scribe/taint interface is a consumed foundation, not the next
 execution slice.
 
-1. **Wave 0:** reconcile current documentation, tracker dependencies, Agent-Ready metadata, and
-   PR #47 proof. Open a reconciliation PR and stop for human merge approval.
-2. **Wave 1:** HEY-15 is the lead context slice, alongside HEY-14 and HEY-144. HEY-144 exclusively
-   owns the V2 goals migration. HEY-15 may build its pure recall Module in parallel but remains
-   read-only at the schema seam; it rebases after HEY-144 before any additive internal FTS migration.
-   HEY-14's source merge plus trigger, ACL, connector, and user-state checks form its five-stage
-   eligibility pipeline; deterministic top-K is terminal selection.
-3. **Wave 2:** after all Wave 1 interfaces merge, HEY-16 composes them; HEY-100 remains a static
-   guard slice only; HEY-75 hardens prompt injection with provenance, held-out, ReDoS, and
-   non-vacuity evidence. HEY-160 separately owns any future production per-user JWT/`db.forUser()`
-   custody path and is not convergence proof.
-4. **Wave 3:** HEY-141 follows HEY-100 unless the coordinator documents disjoint guard/config write
-   sets.
+1. **Wave 0:** reconciliation merged in PR #49. The numbered sequence below remains the structural
+   dependency plan; it is not an inventory of unstarted work.
+2. **Wave 1:** HEY-144's V2 goals storage foundation is merged. HEY-14 is Todo and blocked by
+   HEY-163's WorkspaceMount seam; HEY-15 is Todo and blocked by HEY-14. Any later FTS work remains
+   an additive internal DO migration after rebase. HEY-14's source merge plus trigger, ACL,
+   connector, and user-state checks form its five-stage eligibility pipeline; deterministic top-K is
+   terminal selection.
+3. **Wave 2:** HEY-100's static guard and HEY-75's initial scorer are merged. Corrective PR #53
+   must merge before an HEY-75 acceptance claim; HEY-160 separately owns any future production
+   per-user JWT/`db.forUser()` custody path and is not convergence proof.
+4. **Wave 3:** HEY-100 is merged and HEY-141 is implemented in draft PR #54. It remains a
+   parse-only declared-target policy with no DNS, redirect, fetch, transport, or ACL expansion.
 5. **Convergence:** a fresh clean `origin/main` must prove HEY-14, HEY-15, HEY-144, HEY-16, HEY-100,
    HEY-75, and HEY-141 merged before HEY-143 closure planning. This authorizes planning only.
 

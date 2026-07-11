@@ -1,8 +1,8 @@
 # Harness Runtime Build Plan
 
 Status: active source for the promoted Waldo backend and app-integration build.
-Date: 2026-07-11.
-Baseline: `82f582b5a28530c1fb7800b7fad889590b35e57d` after PR #47.
+Date: 2026-07-12.
+Baseline: `2fd798f818213b344e700d98def006e80e0d56ae` after merged PRs #49, #50, #52, and #51.
 
 ## Source Map
 
@@ -149,7 +149,7 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 | ---: | --- | --- | --- |
 | 1 | Journal/outbox | Local workerd/fake-sink proof merged | Preserve; real async adapter proof is HEY-110 |
 | 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
-| 3 | Context/memory/safety | HEY-10 schema and HEY-13 Scribe are merged; context Modules remain unwired | Wave 0, then HEY-144/14/15 and HEY-16 |
+| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, and HEY-144 storage foundation are merged; context Modules remain unwired | HEY-163 -> HEY-14 -> HEY-15 -> HEY-16 |
 | 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
 | 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
 | 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
@@ -157,13 +157,16 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 
 ## Current Coordinator Program
 
-Wave 0 reconciles current truth and opens a docs/tracker PR. No implementation starts until that PR
-is human-approved and merged. Wave 1 starts HEY-144, HEY-14, and lead-context HEY-15 in isolated
-worktrees; HEY-144 owns the schema seam, HEY-14 owns any binding/config seam, and HEY-15 rebases
-after HEY-144 before an internal FTS migration. Wave 2 starts HEY-16, the static-only HEY-100 guard,
-and HEY-75. HEY-160 separately owns future production per-user JWT/`db.forUser()` custody and does
-not make HEY-100 a data-plane claim. Wave 3 starts HEY-141 after HEY-100 unless the coordinator
-proves disjoint write sets.
+Wave 0 reconciled current truth and merged in PR #49. PR #50's static-only DO guard, PR #52's V2
+goals storage foundation, and PR #51's deterministic injection scorer are merged. PR #53 corrects
+held-out corpus independence and PR #54 adds declared-target parse-only egress hardening; both are
+open drafts. Their merges do not authorize live provider, credential, transport, staging, sink, or
+deployment work.
+
+The remaining structural plan is HEY-163 WorkspaceMount seam, then HEY-14, then HEY-15, then
+HEY-16. HEY-160 separately owns future production per-user JWT/`db.forUser()` custody and does not
+make HEY-100 a data-plane claim. HEY-141 must remain bounded to its declared-target policy until a
+separate adapter/transport scope is admitted.
 
 HEY-143 closure planning requires a fresh clean-main convergence wall after HEY-14, HEY-15, HEY-144,
 HEY-16, HEY-100, HEY-75, and HEY-141 merge. It does not authorize a live-provider, live-secret,
