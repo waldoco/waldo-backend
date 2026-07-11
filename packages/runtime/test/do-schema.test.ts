@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import {
   DEFERRED_DO_PRODUCT_TABLES,
+  DO_SCHEMA_METADATA_TABLE,
   DO_PRODUCT_TABLES,
   DoSchemaDriftError,
   HEY10_BASE_SCHEMA_MIGRATION,
@@ -252,6 +253,40 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(forbiddenColumns).toEqual([]);
+  });
+
+  it('rolls back a failed migration from fresh storage without retaining bootstrap metadata', async () => {
+    const stub = freshStub();
+
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      const beforeVersion = getSchemaVersion(state.storage.sql);
+      const badMigration: DoMigration = {
+        version: 1,
+        name: 'intentional-fresh-failure',
+        up: [
+          'CREATE TABLE transient_fresh_failure_probe (id TEXT PRIMARY KEY);',
+          'INSERT INTO missing_table_for_fresh_failure (id) VALUES (1);',
+        ],
+        down: ['DROP TABLE IF EXISTS transient_fresh_failure_probe;'],
+      };
+
+      expect(() => applyDoMigration(state.storage, badMigration)).toThrow();
+
+      const tables = listTables(state.storage.sql);
+      return {
+        beforeVersion,
+        afterVersion: getSchemaVersion(state.storage.sql),
+        metadataPresent: tables.includes(DO_SCHEMA_METADATA_TABLE),
+        probePresent: tables.includes('transient_fresh_failure_probe'),
+      };
+    });
+
+    expect(result).toEqual({
+      beforeVersion: 0,
+      afterVersion: 0,
+      metadataPresent: false,
+      probePresent: false,
+    });
   });
 
   it('rolls back a failed V2-like migration with its metadata version', async () => {

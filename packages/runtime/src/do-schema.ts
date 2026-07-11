@@ -452,7 +452,6 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
 };
 
 export function provisionDoSchema(storage: DurableObjectStorage): DoSchemaAssertResult {
-  ensureMigrationMetadata(storage.sql);
   for (const migration of DO_SCHEMA_MIGRATIONS) {
     if (getSchemaVersion(storage.sql) < migration.version) {
       applyDoMigration(storage, migration);
@@ -506,10 +505,10 @@ export function applyDoMigration(
   direction: 'up' | 'down' = 'up',
 ): void {
   const sql = storage.sql;
-  ensureMigrationMetadata(sql);
   const statements = direction === 'up' ? migration.up : migration.down;
 
   storage.transactionSync(() => {
+    ensureMigrationMetadata(sql);
     for (const statement of statements) {
       sql.exec(statement);
     }
