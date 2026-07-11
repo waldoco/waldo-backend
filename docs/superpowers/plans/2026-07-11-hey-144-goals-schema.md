@@ -186,11 +186,14 @@ Scribe-backed pre-write boundary in the HEY-144 handoff before opening its draft
 
 ## Completion Record — 2026-07-11
 
-- Completed commits: `0c76742`, `8192dda`, `885449b`, `661d55e`, `6e2f2af`, `954ff7f`.
+- Completed implementation commits: `0c76742`, `8192dda`, `885449b`, `661d55e`, `6e2f2af`, and
+  `954ff7f`; the publication record is `4fb0ea4`.
 - Final verification: `npx -y pnpm@10.34.4 verify` passed with 1,188 contract tests, 493 runtime
   tests, typechecks, and all guards; `git diff --check` passed.
 - QA correction: populated two-owner rows, including a SQL-metacharacter owner identifier, prove the
   bound owner predicate. A deliberate predicate removal failed before restoration.
 - The branch intentionally does **not** close the original durable-write criterion. The required
   Scribe-backed, provenance-aware goal admission and authenticated owner-routing seam remain a
-  separately accepted follow-up; no draft PR, push, or live action was performed here.
+  separately accepted follow-up in [HEY-162](https://linear.app/heywaldo/issue/HEY-162/securitybackend-goal-ingress-scribe-admission-owner-bound-persistence).
+  Draft [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52) is open; no live action was
+  performed.

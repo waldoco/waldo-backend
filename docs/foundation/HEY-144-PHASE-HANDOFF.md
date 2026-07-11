@@ -1,7 +1,7 @@
 # HEY-144 Goals DO Schema Handoff
 
-Status: local implementation and verification complete on `codex/hey-144-goals-do-schema` at
-`954ff7f` before publication; no deployment, credential use, or live cloud action has been performed.
+Status: draft PR [#52](https://github.com/Pin4sf/waldo-backend/pull/52) is open from
+`codex/hey-144-goals-do-schema` at `4fb0ea4`; no deployment or live cloud action has been performed.
 Date: 2026-07-11 IST.
 
 ## What Was Built
@@ -86,15 +86,14 @@ Date: 2026-07-11 IST.
 4. Treat the missing standalone eval runner and the observed tracer intermittency as explicit
    verification/debt items, not silently resolved by a passing rerun.
 
-## PR Packaging Prerequisite
+## PR Publication Record
 
-GitHub currently reports `main` at `a257a175d0361df5c129d73144f95ff245cb63d1`. This isolated
-branch descends from local `a886a1a`, a verified tree-equivalent Wave 0 baseline, but not from that
-remote commit object. Local `git fetch origin main` is unavailable in this environment
-(`Repository not found`). Before publishing, use authenticated Git or the GitHub connector to
-materialize the branch from remote `main`, apply this branch's intended diff, rerun the wall/remote
-CI, and open a **draft** PR. Do not let GitHub compare an unrelated local base and reintroduce Wave
-0 documentation into the review.
+The branch was rebased onto remote `main` at `a257a175d0361df5c129d73144f95ff245cb63d1`, pushed,
+and opened as draft [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52). GitHub compares 12
+commits and seven intended files against `main`; it does not reintroduce Wave 0 documentation.
+The final full verification wall was run on the rebased implementation before publication. GitHub
+reported no workflow runs for the draft head when checked, so retain draft status until human review
+and remote CI evidence are available.
 
 ## Files Changed
 
