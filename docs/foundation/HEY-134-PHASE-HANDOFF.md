@@ -46,6 +46,7 @@ Next dependency: HEY-114 remains blocked until HEY-134 lands or a deliberate sta
 | Arch pgTAP failure investigation | User's Arch runbook reached `supabase test db`; test 13 failed because `service_role` retained default `TRUNCATE`, `REFERENCES`, and `TRIGGER` table privileges on most tables | Root cause found; migration patched |
 | Patched local migrate-from-zero and pgTAP | `npx -y supabase@2.109.1 db reset --local --no-seed`; `npx -y supabase@2.109.1 test db`; `node scripts/verify-supabase-migrations.mjs`; `git diff --check` | PASS; 44/44 pgTAP tests |
 | Transitional `0006` helper-present fixture | Arch runbook step 11 exposed that `supabase db query --file` rejects multi-command SQL files with `cannot insert multiple commands into a prepared statement`; the fixture was converted to one top-level `DO` block, and reconciliation now repeats the helper ACL normalization idempotently | PASS; helper-present path applies `0006`, hardening assertion returns `DO`, final pgTAP still passes |
+| Missing dynamic artifacts | Ashish states that the local security-advisor and post-fix helper-present checks completed successfully without findings | **Operator attestation only**; their logs are not committed and are not independently reproducible from this branch |
 
 ## What Does Not Work Yet
 
@@ -67,6 +68,35 @@ Ashish will boot the machine's separate Arch Linux installation and execute `HEY
 - exact migration history and no-pending-migration behavior pass;
 - local Supabase advisors are reviewed;
 - the full verification wall is classified.
+
+### Captured-artifact gaps — OPERATOR ATTESTATION ONLY
+
+Ashish attests that the two checks below ran successfully on the isolated Arch Linux
+Supabase stack. This is not captured, independently reproducible evidence: their outputs
+are absent from `docs/foundation/hey-134-evidence-20260711T131438Z/`.
+
+Missing artifact 1: `advisors-security.log`.
+
+```bash
+"${SUPABASE[@]}" db advisors --local --type security --level info --fail-on warn \
+  2>&1 | tee "$EVIDENCE/advisors-security.log"
+```
+
+Missing artifact 2: the post-fix helper-present replay log set. Regenerate it from a clean
+local reset, never with `--linked`:
+
+```bash
+"${SUPABASE[@]}" db reset --local --no-seed --version 20260709171953
+"${SUPABASE[@]}" db query --local --file supabase/fixtures/create-legacy-rls-auto-enable.sql
+"${SUPABASE[@]}" migration up --local
+"${SUPABASE[@]}" db query --local --file supabase/fixtures/assert-legacy-rls-auto-enable-hardened.sql
+"${SUPABASE[@]}" db query --local --file supabase/fixtures/assert-canonical-migration-history.sql
+"${SUPABASE[@]}" migration list --local
+"${SUPABASE[@]}" test db
+```
+
+These artifact gaps do not authorize a schema change, linked CLI command, Supabase project
+mutation, or a claim that the outputs were independently reproduced.
 
 ### Known runtime failure — PRE-EXISTING / SHIVANSH-OWNED
 

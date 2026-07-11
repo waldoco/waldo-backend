@@ -64,4 +64,3 @@ npm notice run 'pnpm' verify:node
 [2m      Tests [22m [1m[32m1168 passed[39m[22m[90m (1168)[39m
 [2m   Start at [22m 20:01:44
 [2m   Duration [22m 9.76s[2m (transform 1.88s, setup 0ms, import 10.68s, tests 2.09s, environment 14ms)[22m
-
