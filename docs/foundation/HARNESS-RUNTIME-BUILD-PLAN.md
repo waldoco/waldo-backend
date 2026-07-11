@@ -1,8 +1,9 @@
 # Harness Runtime Build Plan
 
 Status: active source for the promoted Waldo backend and app-integration build.
-Date: 2026-07-11.
-Baseline: `82f582b5a28530c1fb7800b7fad889590b35e57d` after PR #47.
+Date: 2026-07-12.
+Baseline: `2fd798f818213b344e700d98def006e80e0d56ae` after the verified PR #49 -> #50 -> #52 -> #51
+merge sequence.
 
 ## Source Map
 
@@ -125,6 +126,8 @@ Alpha excludes:
 - HEY-10 ten-table context schema artifact;
 - PR #44 provider-readiness/fail-closed hardening at `b311d54`.
 - PR #47 HEY-13 Scribe/taint runtime at `82f582b5`, including focused property and mutation proof.
+- PR #49 Wave 0 coordination, followed by PR #50 HEY-100 static guard, PR #52 HEY-144 V2 goals
+  storage, and PR #51 HEY-75 injection scoring.
 
 HEY-143 remains In Progress. PR #44 proves configuration, parsing, privacy, and fail-closed
 behavior with fakes/mocks. It does not prove a real context/provider/channel path or Alpha.
@@ -149,7 +152,7 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 | ---: | --- | --- | --- |
 | 1 | Journal/outbox | Local workerd/fake-sink proof merged | Preserve; real async adapter proof is HEY-110 |
 | 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
-| 3 | Context/memory/safety | HEY-10 schema and HEY-13 Scribe are merged; context Modules remain unwired | Wave 0, then HEY-144/14/15 and HEY-16 |
+| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, and HEY-144 goals storage are merged; context Modules remain unwired | HEY-163 contract fulfillment, then HEY-14, HEY-15, and HEY-16 |
 | 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
 | 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
 | 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
@@ -157,17 +160,19 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 
 ## Current Coordinator Program
 
-Wave 0 reconciles current truth and opens a docs/tracker PR. No implementation starts until that PR
-is human-approved and merged. Wave 1 starts HEY-144, HEY-14, and lead-context HEY-15 in isolated
-worktrees; HEY-144 owns the schema seam, HEY-14 owns any binding/config seam, and HEY-15 rebases
-after HEY-144 before an internal FTS migration. Wave 2 starts HEY-16, the static-only HEY-100 guard,
-and HEY-75. HEY-160 separately owns future production per-user JWT/`db.forUser()` custody and does
-not make HEY-100 a data-plane claim. Wave 3 starts HEY-141 after HEY-100 unless the coordinator
-proves disjoint write sets.
+Wave 0 merged in PR #49. The observed post-Wave-0 merge order was PR #50 (HEY-100), PR #52
+(HEY-144), then PR #51 (HEY-75). HEY-14 preflight passed the `2fd798f8` baseline but found no typed
+WorkspaceMount/R2 seam. HEY-163 is the contract-only ADR-0029/0076 fulfillment and must merge before
+HEY-14 implementation. HEY-144 has released the V2 goals storage seam; the remaining context
+sequence is HEY-163 -> HEY-14 -> HEY-15 -> HEY-16. Complete goal hydration also awaits HEY-162's
+Scribe-backed admission boundary.
+HEY-100 remains a static conformance result only; HEY-160 separately owns future production per-user
+JWT/`db.forUser()` custody. HEY-141 still requires its own Agent-Ready admission.
 
-HEY-143 closure planning requires a fresh clean-main convergence wall after HEY-14, HEY-15, HEY-144,
-HEY-16, HEY-100, HEY-75, and HEY-141 merge. It does not authorize a live-provider, live-secret,
-staging, sink, or deployment action.
+HEY-143 closure planning requires HEY-163, then the remaining HEY-14, HEY-15, HEY-16, and HEY-141
+work to merge and a fresh clean-main convergence wall, alongside the already merged HEY-100,
+HEY-144, and HEY-75. It does not authorize a live-provider, live-secret, staging, sink, or
+deployment action.
 
 ## First Public Seam
 
@@ -293,9 +298,10 @@ adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate,
 
 Safe parallel work:
 
-- Wave 0 documentation/tracker reconciliation only;
-- HEY-144, HEY-14, and lead-context HEY-15 after Wave 0 merges;
-- HEY-16 only after those merged interfaces converge;
+- HEY-163 contract-only ADR-0029/0076 fulfillment; HEY-14 implementation remains blocked until it
+  merges, while HEY-15 source/ISA preparation remains read-only and disjoint;
+- HEY-16 only after the remaining context interfaces converge; full goal hydration remains gated by
+  HEY-162;
 - HEY-110 async delivery with fake adapters;
 - HEY-158 backend Spots vertical;
 - HEY-100 static guard plus the separate future custody/data-plane issue;
@@ -334,10 +340,15 @@ Merged:
 12. HEY-142 governed multi-iteration loop.
 13. PR #44 HEY-143 provider-readiness/fail-closed hardening.
 14. PR #47 HEY-13 Scribe/sanitizer runtime.
+15. PR #49 Wave 0 coordination.
+16. PR #50 HEY-100 static DO-only guard.
+17. PR #52 HEY-144 V2 goals storage foundation.
+18. PR #51 HEY-75 deterministic Scribe injection scoring.
 
 Next:
 
-15. Wave 0 reconciliation, then HEY-144, HEY-14, and HEY-15 under their serialized ownership map.
+19. HEY-14 preflight passed baseline but found no typed WorkspaceMount/R2 seam. HEY-163 contract-only
+    ADR-0029/0076 fulfillment must merge before HEY-14 -> HEY-15 -> HEY-16.
 
 Do not infer HEY ticket completion beyond the bounded merged capability named above.
 

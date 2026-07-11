@@ -105,3 +105,12 @@ status until human review and applicable remote CI evidence are available.
 - `docs/superpowers/specs/2026-07-11-hey-144-goals-schema-design.md`
 - `docs/superpowers/plans/2026-07-11-hey-144-goals-schema.md`
 - `docs/foundation/HEY-144-PHASE-HANDOFF.md`
+
+## Post-Merge Record — 2026-07-12 IST
+
+- [observed] The publication-time draft PR #52 merged as
+  `4e1cac308e935da2b4e514afbe8fe56b94003655`.
+- [observed] The merged result establishes V2 goals storage only. It does not add a goal writer,
+  authenticated owner routing, Scribe admission, RunLoop use, or prompt hydration.
+- [decision] HEY-162 retains the durable Scribe-backed admission boundary. Full goal hydration
+  remains deferred until that boundary is implemented and verified.

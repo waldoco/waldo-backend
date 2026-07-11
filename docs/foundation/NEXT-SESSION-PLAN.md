@@ -1,10 +1,12 @@
 # Next Session Plan - Harness Foundation Waves
 
-Status: Wave 0 reconciliation in progress; implementation is gated on its human-approved merge.
-Date: 2026-07-11 IST.
-Baseline: `82f582b5a28530c1fb7800b7fad889590b35e57d`; PR #47 merged HEY-13. HEY-143 remains In
-Progress because provider-readiness is fail-closed and has no real context, provider, sink, staging,
-or Alpha proof.
+Status: Wave 0 merged in PR #49. The verified post-Wave-0 order is PR #50 -> PR #52 -> PR #51.
+HEY-14 preflight passed the baseline but found no typed WorkspaceMount/R2 seam; contract-only
+HEY-163 is now the prerequisite before HEY-14.
+Date: 2026-07-12 IST.
+Baseline: `2fd798f818213b344e700d98def006e80e0d56ae`; PR #47 merged HEY-13, and PR #52 merged the
+V2 goals storage foundation. HEY-143 remains In Progress because provider-readiness is fail-closed
+and has no real context, provider, sink, staging, or Alpha proof.
 
 ## Start Here
 
@@ -92,13 +94,16 @@ Built and merged:
   evidence;
 - the HEY-10 ten-table context schema artifact.
 - HEY-13's destination-aware Scribe/taint runtime and its final property/mutation proof.
+- PR #50's HEY-100 static DO-only conformance guard, PR #52's HEY-144 V2 goals storage foundation,
+  and PR #51's HEY-75 deterministic Scribe injection scorer.
 
 Not built or not proven:
 
 - a public authenticated product route; the default Worker still returns 404;
 - verified ES256 subject to owner-bound DO routing and two-user negative proof;
 - merged Supabase migrations, RLS, Vault, R2, consent middleware, or all-store deletion runtime;
-- a wired production context schema, recall, skills, or prompt builder;
+- wired context recall, skills, or prompt hydration; the merged goals table has no admitted writer,
+  authenticated routing, or prompt hydration;
 - a real provider RunLoop call, atomic provider-spend reservation, or staging smoke;
 - an asynchronous idempotent in-app adapter; the current runtime sink is synchronous/fake;
 - the morning Brief public projection/OpenAPI/generated client;
@@ -113,21 +118,23 @@ product capability.
 HEY-13 is historical and Done. Its Scribe/taint interface is a consumed foundation, not the next
 execution slice.
 
-1. **Wave 0:** reconcile current documentation, tracker dependencies, Agent-Ready metadata, and
-   PR #47 proof. Open a reconciliation PR and stop for human merge approval.
-2. **Wave 1:** HEY-15 is the lead context slice, alongside HEY-14 and HEY-144. HEY-144 exclusively
-   owns the V2 goals migration. HEY-15 may build its pure recall Module in parallel but remains
-   read-only at the schema seam; it rebases after HEY-144 before any additive internal FTS migration.
-   HEY-14's source merge plus trigger, ACL, connector, and user-state checks form its five-stage
-   eligibility pipeline; deterministic top-K is terminal selection.
-3. **Wave 2:** after all Wave 1 interfaces merge, HEY-16 composes them; HEY-100 remains a static
-   guard slice only; HEY-75 hardens prompt injection with provenance, held-out, ReDoS, and
-   non-vacuity evidence. HEY-160 separately owns any future production per-user JWT/`db.forUser()`
-   custody path and is not convergence proof.
-4. **Wave 3:** HEY-141 follows HEY-100 unless the coordinator documents disjoint guard/config write
-   sets.
-5. **Convergence:** a fresh clean `origin/main` must prove HEY-14, HEY-15, HEY-144, HEY-16, HEY-100,
-   HEY-75, and HEY-141 merged before HEY-143 closure planning. This authorizes planning only.
+1. **Wave 0:** the reconciliation merged in PR #49. The observed next merges were PR #50 (HEY-100),
+   PR #52 (HEY-144), and PR #51 (HEY-75).
+2. **Current:** HEY-14 preflight passed the `2fd798f8` baseline but found no typed
+   WorkspaceMount/R2 seam. HEY-163 is the contract-only ADR-0029/0076 fulfillment and blocks
+   HEY-14 implementation.
+3. **Remaining context:** HEY-163 -> HEY-14 -> HEY-15 -> HEY-16. HEY-15 retains its serialized
+   schema/rebase discipline, and HEY-16 composes merged HEY-14/15 interfaces; its full
+   goal-hydration path still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
+   static-only, and HEY-160 separately owns any future production per-user JWT/`db.forUser()`
+   custody path.
+4. **Wave 3:** HEY-141 requires its own Agent-Ready admission even though HEY-100 is merged.
+5. **Convergence:** HEY-163 must merge before the remaining HEY-14, HEY-15, HEY-16, and HEY-141
+   work. A fresh clean `origin/main` must prove those results alongside the already merged HEY-100,
+   HEY-144, and HEY-75 before HEY-143 closure planning. This authorizes planning only.
+6. **Reliability parallel root:** HEY-165 owns diagnosis of the recurring unchanged
+   `scribe:invalid_payload` tracer/outbox test failure. It does not authorize a workaround or a
+   sanitizer weakening; record its unresolved status on every affected verification wall.
 
 Every wave remains fake-first and forbids live providers, credentials, app traffic, channel delivery,
 production data, and cloud side effects.
@@ -224,5 +231,5 @@ The Brief seam is not complete until:
   terminal error states without samples or fabricated effects;
 - HEY-156 proves one-path staging cutover and rollback with no legacy fallback.
 
-For this docs promotion, run the docs/guard wall and inspect the complete diff. Do not mark any
-runtime ticket complete.
+For documentation-only updates, run the docs/guard wall and inspect the complete diff. Do not infer
+ticket completion beyond the recorded PR merges.

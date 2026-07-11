@@ -20,15 +20,17 @@ Build in HEY-10:
 
 Do not build in HEY-10:
 
-- `goals`; owned by HEY-144 and blocks full HEY-16 goal hydration
+- `goals`; not built in HEY-10. HEY-144's separate V2 storage foundation is now merged, while
+  HEY-162 still gates full HEY-16 goal hydration
 - `runs`, `outbox`, `schedules`, `daily_push_budget`
 - `memory_edges`, `commitments`, `handoff_state`
 - FTS virtual/shadow tables
 - ADR-0056 compaction/archive columns
 
-Follow-on order: HEY-144 owns a new V2 goals migration; HEY-15 may own a later additive internal
-FTS migration after rebasing on HEY-144. Neither ticket changes this V1 migration or adds a
-Supabase/external migration.
+Follow-on order: HEY-144 added the V2 goals migration in PR #52; HEY-15 may own a later additive
+internal FTS migration after rebasing on that storage seam. Neither ticket changes this V1 migration
+or adds a Supabase/external migration. HEY-162 remains the durable admission prerequisite for full
+goal hydration.
 
 ## DDL Plan
 

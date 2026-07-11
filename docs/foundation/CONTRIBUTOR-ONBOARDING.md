@@ -12,8 +12,10 @@ runtime looping are merged.
 
 PR #44 merged HEY-143 provider-readiness/fail-closed hardening at `b311d54`. HEY-143 remains In
 Progress: no real context/provider/source/sink/staging path has been proved. PR #47 merged HEY-13
-Scribe/sanitizer at `82f582b5`; HEY-13 is historical and Done. The active scope is Wave 0
-reconciliation, followed by the Wave 1 HEY-144, HEY-14, and lead-context HEY-15 foundation slices.
+Scribe/sanitizer at `82f582b5`; HEY-13 is historical and Done. Wave 0 merged in PR #49, followed
+by the verified PR #50 -> PR #52 -> PR #51 sequence. HEY-14 preflight passed baseline but found no
+typed WorkspaceMount/R2 seam; contract-only HEY-163 now precedes HEY-14. HEY-144's V2 goals storage
+foundation is already merged.
 
 The canonical deployable app is
 [`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app), audited at
@@ -44,8 +46,8 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 
 | Lane | Next work | Notes |
 | --- | --- | --- |
-| Runtime safety | Wave 0 reconciliation, then HEY-75 prompt-injection hardening | HEY-13 Scribe is Done; Wave 2 preserves its single Scribe seam and content-free evidence. |
-| Context | HEY-15 lead recall, HEY-14 skills, HEY-144 goals, then HEY-16 prompt builder | Starts from HEY-10's schema root. HEY-144 owns V2 goals; HEY-15 is read-only at that seam until rebase. |
+| Runtime safety | HEY-141 egress hardening after its own admission | HEY-75 merged in PR #51; HEY-13's single Scribe seam and content-free evidence remain mandatory. |
+| Context | HEY-163 contract fulfillment, then HEY-14, HEY-15 recall, and HEY-16 prompt builder | HEY-14 preflight found no typed WorkspaceMount/R2 seam. HEY-144 V2 goals storage merged in PR #52; full goal hydration still awaits HEY-162. |
 | Provider | HEY-143 remains In Progress | PR #44 is merged; real context/provider/spend/secret/staging proof remains. |
 | Evidence | HEY-111/HEY-142 local evidence is available | Reuse `readRunEvidence`, `replayFixture`, and `scoreRun`; do not create a parallel trace path. |
 | Public Brief seam | HEY-151 -> 153 -> 154 -> 132 -> 28/35/47 -> 156 -> 155 | Side-effect-free GET first; generated client only; no legacy fallback. |
@@ -151,7 +153,8 @@ Completed:
 
 Next:
 
-- Wave 0 reconciliation, then Wave 1 HEY-144, HEY-14, and lead-context HEY-15.
+- HEY-14 preflight passed the `2fd798f8` baseline but found no typed WorkspaceMount/R2 seam.
+  HEY-163 is the contract-only ADR-0029/0076 prerequisite before HEY-14 implementation.
 
 After the convergence gate:
 
@@ -174,20 +177,22 @@ Merged evidence:
 
 - `HEY-10` DO SQLite context schema root.
 
-Next after Wave 0 merges:
+Current and next:
 
-- `HEY-15` lead recall-before-act Module, read-only at the schema seam.
-- `HEY-14` skill loader.
-- `HEY-144` V2 goals migration and active-goal Module.
+- `HEY-14` SkillLoader preflight passed baseline but found no typed WorkspaceMount/R2 seam.
+  `HEY-163` is the contract-only ADR-0029/0076 prerequisite before HEY-14 implementation.
+- `HEY-15` recall-before-act source/ISA preparation may remain read-only at the schema seam.
+- `HEY-144` V2 goals migration and active-goal storage Module merged in PR #52.
 - `HEY-11` AuditedDB wrapper alongside where its write set is disjoint.
 
-After all three foundation interfaces merge:
+After HEY-163, HEY-14, and HEY-15 interfaces merge:
 
-- `HEY-16` REASONS prompt builder.
+- `HEY-16` REASONS prompt builder. Its complete goal-hydration path also awaits HEY-162's
+  Scribe-backed admission boundary.
 
 Needed / related:
 
-- `HEY-144` before full goal hydration.
+- `HEY-144` goals storage is merged; `HEY-162` is still required before full goal hydration.
 - `HEY-134` Supabase schema re-land.
 - `HEY-133` ADR-0024 vocabulary sync.
 - `HEY-102`, `HEY-75`, `HEY-79`, `HEY-74` as context/safety support.
@@ -354,11 +359,12 @@ Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open
 
 ## What To Assign Now
 
-1. Wave 0: coordinator-only reconciliation; do not start an implementation ticket before its merge.
-2. Wave 1 context: `HEY-15` lead recall, `HEY-14` skill loader, and `HEY-144` goals schema;
-   `HEY-15` must rebase after HEY-144 before an internal FTS migration.
-3. Wave 2: `HEY-16`, static-only `HEY-100`, and `HEY-75` after their readiness gates.
-4. Wave 3: `HEY-141` after HEY-100 unless guard/config write sets are proved disjoint.
+1. Current: `HEY-14` preflight passed the `2fd798f8` baseline but found no typed
+   WorkspaceMount/R2 seam. Contract-only `HEY-163` must merge before HEY-14 implementation.
+2. Remaining context: `HEY-163 -> HEY-14 -> HEY-15 -> HEY-16`; HEY-15 source/ISA preparation
+   remains read-only at the schema seam, and full goal hydration awaits `HEY-162`.
+3. Merged post-Wave-0 work: `HEY-100` in PR #50, `HEY-144` in PR #52, and `HEY-75` in PR #51.
+4. `HEY-141` requires its own admission even though HEY-100 is merged.
 5. Delivery parallel: `HEY-110` Backlog/Phase 5 async idempotent in-app adapter.
 6. Auth/data parallel: `HEY-125` is Done; `HEY-134` and `HEY-114` remain open.
 7. Product contract lane: HEY-151/153/154 first Brief seam, HEY-158 Spots, and the HEY-126 bounded
@@ -641,9 +647,11 @@ For harness/runtime changes, include focused runtime or contract tests and evide
 
 Start from Linear and the active docs, not from archived plans:
 
-- Runtime/safety builder: HEY-13 is historical and Done; Wave 2 HEY-75 follows the Wave 1 barrier.
-- Context builder: after Wave 0 merge, HEY-15 leads alongside HEY-14 and HEY-144; HEY-16 follows
-  their merged interfaces.
+- Runtime/safety builder: HEY-13 is historical and Done; HEY-75 merged in PR #51, and HEY-141
+  remains separately admitted work.
+- Context builder: Wave 0 and the PR #50 -> #52 -> #51 sequence are merged. HEY-14 preflight
+  found no typed WorkspaceMount/R2 seam; contract-only HEY-163 is next, then HEY-14 -> HEY-15 ->
+  HEY-16 under their documented interface and hydration dependencies.
 - Delivery builder: HEY-110 async idempotent in-app adapter.
 - Infra/provider builder: HEY-125 is Done; HEY-134/114 and the remaining HEY-143 live-path
   dependencies remain.

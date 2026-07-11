@@ -114,3 +114,21 @@ merge barrier clears.
 - `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
 - `docs/foundation/NEXT-SESSION-PLAN.md`
 - `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md`
+
+## Post-Merge Record — 2026-07-12 IST
+
+- [observed] The historical draft PR #49 merged as `a257a175d0361df5c129d73144f95ff245cb63d1`.
+  The verified first-parent post-Wave-0 sequence is PR #50 (`7d02b173`), PR #52 (`4e1cac30`), then
+  PR #51 (`2fd798f8`).
+- [decision] The Wave 0 merge barrier is retired. The next coordinator action is a fresh HEY-14
+  SkillLoader preflight from `2fd798f8`, not an automatic implementation grant.
+- [observed] PR #52 supplies the V2 goals storage foundation only. Full goal hydration still awaits
+  HEY-162's Scribe-backed admission boundary.
+
+## Post-Preflight Addendum — 2026-07-12 IST
+
+- [verified] The fresh HEY-14 worktree passed its `2fd798f8` baseline wall, then source inspection
+  found no typed WorkspaceMount/R2 seam in the current backend contracts or runtime bindings.
+- [decision] HEY-163 is the contract-only ADR-0029/0076 fulfillment and blocks HEY-14 runtime
+  implementation. The remaining serialized context sequence is HEY-163 -> HEY-14 -> HEY-15 ->
+  HEY-16; no raw R2/key workaround is admitted.
