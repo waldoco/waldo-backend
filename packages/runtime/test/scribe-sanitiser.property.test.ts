@@ -30,7 +30,7 @@ const unitArbitrary = fc.constantFrom('ms', 'bpm', '%', 'mmHg', 'kg', 'minutes')
 const numericArbitrary = fc.integer({ min: 1, max: 240 });
 const categoricalHealthArbitrary = fc.tuple(
   fc.constantFrom('motion', 'circadian', 'sleep_stage'),
-  fc.stringMatching(/^[a-z]{1,12}(?:-[a-z]{1,12})?$/),
+  fc.stringMatching(/^[a-z]{1,12}(?:[-_][a-z]{1,12})?$/),
 );
 
 function inspect(payload: SanitiseInput['payload']) {
@@ -45,6 +45,12 @@ function inspect(payload: SanitiseInput['payload']) {
 function unicodeEscape(text: string): string {
   return [...text]
     .map((character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`)
+    .join('');
+}
+
+function percentEscape(text: string): string {
+  return [...text]
+    .map((character) => `%${character.charCodeAt(0).toString(16).padStart(2, '0')}`)
     .join('');
 }
 
@@ -69,6 +75,100 @@ describe('Scribe sanitiser properties', () => {
             ? { [metric]: value }
             : { metric, measurement: value };
           expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          });
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('denies encoded health discriminators with arbitrary numeric sibling keys', () => {
+    fc.assert(
+      fc.property(
+        metricArbitrary,
+        numericArbitrary,
+        fc.stringMatching(/^[a-z]{1,12}$/).filter((key) => key !== 'metric'),
+        fc.integer({ min: 0, max: 6 }),
+        fc.constantFrom('plain', 'percent', 'base64', 'unicode'),
+        (metric, value, numericKey, depth, encoding) => {
+          const encoded = (() => {
+            switch (encoding) {
+              case 'plain':
+                return metric;
+              case 'percent':
+                return percentEscape(metric);
+              case 'base64':
+                return btoa(metric);
+              case 'unicode':
+                return unicodeEscape(metric);
+            }
+          })();
+          expect(inspect(wrapAtDepth({ metric: encoded, [numericKey]: value }, depth))).toMatchObject({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          });
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('denies generated encoded numeric siblings, encoded health keys, and split correlations', () => {
+    fc.assert(
+      fc.property(
+        metricArbitrary,
+        numericArbitrary,
+        fc.stringMatching(/^[a-z]{1,12}$/).filter((key) => key !== 'metric'),
+        fc.integer({ min: 0, max: 6 }),
+        fc.constantFrom('percent', 'base64', 'unicode'),
+        fc.constantFrom('numeric', 'key', 'split'),
+        (metric, value, numericKey, depth, encoding, shape) => {
+          const encode = (text: string): string => {
+            switch (encoding) {
+              case 'percent':
+                return percentEscape(text);
+              case 'base64':
+                return btoa(text);
+              case 'unicode':
+                return unicodeEscape(text);
+            }
+          };
+          const encodedMetric = encode(metric);
+          const encodedNumeric = encode(String(value));
+          const hostile = (() => {
+            switch (shape) {
+              case 'numeric':
+                return { metric, [numericKey]: encodedNumeric };
+              case 'key':
+                return { [encodedMetric]: value };
+              case 'split':
+                return [{ metric: encodedMetric }, { [numericKey]: encodedNumeric }];
+            }
+          })();
+          expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          });
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('denies generated numeric health aliases with semantic measurement suffixes', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('hrv', 'heart_rate', 'spo2'),
+        fc.constantFrom('reading', 'value', 'sample', 'datum'),
+        numericArbitrary,
+        fc.integer({ min: 0, max: 6 }),
+        (metric, suffix, value, depth) => {
+          expect(inspect(wrapAtDepth({ [`${metric}_${suffix}`]: value }, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
@@ -118,7 +218,7 @@ describe('Scribe sanitiser properties', () => {
               case 'text':
                 return text;
               case 'percent':
-                return encodeURIComponent(text);
+                return percentEscape(text);
               case 'base64':
                 return btoa(text);
               case 'unicode':
@@ -156,7 +256,7 @@ describe('Scribe sanitiser properties', () => {
               case 'json':
                 return JSON.stringify({ [metric]: value, unit });
               case 'percent':
-                return encodeURIComponent(text);
+                return percentEscape(text);
               case 'base64':
                 return btoa(text);
               case 'unicode':
@@ -204,7 +304,7 @@ describe('Scribe sanitiser properties', () => {
               case 'text':
                 return text;
               case 'percent':
-                return encodeURIComponent(text);
+                return percentEscape(text);
               case 'base64':
                 return btoa(text);
               case 'unicode':
@@ -230,9 +330,16 @@ describe('Scribe sanitiser properties', () => {
         numericArbitrary,
         fc.oneof(unitArbitrary, fc.constantFrom('°C', '°F', 'steps')),
         fc.integer({ min: 0, max: 6 }),
-        (value, unit, depth) => {
+        fc.constantFrom('array', 'object', 'map'),
+        (value, unit, depth, shape) => {
+          const sample = { timestamp: '2026-07-11T00:00:00.000Z', datum: value, unit };
           const hostile = {
-            samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value, unit }],
+            samples:
+              shape === 'array'
+                ? [sample]
+                : shape === 'map'
+                  ? { '2026-07-11T00:00:00.000Z': sample }
+                  : sample,
           };
           expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
             ok: false,

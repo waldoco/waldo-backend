@@ -52,7 +52,7 @@ const HEALTH_KEY = /(?:^|[^a-z0-9])(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)
 const HEALTH_KEY_COMPACT = /^(?:hrv(?:ms)?|heartratevariability(?:ms)?|restingheartrate(?:bpm)?|heartrate(?:bpm)?|pulse(?:bpm)?|spo2|oxygensaturation(?:percent|pct)?|bloodoxygen(?:percent|pct)?|systolic(?:mmhg)?|diastolic(?:mmhg)?|bloodpressure|bp|bodyweight(?:kg|lb|lbs)?|bodymass(?:kg|lb|lbs)?|weight(?:kg|lb|lbs)?|bodytemperature|respiratoryrate|breathingrate|bloodglucose|glucose|steps|stepcount|motion|circadian|calorieburn(?:kcal)?|caloriesburned(?:kcal)?|activeenergy(?:kcal)?|sleep(?:hours|duration|minutes|mins|efficiency|stages?)?|remsleep(?:minutes|mins)?|deepsleep(?:minutes|mins)?|providerpayload|healthpayload|rawpayload|crs|form(?:score)?|recovery(?:score)?|load(?:score)?)$/i;
 const HEALTH_INDICATOR_VALUE = /^(?:hrv|heart rate(?: variability)?|resting heart rate|pulse|spo2|oxygen saturation|blood oxygen|systolic|diastolic|blood pressure|bp|body weight|body mass|weight|body temperature|respiratory rate|breathing rate|blood glucose|glucose|steps|step count|motion|circadian|sleep|sleep efficiency|sleep stage|sleep stages|rem sleep|deep sleep|active energy|calorie burn|provider payload|health payload|raw payload|crs|form|recovery|load)$/i;
 const NUMERIC_VALUE = /^\s*["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?(?:\s*\/\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)?["']?\s*$/;
-const HEALTH_MEASUREMENT_KEY = /^(?:measurement|value|reading|amount|score|sample|quantity|duration|minutes?|mins?)$/i;
+const HEALTH_DISCRIMINATOR_KEY = /^(?:metric|measure|measurement|indicator|signal|type|kind|name)$/i;
 const FORBIDDEN_HEALTH_PAYLOAD_KEY = /^(?:motion|circadian|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload|sleep[\s_-]*stages?)$/i;
 const RAW_HEALTH_SERIES_KEY = /^(?:samples?|series)$/i;
 const DERIVED_HEALTH_ELIGIBILITIES = new Set([
@@ -72,7 +72,7 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [
   /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d{1,3}\b/i,
   /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
   /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?[+-]?(?:\d+(?:\.\d*)?|\.\d+)[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
-  /\b(?:motion|circadian(?:\s+rhythm)?|sleep[\s_-]*stage)\b\s*(?::|=|,|\bis\b|\bwas\b)\s*["']?[a-z][a-z\s-]{0,32}["']?(?=$|[;,.])/i,
+  /\b(?:motion|circadian(?:\s+rhythm)?|sleep[\s_-]*stage)\b\s*(?::|=|,|\bis\b|\bwas\b)\s*["']?[a-z][a-z\s_-]{0,32}["']?(?=$|[;,.])/i,
   /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*(?:weight|temperature)|steps|sleep[\s_-]*(?:duration|efficiency)|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?-?\d+(?:\.\d+)?["']?(?:\s*,?\s*)(?:°[cf]|degrees?\s*[cf])(?=$|[^a-z0-9])/i,
 ];
 
@@ -84,8 +84,10 @@ const SECRET_PATTERNS: readonly RegExp[] = [
   /\bgh[pousr]_[A-Za-z0-9]{20,}\b/,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
   /\bAKIA[0-9A-Z]{16}\b/,
+  /\bsb_secret_[A-Za-z0-9_-]{16,}\b/,
   /\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|secret|password)\s*[:=]\s*["']?[A-Za-z0-9._~+\/-]{12,}["']?/i,
 ];
+const SECRET_FIELD_KEY = /^(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|sb[_-]?secret|secret|password)$/i;
 
 const ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,5}\s+(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|way)\b/gi;
 const ATTENDEE_KEY = /^(?:attendee|attendees|attendee_name|participant|participants|participant_name|contact_name)$/i;
@@ -264,6 +266,17 @@ function decodedViews(text: string, destination: SanitiseDestination): DecodeBun
   return { invalid: false, views };
 }
 
+function hasDecodedHealthIndicator(
+  text: string,
+  destination: SanitiseDestination,
+): boolean {
+  const decoded = decodedViews(text, destination);
+  if (decoded.views.some(isHealthIndicatorText)) return true;
+
+  const shortDecoded = printableUtf8FromBase64(text.trim());
+  return shortDecoded !== undefined && isHealthIndicatorText(shortDecoded);
+}
+
 function visitStrings(
   payload: JsonValue,
   destination: SanitiseDestination,
@@ -310,7 +323,7 @@ function containsCanaryOrSecret(
   input: PreparedInput,
 ): SanitiseFailureReason | undefined {
   let canaryFound = false;
-  let secretFound = false;
+  let secretFound = containsStructuredSecret(payload, input.destination);
   const result = visitStrings(payload, input.destination, (text) => {
     if (input.canary_tokens.some((token) => text.includes(token)) || matches(CANARY_REGEX, text)) {
       canaryFound = true;
@@ -321,6 +334,33 @@ function containsCanaryOrSecret(
   if (result.invalid) return 'invalid_payload';
   if (canaryFound) return 'canary_leak';
   return secretFound ? 'secret_leak' : undefined;
+}
+
+function containsStructuredSecret(
+  payload: JsonValue,
+  destination: SanitiseDestination,
+): boolean {
+  const pending = [payload];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (typeof value !== 'object' || value === null) continue;
+    if (Array.isArray(value)) {
+      pending.push(...value);
+      continue;
+    }
+    for (const [key, item] of Object.entries(value)) {
+      const keyViews = decodedViews(key, destination);
+      if (
+        typeof item === 'string' &&
+        item.trim().length >= 12 &&
+        keyViews.views.some((view) => SECRET_FIELD_KEY.test(view.trim()))
+      ) {
+        return true;
+      }
+      pending.push(item);
+    }
+  }
+  return false;
 }
 
 function destinationEligibility(destination: SanitiseDestination): readonly string[] {
@@ -378,39 +418,73 @@ function isHealthIndicatorText(value: string): boolean {
 function subtreeHealthFlags(
   value: JsonValue,
   destination: SanitiseDestination,
-): { indicator: boolean; measurement: boolean; numeric: boolean; unit: boolean } {
+): {
+  indicator: boolean;
+  strongIndicator: boolean;
+  measurement: boolean;
+  numeric: boolean;
+  unit: boolean;
+} {
   if (typeof value === 'number') {
     return {
       indicator: false,
+      strongIndicator: false,
       measurement: false,
       numeric: Number.isFinite(value),
       unit: false,
     };
   }
   if (typeof value === 'string') {
+    const indicator = isHealthIndicatorText(value);
     return {
-      indicator: isHealthIndicatorText(value),
+      indicator,
+      strongIndicator: indicator,
       measurement: false,
-      numeric: isNumeric(value),
-      unit: HEALTH_UNIT_VALUE.test(value.trim()),
+      numeric: decodedViews(value, destination).views.some(isNumeric) || numericFromBase64(value) !== undefined,
+      unit: decodedViews(value, destination).views.some((view) => HEALTH_UNIT_VALUE.test(view.trim())),
     };
   }
   if (typeof value !== 'object' || value === null) {
-    return { indicator: false, measurement: false, numeric: false, unit: false };
+    return {
+      indicator: false,
+      strongIndicator: false,
+      measurement: false,
+      numeric: false,
+      unit: false,
+    };
   }
   if (!Array.isArray(value)) {
     const parsedView = derivedHealthDestinationViewSchema.safeParse(value);
     if (parsedView.success) {
       return isEligibleHealthView(value, destination)
-        ? { indicator: false, measurement: false, numeric: false, unit: false }
-        : { indicator: true, measurement: true, numeric: true, unit: false };
+        ? {
+            indicator: false,
+            strongIndicator: false,
+            measurement: false,
+            numeric: false,
+            unit: false,
+          }
+        : {
+            indicator: true,
+            strongIndicator: true,
+            measurement: true,
+            numeric: true,
+            unit: false,
+          };
     }
     if (looksLikeDerivedHealthView(value)) {
-      return { indicator: true, measurement: true, numeric: false, unit: false };
+      return {
+        indicator: true,
+        strongIndicator: true,
+        measurement: true,
+        numeric: false,
+        unit: false,
+      };
     }
   }
 
   let indicator = false;
+  let strongIndicator = false;
   let measurement = false;
   let numeric = false;
   let unit = false;
@@ -418,6 +492,7 @@ function subtreeHealthFlags(
     for (const item of value) {
       const child = subtreeHealthFlags(item, destination);
       indicator ||= child.indicator;
+      strongIndicator ||= child.strongIndicator;
       measurement ||= child.measurement;
       numeric ||= child.numeric;
       unit ||= child.unit;
@@ -425,22 +500,27 @@ function subtreeHealthFlags(
     measurement ||= numeric;
   } else {
     for (const [key, item] of Object.entries(value)) {
-      const healthKey = HEALTH_KEY.test(key) || HEALTH_KEY_COMPACT.test(compactKey(key));
+      const healthKey = HEALTH_KEY.test(key) || hasDecodedHealthIndicator(key, destination);
+      const strongHealthKey = isStrongHealthKey(key) || hasDecodedHealthIndicator(key, destination);
+      const encodedHealthIndicator =
+        typeof item === 'string' &&
+        HEALTH_DISCRIMINATOR_KEY.test(key) &&
+        hasDecodedHealthIndicator(item, destination);
       const child = subtreeHealthFlags(item, destination);
-      const rawHealthSeries = RAW_HEALTH_SERIES_KEY.test(key) && child.measurement && child.unit;
-      indicator ||= healthKey || rawHealthSeries;
+      const rawHealthSeries = RAW_HEALTH_SERIES_KEY.test(key) && child.numeric && child.unit;
+      indicator ||= healthKey || rawHealthSeries || encodedHealthIndicator;
       indicator ||= child.indicator;
+      strongIndicator ||= strongHealthKey || encodedHealthIndicator || child.strongIndicator;
       measurement ||=
         FORBIDDEN_HEALTH_PAYLOAD_KEY.test(key) ||
         rawHealthSeries ||
-        child.measurement ||
-        ((healthKey || HEALTH_MEASUREMENT_KEY.test(key)) && child.numeric);
+        child.measurement;
       numeric ||= child.numeric;
       unit ||= child.unit;
     }
-    measurement ||= unit && numeric;
+    measurement ||= strongIndicator && numeric;
   }
-  return { indicator, measurement, numeric, unit };
+  return { indicator, strongIndicator, measurement, numeric, unit };
 }
 
 function objectHasHealthCorrelation(value: JsonValue, destination: SanitiseDestination): boolean {
@@ -829,4 +909,30 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
   if ('ok' in instructions) return instructions;
   return applyDestinationPolicy(input, instructions.payload, instructions.redactions);
+}
+
+const HEALTH_MEASUREMENT_SUFFIX = /(?:datum|measurement|value|reading|amount|score|sample|quantity|duration|minutes?|mins?)$/i;
+
+function numericFromBase64(token: string): string | undefined {
+  const trimmed = token.trim();
+  if (!/^[A-Za-z0-9+\/_-]{2,}={0,2}$/.test(trimmed)) return undefined;
+  const normalized = trimmed.replaceAll('-', '+').replaceAll('_', '/');
+  if (normalized.length % 4 === 1) return undefined;
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
+  try {
+    const binary = atob(padded);
+    const canonical = btoa(binary).replace(/=+$/, '');
+    if (canonical !== normalized.replace(/=+$/, '')) return undefined;
+    const decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(
+      Uint8Array.from(binary, (character) => character.charCodeAt(0)),
+    );
+    return isNumeric(decoded) ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isStrongHealthKey(key: string): boolean {
+  const base = compactKey(key).replace(HEALTH_MEASUREMENT_SUFFIX, '');
+  return HEALTH_KEY_COMPACT.test(base);
 }

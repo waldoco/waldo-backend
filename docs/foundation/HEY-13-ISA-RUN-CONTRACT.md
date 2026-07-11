@@ -3,7 +3,7 @@
 Status: implementation complete on 2026-07-11; PR review remains the promotion gate
 Issue: [HEY-13](https://linear.app/heywaldo/issue/HEY-13/security-scribe-runtime-sanitiser-boundary-placement-and-article-9)
 Branch: `codex/hey-13-scribe-sanitiser`
-Base: `407a875a96efe1fc5bac9a1e3cc9f6294c5e3aa5`
+Base: `7dfc1281f63c5814093c894bb195f26cd87124f7`
 
 ## Current
 
@@ -139,6 +139,9 @@ HEY-13 owns these files for this branch:
 - `packages/runtime/src/scribe/**` and focused tests
 - `packages/runtime/src/hooks/registry.ts`, `src/llm/provider.ts`, `src/tools/dispatcher.ts`
 - `packages/runtime/src/run-loop/adapters.ts`, `do.ts`, `evidence.ts`, and focused tests
+- `packages/runtime/src/run-journal/outbox-runtime.ts`, `src/delivery-gate/store.ts`,
+  `src/tracer/tracer-do.ts`, and focused Tracer/scheduler/delivery tests for the audited direct
+  persistence paths
 - package manifests, lockfile, Stryker/Node-Vitest configuration, and root verification scripts
 
 Serialized/shared files: contract barrel, hooks, provider, dispatcher, RunLoop, evidence, package
@@ -149,19 +152,35 @@ manifests, lockfile, shared fixtures, and DO schema. Sidecars must not edit them
 - 2026-07-10 baseline: `npx -y pnpm@10.34.4 verify` — PASS; 1,168 contract tests and 182
   runtime/Workerd tests.
 - 2026-07-10 baseline: `git diff --check` — PASS; no output.
-- 2026-07-11 focused Scribe/property lane — PASS; 2 files and 154 tests.
+- 2026-07-11 post-audit Scribe/property/medical lane — PASS; 3 files and 235 tests.
 - 2026-07-11 focused medical/provider lane — PASS; 2 files and 70 tests.
-- 2026-07-11 whole verification wall — PASS; contracts 48 files / 1,188 tests; runtime 19 files /
-  414 tests; both package typechecks and every repository guard passed.
-- 2026-07-11 targeted production-module mutation lane — PASS at 100%; 267 mutants, 258 killed,
-  9 timed out, 0 survived, 0 uncovered, and 0 errors. The target map was realigned after reviewer
-  edits before the score was accepted.
+- 2026-07-11 post-audit whole verification wall — PASS; contracts 48 files / 1,188 tests; runtime
+  19 files / 485 tests; all package typechecks and every repository guard passed.
+- 2026-07-11 targeted production-module mutation lane — PASS at 100%; 351 mutants, 342 killed,
+  9 timed out, 0 survived, 0 uncovered, and 0 errors. The target map includes 27 medical-gate
+  mutants and was realigned after the audit
+  changes before the score was accepted; meaningful survivors first produced new negative and
+  boundary tests rather than a reduced threshold.
 - The repository has no `tools/eval/run-suite.ts`; `/run-eval` therefore records the missing suite
   and uses the complete verification wall as the required fallback. This is an explicit tooling gap,
   not an inferred eval pass.
-- Independent contract/integration, security/QA, and health-data/adversarial reviewers returned
-  PASS after every concrete counterexample was added to the corpus. The final post-rebase proof and
-  PR are recorded in the phase handoff.
+- The audit at PR head `3f754957` found eight concrete standards/spec gaps despite the then-green
+  wall: structured and encoded health correlation, direct Tracer persistence, structured and bare
+  secrets, fractional dosage, durable-row compatibility, operational-ID rewriting, and field-policy
+  ownership. Each falsifier is now represented by production-path or focused regression evidence.
+- Follow-up adversarial review added encoded numeric siblings and keys, numeric alias suffixes,
+  categorical provider separators, object-map raw series, leading-decimal dosage, direct Tracer and
+  proactive-schedule identities, redaction-colliding event IDs, current-schema legacy rows, terminal
+  migration semantics, and poisoned legacy candidates. These cases now fail before effects or are
+  scrubbed with legal, content-free durable evidence.
+- Destination field names remain owned by strict caller schemas as the accepted design requires;
+  Scribe owns destination payload kind and structural caps. Candidate and held-candidate stores now
+  re-parse their strict contract immediately before serialization, while transient PostTool results
+  retain a strict outer envelope, per-tool provenance checks, size bounds, and terminal Scribe.
+- Final independent contract/standards, workflow/security/QA, and health-data/medical reviews all
+  returned PASS on the combined diff after testing active and terminal legacy rows, direct and held
+  Tracer entry, proactive schedule IDs, public flush, redaction collisions, and both sides of the
+  durable `runtime:GATED / delivery:FAILED / candidate:deleted` recovery checkpoint.
 
 ## Learning
 
@@ -178,7 +197,7 @@ manifests, lockfile, shared fixtures, and DO schema. Sidecars must not edit them
 
 Retrieved or revalidated 2026-07-11 unless stated otherwise:
 
-- Backend base `407a875a96efe1fc5bac9a1e3cc9f6294c5e3aa5`.
+- Backend base `7dfc1281f63c5814093c894bb195f26cd87124f7`.
 - Brain base `75591543053dbdda6cf7c7f0210f8d16f36c3db8`.
 - Canonical source blobs at that accepted main: ADR-0024
   `17f233bfd8d9c50217ff4130eef1a08b59e9adaf`, ADR-0081

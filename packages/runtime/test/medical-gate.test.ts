@@ -40,6 +40,14 @@ describe('medical claim gate', () => {
     'Inject 20 U of insulin.',
     'Take 5mg melatonin tonight.',
     'Use 2ml insulin.',
+    'Take half a tablet of melatonin today.',
+    'Take half of a tablet of melatonin today.',
+    'Take one-half tablet of melatonin today.',
+    'Take 1/2 tablet of melatonin today.',
+    'Take ½ tablet of melatonin today.',
+    'Use a quarter dose of insulin.',
+    'Take .5 tablet of melatonin today.',
+    'Take 0.5 tablet of melatonin today.',
   ])('denies immutable medical claims and direct treatment instructions: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: false, reason: 'medical_claim' });
   });
@@ -50,6 +58,10 @@ describe('medical claim gate', () => {
     'A short walk and an earlier bedtime may support recovery.',
     'Consider discussing persistent concerns with a qualified clinician.',
     'Take a short walk today.',
+    'Take half a day to review the document.',
+    'The recipe says take half a cup.',
+    'Use half the tablet width in the layout.',
+    'Take .5 day to review the document.',
   ])('allows bounded wellness language: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: true });
   });

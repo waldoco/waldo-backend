@@ -35,6 +35,8 @@ const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
   { circadian: 'aligned' },
   { sleep_stage: 'awake' },
   { samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 42, unit: 'ms' }] },
+  { samples: { datum: 42, unit: 'ms' } },
+  { series: { '2026-07-11T00:00:00.000Z': { datum: 37, unit: '°C' } } },
   'sleep stage: awake',
   encodeURIComponent('motion: active'),
   btoa('circadian: aligned'),
@@ -47,6 +49,10 @@ const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
   'motion is active',
   'sleep stage was awake',
   'circadian rhythm is aligned',
+  'sleep_stage=slow_wave',
+  '%73%6C%65%65%70%5F%73%74%61%67%65%3D%73%6C%6F%77%5F%77%61%76%65',
+  btoa('sleep_stage=slow_wave'),
+  'motion=not_wearing',
 ];
 
 const INCOMPLETE_DERIVED_HEALTH_VIEWS: SanitiseInput['payload'][] = [
@@ -71,6 +77,59 @@ describe('Scribe sanitiser', () => {
       }),
     ).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
   });
+
+  it.each([
+    { metric: 'hrv', datum: 58 },
+    { name: 'spo2', point: 96 },
+    { meta: { metric: 'hrv' }, payload: { datum: '58' } },
+    [{ metric: 'hrv' }, { datum: 58 }],
+    { meta: [{ metric: 'hrv' }], datum: 58 },
+  ])(
+    'denies a health discriminator paired with an arbitrarily named numeric field: %j',
+    (payload) => {
+      expect(inspect(payload as unknown as SanitiseInput['payload'])).toEqual({
+        ok: false,
+        check: 'health_value',
+        reason: 'health_value_leak',
+      });
+    },
+  );
+
+  it.each(['aHJ2', ' aHJ2 ', '%68%72%76', '\\u0068\\u0072\\u0076'])(
+    'denies an encoded health discriminator paired with a numeric field: %s',
+    (metric) => {
+      expect(inspect({ metric, datum: 58 })).toEqual({
+        ok: false,
+        check: 'health_value',
+        reason: 'health_value_leak',
+      });
+    },
+  );
+
+  it.each([
+    { metric: 'hrv', datum: 'NTg=' },
+    { metric: 'hrv', datum: '%35%38' },
+    { metric: 'hrv', datum: '\\u0035\\u0038' },
+    { aHJ2: 58 },
+    [{ metric: 'aHJ2' }, { datum: 'NTg=' }],
+  ])('denies encoded numeric health correlations across keys and split branches: %j', (payload) => {
+    expect(inspect(payload as unknown as SanitiseInput['payload'])).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+  });
+
+  it.each([{ hrv_reading: 58 }, { heart_rate_value: 88 }, { spo2_sample: 96 }])(
+    'denies a numeric health alias with a measurement suffix: %j',
+    (payload) => {
+      expect(inspect(payload as unknown as SanitiseInput['payload'])).toEqual({
+        ok: false,
+        check: 'health_value',
+        reason: 'health_value_leak',
+      });
+    },
+  );
 
   it.each(CATEGORICAL_AND_RAW_SERIES_HEALTH)('denies categorical and raw-series health: %j', (payload) => {
     expect(inspect(payload)).toEqual({
@@ -200,6 +259,34 @@ describe('Scribe sanitiser', () => {
     });
   });
 
+  it('denies a credential value correlated with a sensitive object key', () => {
+    for (const payload of [
+      { api_key: 'abcdefghijklmnop' },
+      { nested: { sb_secret: 'abcdefghijklmnop' } },
+      { [btoa('api_key')]: 'abcdefghijklmnop' },
+      { ' api_key ': 'abcdefghijkl' },
+      { accessToken: 'abcdefghijkl' },
+      { 'auth-token': 'abcdefghijkl' },
+      { client_secret: 'abcdefghijkl' },
+      { password: 'abcdefghijkl' },
+    ]) {
+      expect(inspect(payload as unknown as SanitiseInput['payload'])).toEqual({
+        ok: false,
+        check: 'canary_token',
+        reason: 'secret_leak',
+      });
+    }
+    expect(inspect('sb_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 'send_message')).toEqual({
+      ok: false,
+      check: 'canary_token',
+      reason: 'secret_leak',
+    });
+    expect(inspect({ api_key: 'abcdefghijk' })).toMatchObject({ ok: true });
+    expect(inspect({ api_key: '  abcdefgh  ' })).toMatchObject({ ok: true });
+    expect(inspect({ api_key: 123456789012 })).toMatchObject({ ok: true });
+    expect(inspect({ api_key: { nested: 'ordinary value' } })).toMatchObject({ ok: true });
+  });
+
   it('finds encoded secrets within the two-pass decode bound', () => {
     const encoded = btoa('sk-proj-abcdefghijklmnopqrstuvwxyz012345');
     expect(inspect(encoded)).toEqual({
@@ -310,6 +397,14 @@ describe('Scribe sanitiser', () => {
     expect(
       inspect({ heart_rate_notes: 'no measurements included', year: 2026 }),
     ).toMatchObject({ ok: true });
+    expect(inspect({ metric: 'latency', datum: 58 })).toMatchObject({ ok: true });
+    expect(inspect({ metric: 'latency', datum: 'NTg=' })).toMatchObject({ ok: true });
+    expect(inspect({ metric: 'hrv', note: 'no numeric sample' })).toMatchObject({ ok: true });
+    expect(inspect({ code: 'aHJ2', datum: 58 })).toMatchObject({ ok: true });
+    expect(inspect({ metric: btoa('latency'), datum: 58 })).toMatchObject({ ok: true });
+    expect(inspect({ [btoa('latency')]: 58 })).toMatchObject({ ok: true });
+    expect(inspect({ hrv_reading: 'not measured' })).toMatchObject({ ok: true });
+    expect(inspect({ secret_hint: 'abcdefghijklmnop' })).toMatchObject({ ok: true });
     expect(inspect({ unit: 'ms', note: 'timer configuration' })).toMatchObject({ ok: true });
     expect(inspect({ context: { value: 42 }, note: 'ordinary record' })).toMatchObject({
       ok: true,
@@ -317,6 +412,14 @@ describe('Scribe sanitiser', () => {
     expect(
       inspect({ context: { value: 42, unit: 'ms' }, note: 'ordinary timer sample' }),
     ).toMatchObject({ ok: true });
+    expect(inspect({ context: [42, 'ms'], note: 'ordinary timer tuple' })).toMatchObject({
+      ok: true,
+    });
+    expect(inspect({ samples: [{ datum: 42, unit: 'ms' }] })).toMatchObject({
+      ok: false,
+      check: 'health_value',
+    });
+    expect(inspect({ samples: { datum: 42, unit: 'items' } })).toMatchObject({ ok: true });
   });
 
   it('allows a valid nonnumeric health view only at its explicit eligible destination', () => {

@@ -94,7 +94,8 @@ async function schedule(stub: DurableObjectStub<TracerDO>) {
 // The next wake after a crash consumed the alarm slot: re-enter alarm() directly on the
 // reconstructed instance, resuming purely from committed DO SQLite (see tracer.test.ts).
 async function resume(stub: DurableObjectStub<TracerDO>) {
-  await runInDurableObject(stub, async (instance) => {
+  await runInDurableObject(stub, async (instance, state) => {
+    await state.storage.deleteAlarm();
     await instance.alarm();
   });
 }

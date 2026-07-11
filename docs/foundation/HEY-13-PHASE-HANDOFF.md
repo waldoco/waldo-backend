@@ -4,7 +4,7 @@ Status: implementation and local proof complete on `codex/hey-13-scribe-sanitise
 In Progress until PR review. No merge, deployment, live-provider call, credential use, staging
 traffic, or production cloud effect was performed.
 Date: 2026-07-11 IST.
-Rebased implementation head before this handoff: `2af582a` on `origin/main` `7dfc128`.
+Audit closure started from reviewed PR head `3f754957` on `origin/main` `7dfc128`.
 Review: [waldo-backend PR #47](https://github.com/Pin4sf/waldo-backend/pull/47).
 
 ## [observed] Implemented
@@ -27,21 +27,39 @@ Review: [waldo-backend PR #47](https://github.com/Pin4sf/waldo-backend/pull/47).
   checkpoint, eviction, restart, and blocks privileged follow-up execution.
 - Sandbox stdout truncation preserves the structured PostToolUse result envelope and the canonical
   ADR-0024 marker while respecting the 10 KB serialized cap.
+- Direct Tracer start and held-candidate release now cross the same strict schema → Scribe → strict
+  schema preparation before any journal, governor, candidate, or reopened-run write. Unsafe held
+  rows are scrubbed rather than reactivated.
+- Existing recognized pre-Scribe RunLoop rows are upgraded with `source_taint: null` and re-sanitised
+  on owner startup. Malformed or forbidden legacy rows are content-scrubbed and moved to the closed
+  `FAILED` state before resume.
+- Health discriminators correlate with arbitrary numeric sibling keys across nested objects and
+  arrays, including bounded percent/Base64/Unicode encodings. Sensitive structured keys and bare
+  `sb_secret_…` tokens fail closed, and fractional tablet/capsule/dose instructions reach the
+  immutable medical gate.
+- Operational schedule and user references are validated as opaque IDs before content sanitation;
+  PII-shaped identifiers reject rather than being rewritten into a different persistence owner.
 
 ## [observed] Verification
 
 - `npx -y pnpm@10.34.4 verify`: PASS — contract typecheck and 48 files / 1,188 tests; runtime
-  typecheck and 19 files / 414 tests; all guards and guard self-tests passed.
-- `npx -y pnpm@10.34.4 verify:property`: PASS — 2 files / 154 production-module tests.
-- `npx -y pnpm@10.34.4 verify:mutation`: PASS — 267 selected critical-policy mutants; 258 killed,
-  9 timed out, 0 survived, 0 uncovered, 0 errors; 100% score.
+  typecheck and 19 files / 485 tests; all guards and guard self-tests passed.
+- `pnpm --filter @waldo/runtime test:property`: PASS — 3 files / 235 production-module tests.
+- `pnpm --filter @waldo/runtime test:mutation`: PASS — 351 selected critical-policy mutants;
+  342 killed, 9 timed out, 0 survived, 0 uncovered, 0 errors; 100% score. The target includes
+  27 medical-gate mutants, closing the prior mutation-runner coverage gap.
 - Workerd integration proves health, canary, and secret denial leaves no candidate bytes in
   checkpoints, trace details, replay, outbox, or sink delivery.
-- `git diff --check 407a875`: PASS.
+- `git diff --check origin/main`: PASS.
 - The branch rebased cleanly onto `origin/main` `7dfc128`; property, mutation, full verification,
   and `git diff --check origin/main` all passed again after the rebase.
-- Independent contract/integration, security/QA, and health-data/adversarial closure reviews passed
-  after their concrete counterexamples were added to the corpus.
+- The eight counterexamples reported against `3f754957` are reproduced by regression tests and now
+  deny or fail safely. Strict caller schemas remain the exact field allowlists per the accepted
+  design; Scribe remains the single content-policy implementation rather than duplicating field
+  vocabularies in a second global table.
+- Final read-only contract/standards, workflow/security/QA, and health-data/medical reviewers all
+  returned PASS on the combined audit-closure diff. Their last pass explicitly covered terminal
+  candidate scrubbing and state-only recovery from a failed delivery journal without a candidate.
 - The standalone eval runner `tools/eval/run-suite.ts` is absent. Per `/run-eval`, this is recorded
   as a tooling gap and the complete verification wall is the fallback; it is not reported as an
   eval-suite pass.

@@ -14,25 +14,29 @@ export class DeliveryGateStore {
   constructor(private readonly sql: SqlStorage) {}
 
   writeCandidate(runId: string, candidate: DeliveryCandidate): void {
+    const parsed = deliveryCandidateSchema.parse(candidate);
     this.sql.exec(
       `INSERT INTO run_candidates (run_id, candidate_json)
          VALUES (?, ?)
        ON CONFLICT(run_id)
          DO UPDATE SET candidate_json = excluded.candidate_json`,
       runId,
-      JSON.stringify(candidate),
+      JSON.stringify(parsed),
     );
   }
 
-  readCandidate(runId: string): DeliveryCandidate {
+  readCandidateJson(runId: string): string | null {
     const row = this.sql
       .exec<{ candidate_json: string }>(
         'SELECT candidate_json FROM run_candidates WHERE run_id = ?',
         runId,
       )
       .toArray()[0];
-    if (!row) throw new Error(`readCandidate: no candidate for ${runId}`);
-    return deliveryCandidateSchema.parse(JSON.parse(row.candidate_json));
+    return row?.candidate_json ?? null;
+  }
+
+  deleteCandidate(runId: string): void {
+    this.sql.exec('DELETE FROM run_candidates WHERE run_id = ?', runId);
   }
 
   readClassState(userId: string, candidate: DeliveryCandidate, now: number): ClassState {
@@ -259,6 +263,13 @@ export class DeliveryGateStore {
     if (admission.verdict !== 'hold' || admission.hold_until === undefined) {
       throw new Error('recordHeld requires a held admission');
     }
+    const held = heldCandidateSchema.parse({
+      event_id: candidate.event_id,
+      push_class: candidate.push_class,
+      candidate,
+      hold_until: admission.hold_until,
+      expires_at: admission.stamped.expires_at ?? null,
+    });
     this.sql.exec(
       `INSERT INTO held_candidates
          (user_id, event_id, push_class, candidate_json, hold_until, expires_at)
@@ -270,11 +281,11 @@ export class DeliveryGateStore {
            hold_until = excluded.hold_until,
            expires_at = excluded.expires_at`,
       userId,
-      candidate.event_id,
-      candidate.push_class,
-      JSON.stringify(candidate),
-      admission.hold_until,
-      admission.stamped.expires_at ?? null,
+      held.event_id,
+      held.push_class,
+      JSON.stringify(held.candidate),
+      held.hold_until,
+      held.expires_at,
     );
   }
 

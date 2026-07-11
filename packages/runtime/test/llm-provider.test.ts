@@ -692,10 +692,14 @@ describe('RuntimeLLMProvider', () => {
     });
   });
 
-  it('rejects an immutable medical claim returned by the gateway', async () => {
+  it.each([
+    'This appears to be a symptom of pneumonia.',
+    'Take .5 tablet of melatonin today.',
+    'Take 0.5 tablet of melatonin today.',
+  ])('rejects an immutable medical claim returned by the gateway: %s', async (medicalClaim) => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
-      data: response(request.request.model, 'This appears to be a symptom of pneumonia.'),
+      data: response(request.request.model, medicalClaim),
     }));
     const provider = new RuntimeLLMProvider({ gateway });
 
@@ -778,7 +782,7 @@ describe('RuntimeLLMProvider', () => {
             temperature: 0.3,
           };
         },
-        renderTemplate: () => 'Take 5mg melatonin tonight.',
+        renderTemplate: () => 'Take half a tablet of melatonin today.',
       },
       runtimeCtx(),
     );
