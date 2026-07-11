@@ -69,3 +69,14 @@ Until that decision exists, HEY-14 must not infer a raw-byte cap from the 5 KB s
 - **High:** no routed primary source ratifies an application-level `WorkspaceBlob` byte cap.
 - **High:** the existing 5 KB skill-body cap is surface-specific text policy, not a generic raw-byte policy.
 - **Medium:** the proposed reader/writer ownership split is the smallest source-consistent next step; the exact cap requires a new ratified policy decision.
+
+## Follow-up Review Result
+
+The independent reader-admission review confirmed that a loader-side `bytes.byteLength` check is
+already after materialisation and cannot satisfy HEY-14's pre-buffer requirement. The reviewed
+proposal therefore keeps `WorkspaceMount` unchanged and assigns the private R2 mount a metadata
+preflight, conditional ranged-read, and exact-length verification sequence. It also found two
+separate authority gaps: a model-aware token counter for the ADR-0028 envelope, and canonical
+permission to run the existing Scribe seam in memory before a mutable R2 skill reaches cache/prompt
+admission. Those are documented as proposed behavior, not accepted ADR fact, in
+`2026-07-12-hey-166-workspace-reader-admission-proposal.md`; HEY-167 owns the ADR ratification.
