@@ -89,8 +89,9 @@ Date: 2026-07-11 IST.
 ## PR Publication Record
 
 The branch was rebased onto remote `main` at `a257a175d0361df5c129d73144f95ff245cb63d1`, pushed,
-and opened as draft [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52). GitHub compares 12
-commits and seven intended files against `main`; it does not reintroduce Wave 0 documentation.
+and opened as draft [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52). GitHub compares only
+the intended implementation and documentation files against `main`; it does not reintroduce Wave 0
+documentation.
 The final full verification wall was run on the rebased implementation before publication. GitHub
 reports a skipped Supabase Preview check for the draft head, but no executable CI result; retain draft
 status until human review and applicable remote CI evidence are available.
