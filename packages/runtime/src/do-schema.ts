@@ -313,12 +313,12 @@ export const HEY144_GOALS_SCHEMA_MIGRATION: DoMigration = {
   down: ['DROP TABLE IF EXISTS goals;'],
 };
 
-export const DO_SCHEMA_VERSION = HEY144_GOALS_SCHEMA_MIGRATION.version;
-
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
 ] as const;
+
+export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
 
 const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
   memory_blocks: [
