@@ -183,7 +183,7 @@ untrusted inbox rows as recall.
 - Worktree: `/Users/shivanshfulper/.codex/worktrees/hey-166-workspace-policy/waldo-backend`.
 - Branch: `codex/hey-166-workspace-policy`.
 - Status: blocked by HEY-163's merge for any contract extension; it blocks HEY-14 now because the
-  latter must reject oversized content before decoding/cache/prompt admission.
+  latter must reject oversized content before buffering, cache, or prompt admission.
 - Scope: decide proposed reader per-file/total-read bounds and decode/failure/cache/prompt-admission
   behavior. ADR-0076 separately fixes staged writer-to-commit admission through Scribe/sanitiser,
   destination, size, and path checks; HEY-166 may identify the later writer-policy owner but cannot
