@@ -2,8 +2,8 @@ import {
   CANARY_REGEX,
   DERIVED_SCORE_PATTERNS,
   derivedHealthDestinationViewSchema,
-  INSTRUCTION_PATTERNS,
-  INSTRUCTION_REJECT_THRESHOLD,
+  INJECTION_GUARD_THRESHOLDS,
+  INJECTION_RULES,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
   SANITISE_DESTINATION_POLICIES,
@@ -11,6 +11,8 @@ import {
   sanitiseInputSchema,
   type Redaction,
   type RedactionKind,
+  type GuardVerdict,
+  type InjectionRuleId,
   type SanitiseCheck,
   type SanitiseDestination,
   type SanitiseDestinationPolicy,
@@ -108,6 +110,31 @@ function cloneRegex(pattern: RegExp): RegExp {
 
 function matches(pattern: RegExp, text: string): boolean {
   return cloneRegex(pattern).test(text);
+}
+
+function verdictForMatches(matches: GuardVerdict['matches']): GuardVerdict {
+  const score = matches.reduce((total, match) => total + match.weight, 0);
+  return {
+    decision:
+      score >= INJECTION_GUARD_THRESHOLDS.block
+        ? 'block'
+        : score >= INJECTION_GUARD_THRESHOLDS.review
+          ? 'review'
+          : 'allow',
+    score,
+    matches,
+    matchCount: matches.length,
+  };
+}
+
+function matchingInjectionRules(input: string) {
+  return INJECTION_RULES.filter((rule) => matches(rule.pattern, input));
+}
+
+export function scoreInjection(input: string): GuardVerdict {
+  return verdictForMatches(
+    matchingInjectionRules(input).map((rule) => ({ id: rule.id, weight: rule.weight })),
+  );
 }
 
 function compactKey(key: string): string {
@@ -738,34 +765,34 @@ function inspectInstructions(
   destination: SanitiseDestination,
   redactions: Redaction[],
 ): SanitiseResult | { payload: JsonValue; redactions: Redaction[] } {
-  const matched = new Set<number>();
+  const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
   const scanned = visitStrings(payload, destination, (text) => {
-    INSTRUCTION_PATTERNS.forEach((pattern, index) => {
-      if (matches(pattern, text)) matched.add(index);
-    });
+    for (const match of scoreInjection(text).matches) matched.set(match.id, match);
     return false;
   });
   if (scanned.invalid) return deny('size_cap', 'invalid_payload');
-  if (matched.size >= INSTRUCTION_REJECT_THRESHOLD) {
+  const verdict = verdictForMatches(
+    INJECTION_RULES.flatMap((rule) => {
+      const match = matched.get(rule.id);
+      return match === undefined ? [] : [match];
+    }),
+  );
+  if (verdict.decision === 'block') {
     return deny('instruction_pattern', 'untrusted_instruction');
   }
-  if (matched.size === 0) return { payload, redactions };
+  if (verdict.decision === 'allow') return { payload, redactions };
 
-  const patternIndex = [...matched][0];
-  if (patternIndex === undefined) return { payload, redactions };
-  const pattern = INSTRUCTION_PATTERNS[patternIndex];
-  if (pattern === undefined) return deny('instruction_pattern', 'untrusted_instruction');
   let instructionCount = 0;
   const transformed = transformJsonStrings(payload, (text) => {
     let output = text;
-    if (matches(pattern, text)) {
-      const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
-      const global = new RegExp(pattern.source, flags);
+    for (const rule of matchingInjectionRules(text)) {
+      const flags = rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`;
+      const global = new RegExp(rule.pattern.source, flags);
       instructionCount += Array.from(text.matchAll(global)).length;
-      output = text.replace(new RegExp(pattern.source, flags), '[REDACTED_INSTRUCTION]');
+      output = output.replace(global, '[REDACTED_INSTRUCTION]');
     }
     const decoded = decodedViews(output, destination);
-    if (decoded.views.slice(1).some((view) => matches(pattern, view))) {
+    if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
       instructionCount += 1;
       return '[REDACTED_INSTRUCTION]';
     }
