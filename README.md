@@ -31,7 +31,7 @@ Open context -> define done -> design the seam -> build with tests -> break it -
 
 Session flow:
 
-1. Open with `/session-bus`.
+1. Read HEY-109 plus the current coordinator ledger or phase handoff.
 2. Shape fuzzy work with `/current-ideal-gap`.
 3. Use `/waldo-isa-run-contract` for non-trivial work, shared contracts, architecture changes, agent-harness work, or handoffs.
 4. Use `/thinking-mode-router` when the problem needs the right reasoning mode before action.
@@ -39,7 +39,8 @@ Session flow:
 6. Build with `/tdd` for new behavior or `/diagnose` for bugs and regressions.
 7. Use `/check-contract` whenever touching DTOs, schemas, tool outputs, adapters, Worker/EF responses, or `packages/contracts`.
 8. Break the feature with `/break-feature`, then review with `/code-review` or `/review-all`.
-9. Close with verification, `/compound-learning-capture` when useful, `/phase-handoff` at phase boundaries, and `/session-bus`.
+9. Close with verification, `/compound-learning-capture` when useful, `/phase-handoff` at phase
+   boundaries, and a concise HEY-109/Linear/ledger update.
 
 ## Skill Guide
 
@@ -47,7 +48,7 @@ Use these skills intentionally:
 
 | Skill | Use when |
 | --- | --- |
-| `/session-bus` | Starting or ending a session; coordinating state across people and agents. |
+| Legacy `/session-bus` | Not a loadable package in this checkout. Use HEY-109, Linear comments, the coordinator ledger, and phase handoffs; record its packaging repair gap. |
 | `/current-ideal-gap` | The ask is directionally clear but needs a current state, ideal state, gaps, and verification path. |
 | `/waldo-isa-run-contract` | Done needs to be durable: acceptance criteria, tests, work slices, evidence, and learning. |
 | `/thinking-mode-router` | The work needs first-principles, systems thinking, RCA, red-team, research, creative, or council mode. |

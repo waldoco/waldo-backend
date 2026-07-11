@@ -1,8 +1,8 @@
 # Harness Runtime Build Plan
 
 Status: active source for the promoted Waldo backend and app-integration build.
-Date: 2026-07-10.
-Baseline: `origin/main` at `b311d54` after PR #44.
+Date: 2026-07-11.
+Baseline: `82f582b5a28530c1fb7800b7fad889590b35e57d` after PR #47.
 
 ## Source Map
 
@@ -25,14 +25,14 @@ Primary backend sources:
 Primary Waldo Brain authorities:
 
 - ADRs already merged to `waldo-brain/main` and the mirrored universal rules;
-- the approved ADR-0001/0071/0077 amendment set and new ADR-0081/0082 as target-pending decisions
-  in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17);
+- the ADR-0001/0071/0077 amendment set and new accepted ADR-0081/0082 merged in
+  [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17) at
+  `75591543053dbdda6cf7c7f0210f8d16f36c3db8`;
 - the current architecture overview, final build image, decided-vs-gap map, and finalization
   blockers.
 
-PR #17 is an explicit promotion dependency: those amendments and ADR-0081/0082 are not yet on
-`waldo-brain/main`. The PR may advance during review; its eventual merge result governs. Keep the
-target-pending qualifier until it merges; the ownership/DAG below does not change on merge.
+PR #17 is accepted architecture source. Its changes govern the named ownership and destination
+constraints; they do not claim runtime, device, staging, or production proof.
 
 The canonical deployable app repository is
 [`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app). The audited promotion snapshot is
@@ -61,8 +61,8 @@ verticals must not introduce alternate agent runtimes or direct app-owned provid
 
 - Agent execution is DO-only; no app or Edge Function owns a second agent loop.
 - Raw health remains Supabase/RLS-only.
-- Health-derived computation and destination authority depend on target-pending Brain ADR-0081.
-- Persistent device-local sensitive cache and account/consent lifecycle depend on target-pending
+- Health-derived computation and destination authority depend on accepted Brain ADR-0081.
+- Persistent device-local sensitive cache and account/consent lifecycle depend on accepted
   Brain ADR-0082 and HEY-159.
 - Session authorization, canaries, approvals, and ACL rebuild on every wake; runs may resume only
   from committed journal state.
@@ -75,8 +75,8 @@ verticals must not introduce alternate agent runtimes or direct app-owned provid
   persistent generic Feed entity.
 - The first Brief GET is a side-effect-free read, not async delivery. HEY-110 owns asynchronous
   idempotent in-app delivery.
-- HEY-126 owns the bounded Chat transport/replay spike; production transport waits for the
-  target-pending ADR-0077 amendment to merge.
+- HEY-126 owns the bounded Chat transport/replay spike under the accepted ADR-0077 amendment;
+  production transport still waits for its own evidence.
 - HEY-127 is conditional/deferred. No generic Feed is an Alpha prerequisite.
 - Direct Apple Watch/watchOS/WatchConnectivity work is deferred.
 - No configuration, ticket, schema, local test, or merged source is called staging, Alpha, or
@@ -124,6 +124,7 @@ Alpha excludes:
 - fake-first `RunLoopDO`, runtime hardening, governed multi-iteration loop, and local replay;
 - HEY-10 ten-table context schema artifact;
 - PR #44 provider-readiness/fail-closed hardening at `b311d54`.
+- PR #47 HEY-13 Scribe/taint runtime at `82f582b5`, including focused property and mutation proof.
 
 HEY-143 remains In Progress. PR #44 proves configuration, parsing, privacy, and fail-closed
 behavior with fakes/mocks. It does not prove a real context/provider/channel path or Alpha.
@@ -134,13 +135,13 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 - verified ES256 subject to owner-bound DO routing;
 - merged canonical Supabase/RLS/Vault migrations or R2;
 - consent middleware, all-store deletion, and restore/re-delete proof;
-- wired production context DDL, recall, skills, prompt hydration, or real Scribe;
+- wired production context DDL, recall, skills, or prompt hydration;
 - real provider RunLoop execution, atomic spend reservation, fleet kill, or staging smoke;
 - asynchronous idempotent in-app delivery;
 - current morning Brief projection/OpenAPI/generated app client;
 - shadow Fetch, real Spots, or persistent text Chat end to end;
-- standalone eval, property, mutation, load, native-device, staging, dogfood, Alpha, or production
-  evidence.
+- standalone eval, broad property/mutation, load, native-device, staging, dogfood, Alpha, or
+  production evidence.
 
 ## Workstream Map
 
@@ -148,43 +149,25 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 | ---: | --- | --- | --- |
 | 1 | Journal/outbox | Local workerd/fake-sink proof merged | Preserve; real async adapter proof is HEY-110 |
 | 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
-| 3 | Context/memory/safety | HEY-10 schema artifact merged; runtime unwired | HEY-13, then HEY-15/14/16 and accepted goal scope |
+| 3 | Context/memory/safety | HEY-10 schema and HEY-13 Scribe are merged; context Modules remain unwired | Wave 0, then HEY-144/14/15 and HEY-16 |
 | 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
 | 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
 | 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
 | App | generated consumer | canonical app has UI/native shell plus legacy bypass inventory | HEY-132 client, protected shell, honest renderer, staged cutover |
 
-## Next Backend Slice - HEY-13
+## Current Coordinator Program
 
-HEY-13 structured Scribe/sanitizer runtime is next.
+Wave 0 reconciles current truth and opens a docs/tracker PR. No implementation starts until that PR
+is human-approved and merged. Wave 1 starts HEY-144, HEY-14, and lead-context HEY-15 in isolated
+worktrees; HEY-144 owns the schema seam, HEY-14 owns any binding/config seam, and HEY-15 rebases
+after HEY-144 before an internal FTS migration. Wave 2 starts HEY-16, the static-only HEY-100 guard,
+and HEY-75. HEY-160 separately owns future production per-user JWT/`db.forUser()` custody and does
+not make HEY-100 a data-plane claim. Wave 3 starts HEY-141 after HEY-100 unless the coordinator
+proves disjoint write sets.
 
-Interface outcome:
-
-- one typed sanitizer/taint result consumed by hook, prompt, memory, provider-egress, projection,
-  trace, and delivery paths;
-- recursive key/value classification across strings, numbers, objects, and arrays;
-- fail-closed handling for unknown health-shaped content;
-- bounded, content-free denial evidence;
-- no direct committed-memory mutation.
-
-First failing tests:
-
-- a health-shaped numeric value under a benign key rejects;
-- nested, array, CSV, synonym, and intervening-word shapes reject;
-- external taint survives iteration and crash/resume;
-- sanitizer failure prevents provider call, projection response, trace payload, and outbox row;
-- the nine-event hook order remains deterministic.
-
-Verification:
-
-- focused contract/runtime tests;
-- health-leak and fake-callback guards;
-- workerd proof where durable state/outbox is involved;
-- `npx -y pnpm@10.34.4 verify`;
-- `git diff --check`.
-
-Live provider calls, credentials, channel delivery, app traffic, production data, and cloud side
-effects remain out of the default HEY-13 path.
+HEY-143 closure planning requires a fresh clean-main convergence wall after HEY-14, HEY-15, HEY-144,
+HEY-16, HEY-100, HEY-75, and HEY-141 merge. It does not authorize a live-provider, live-secret,
+staging, sink, or deployment action.
 
 ## First Public Seam
 
@@ -241,8 +224,7 @@ HEY-158 owns backend Spot semantics. HEY-132 owns only the generated consumer.
 
 ### Chat
 
-HEY-126 owns the bounded transport/replay spike before the target-pending ADR-0077 amendment
-merges:
+HEY-126 owns the bounded transport/replay spike under the accepted ADR-0077 amendment:
 
 - authenticated command POST with client idempotency;
 - server-owned thread/message IDs;
@@ -275,7 +257,7 @@ ingest Apple Watch-originated data without a Waldo watch app.
 | HEY-155 | legacy app runtime/direct-path decommission and removal |
 | HEY-13 | privacy-safe real content, parallel |
 | HEY-110 | async idempotent in-app delivery, parallel |
-| HEY-126 | bounded Chat transport/replay spike, then target-pending ADR-0077 amendment merge |
+| HEY-126 | bounded Chat transport/replay spike under accepted ADR-0077; production transport remains evidence-gated |
 | HEY-127 | conditional/deferred persistent Feed decision; not Alpha-critical |
 | HEY-158 | backend Spots generation/projection/engagement/privacy, Phase 5 |
 | HEY-159 | per-account sensitive cache and consent-epoch lifecycle, App Track |
@@ -301,26 +283,27 @@ live Linear relations are:
 
 HEY-149 and HEY-150 are In Progress. HEY-150 directly gates only HEY-151 and HEY-152 and is not
 Done until the matrix is reviewed and accepted. HEY-151-159 otherwise remain Backlog in their
-documented lanes. HEY-13 is Todo/ready-for-agent and gates real HEY-154 content. HEY-110 async
-delivery and HEY-158 Spots remain separate Alpha gates; neither is replaced by the GET. HEY-126 is
-a parallel spike, and HEY-127 is off-path conditional/deferred. HEY-13 is a direct live blocker of
-HEY-154 because it gates real health/model content, even though fixture-only projection work can
-start earlier. The adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate,
-not a Linear `blockedBy` relation.
+documented lanes. HEY-13 is Done; its Scribe/taint contract is the completed prerequisite for real
+HEY-154 content. HEY-110 async delivery and HEY-158 Spots remain separate Alpha gates; neither is
+replaced by the GET. HEY-126 is a parallel spike, and HEY-127 is off-path conditional/deferred. The
+adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate, not a Linear
+`blockedBy` relation.
 
 ## Parallel Lanes
 
 Safe parallel work:
 
-- HEY-13 structured sanitizer and taint proof;
-- HEY-15/14/16 context hydration;
+- Wave 0 documentation/tracker reconciliation only;
+- HEY-144, HEY-14, and lead-context HEY-15 after Wave 0 merges;
+- HEY-16 only after those merged interfaces converge;
 - HEY-110 async delivery with fake adapters;
 - HEY-158 backend Spots vertical;
-- HEY-125/134/114 auth/data/environment proof;
-- HEY-137/138/135/141 reliability and egress;
+- HEY-100 static guard plus the separate future custody/data-plane issue;
+- HEY-125 is Done; HEY-134/114 remain auth/data/environment proof;
+- HEY-137/138/135 reliability and HEY-141 egress after HEY-100 unless write sets are disjoint;
 - strict Brief contract fixtures and generated-client scaffolding after contract approval;
 - HEY-126 Chat transport/replay spike;
-- HEY-159 app account/consent lifecycle alongside target-pending ADR-0082 promotion;
+- HEY-159 app account/consent lifecycle alongside accepted ADR-0082;
 - read-only review, failure mapping, and conformance guards.
 
 Single-writer surfaces remain:
@@ -350,10 +333,11 @@ Merged:
 11. HEY-111 local evidence/replay.
 12. HEY-142 governed multi-iteration loop.
 13. PR #44 HEY-143 provider-readiness/fail-closed hardening.
+14. PR #47 HEY-13 Scribe/sanitizer runtime.
 
 Next:
 
-14. HEY-13 real Scribe/sanitizer runtime.
+15. Wave 0 reconciliation, then HEY-144, HEY-14, and HEY-15 under their serialized ownership map.
 
 Do not infer HEY ticket completion beyond the bounded merged capability named above.
 

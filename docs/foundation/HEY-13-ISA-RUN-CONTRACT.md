@@ -218,3 +218,19 @@ Assumption: “encoded” is bounded to JSON Unicode escapes, percent encoding, 
 Base64/Base64URL, with at most two decode passes, destination caps applied before and after decoding,
 and a four-times expansion ceiling. Archives, compression formats, and arbitrary charsets are out of
 scope and fail closed when presented as recognized encoded content.
+
+## Post-Merge Promotion — 2026-07-11
+
+[observed] PR #47 merged as `82f582b5a28530c1fb7800b7fad889590b35e57d`; HEY-13 is Done. The
+historical implementation criteria above remain evidence, not a claim of live-provider or staging
+proof.
+
+Final evidence for the merged commit:
+
+- contracts: 1,188;
+- runtime: 485;
+- property lane: 235;
+- mutation lane: 351 selected, 342 killed, 9 timed out, and zero survivors, uncovered mutants, or
+  errors.
+
+The standalone eval runner remains absent. The recorded verification wall is not an eval-suite pass.

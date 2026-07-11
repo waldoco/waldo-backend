@@ -99,3 +99,13 @@ eval runner remains follow-up infrastructure rather than hidden HEY-13 completio
   partial derived views, and provider-controlled failure text need first-class adversarial fixtures.
 - Generated mutation reports can reproduce hostile corpus literals. Keep detailed mutation evidence
   in terminal output because repository privacy guards intentionally scan ignored files too.
+
+## Post-Merge Promotion — 2026-07-11
+
+[observed] PR #47 merged as `82f582b5a28530c1fb7800b7fad889590b35e57d`; HEY-13 is Done. The
+earlier review-pending status is historical. Final evidence is 1,188 contract tests, 485 runtime
+tests, 235 property tests, and 351 selected mutants with 342 killed, 9 timed out, and zero survivors,
+uncovered mutants, or errors.
+
+This promotion does not claim a live provider, credential, staging, channel-delivery, or production
+cloud path. The missing standalone eval runner remains an explicit tooling gap.

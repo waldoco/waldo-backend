@@ -15,7 +15,7 @@ accident.
 | `outbox` | Delivery side-effect journal, explicitly excluded from HEY-10. | ADR-0054 | HEY-110, HEY-120, HEY-121, HEY-124, HEY-136 |
 | `schedules` | Alarm multiplexer/runtime wake state, explicitly excluded from HEY-10. | ADR-0065 | HEY-123, HEY-135 |
 | `daily_push_budget` | DeliveryGate policy state, not context/memory base schema. | ADR-0068 | HEY-124, HEY-137, HEY-138 |
-| FTS virtual/shadow tables | Retrieval implementation detail; may violate HEY-10 "exactly 10 owned tables" wording. | ADR-0031, ADR-0007 | HEY-15 |
+| FTS virtual/shadow tables | Retrieval implementation detail; excluded from HEY-10's exact ten-table V1. | ADR-0031, ADR-0007 | HEY-15 |
 | `goals` | Coordinator scope decision: HEY-10 stays exact 10 tables; goals land separately. | ADR-0064 | HEY-144; blocks HEY-16 |
 | `memory_edges` | Future graph/activation retrieval, not needed for HEY-15 base recall. | ADR-0078 proposed | HEY-145 |
 | `handoff_state` | Future Handoff plan/progress state, not current context lane. | ADR-0080 proposed | HEY-147 |
@@ -60,6 +60,10 @@ conflict and rescope before DDL.
 Coordinator resolution: keep HEY-10 as the exact 10-table base schema and make HEY-144 the
 dedicated goals DDL slice. HEY-144 blocks full HEY-16 goal hydration before prompt-builder work
 claims complete `active_goals` support.
+
+Migration order: HEY-144 adds the ordered V2 internal goals migration without mutating V1. If HEY-15
+still needs BM25/FTS5 after rebasing on that merge, it owns the next additive internal DO SQLite
+migration. Supabase and external migrations remain out of scope for both tickets.
 
 ## Privacy Boundary
 

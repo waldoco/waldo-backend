@@ -26,6 +26,10 @@ Do not build in HEY-10:
 - FTS virtual/shadow tables
 - ADR-0056 compaction/archive columns
 
+Follow-on order: HEY-144 owns a new V2 goals migration; HEY-15 may own a later additive internal
+FTS migration after rebasing on HEY-144. Neither ticket changes this V1 migration or adds a
+Supabase/external migration.
+
 ## DDL Plan
 
 | Table | Flow enabled | Downstream unblocker | Owner | Hot access | DO SQLite reason | Retention/privacy note |
