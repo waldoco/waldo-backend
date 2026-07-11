@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "url": "https://genai.owasp.org/llmrisk/llm01-prompt-injection/",
+    "license": "CC BY-SA 4.0",
+    "noCopyConclusion": "OWASP LLM01 informed the threat categories only. No OWASP prose, regexes, or corpus text is copied. No GPL-derived rules or corpus material is used."
+  },
+  "syntheticDerivation": "Cases are independently authored, synthetic, short-form examples covering instruction override, role confusion, privilege bypass, protected-instruction requests, encoded-instruction requests, and benign operational prose.",
+  "seed": "hey75-owasp-llm01-v1",
+  "partitions": {
+    "calibration": {
+      "hostile": {
+        "file": "calibration-hostile.json",
+        "caseIds": [
+          "HC-01", "HC-02", "HC-03", "HC-04", "HC-05", "HC-06", "HC-07", "HC-08", "HC-09", "HC-10",
+          "HC-11", "HC-12", "HC-13", "HC-14", "HC-15", "HC-16", "HC-17", "HC-18", "HC-19", "HC-20",
+          "HC-21", "HC-22", "HC-23", "HC-24", "HC-25", "HC-26", "HC-27", "HC-28", "HC-29", "HC-30",
+          "HC-31", "HC-32", "HC-33", "HC-34", "HC-35", "HC-36", "HC-37", "HC-38", "HC-39", "HC-40",
+          "HC-41", "HC-42", "HC-43", "HC-44", "HC-45", "HC-46", "HC-47", "HC-48", "HC-49", "HC-50",
+          "HC-51", "HC-52", "HC-53", "HC-54", "HC-55", "HC-56", "HC-57", "HC-58", "HC-59", "HC-60",
+          "HC-61", "HC-62", "HC-63", "HC-64", "HC-65", "HC-66", "HC-67", "HC-68", "HC-69", "HC-70",
+          "HC-71", "HC-72", "HC-73", "HC-74", "HC-75", "HC-76", "HC-77", "HC-78", "HC-79", "HC-80"
+        ]
+      },
+      "benign": {
+        "file": "calibration-benign.json",
+        "caseIds": [
+          "BC-01", "BC-02", "BC-03", "BC-04", "BC-05", "BC-06", "BC-07", "BC-08", "BC-09", "BC-10",
+          "BC-11", "BC-12", "BC-13", "BC-14", "BC-15", "BC-16", "BC-17", "BC-18", "BC-19", "BC-20",
+          "BC-21", "BC-22", "BC-23", "BC-24", "BC-25", "BC-26", "BC-27", "BC-28", "BC-29", "BC-30",
+          "BC-31", "BC-32", "BC-33", "BC-34", "BC-35", "BC-36", "BC-37", "BC-38", "BC-39", "BC-40",
+          "BC-41", "BC-42", "BC-43", "BC-44", "BC-45", "BC-46", "BC-47", "BC-48", "BC-49", "BC-50"
+        ]
+      }
+    },
+    "heldOut": {
+      "hostile": {
+        "file": "held-out-hostile.json",
+        "caseIds": ["HH-01", "HH-02", "HH-03", "HH-04", "HH-05", "HH-06", "HH-07", "HH-08", "HH-09", "HH-10", "HH-11", "HH-12", "HH-13", "HH-14", "HH-15", "HH-16", "HH-17", "HH-18", "HH-19", "HH-20"]
+      },
+      "benign": {
+        "file": "held-out-benign.json",
+        "caseIds": ["HB-01", "HB-02", "HB-03", "HB-04", "HB-05", "HB-06", "HB-07", "HB-08", "HB-09", "HB-10", "HB-11", "HB-12", "HB-13", "HB-14", "HB-15", "HB-16", "HB-17", "HB-18", "HB-19", "HB-20", "HB-21", "HB-22", "HB-23", "HB-24", "HB-25", "HB-26", "HB-27", "HB-28", "HB-29", "HB-30", "HB-31", "HB-32", "HB-33", "HB-34", "HB-35", "HB-36", "HB-37", "HB-38", "HB-39", "HB-40", "HB-41", "HB-42", "HB-43", "HB-44", "HB-45", "HB-46", "HB-47", "HB-48", "HB-49", "HB-50"]
+      }
+    }
+  }
+}
