@@ -12,27 +12,26 @@ Status: approved for implementation by the user's 2026-07-11 Wave 1 authorizatio
 
 ## Decision
 
-Adopt an ordered V1 -> V2 internal DO SQLite migration and one deep `GoalStore` Module.
+Adopt an ordered V1 -> V2 internal DO SQLite migration and one deep read-only `GoalStore` Module.
 
 The Module interface is intentionally narrow:
 
 ```ts
-type GoalWrite = {
-  ownerId: string;
-  source: GoalWriteSource;
-  goal: unknown;
-};
-
 class GoalStore {
-  write(input: GoalWrite): GoalRecord;
   readActive(ownerId: string): GoalRecord[];
 }
 ```
 
-`write()` parses `goal` with the existing strict `goalRecordSchema`, rejects an owner mismatch, and
-accepts only the existing onboarding or user-message source vocabulary. `readActive()` selects only
-the requested owner, converts SQLite `0 | 1` and `NULL` values into contract values, parses every
-row, and omits malformed rows. An empty array is the bounded typed absence.
+`readActive()` selects only the requested owner, converts SQLite `0 | 1` and `NULL` values into
+contract values, parses every row with the existing strict `goalRecordSchema`, and omits malformed
+rows. An empty array is the bounded typed absence.
+
+No public writer is introduced in this slice. ADR-0064 requires goal text to enter through
+Scribe/sanitisation, but the current accepted Scribe destination vocabulary has no durable-goal
+destination or owner-bound ingestion seam. `internal_context` is explicitly volatile-run context,
+not approval to persist a goal. Adding a direct `write()` method would create a bypass around that
+missing boundary. A later, separately accepted ingress must perform strict pre-write parsing after
+an approved Scribe decision and before calling a private persistence capability.
 
 This is logical owner isolation within the storage Module. It is not a substitute for the later
 authenticated subject-to-DO routing seam.
@@ -43,9 +42,13 @@ authenticated subject-to-DO routing seam.
    Rejected: it expands this schema ticket into the run-loop owner and would falsely imply live
    prompt hydration.
 2. Add V2 DDL without a storage Module.
-   Rejected: it cannot provide the required pre-write/post-read contract checks.
-3. Add V2 DDL plus `GoalStore` behind the existing contract.
-   Adopted: it keeps migration, parsing, SQLite representation, and owner filtering local.
+   Rejected: it leaves the required strict post-read normalization scattered across future callers.
+3. Add V2 DDL plus a public `GoalStore.write()` behind the existing contract.
+   Rejected: no accepted durable Scribe destination or authenticated owner-bound ingress exists;
+   this would bypass the required sanitisation decision.
+4. Add V2 DDL plus a read-only `GoalStore` behind the existing contract.
+   Adopted: it keeps migration, representation, strict post-read parsing, and owner filtering local
+   without pretending the write boundary is solved.
 
 ## Data Shape
 
@@ -63,17 +66,17 @@ provider payloads, prompt bodies, Scribe output, source text, or autonomous-muta
 
 ### Ideal
 
-An empty or V1 per-user DO database deterministically reaches V2. Valid goal rows can be stored and
-retrieved through the strict Module, while malformed, inactive, or other-owner rows never become
-active-goal output.
+An empty or V1 per-user DO database deterministically reaches V2. Committed goal rows supplied by
+a future approved ingress can be retrieved through the strict Module, while malformed, inactive,
+or other-owner rows never become active-goal output.
 
 ### Criteria
 
 - [ ] ISC-1: Empty storage provisions V1 then V2 in order and reports version 2.
 - [ ] ISC-2: A V1 database preserves its existing rows while V2 adds only `goals`.
 - [ ] ISC-3: A failed V2 statement rolls back both V2 DDL and its metadata version.
-- [ ] ISC-4: `GoalStore.write()` rejects invalid contract data, unapproved source values, and owner
-  mismatch before a row is written.
+- [ ] ISC-4: No public raw-goal writer, Scribe bypass, or unauthenticated persistence interface is
+  introduced. The missing strict pre-write ingress is explicitly recorded as follow-up work.
 - [ ] ISC-5: `GoalStore.readActive()` returns only valid active records for its owner in stable ID
   order; it excludes inactive, malformed, legacy, and another-owner rows.
 - [ ] ISC-6: Eviction/reconstruction retains committed V2 goal rows.
@@ -87,7 +90,7 @@ active-goal output.
 | Criterion | Evidence | Threshold |
 | --- | --- | --- |
 | ISC-1,2,3 | Workerd direct-storage migration tests | exact version/table/rollback assertions |
-| ISC-4,5 | `GoalStore` public-interface tests | invalid paths write zero rows; valid rows round-trip |
+| ISC-4,5 | `GoalStore` public-interface and source-boundary tests | no writer exists; committed valid rows normalize while invalid rows are omitted |
 | ISC-6 | Workerd eviction/reconstruction test | persisted goal survives, in-memory state is irrelevant |
 | ISC-7,8 | diff/source scans, contract review, privacy review | no excluded files or unsafe schema fields |
 
@@ -96,7 +99,7 @@ active-goal output.
 | Slice | Satisfies | Depends on | Parallelism |
 | --- | --- | --- | --- |
 | Ordered V2 migration | ISC-1,2,3 | V1 schema source | sole schema writer |
-| GoalStore Module | ISC-4,5 | V2 table, existing GoalRecord | after migration seam exists |
+| GoalStore read Module | ISC-4,5 | V2 table, existing GoalRecord | after migration seam exists |
 | Workerd proof and review | ISC-6,7,8 | both prior slices | independent reviewers only |
 
 ### Verification
@@ -109,9 +112,10 @@ active-goal output.
 ### Assumptions And Falsifier
 
 The selected storage-only interface assumes no present caller needs a live `RunLoopDO` integration.
-The decision is falsified if a current accepted contract requires prompt hydration or authenticated
-subject routing in this ticket; in that case the work stops for an ownership decision rather than
-expanding this branch.
+The original ticket also calls for strict pre-write parsing; that criterion cannot be safely met
+until an accepted Scribe destination and owner-bound ingress exist. The decision is falsified if a
+current accepted contract establishes either seam; in that case the work stops for an ownership
+decision rather than expanding this branch.
 
 ## Source Grounding
 

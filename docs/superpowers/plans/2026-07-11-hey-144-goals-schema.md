@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a transactional V2 DO SQLite goals schema and strict storage Module without widening the runtime beyond the accepted `GoalRecord` contract.
+**Goal:** Add a transactional V2 DO SQLite goals schema and strict read Module without widening the runtime beyond the accepted `GoalRecord` contract.
 
-**Architecture:** `do-schema.ts` owns ordered migration and schema assertions. `GoalStore` owns the SQLite representation, strict contract parsing, and logical owner filtering behind two methods. The existing contract remains the only goal vocabulary; no prompt, Scribe, or RunLoop caller is added.
+**Architecture:** `do-schema.ts` owns ordered migration and schema assertions. `GoalStore` owns the SQLite representation, strict post-read contract parsing, and logical owner filtering behind one read method. The existing contract remains the only goal vocabulary; no prompt, Scribe, RunLoop, or public goal writer is added.
 
 **Tech Stack:** TypeScript 5.9.3, Zod 4.4.3, Vitest 4.1.9, `@cloudflare/vitest-pool-workers` 0.16.20, Workers SQLite `SqlStorage`.
 
@@ -17,6 +17,9 @@
 - No new Durable Object class or Wrangler `new_sqlite_classes` migration.
 - Treat `ownerId` as logical storage filtering, never as authentication or owner-to-DO routing proof.
 - Use synthetic, non-health fixtures. User-stated aspirations are allowed as bounded text; measured health fields are not.
+- Do not create a raw persistence writer. ADR-0064 requires Scribe/sanitisation for goal text, and
+  the current accepted destination vocabulary has no durable-goal ingress. `internal_context` is
+  volatile-run and is not a persistence authorization.
 - No live credentials, cloud mutation, deployment, provider call, or production/staging operation.
 
 ---
@@ -80,7 +83,7 @@ Expected: PASS, including V1 preservation, repeated provisioning, and transactio
 
 Run: `git add packages/runtime/src/do-schema.ts packages/runtime/test/do-schema.test.ts && git commit -m "feat(runtime): add V2 goals schema"`
 
-### Task 2: Add strict `GoalStore` persistence Module
+### Task 2: Add strict `GoalStore` read Module
 
 **Files:**
 
@@ -89,15 +92,15 @@ Run: `git add packages/runtime/src/do-schema.ts packages/runtime/test/do-schema.
 
 **Interfaces:**
 
-- Consumes: `GoalRecord`, `GoalWriteSource`, `goalRecordSchema`, and the V2 `goals` table.
-- Produces: `GoalStore.write({ ownerId, source, goal })` and `GoalStore.readActive(ownerId)`.
+- Consumes: `GoalRecord`, `goalRecordSchema`, and the V2 `goals` table.
+- Produces: `GoalStore.readActive(ownerId)`.
 
 - [ ] **Step 1: Write the first failing public-interface test**
 
 ```ts
-it('writes a contract-valid goal and reads it only for its owner', () => {
+it('reads a contract-valid committed goal only for its owner', () => {
   const store = new GoalStore(sql);
-  store.write({ ownerId: 'owner-a', source: 'user_message', goal: validGoal('owner-a') });
+  seedGoalRow(sql, validGoal('owner-a'));
   expect(store.readActive('owner-a')).toEqual([validGoal('owner-a')]);
   expect(store.readActive('owner-b')).toEqual([]);
 });
@@ -109,18 +112,11 @@ Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- goals-store`
 
 Expected: FAIL because `GoalStore` does not exist.
 
-- [ ] **Step 3: Write the smallest strict storage Module**
+- [ ] **Step 3: Write the smallest strict read Module**
 
 ```ts
 export class GoalStore {
   constructor(private readonly sql: SqlStorage) {}
-
-  write(input: GoalWrite): GoalRecord {
-    const goal = goalRecordSchema.parse(input.goal);
-    if (goal.user_id !== input.ownerId) throw new Error('Goal owner mismatch');
-    // Store booleans as 0/1 and optional values as NULL using parameterized SQL.
-    return goal;
-  }
 
   readActive(ownerId: string): GoalRecord[] {
     // SELECT explicit columns WHERE user_id = ? AND active = 1 ORDER BY id.
@@ -129,14 +125,14 @@ export class GoalStore {
 }
 ```
 
-Validate the source with existing `goalWriteSourceSchema`; do not create source vocabulary, telemetry, an autonomous mutation path, or an external caller.
+Do not create source vocabulary, telemetry, an autonomous mutation path, an external caller, or a
+writer that accepts raw goal data.
 
 - [ ] **Step 4: Add one behavior at a time**
 
 ```ts
-it('writes zero rows for an invalid or owner-mismatched candidate', () => {});
 it('omits malformed, legacy, and inactive storage rows without returning their content', () => {});
-it('keeps a user-stated aspiration but rejects extra measured-health fields through the strict contract', () => {});
+it('has no public raw-goal writer or Scribe bypass', () => {});
 it('survives eviction and reconstructs the same active owner rows', async () => {});
 ```
 
@@ -179,10 +175,11 @@ Expected: focused tests and the full wall pass. If the known unrelated runtime-s
 
 - [ ] **Step 4: Run adversarial feature review**
 
-Map empty, V1, malformed, owner-mismatch, repeated-provisioning, eviction, and failed-DDL paths; then run an independent QA break pass against those paths.
+Map empty, V1, malformed, inactive, another-owner, repeated-provisioning, eviction, no-writer, and failed-DDL paths; then run an independent QA break pass against those paths.
 
 - [ ] **Step 5: Commit any test-only correction and write the handoff**
 
 Run: `git add packages/runtime/src packages/runtime/test docs/superpowers && git commit -m "test(runtime): harden goals schema proof"`
 
-Record final verification evidence and the explicit no-live-integration limit in the HEY-144 handoff before opening its draft PR.
+Record final verification evidence, the explicit no-live-integration limit, and the unimplemented
+Scribe-backed pre-write boundary in the HEY-144 handoff before opening its draft PR.
