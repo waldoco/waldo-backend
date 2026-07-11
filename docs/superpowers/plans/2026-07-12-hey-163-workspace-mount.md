@@ -250,7 +250,7 @@ Expected: production contract code contains one workspace seam and no raw R2/buc
 
 Confirm all five interface methods exist, no generic filesystem sneaks in, staged types do not imply a writer, workspace_file remains absent from sanitisation, and HEY-14 can only use list({ kind: 'user_skills' }) followed by readFile(file).
 
-- [ ] **Step 3: Write and commit the handoff**
+- [x] **Step 3: Write and commit the handoff**
 
 Record merge base, exact exports, test commands/results, no-provider boundary, and the raw bucket/key/owner prohibition in docs/foundation/HEY-163-PHASE-HANDOFF.md.
 
