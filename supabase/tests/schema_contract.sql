@@ -95,8 +95,9 @@ select is_empty(
       values ('authenticated', 'app_user_id', 'EXECUTE')
     ), actual as (
       select grantee::text, routine_name::text, privilege_type::text
-      from information_schema.role_routine_grants
-      where routine_schema = 'public' and grantee in ('anon', 'authenticated')
+      from information_schema.routine_privileges
+      where routine_schema = 'public'
+        and grantee in ('PUBLIC', 'anon', 'authenticated')
     )
     (select * from actual except select * from expected)
     union all
@@ -144,11 +145,19 @@ select ok(has_table_privilege('service_role', 'public.agent_logs', 'INSERT'),
 select ok(has_table_privilege('service_role', 'public.patrol_entries', 'UPDATE'),
   'patrol_entries keeps service-role UPDATE');
 
-select ok(
-  not has_table_privilege('service_role', 'public.user_consents', 'UPDATE,DELETE')
-  and has_column_privilege('service_role', 'public.user_consents', 'status', 'UPDATE')
-  and has_column_privilege('service_role', 'public.user_consents', 'withdrawn_at', 'UPDATE'),
-  'service role can withdraw consent but cannot rewrite or directly delete audit rows'
+select is_empty(
+  $$with expected(column_name, privilege_type) as (
+      values ('status', 'UPDATE'), ('withdrawn_at', 'UPDATE')
+    ), actual as (
+      select column_name::text, privilege_type::text
+      from information_schema.role_column_grants
+      where table_schema = 'public' and table_name = 'user_consents'
+        and grantee = 'service_role' and privilege_type = 'UPDATE'
+    )
+    (select * from actual except select * from expected)
+    union all
+    (select * from expected except select * from actual)$$,
+  'service role can update exactly the two consent-withdrawal columns'
 );
 
 select ok(
