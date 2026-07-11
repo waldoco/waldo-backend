@@ -114,6 +114,20 @@ The observed line number moved as `main` evolved, but the assertion and failure 
 
 `tools/eval/run-suite.ts` is absent. `/run-eval` therefore triaged to the current verification wall. This ticket changes no prompt, routing, LLM, delivery, memory, or agent-loop behavior.
 
+### Verification status correction — 2026-07-11
+
+The earlier "Dynamic migrate-from-zero evidence — BLOCKER" and runtime-baseline sections
+above are historical notes from before Ashish completed the Arch Linux run. They are
+superseded by the captured Arch evidence: all seven migrations applied from zero, 44/44
+pgTAP passed, helper-absent behavior passed, canonical history and idempotent migration-up
+passed, full `pnpm verify` passed with 182/182 runtime tests, performance advisors produced
+INFO-only findings, and no shared Supabase environment was accessed.
+
+GitHub Actions remains unavailable, but is no longer a HEY-134 verification blocker because
+the isolated Arch Docker run supplied the local evidence. The only remaining evidence gaps
+are the security-advisor log and post-fix helper-present replay log, both marked above as
+operator attestation only rather than independently captured evidence.
+
 ## Architecture Decisions
 
 ### Preserve Project Woof migration versions
