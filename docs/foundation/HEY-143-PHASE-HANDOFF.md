@@ -27,9 +27,12 @@ Historical implementation branch: `codex/hey-143-provider-readiness`.
   fallback.
 - No live provider call, credential, channel delivery, or Cloudflare/Supabase side effect occurred.
 
-## [blocked] Before Alpha
+## Historical / Superseded Before-Alpha Record (pre-PR #47)
 
-- HEY-13 must supply structured sanitizer/Scribe/taint wiring before real content.
+This preserved block predates HEY-13's merge. HEY-13 is now a completed prerequisite rather than a
+live blocker; use the 2026-07-11 convergence update below for current gates.
+
+- HEY-13 supplied the structured sanitizer/Scribe/taint foundation before real content.
 - Provider spend needs atomic/auditable reservation and reconciliation before each attempt.
 - A Cloudflare Secrets Store binding must be provisioned outside this repository.
 - Real context/recall, one accepted source seam, and a bounded provider staging smoke remain.
@@ -38,7 +41,10 @@ Historical implementation branch: `codex/hey-143-provider-readiness`.
 - HEY-156 must prove two-user staging parity and whole-path rollback.
 - Shadow Fetch delivery must remain off; real Spots and persistent text Chat remain unbuilt.
 
-## Next Owner Handoff
+## Historical / Superseded Next Owner Handoff (pre-PR #47)
+
+This retained record predates the HEY-13 merge. Use the 2026-07-11 convergence update below for
+current sequencing; do not treat this section as an active assignment.
 
 HEY-13 is the next backend harness execution slice. Keep sanitizer/hooks/provider/run-loop files
 single-writer where that slice crosses them. A later provider session consumes the real safety,
@@ -47,3 +53,16 @@ context, spend, secret, and source seams and preserves the no-payload logging in
 The first public morning-Brief GET is a side-effect-free committed-projection read. It is not a
 provider call, async delivery, HEY-143 completion, or Alpha proof. Do not mark HEY-143 complete
 until the promoted Alpha criteria are separately observed.
+
+## Convergence Update — 2026-07-11
+
+[observed] HEY-13 merged and is Done at `82f582b5a28530c1fb7800b7fad889590b35e57d`; it is no
+longer a live convergence blocker for HEY-143.
+
+Before HEY-143 closure planning, the required merged convergence gates are HEY-15, HEY-16, HEY-75,
+HEY-100's static guard slice, and HEY-141. HEY-14 and HEY-144 remain transitive through HEY-16.
+HEY-153 owner-bound identity/routing, HEY-110 asynchronous idempotent in-app delivery, and HEY-156
+two-user staging parity/rollback remain separate Alpha dependencies.
+
+The clean-main convergence wall authorizes planning only. It does not authorize a live provider,
+Secrets Store use, staging write, sink effect, or deployment.

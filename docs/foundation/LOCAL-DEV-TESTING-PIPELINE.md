@@ -75,6 +75,8 @@ pnpm -r typecheck
 pnpm verify:node              # @waldo/contracts tests
 pnpm verify:workers           # @waldo/runtime workerd tests
 pnpm verify:guards            # repo conformance guards
+pnpm verify:property          # focused fast-check lane; not part of the default verify wall
+pnpm verify:mutation          # focused Stryker lane; not part of the default verify wall
 ```
 
 Target-only gates still to build in Phase D+:
@@ -83,12 +85,10 @@ Target-only gates still to build in Phase D+:
 pnpm verify:fast         # targeted dev loop: typecheck + affected tests + guards
 pnpm verify:contracts    # contract tests + OpenAPI freshness + leak checks
 pnpm verify:scenarios    # deterministic scenario traces with fake model/sinks
-pnpm verify:property     # fast-check suites for selected deterministic invariants
-pnpm verify:mutation     # Stryker targeted deterministic-core mutation run
 ```
 
-Do not pretend a target-only gate passed. Report it as target-only and run the closest current
-lower-level command.
+Do not overstate a focused property or mutation run as whole-repository evidence. Do not pretend a
+missing target-only gate passed; report it honestly and run the closest current lower-level command.
 
 ## Standard Local Loop
 
@@ -558,33 +558,34 @@ Waldo differs from coding agents because its hard guarantees are stateful, priva
 
 ## Near-Term Build Order
 
-Authority promotion dependency: the ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are
-approved target decisions in [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17)
-but are not yet on `waldo-brain/main`. The PR may advance during review; its eventual merge result
-governs. Keep target-pending labels until that PR merges.
+Brain PR #17 merged at `75591543053dbdda6cf7c7f0210f8d16f36c3db8`; its ADR-0001/0071/0077
+amendments and new accepted ADR-0081/0082 govern architecture, not a proof-level promotion.
 
-1. Build HEY-13 (Todo/ready-for-agent) structured Scribe/sanitizer runtime with
-   nested/numeric/taint rejection proof. Keep HEY-15/14/16 context hydration parallel where files
-   do not overlap.
-2. Review HEY-150's matrix. Its acceptance directly gates only HEY-151 and HEY-152. Run HEY-157,
-   HEY-159, HEY-125, and HEY-134/114 in parallel; do not put HEY-157 or HEY-159 below HEY-150.
-3. Under HEY-151, commit the first strict public contract:
+1. Complete Wave 0 reconciliation and stop for human approval of its PR. Then run Wave 1:
+   HEY-144 owns V2 goals schema, HEY-14 owns the SkillLoader, and HEY-15 leads recall while
+   remaining read-only at the schema seam until its rebase. HEY-13 is Done and consumed as the
+   Scribe/taint foundation.
+2. Run Wave 2 only after those interfaces merge: HEY-16 composes them, HEY-100 is static guard only,
+   and HEY-75 carries corpus, held-out, ReDoS, and provenance proof. HEY-141 follows in Wave 3 after
+   HEY-100 unless guard/config write sets are proved disjoint.
+3. Review HEY-150's matrix. Its acceptance directly gates only HEY-151 and HEY-152. Run HEY-157,
+   HEY-159, and HEY-134/114 in parallel; do not put HEY-157 or HEY-159 below HEY-150.
+4. Under HEY-151, commit the first strict public contract:
    `GET /public/v1/briefs/morning/current`, `ready|pending|empty`, `WaldoProblemV1`, no tenant
    selector, and generated-client freshness. HEY-152 owns the parallel whole-path cutover/rollback
    contract.
-4. Prove HEY-153 only after HEY-125, HEY-134/114, HEY-152, and HEY-157. Require verified subject to
+5. Prove HEY-153 only after HEY-125, HEY-134/114, HEY-152, and HEY-157. Require verified subject to
    owner-bound DO and two-user RLS/cache/ETag rejection.
-5. HEY-154 is directly blocked by HEY-13, HEY-151, and HEY-153; HEY-13 semantically gates real
-   health/model content even though fixture-only projection work can start earlier. HEY-132 live
+6. HEY-154 consumes completed HEY-13 Scribe/taint proof plus HEY-151 and HEY-153; HEY-132 live
    integration requires HEY-151/153/154/157. HEY-35 requires HEY-28/132/151/154; HEY-47 requires
    HEY-28/132/151.
-6. Keep HEY-110 async delivery and HEY-158 Spots as separate Alpha gates. Run HEY-126's bounded
-   Chat transport/replay spike in parallel before the target-pending ADR-0077 amendment merges;
+7. Keep HEY-110 async delivery and HEY-158 Spots as separate Alpha gates. Run HEY-126's bounded
+   Chat transport/replay spike in parallel under accepted ADR-0077;
    HEY-127 remains off-path conditional/deferred.
-7. Run HEY-156 only after HEY-132, HEY-154, HEY-28, HEY-35, HEY-47, HEY-13, and HEY-159. HEY-159
+8. Run HEY-156 only after HEY-132, HEY-154, HEY-28, HEY-35, HEY-47, HEY-13, and HEY-159. HEY-159
    also blocks HEY-56. Keep native-device, Alpha, and production labels at their lower proof level
    until their own gates pass.
-8. HEY-155's live blockers are HEY-132 and HEY-156. Pass the adopted dogfood acceptance gate after
+9. HEY-155's live blockers are HEY-132 and HEY-156. Pass the adopted dogfood acceptance gate after
    HEY-156 before executing HEY-155 decommission and residue removal; dogfood is not a Linear
    blocker relation.
 
@@ -592,8 +593,8 @@ Home is tested as composition of Brief, Spots, relevant threads, and Patrol/audi
 conditional/deferred; do not add a generic Feed fixture/schema or make it an Alpha prerequisite.
 The Brief GET is a read path, not HEY-110 async delivery.
 
-Persistent app-cache tests depend on target-pending Brain ADR-0082 and HEY-159. Health-derived
-computation/public-field tests depend on target-pending Brain ADR-0081.
+Persistent app-cache tests depend on accepted Brain ADR-0082 and HEY-159. Health-derived
+computation/public-field tests depend on accepted Brain ADR-0081.
 
 ## Definition Of Done
 

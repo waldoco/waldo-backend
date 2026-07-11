@@ -1,6 +1,6 @@
 # waldo-backend — Claude Code Instructions
 
-## Current Foundation Status (2026-07-10)
+## Current Foundation Status (2026-07-11)
 
 Current work is governed by the local rule index, active foundation docs, accepted ADRs, and
 Waldo Brain source pages. Archived foundation docs are archaeology, not onboarding.
@@ -18,7 +18,9 @@ Before any implementation:
 
 Current facts:
 
-- Collaboration model: Claude Code builds; Codex audits adversarially.
+- Temporary harness-wave override: Codex coordinates and builds HEY-14, HEY-15, HEY-144, HEY-16,
+  HEY-100, HEY-75, and HEY-141. Review remains independent; this does not amend the mirrored
+  universal rules.
 - Runtime foundation through HEY-142 is merged: scheduler, Loop Governor, journal/outbox,
   DeliveryGate, hooks, ToolDispatcher/ACL, fake-first LLM provider, fake-first `RunLoopDO`,
   ingress/idempotency/gate/failure hardening, governed multi-iteration looping, and local replay.
@@ -26,20 +28,24 @@ Current facts:
 - HEY-111 is merged: typed local runtime evidence, replay fixtures, and local rule-based eval.
 - PR #44 merged bounded provider-readiness/fail-closed hardening; HEY-143 remains In Progress because
   real context/provider/sink/staging/Alpha proof is absent.
-- The next executable safety slice is HEY-13 structured Scribe/sanitizer runtime
-  (Todo/ready-for-agent).
+- HEY-13 structured Scribe/sanitizer runtime is merged and Done at `82f582b5`; its final local
+  evidence is 1,188 contract tests, 485 runtime tests, 235 property tests, and a 351-mutant lane
+  with 342 killed, 9 timed out, and no survivors, uncovered mutants, or errors.
+- Current work is Wave 0 reconciliation. After its human-approved merge, HEY-15 is the lead context
+  slice alongside HEY-14 and HEY-144; HEY-16 waits for their merged interfaces.
 - HEY-150 matrix review and HEY-151/152 contract/cutover work can proceed alongside HEY-125;
   HEY-157 and HEY-159 are parallel roots, not children of HEY-150.
-- The next context work is HEY-15 recall, HEY-14 skill loader, and HEY-16 prompt builder.
+- The Wave 1 context order is HEY-144, HEY-14, and HEY-15 with serialized schema ownership;
+  HEY-15 may build its pure Module before HEY-144 but cannot change the schema seam until its
+  rebase. HEY-16 is a Wave 2 consumer.
 - Do not call the harness a complete Pi/Hermes-style agent loop until real context/recall/provider,
   Scribe, delivery, staging, and Alpha proof are wired and verified.
 - The 16-table Supabase/RLS data plane is intended/contracted, not merged or staging-proven.
   HEY-134 owns the canonical migration/RLS/Vault re-land; HEY-114 owns environment and rollback
   proof.
-- The ADR-0001/0071/0077 amendment set and new ADR-0081/0082 are approved target decisions in
-  [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17), but are not yet on
-  `waldo-brain/main`. PR #17 may advance during review; its eventual merge result governs. Keep
-  these decisions target-pending until merge.
+- Brain PR #17 merged at `75591543053dbdda6cf7c7f0210f8d16f36c3db8`. Its ADR-0001/0071/0077
+  amendments and new accepted ADR-0081/0082 govern architecture, ownership, and destination rules;
+  they do not constitute runtime, device, staging, or production proof.
 - Retired external contract package references are stale for this branch.
   Current contracts live in `waldo-backend/packages/contracts`.
 - ADR-0069 owns the model roster. Do not use stale ADR-0003 model IDs.
@@ -84,15 +90,15 @@ pnpm typecheck
 pnpm test                              # vitest
 
 # Supabase
-supabase functions serve               # local EF
-supabase db push                       # apply migrations
-supabase functions deploy <name>
+supabase functions serve               # local only; fake/empty test inputs
+# supabase db push                      # PROHIBITED in Waves 0-3 without explicit human authority
+# supabase functions deploy <name>      # PROHIBITED in Waves 0-3 without explicit human authority
 
 # Cloudflare
-wrangler dev --local                   # local Worker
-wrangler deploy --env staging
-wrangler tail --env staging            # live logs
-wrangler durable-objects:list
+wrangler dev --local                   # local Worker with fake bindings
+# wrangler deploy --env staging         # PROHIBITED in Waves 0-3 without explicit human authority
+# wrangler tail --env staging           # PROHIBITED in Waves 0-3 without explicit human authority
+# wrangler durable-objects:list         # requires separately authorized remote-read scope
 
 # Eval
 # No pnpm eval script exists in this checkout yet.
@@ -115,7 +121,7 @@ Same set as the other repos (P0-P3 · ready-for-agent/human · type:* · repo:*)
 ## Domain docs (waldo-brain)
 
 - **[01-Waldo/planning/WALDO_V1_MASTER_PLAN.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md)** — build plan
-- **[01-Waldo/Architecture Decision Records (ADR)](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29)** — ADRs merged to `waldo-brain/main`; approved target amendments in PR #17 remain pending merge
+- **[01-Waldo/Architecture Decision Records (ADR)](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29)** — accepted ADRs, including Brain PR #17's merged amendments
 - **[04-Agent-Harness](https://github.com/Pin4sf/waldo-brain/tree/main/04-Agent-Harness)** — agent runtime master notes
 - **[03-References/ADL](https://github.com/Pin4sf/waldo-brain/tree/main/03-References/ADL)** — research grounding (Hermes, Cursor, MemPalace, Cognee, agentic-stack, Fowler SPDD, squad, federated learning)
 - **[05-Team/suyash/app-task-flows](https://github.com/Pin4sf/waldo-brain/tree/main/05-Team/suyash/app-task-flows)** — UX flow specs (read these BEFORE building any tool that affects user-facing surface)
@@ -187,7 +193,8 @@ Before any work, read **[waldo-brain/.claude/rules/mental-model.md](https://gith
 4. Read the relevant `.claude/rules/INDEX.md` ADR-by-area entries
 5. **Test-first** — golden test from the Acceptance section. Failing first. `/tdd`.
 6. Implement until green
-7. Integration test against real Supabase + CF Worker (not mocks alone)
+7. In Waves 0-3, integration test hermetically with Miniflare, fake bindings, fake provider, and
+   fake sink. Real Supabase/Cloudflare/staging validation needs separate explicit human authority.
 8. **5-step QA pass** — happy · null · hostile · concurrent · degraded. `/break-feature` or `qa-breaker` agent.
 9. Run `/diagnose` on any recurring failure — ROOT CAUSE, never quick patch
 10. Run `/grill-with-docs` for any decision that drifts from existing ADRs
@@ -197,13 +204,18 @@ Before any work, read **[waldo-brain/.claude/rules/mental-model.md](https://gith
 ## Source of truth
 
 When in doubt, in order:
-1. The Linear ticket description (it links the ADR)
-2. The ADR (it links research + grounding docs)
-3. [WALDO_V1_MASTER_PLAN.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md) for cross-cutting context
-4. The ADR's "Grounded in" references
+1. Mirrored universal rules and accepted ADRs for architecture, safety, and ownership.
+2. Verified current source and command output for implementation truth.
+3. Active foundation docs for the current build order.
+4. Linear tickets, the coordinator ledger, and handoffs for mutable scope/state only.
+5. [WALDO_V1_MASTER_PLAN.md](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/planning/WALDO_V1_MASTER_PLAN.md) for cross-cutting context.
+6. The ADR's "Grounded in" references.
 
 Anything in `Docs/archive/` is superseded.
 
 ## Cross-session bus
 
-**[MUST]** Invoke `/session-bus` at session START and END. Reads/writes Linear `State — waldo-backend` doc + Linear Session Log issue + [waldo-brain/04-Sessions/handoffs/waldo-backend](https://github.com/Pin4sf/waldo-brain/tree/main/04-Sessions/handoffs/waldo-backend). See ADR-0043. This is how Shivansh, Pranav, Aachi avoid divergence across machines.
+Use HEY-109, Linear issue comments, the coordinator ledger, and repo-local phase handoffs at session
+start and end. The legacy `/session-bus` markdown is not a loadable skill package and contains stale
+tool identifiers; record the packaging repair gap rather than invoking or repairing it inside a
+feature ticket.

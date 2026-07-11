@@ -10,7 +10,8 @@ This workflow turns the recent Waldo Brain builder work, LifeOS skill-corpus les
 
 Start every non-trivial session by loading context in this order:
 
-1. `/session-bus` for current cross-session state.
+1. HEY-109, its recent comments, and the current coordinator ledger or phase handoff for
+   cross-session state.
 2. `.claude/rules/INDEX.md` and the six mirrored universal rules.
 3. `docs/foundation/CONTRIBUTOR-ONBOARDING.md` for the current build lanes.
 4. Relevant `docs/foundation/*` files.
@@ -60,7 +61,7 @@ Use this for every feature, harness change, or shared contract edit:
 
 ```text
 Open:
-  /session-bus
+  HEY-109 + Linear comments + coordinator ledger/phase handoff
   read rules + foundation + accepted ADRs
 
 Shape:
@@ -89,7 +90,7 @@ Close:
   /run-eval for eval-gate triage
   /compound-learning-capture when a reusable lesson emerged
   /phase-handoff at phase or wave boundaries
-  /session-bus
+  update HEY-109, relevant Linear evidence comments, and the coordinator ledger/phase handoff
 ```
 
 ## Parallel Agent Policy
