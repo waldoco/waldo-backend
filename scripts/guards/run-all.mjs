@@ -5,9 +5,17 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const REQUIRED_GUARDS = ['guard-do-only-runtime.mjs'];
 const guardFiles = readdirSync(here)
   .filter((file) => file.endsWith('.mjs') && file !== 'run-all.mjs')
   .sort();
+
+for (const guard of REQUIRED_GUARDS) {
+  if (!guardFiles.includes(guard)) {
+    process.stderr.write(`guard-runner: required guard is missing: ${guard}\n`);
+    process.exit(1);
+  }
+}
 
 for (const file of guardFiles) {
   const result = spawnSync(process.execPath, [join(here, file)], {
