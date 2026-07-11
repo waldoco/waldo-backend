@@ -186,7 +186,7 @@ Scribe-backed pre-write boundary in the HEY-144 handoff before opening its draft
 
 ## Completion Record — 2026-07-11
 
-- Completed commits: `71cb7a8`, `ee80976`, `57e6c08`, `270eda4`, `d9a8313`, `998f304`.
+- Completed commits: `0c76742`, `8192dda`, `885449b`, `661d55e`, `6e2f2af`, `954ff7f`.
 - Final verification: `npx -y pnpm@10.34.4 verify` passed with 1,188 contract tests, 493 runtime
   tests, typechecks, and all guards; `git diff --check` passed.
 - QA correction: populated two-owner rows, including a SQL-metacharacter owner identifier, prove the

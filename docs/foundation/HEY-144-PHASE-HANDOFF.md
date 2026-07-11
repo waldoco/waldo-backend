@@ -1,7 +1,7 @@
 # HEY-144 Goals DO Schema Handoff
 
 Status: local implementation and verification complete on `codex/hey-144-goals-do-schema` at
-`998f304`; no PR, push, deployment, credential use, or live cloud action has been performed.
+`954ff7f` before publication; no deployment, credential use, or live cloud action has been performed.
 Date: 2026-07-11 IST.
 
 ## What Was Built
@@ -60,12 +60,12 @@ Date: 2026-07-11 IST.
 ## Review Record
 
 - Standards review found and the branch resolved the duplicate schema-version authority in
-  `d9a8313`/`998f304`; the final follow-up review found no residual P0–P3 issue.
+  `6e2f2af`/`954ff7f`; the final follow-up review found no residual P0–P3 issue.
 - Spec review passed for the explicitly bounded storage foundation and recorded the original
   end-to-end write criterion as intentionally incomplete.
 - Security/privacy and health-data review passed after the populated two-owner proof; no reachable
   raw-health, provider, prompt, logging, or external-service path was introduced.
-- Workflow mapping and adversarial QA found the populated-second-owner proof gap; `270eda4` adds the
+- Workflow mapping and adversarial QA found the populated-second-owner proof gap; `661d55e` adds the
   parameterized SQL-metacharacter fixture and a recorded predicate-removal failure.
 - Tracker evidence and future boundary: [HEY-144](https://linear.app/heywaldo/issue/HEY-144/schema-do-sqlite-goals-table-adr-0064-goalrecord-state-home) remains In Progress, while
   [HEY-162](https://linear.app/heywaldo/issue/HEY-162/securitybackend-goal-ingress-scribe-admission-owner-bound-persistence) owns durable goal admission.
