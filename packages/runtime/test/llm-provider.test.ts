@@ -778,7 +778,7 @@ describe('RuntimeLLMProvider', () => {
             temperature: 0.3,
           };
         },
-        renderTemplate: () => 'Take a 20-unit dose of insulin.',
+        renderTemplate: () => 'Take 5mg melatonin tonight.',
       },
       runtimeCtx(),
     );

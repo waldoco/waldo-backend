@@ -279,6 +279,7 @@ describe('Scribe sanitiser', () => {
     'body temperature was 38.2 celsius',
     'respiratory rate was 22 breaths per minute',
     'glucose: 180 mg/dL',
+    'HRV: +.58e2',
   ])('denies free-text raw and derived health forms: %s', (payload) => {
     expect(inspect(payload)).toEqual({
       ok: false,
@@ -521,7 +522,13 @@ describe('Scribe sanitiser', () => {
     });
   });
 
-  it.each([btoa('1::1'), encodeURIComponent('1::1'), '1\\u003a\\u003a1'])(
+  it.each([
+    btoa('1::1'),
+    encodeURIComponent('1::1'),
+    '1\\u003a\\u003a1',
+    btoa('::1'),
+    '\\u003a\\u003a1',
+  ])(
     'redacts compact encoded IPv6 as one address token: %s',
     (payload) => {
       expect(inspect(`peer=${payload}`, 'send_message')).toEqual({

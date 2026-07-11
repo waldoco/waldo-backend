@@ -104,6 +104,38 @@ describe('Scribe sanitiser properties', () => {
     );
   });
 
+  it('denies generated signed scientific health text across encodings', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('hrv', 'heart_rate', 'spo2', 'steps', 'glucose'),
+        fc.constantFrom('+.58e2', '-.58E+2', '+5.8e1'),
+        fc.integer({ min: 0, max: 4 }),
+        fc.constantFrom('text', 'percent', 'base64', 'unicode'),
+        (metric, scientific, depth, encoding) => {
+          const text = `${metric}: ${scientific}`;
+          const encoded = (() => {
+            switch (encoding) {
+              case 'text':
+                return text;
+              case 'percent':
+                return encodeURIComponent(text);
+              case 'base64':
+                return btoa(text);
+              case 'unicode':
+                return unicodeEscape(text);
+            }
+          })();
+          expect(inspect(wrapAtDepth(encoded, depth))).toMatchObject({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          });
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
   it('denies generated free text, CSV, JSON, percent, Base64, and Unicode-escape forms', () => {
     fc.assert(
       fc.property(
