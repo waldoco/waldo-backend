@@ -269,3 +269,13 @@ Run: git add docs/foundation/HEY-163-PHASE-HANDOFF.md && git commit -m "docs(con
 - Placeholder scan: no incomplete markers or undefined signature remains.
 - Type consistency: readFile and writeFile use the ADR-required versioned WorkspaceBlob; writeFile
   also accepts WorkspaceWriteOptions, and list uses the sole WorkspacePrefix.
+
+## Post-Review Policy Split — 2026-07-12
+
+Security review correctly found that a `Uint8Array` alone is not an application-level byte cap.
+Health-data review confirmed that this contract has no read/write consumer and that a universal cap
+would conflate files with distinct future policies. Accepted ADR-0076 requires size checks at the
+staged writer/commit boundary, but supplies no universal numeric limit or reader policy. HEY-166
+therefore owns a proposed separate reader-admission policy and blocks HEY-14; this contract remains
+a strict materialized transport seam and must not invent a number or widen `workspace_file`
+sanitisation.

@@ -20,13 +20,21 @@ HEY-14 must read selected user skill files and cache their opaque versions. The 
 - `WorkspacePrefix`, exactly `{ kind: 'user_skills' }`.
 - `WorkspaceVersion` and `WorkspaceWriteId`, non-empty branded opaque tokens.
 - `WorkspaceBlob`, a strict `{ bytes: Uint8Array, version: WorkspaceVersion }` versioned content
-  value used for read results and staged write input.
+  value used for read results and staged write input. It intentionally has no universal numeric byte
+  cap: HEY-166 owns a proposed file-class-specific reader-admission policy before any blob is
+  decoded, cached, or prompted; ADR-0076 separately requires writer size limits before commit.
 - `WorkspaceWriteOptions` with optional `expected_version`, and `StagedWorkspaceWrite` with a staged opaque id.
 - `WorkspaceMount` with `readFile`, `writeFile(file, content: WorkspaceBlob, options?)`, `list`,
   `commit`, and `discard` methods. No method receives a user id, raw path, bucket name, object key,
   or R2 client.
 
 The write-related types faithfully preserve the ADR-0076 staged protocol but add no runtime writer, sanitizer destination, R2 binding, or commit implementation. Existing `skill_body` sanitation remains the only relevant H14 prompt-admission protection; `workspace_file` remains deliberately absent from the current sanitiser vocabulary until a separate writer-policy decision.
+
+The strict `WorkspaceBlob` shape materializes bytes and prevents provider/metadata leakage; it is
+not proof of a numeric byte budget. Review found no accepted source that sets one universal workspace
+limit across static context, user skills, and future archive manifests. HEY-166 owns a proposed
+file-class reader policy that blocks HEY-14 read/cache/decode admission. Every staged writer remains
+independently bound by ADR-0076's future destination/sanitiser/size policy.
 
 This initial closed vocabulary admits the HEY-14 files only. ADR-0076 also anticipates a typed
 cold-archive manifest when `retrieve()` needs one, but neither the current H14 loader nor the

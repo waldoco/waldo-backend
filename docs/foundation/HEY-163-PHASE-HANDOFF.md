@@ -1,6 +1,7 @@
 # Phase HEY-163 → HEY-14 Handoff
 
-Status: contract-only slice independently reviewed and ready for draft-PR publication.
+Status: contract-only slice independently reviewed and ready for draft-PR publication; HEY-166
+blocks HEY-14 admission and every workspace writer until its bounded-read/admission policy lands.
 Date: 2026-07-12 IST.
 Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
 
@@ -22,10 +23,13 @@ Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
 - [verified] A fake owner-bound mount implements every method and exercises `writeFile` with a
   versioned `WorkspaceBlob` plus `expected_version`; contracts typecheck passed.
 - [verified] Independent contract review found and verified the ADR signature corrections; the
-  final combined diff has no P0/P1 finding.
+  source contract has no unresolved raw-R2/path/owner exposure.
 - [verified] Fresh `npx -y pnpm@10.34.4 verify` passed: contracts 49 files / 1,190 tests; runtime
   20 files / 514 tests; all workspace typechecks and repository guards passed. `git diff --check`
   also passed.
+- [blocked] `tools/eval/run-suite.ts` and an `eval` package command are absent. Per `/run-eval`,
+  this records a missing standalone eval gate, not an inferred eval pass; the verification wall
+  above is the available merge evidence.
 
 ## What Doesn't Work Yet (known issues)
 
@@ -34,6 +38,12 @@ Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
 - `workspace_file` remains deliberately rejected by the current sanitiser. A future staged writer
   must first add an accepted destination policy, size limits, Scribe/sanitiser evidence, deletion,
   export, and metadata-only logging; it must not use this interface as a bypass.
+- HEY-166 owns a **proposed** reader/admission policy for per-file bytes, source-count/total-read
+  bounds, decode failure, cache, and prompt-budget behavior. `WorkspaceBlob` is deliberately a
+  strict materialized transport shape, not a universal numeric-cap policy: its allowed file classes
+  need different future limits, and no accepted source supplies one shared byte value. ADR-0076
+  requires numeric size enforcement only for the staged writer/commit path. HEY-14 must not
+  read/cache/decode a blob until HEY-166 supplies its proposed bounded policy and tests.
 - The initial vocabulary does not admit cold-archive manifests. This does not block HEY-14; a later
   `retrieve()` slice must define its manifest descriptor and conformance fixture rather than pass a
   generic string path.
@@ -53,6 +63,12 @@ Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
   user identifier nor bucket, object key, raw prefix, or R2 client.
 - [decision] The current closed set is deliberately limited to HEY-14's files. Cold retrieval must
   extend the descriptor union explicitly after it owns a typed manifest shape.
+- [decision] Review-all surfaced a conflict: security correctly identified that a bare `Uint8Array`
+  is not an application cap, while health-data review established that a universal mount cap would
+  be a false policy for multiple file classes. ADR-0076 requires numeric size enforcement for the
+  staged writer/commit path; it does not define a reader cap. HEY-166 therefore owns a proposed
+  separate reader-admission policy for HEY-14 and the still-required writer policy; this branch does
+  not invent a number or relax sanitisation.
 
 ## Hard-Won Lessons
 
@@ -61,15 +77,32 @@ Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
 - A fake that omits method parameters can satisfy TypeScript structurally while failing to prove the
   caller-facing contract. Invoke every critical method with its exact public values.
 
+## Compound Learning Capture
+
+- **Lesson:** accepted ADR signatures outrank derived task prose; shared adapter fakes must invoke
+  every critical method to prove caller-facing types.
+- **Mode / track:** lightweight knowledge-and-practice capture.
+- **Overlap check:** no existing active foundation lesson covers ADR-to-derived-plan signature drift;
+  this handoff is the narrowest durable home.
+- **Source / applicability:** accepted
+  `waldo-brain@75591543053dbdda6cf7c7f0210f8d16f36c3db8` ADR-0076; apply when implementing a
+  shared contract from an ADR, not to ordinary private refactors.
+- **Pressure scenario:** alter a fake's parameter or return type to the previous incorrect shape;
+  contracts typecheck must fail before restoring the ADR signature.
+- **Evidence trail / impact:** the `WorkspaceBlob` and mutable `WorkspaceFile[]` mismatches were
+  caught by independent review, then verified by focused tests, typecheck, and the full merge wall.
+
 ## Prerequisites for Next Phase
 
-1. Merge HEY-163, then rebase HEY-14 on the merged contract.
-2. HEY-14 receives only an already owner-bound `WorkspaceMount`; it may call
-   `list({ kind: 'user_skills' })` and `readFile(file)` and cache opaque blob versions.
+1. Merge HEY-163, then complete HEY-166's proposed bounded reader/admission policy before
+   starting HEY-14 implementation.
+2. After that policy lands, HEY-14 receives only an already owner-bound `WorkspaceMount`; it may
+   call `list({ kind: 'user_skills' })` and `readFile(file)` within the policy's count/byte/decode
+   bounds and cache opaque blob versions.
 3. HEY-14 must not construct a user prefix/key, access a bucket/binding, use generic filesystem
    paths, stage or commit a workspace write, or broaden `workspace_file` sanitation.
 4. A later runtime adapter owns private descriptor-to-R2 mapping and must separately satisfy
-   ADR-0076's sanitisation, logging, deletion, export, and stable-snapshot obligations.
+   ADR-0076's sanitisation, logging, deletion, export, stable-snapshot, and writer-size obligations.
 
 ## Files Changed
 
