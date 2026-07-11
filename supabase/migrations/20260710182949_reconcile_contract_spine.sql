@@ -36,6 +36,46 @@ create unique index user_consents_one_active_grant
 create index idx_user_consents_user
   on public.user_consents (user_id);
 
+-- Consent is append-only audit evidence. The only in-place transition is withdrawal;
+-- re-granting creates a new versioned row. Account deletion still cascades through users.
+revoke update, delete on public.user_consents from service_role;
+grant update (status, withdrawn_at) on public.user_consents to service_role;
+
+create function public.enforce_consent_audit_history()
+  returns trigger
+  language plpgsql
+  security invoker
+  set search_path = ''
+as $$
+begin
+  if old.user_id is distinct from new.user_id
+     or old.consent_class is distinct from new.consent_class
+     or old.source is distinct from new.source
+     or old.purpose is distinct from new.purpose
+     or old.version is distinct from new.version
+     or old.granted_at is distinct from new.granted_at
+     or old.age_attested_18_plus is distinct from new.age_attested_18_plus
+     or old.policy_version is distinct from new.policy_version
+     or old.health_data_consent is distinct from new.health_data_consent
+     or old.status is distinct from 'granted'
+     or old.withdrawn_at is not null
+     or new.status is distinct from 'withdrawn'
+     or new.withdrawn_at is null then
+    raise exception 'consent audit records are immutable except for withdrawal'
+      using errcode = '23514';
+  end if;
+
+  return new;
+end;
+$$;
+
+revoke all on function public.enforce_consent_audit_history() from public;
+
+create trigger enforce_consent_audit_history
+  before update on public.user_consents
+  for each row
+  execute function public.enforce_consent_audit_history();
+
 create or replace function public.health_daily_requires_consent()
   returns trigger
   language plpgsql
@@ -95,4 +135,11 @@ alter table public.crs_scores
       else 'depleted'
     end),
   add constraint crs_scores_confidence_check
-    check (confidence is null or confidence between 0 and 1);
+    check (confidence is null or confidence between 0 and 1),
+  add constraint crs_scores_form_pillars_check
+    check (
+      (sleep_score is null or sleep_score between 0 and 100)
+      and (hrv_score is null or hrv_score between 0 and 100)
+      and (circadian_score is null or circadian_score between 0 and 100)
+      and (motion_score is null or motion_score between 0 and 100)
+    );

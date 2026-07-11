@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(38);
+select plan(43);
 
 select is(
   (select array_agg(table_name::text order by table_name)
@@ -114,6 +114,13 @@ select ok(has_table_privilege('service_role', 'public.patrol_entries', 'UPDATE')
   'patrol_entries keeps service-role UPDATE');
 
 select ok(
+  not has_table_privilege('service_role', 'public.user_consents', 'UPDATE,DELETE')
+  and has_column_privilege('service_role', 'public.user_consents', 'status', 'UPDATE')
+  and has_column_privilege('service_role', 'public.user_consents', 'withdrawn_at', 'UPDATE'),
+  'service role can withdraw consent but cannot rewrite or directly delete audit rows'
+);
+
+select ok(
   not (select convalidated from pg_constraint
        where conname = 'user_consents_canonical_record_check'),
   'legacy consent audit rows remain readable while new rows are contract-enforced'
@@ -138,13 +145,14 @@ select ok(
 select is(
   (select array_agg(conname::text order by conname) from pg_constraint
    where conrelid = 'public.crs_scores'::regclass
-     and conname in ('crs_scores_confidence_check', 'crs_scores_score_check',
-                     'crs_scores_score_zone_check', 'crs_scores_zone_check')),
+     and conname in ('crs_scores_confidence_check', 'crs_scores_form_pillars_check',
+                     'crs_scores_score_check', 'crs_scores_score_zone_check',
+                     'crs_scores_zone_check')),
   array[
-    'crs_scores_confidence_check', 'crs_scores_score_check',
-    'crs_scores_score_zone_check', 'crs_scores_zone_check'
+    'crs_scores_confidence_check', 'crs_scores_form_pillars_check',
+    'crs_scores_score_check', 'crs_scores_score_zone_check', 'crs_scores_zone_check'
   ]::text[],
-  'CRS persisted values carry score, zone, and confidence constraints'
+  'CRS persisted values carry composite, pillar, zone, and confidence constraints'
 );
 
 insert into auth.users (id) values
@@ -362,6 +370,29 @@ select throws_ok(
 );
 
 select throws_ok(
+  $$update public.user_consents set status = 'granted', withdrawn_at = null
+    where user_id = '30000000-0000-0000-0000-0000000000c3'$$,
+  '23514'::char(5), null,
+  'withdrawn consent cannot be reactivated in place'
+);
+
+select throws_ok(
+  $$update public.user_consents set version = 2
+    where user_id = '30000000-0000-0000-0000-0000000000c3'$$,
+  '23514'::char(5), null,
+  'consent scope and grant evidence are immutable'
+);
+
+select lives_ok(
+  $$insert into public.user_consents
+      (user_id, consent_class, source, purpose, version, status, granted_at,
+       age_attested_18_plus)
+    values ('30000000-0000-0000-0000-0000000000c3', 'health_processing',
+            'whoop', 'daily_readiness_briefing', 2, 'granted', now(), true)$$,
+  're-grant after withdrawal creates a new versioned record'
+);
+
+select throws_ok(
   $$insert into public.notification_log
       (user_id, notification_type, channel, idempotency_key)
     values ('20000000-0000-0000-0000-0000000000b2', 'brief', 'push', 'retry-1')$$,
@@ -380,6 +411,14 @@ select throws_ok(
     values ('30000000-0000-0000-0000-0000000000c3', date '2026-06-03', 80, 'steady')$$,
   '23514'::char(5), null,
   'CRS score and zone drift is rejected'
+);
+select throws_ok(
+  $$insert into public.crs_scores
+      (user_id, date, score, zone, sleep_score, hrv_score, circadian_score, motion_score)
+    values ('30000000-0000-0000-0000-0000000000c3', date '2026-06-04', 80,
+            'energized', 101, 80, 80, 80)$$,
+  '23514'::char(5), null,
+  'CRS pillar scores outside the shared contract scale are rejected'
 );
 select lives_ok(
   $$insert into public.crs_scores (user_id, date, score, zone, confidence)
