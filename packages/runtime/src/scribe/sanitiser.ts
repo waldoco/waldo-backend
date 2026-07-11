@@ -51,9 +51,17 @@ const REDACTION_ORDER: readonly RedactionKind[] = [
 const HEALTH_KEY = /(?:^|[^a-z0-9])(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass|temperature)|weight|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|steps|step[\s_-]*count|motion|circadian|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?|efficiency|stages?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)(?:[^a-z0-9]|$)/i;
 const HEALTH_KEY_COMPACT = /^(?:hrv(?:ms)?|heartratevariability(?:ms)?|restingheartrate(?:bpm)?|heartrate(?:bpm)?|pulse(?:bpm)?|spo2|oxygensaturation(?:percent|pct)?|bloodoxygen(?:percent|pct)?|systolic(?:mmhg)?|diastolic(?:mmhg)?|bloodpressure|bp|bodyweight(?:kg|lb|lbs)?|bodymass(?:kg|lb|lbs)?|weight(?:kg|lb|lbs)?|bodytemperature|respiratoryrate|breathingrate|bloodglucose|glucose|steps|stepcount|motion|circadian|calorieburn(?:kcal)?|caloriesburned(?:kcal)?|activeenergy(?:kcal)?|sleep(?:hours|duration|minutes|mins|efficiency|stages?)?|remsleep(?:minutes|mins)?|deepsleep(?:minutes|mins)?|providerpayload|healthpayload|rawpayload|crs|form(?:score)?|recovery(?:score)?|load(?:score)?)$/i;
 const HEALTH_INDICATOR_VALUE = /^(?:hrv|heart rate(?: variability)?|resting heart rate|pulse|spo2|oxygen saturation|blood oxygen|systolic|diastolic|blood pressure|bp|body weight|body mass|weight|body temperature|respiratory rate|breathing rate|blood glucose|glucose|steps|step count|motion|circadian|sleep|sleep efficiency|sleep stage|sleep stages|rem sleep|deep sleep|active energy|calorie burn|provider payload|health payload|raw payload|crs|form|recovery|load)$/i;
-const NUMERIC_VALUE = /^\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*$/;
+const NUMERIC_VALUE = /^\s*["']?-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?:\s*\/\s*\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)?["']?\s*$/;
 const HEALTH_MEASUREMENT_KEY = /^(?:measurement|value|reading|amount|score|sample|quantity|duration|minutes?|mins?)$/i;
-const FORBIDDEN_HEALTH_PAYLOAD_KEY = /^(?:provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload|sleep[\s_-]*stages?)$/i;
+const FORBIDDEN_HEALTH_PAYLOAD_KEY = /^(?:motion|circadian|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload|sleep[\s_-]*stages?)$/i;
+const RAW_HEALTH_SERIES_KEY = /^(?:samples?|series)$/i;
+const DERIVED_HEALTH_ELIGIBILITIES = new Set([
+  'trigger_prompt',
+  'volatile_run',
+  'runtime_trace',
+  'r2_today_summary',
+  'r2_baselines_summary',
+]);
 const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|breaths?(?: per minute)?|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?|celsius|fahrenheit|mg\/dl|mmol\/l)$/i;
 const HEALTH_FREE_TEXT: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)\b\s*,\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*,\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)(?=$|[^a-z0-9])/i,
@@ -63,6 +71,8 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [
   /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
   /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d{1,3}\b/i,
   /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
+  /\b(?:hrv|heart[\s_-]*rate|spo2|blood[\s_-]*pressure|body[\s_-]*weight|steps|sleep[\s_-]*duration|body[\s_-]*temperature|respiratory[\s_-]*rate|glucose|crs|form|recovery|load)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?-?\d+(?:\.\d+)?[eE][+-]?\d+["']?(?=$|[^a-z0-9])/i,
+  /\b(?:motion\s*[:=,]\s*(?:active|inactive|still|moving)|circadian\s*[:=,]\s*(?:aligned|misaligned|early|late)|sleep[\s_-]*stage\s*[:=,]\s*(?:awake|asleep|light|deep|rem|core))\b/i,
 ];
 
 const SECRET_PATTERNS: readonly RegExp[] = [
@@ -80,7 +90,7 @@ const ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,5}\
 const ATTENDEE_KEY = /^(?:attendee|attendees|attendee_name|participant|participants|participant_name|contact_name)$/i;
 const ADDRESS_KEY = /^(?:address|street_address|mailing_address|home_address|ip|ip_address)$/i;
 const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
-const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])[A-Za-z0-9+\/_-]{8,}={0,2}(?![A-Za-z0-9+\/_=-])/g;
+const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])[A-Za-z0-9+\/_-]{4,}={0,2}(?![A-Za-z0-9+\/_=-])/g;
 const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
@@ -334,6 +344,29 @@ function isEligibleHealthView(value: object, destination: SanitiseDestination): 
   return parsed.data.destination_eligibility.some((eligibility) => allowed.includes(eligibility));
 }
 
+function looksLikeDerivedHealthView(value: Record<string, JsonValue>): boolean {
+  if (
+    Object.hasOwn(value, 'form_zone') ||
+    Object.hasOwn(value, 'missing_components') ||
+    Object.hasOwn(value, 'confidence_band') ||
+    Object.hasOwn(value, 'provenance_refs')
+  ) {
+    return true;
+  }
+  if (
+    typeof value.algorithm_version === 'string' &&
+    value.algorithm_version.startsWith('form.')
+  ) {
+    return true;
+  }
+  return (
+    Array.isArray(value.destination_eligibility) &&
+    value.destination_eligibility.some(
+      (eligibility) => DERIVED_HEALTH_ELIGIBILITIES.has(eligibility as string),
+    )
+  );
+}
+
 function isHealthIndicatorText(value: string): boolean {
   return (
     HEALTH_INDICATOR_VALUE.test(value.trim()) ||
@@ -371,11 +404,7 @@ function subtreeHealthFlags(
         ? { indicator: false, measurement: false, numeric: false, unit: false }
         : { indicator: true, measurement: true, numeric: true, unit: false };
     }
-    if (
-      Object.hasOwn(value, 'algorithm_version') &&
-      Object.hasOwn(value, 'form_zone') &&
-      Object.hasOwn(value, 'destination_eligibility')
-    ) {
+    if (looksLikeDerivedHealthView(value)) {
       return { indicator: true, measurement: true, numeric: false, unit: false };
     }
   }
@@ -396,11 +425,13 @@ function subtreeHealthFlags(
   } else {
     for (const [key, item] of Object.entries(value)) {
       const healthKey = HEALTH_KEY.test(key) || HEALTH_KEY_COMPACT.test(compactKey(key));
-      indicator ||= healthKey;
       const child = subtreeHealthFlags(item, destination);
+      const rawHealthSeries = RAW_HEALTH_SERIES_KEY.test(key) && child.measurement && child.unit;
+      indicator ||= healthKey || rawHealthSeries;
       indicator ||= child.indicator;
       measurement ||=
         FORBIDDEN_HEALTH_PAYLOAD_KEY.test(key) ||
+        rawHealthSeries ||
         child.measurement ||
         ((healthKey || HEALTH_MEASUREMENT_KEY.test(key)) && child.numeric);
       numeric ||= child.numeric;
@@ -515,7 +546,7 @@ function redactEncodedPii(
     increment(counts, kind);
     return `[REDACTED_${kind === 'credit_card' ? 'CREDIT_CARD' : kind.toUpperCase()}]`;
   });
-  const candidates = /(?:[A-Za-z0-9._+\/%-]|\\u[0-9a-fA-F]{4}){8,}/g;
+  const candidates = /(?:[A-Za-z0-9._+\/%-]|\\u[0-9a-fA-F]{4}){4,}/g;
   output = output.replace(candidates, (token) => {
     const kind = encodedPiiKind(token, destination);
     if (kind === undefined) return token;
@@ -654,6 +685,42 @@ function inspectInstructions(
   };
 }
 
+function truncateSandboxStructuredStdout(
+  payload: JsonValue,
+  maxChars: number,
+): JsonValue | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined;
+
+  const root = payload as Record<string, JsonValue>;
+  const nestedData = root.data;
+  const data =
+    typeof nestedData === 'object' && nestedData !== null && !Array.isArray(nestedData)
+      ? (nestedData as Record<string, JsonValue>)
+      : undefined;
+  const stdout = typeof root.stdout === 'string' ? root.stdout : data?.stdout;
+  if (typeof stdout !== 'string') return undefined;
+
+  const replaceStdout = (value: string): JsonValue =>
+    typeof root.stdout === 'string'
+      ? { ...root, stdout: value }
+      : { ...root, data: { ...data, stdout: value } };
+
+  let low = 0;
+  let high = stdout.length;
+  let bounded: JsonValue | undefined;
+  while (low <= high) {
+    const midpoint = Math.floor((low + high) / 2);
+    const candidate = replaceStdout(`${stdout.slice(0, midpoint)}${TRUNCATION_MARKER}`);
+    if (JSON.stringify(candidate).length <= maxChars) {
+      bounded = candidate;
+      low = midpoint + 1;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  return bounded;
+}
+
 function applyDestinationPolicy(
   input: PreparedInput,
   payload: JsonValue,
@@ -680,13 +747,21 @@ function applyDestinationPolicy(
   const serialized = isText ? payload : JSON.stringify(payload);
   let boundedPayload = payload;
   if (serialized.length > policy.max_chars) {
-    if (input.destination !== 'sandbox_stdout' || !isText) {
+    if (input.destination !== 'sandbox_stdout') {
       return deny('size_cap', 'oversize');
     }
-    boundedPayload = `${payload.slice(0, policy.max_chars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+    if (isText) {
+      boundedPayload = `${payload.slice(0, policy.max_chars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+    } else {
+      const truncated = truncateSandboxStructuredStdout(payload, policy.max_chars);
+      if (truncated === undefined) return deny('size_cap', 'oversize');
+      boundedPayload = truncated;
+    }
   }
   if (isStructured) {
-    const pending: Array<{ value: JsonValue; depth: number }> = [{ value: payload, depth: 1 }];
+    const pending: Array<{ value: JsonValue; depth: number }> = [
+      { value: boundedPayload, depth: 1 },
+    ];
     while (pending.length > 0) {
       const current = pending.pop();
       if (!current) continue;

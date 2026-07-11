@@ -66,6 +66,7 @@ export type DispatchToolResult =
       error: string;
       code: ErrorCode;
       reason: ToolDispatchErrorReason;
+      source_taint?: 'external';
     };
 
 export type ToolDispatchErrorReason =
@@ -293,6 +294,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       finalResult.error,
       finalResult.code,
       'tool_result_error',
+      finalResult.source_taint,
     );
   }
 
@@ -548,8 +550,11 @@ function failDispatch(
   error: string,
   code: ErrorCode,
   reason: ToolDispatchErrorReason,
+  sourceTaint?: SourceTaint,
 ): DispatchToolResult {
-  return { ok: false, call_id: callId, tool, error, code, reason };
+  return sourceTaint === 'external'
+    ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external' }
+    : { ok: false, call_id: callId, tool, error, code, reason };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -586,7 +591,7 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
 
 type ParsedToolResult =
   | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external' };
 
 function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
@@ -614,12 +619,29 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
       : null;
   }
 
-  if (!hasOnlyKeys(value, ['ok', 'error', 'code'])) return null;
+  const expectsExternal = EXTERNAL_ORIGIN_TOOLS.includes(tool);
+  if (
+    !hasOnlyKeys(
+      value,
+      expectsExternal ? ['ok', 'error', 'code', 'source_taint'] : ['ok', 'error', 'code'],
+    )
+  ) {
+    return null;
+  }
   const code = errorCodeSchema.safeParse(value.code);
   if (typeof value.error !== 'string' || value.error.length === 0 || !code.success) {
     return null;
   }
 
+  if (expectsExternal) {
+    if (value.source_taint !== 'external') return null;
+    return {
+      ok: false,
+      error: value.error,
+      code: code.data,
+      source_taint: 'external',
+    };
+  }
   return { ok: false, error: value.error, code: code.data };
 }
 

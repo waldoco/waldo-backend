@@ -23,13 +23,14 @@ export const toolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
 
 export type ToolResult<T> =
   | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint };
 
 // ADR-0049 accepted amendment: source_taint is a REQUIRED field on external-origin tool
 // results (web, document, MCP, connector, calendar/email body text), carried 'external'
 // end-to-end. The refine pins the stamp: an absent OR null stamp on an external-origin
 // result would launder taint, so both are parse failures. The taint vocabulary is
-// single-owned by memory/sanitise; a failure branch carries no content, hence no stamp.
+// single-owned by memory/sanitise. Failure text can be provider-controlled too, so the external
+// failure arm is stamped and cannot silently become trusted diagnostic context.
 export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Data) =>
   z.discriminatedUnion('ok', [
     z.strictObject({
@@ -40,7 +41,12 @@ export const externalToolResultSchema = <Data extends z.ZodType>(dataSchema: Dat
         error: "external-origin results are stamped 'external'; a null stamp launders taint",
       }),
     }),
-    z.strictObject({ ok: z.literal(false), error: z.string().min(1), code: errorCodeSchema }),
+    z.strictObject({
+      ok: z.literal(false),
+      error: z.string().min(1),
+      code: errorCodeSchema,
+      source_taint: z.literal('external'),
+    }),
   ]);
 
 // The three general-agent tools ship in V1 only WITH the taint gate (ADR-0049): if the gate

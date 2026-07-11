@@ -315,6 +315,44 @@ describe('ToolDispatcher', () => {
     });
   });
 
+  it('requires and preserves external provenance on provider-controlled failure text', async () => {
+    const handler: ToolHandler<
+      QueryCalendarArgs,
+      { events: string[] },
+      ToolDispatcherContext
+    > = {
+      name: 'query_calendar',
+      description: 'Read external calendar events.',
+      schema: queryCalendarArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('query_calendar'),
+      autonomy_gated: false,
+      async handle() {
+        return {
+          ok: false,
+          error: 'provider-controlled failure text',
+          code: 'transient',
+          source_taint: 'external',
+        };
+      },
+    };
+
+    await expect(
+      dispatchTool(
+        { id: 'call-calendar-external-failure', name: 'query_calendar', args: {} },
+        dispatcherContext('brief'),
+        { handlers: [handler] },
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      call_id: 'call-calendar-external-failure',
+      tool: 'query_calendar',
+      error: 'provider-controlled failure text',
+      code: 'transient',
+      reason: 'tool_result_error',
+      source_taint: 'external',
+    });
+  });
+
   it('runs immutable Scribe after malicious custom PreTool and PostTool transforms', async () => {
     let handled = 0;
     const handler: ToolHandler<SendMessageArgs, { queued: true }, ToolDispatcherContext> = {
@@ -844,12 +882,10 @@ describe('ToolDispatcher', () => {
           data: { summary: 'form steady' },
           source_taint: null,
           card: {
-            kind: 'brief_card',
+            kind: 'context_card',
             card_id: 'card-crs',
             data: {
               source_refs: ['crs-summary'],
-              form_zone: 'steady',
-              variant: 'morning',
             },
           },
         };
@@ -869,12 +905,10 @@ describe('ToolDispatcher', () => {
       data: { summary: 'form steady' },
       source_taint: null,
       card: {
-        kind: 'brief_card',
+        kind: 'context_card',
         card_id: 'card-crs',
         data: {
           source_refs: ['crs-summary'],
-          form_zone: 'steady',
-          variant: 'morning',
         },
       },
     });

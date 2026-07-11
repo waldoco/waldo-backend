@@ -438,6 +438,36 @@ describe('hook registry', () => {
     });
   });
 
+  it('preserves an execute_code result envelope while truncating sandbox stdout', async () => {
+    const result = await runHooks(
+      'PostToolUse',
+      {
+        event: 'PostToolUse',
+        tool: 'execute_code',
+        result: {
+          ok: true,
+          data: { stdout: 'x'.repeat(10_241) },
+          source_taint: null,
+        },
+        latency_ms: 5,
+      },
+      runtimeCtx({ sanitise }),
+      { registry: [scribeSanitisePostToolUseHook] },
+    );
+
+    expect(result).toMatchObject({
+      event: 'PostToolUse',
+      tool: 'execute_code',
+      result: {
+        ok: true,
+        data: { stdout: expect.stringMatching(/\[truncated, full output at sandbox-output\/\{trace_id\}\]$/) },
+        source_taint: null,
+      },
+    });
+    if (result.event !== 'PostToolUse') throw new Error('expected PostToolUse payload');
+    expect(JSON.stringify(result.result).length).toBeLessThanOrEqual(10_240);
+  });
+
   it('halts PostToolUse when the Scribe sanitiser rejects tool output', async () => {
     await expect(
       runHooks(

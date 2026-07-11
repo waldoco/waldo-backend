@@ -125,8 +125,9 @@ describe('externalToolResultSchema — ADR-0049 taint stamp', () => {
     expect(externalSchema.safeParse({ ...baseOk, source_taint: 'none' }).success).toBe(false);
   });
 
-  it('accepts a coded failure without a stamp — no content, nothing to taint', () => {
-    expect(externalSchema.safeParse(baseErr).success).toBe(true);
+  it('requires an external stamp on provider-controlled failure text', () => {
+    expect(externalSchema.safeParse(baseErr).success).toBe(false);
+    expect(externalSchema.safeParse({ ...baseErr, source_taint: 'external' }).success).toBe(true);
   });
 });
 

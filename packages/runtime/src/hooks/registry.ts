@@ -858,7 +858,9 @@ async function sanitiseCandidate(
 function successfulResultTaint(value: unknown): Parsed<SourceTaint> {
   if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
-    if (record.ok !== true) return { parsed: true, data: null };
+    if (record.ok !== true && !Object.hasOwn(record, 'source_taint')) {
+      return { parsed: true, data: null };
+    }
     const parsed = sourceTaintSchema.safeParse(record.source_taint);
     return parsed.success
       ? { parsed: true, data: parsed.data }

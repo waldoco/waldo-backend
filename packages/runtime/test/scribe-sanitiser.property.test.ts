@@ -28,6 +28,11 @@ const metricArbitrary = fc.constantFrom(
 );
 const unitArbitrary = fc.constantFrom('ms', 'bpm', '%', 'mmHg', 'kg', 'minutes');
 const numericArbitrary = fc.integer({ min: 1, max: 240 });
+const categoricalHealthArbitrary = fc.constantFrom(
+  ['motion', 'active'] as const,
+  ['circadian', 'aligned'] as const,
+  ['sleep_stage', 'awake'] as const,
+);
 
 function inspect(payload: SanitiseInput['payload']) {
   return sanitise({
@@ -69,6 +74,30 @@ describe('Scribe sanitiser properties', () => {
             check: 'health_value',
             reason: 'health_value_leak',
           });
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('denies generated quoted scientific health values', () => {
+    fc.assert(
+      fc.property(
+        metricArbitrary,
+        numericArbitrary,
+        fc.integer({ min: 0, max: 6 }),
+        (metric, value, depth) => {
+          const scientific = `${value}.5e1`;
+          for (const hostile of [
+            { [metric]: scientific },
+            { metric, measurement: scientific },
+          ]) {
+            expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+              ok: false,
+              check: 'health_value',
+              reason: 'health_value_leak',
+            });
+          }
         },
       ),
       { numRuns: RUNS },
@@ -122,6 +151,60 @@ describe('Scribe sanitiser properties', () => {
           expect(
             inspect(wrapAtDepth({ count: value, item_index: Math.abs(value) }, depth)),
           ).toMatchObject({ ok: true });
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('denies generated categorical health in structured and encoded forms', () => {
+    fc.assert(
+      fc.property(
+        categoricalHealthArbitrary,
+        fc.integer({ min: 0, max: 6 }),
+        fc.constantFrom('text', 'percent', 'base64', 'unicode'),
+        ([metric, value], depth, encoding) => {
+          const text = `${metric}: ${value}`;
+          const encoded = (() => {
+            switch (encoding) {
+              case 'text':
+                return text;
+              case 'percent':
+                return encodeURIComponent(text);
+              case 'base64':
+                return btoa(text);
+              case 'unicode':
+                return unicodeEscape(text);
+            }
+          })();
+          for (const hostile of [{ [metric]: value }, encoded]) {
+            expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+              ok: false,
+              check: 'health_value',
+              reason: 'health_value_leak',
+            });
+          }
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('denies generated raw sample envelopes with health units', () => {
+    fc.assert(
+      fc.property(
+        numericArbitrary,
+        unitArbitrary,
+        fc.integer({ min: 0, max: 6 }),
+        (value, unit, depth) => {
+          const hostile = {
+            samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value, unit }],
+          };
+          expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          });
         },
       ),
       { numRuns: RUNS },

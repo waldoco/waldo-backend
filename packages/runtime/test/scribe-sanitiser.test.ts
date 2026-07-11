@@ -30,6 +30,28 @@ const VIEW: DerivedHealthDestinationView = {
   destination_eligibility: ['volatile_run'],
 };
 
+const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
+  { motion: 'active' },
+  { circadian: 'aligned' },
+  { sleep_stage: 'awake' },
+  { samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 42, unit: 'ms' }] },
+  'sleep stage: awake',
+  encodeURIComponent('motion: active'),
+  btoa('circadian: aligned'),
+  'sleep\\u0020stage\\u003a\\u0020awake',
+];
+
+const INCOMPLETE_DERIVED_HEALTH_VIEWS: SanitiseInput['payload'][] = [
+  { form_zone: 'steady' },
+  { form_zone: 'steady', destination_eligibility: ['volatile_run'] },
+  { algorithm_version: 'form.safte-fast.v1' },
+  { destination_eligibility: ['volatile_run'] },
+  { destination_eligibility: ['volatile_run', 'unknown'] },
+  { missing_components: [] },
+  { confidence_band: 'high' },
+  { provenance_refs: ['hpr_0123456789abcdef0123456789abcdef'] },
+];
+
 describe('Scribe sanitiser', () => {
   it('denies a structured raw health measurement', () => {
     expect(
@@ -40,6 +62,14 @@ describe('Scribe sanitiser', () => {
         source_taint: null,
       }),
     ).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
+  });
+
+  it.each(CATEGORICAL_AND_RAW_SERIES_HEALTH)('denies categorical and raw-series health: %j', (payload) => {
+    expect(inspect(payload)).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
   });
 
   it('denies structured health serialized inside model text', () => {
@@ -199,6 +229,7 @@ describe('Scribe sanitiser', () => {
     { glucose: 180 },
     { provider_payload: { quantity: 42, unit: 'ms' } },
     { provider_payload: { vendor: 'synthetic' } },
+    { hrv: '5.8e1' },
   ])('denies numeric health values under aliases and nested keys', (payload) => {
     expect(inspect(payload as unknown as SanitiseInput['payload'])).toEqual({
       ok: false,
@@ -213,6 +244,7 @@ describe('Scribe sanitiser', () => {
     { meta: { metric: 'hrv' }, sample: { reading: 58, unit: 'ms' } },
     { name: 'spo2', value: '96', unit: 'percent' },
     { label: 'form', amount: 72 },
+    { metric: 'hrv', measurement: '5.8e1' },
     ['heartRate', 88, 'bpm'],
   ])('denies sibling and array health correlations', (payload) => {
     expect(inspect(payload as SanitiseInput['payload'])).toMatchObject({
@@ -265,6 +297,13 @@ describe('Scribe sanitiser', () => {
     expect(
       inspect({ heart_rate_notes: 'no measurements included', year: 2026 }),
     ).toMatchObject({ ok: true });
+    expect(inspect({ unit: 'ms', note: 'timer configuration' })).toMatchObject({ ok: true });
+    expect(inspect({ context: { value: 42 }, note: 'ordinary record' })).toMatchObject({
+      ok: true,
+    });
+    expect(
+      inspect({ context: { value: 42, unit: 'ms' }, note: 'ordinary timer sample' }),
+    ).toMatchObject({ ok: true });
   });
 
   it('allows a valid nonnumeric health view only at its explicit eligible destination', () => {
@@ -307,15 +346,20 @@ describe('Scribe sanitiser', () => {
     expect(inspect({ ...VIEW }, 'send_message')).toMatchObject({ ok: false, check: 'health_value' });
   });
 
-  it.each([
-    { algorithm_version: 'ordinary.v1' },
-    { form_zone: 'green' },
-    { destination_eligibility: ['volatile_run'] },
-    { algorithm_version: 'ordinary.v1', form_zone: 'green' },
-    { algorithm_version: 'ordinary.v1', destination_eligibility: ['volatile_run'] },
-    { form_zone: 'green', destination_eligibility: ['volatile_run'] },
-  ])('does not treat incomplete derived-view markers as a complete malformed view: %j', (payload) => {
-    expect(inspect(payload, 'internal_context')).toMatchObject({ ok: true });
+  it.each(INCOMPLETE_DERIVED_HEALTH_VIEWS)('denies an incomplete derived-health view: %j', (payload) => {
+    expect(inspect(payload, 'internal_context')).toMatchObject({
+      ok: false,
+      check: 'health_value',
+    });
+  });
+
+  it('allows a generic algorithm-version field that is not a health-view marker', () => {
+    expect(
+      inspect(
+        { algorithm_version: 'ordinary.v1', destination_eligibility: ['public'] },
+        'internal_context',
+      ),
+    ).toMatchObject({ ok: true });
   });
 
   it('uses the required check precedence for payloads matching multiple policies', () => {
@@ -398,6 +442,26 @@ describe('Scribe sanitiser', () => {
     });
   });
 
+  it.each([
+    'memory_block',
+    'system_prompt',
+    'internal_context',
+    'draft_document',
+    'draft_email',
+    'send_message',
+    'sandbox_stdout',
+    'skill_body',
+    'audit_log',
+    'r2_summary',
+    'outbox',
+  ] as const)('denies ADR-0081 categorical motion at %s', (destination) => {
+    expect(inspect({ motion: 'active' }, destination)).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+  });
+
   it('redacts recursive direct PII deterministically and reports counts only', () => {
     expect(
       inspect({
@@ -444,6 +508,18 @@ describe('Scribe sanitiser', () => {
       redactions: [{ kind: 'address', count: 1 }],
     });
   });
+
+  it.each([btoa('1::1'), encodeURIComponent('1::1'), '1\\u003a\\u003a1'])(
+    'redacts compact encoded IPv6 as one address token: %s',
+    (payload) => {
+      expect(inspect(`peer=${payload}`, 'send_message')).toEqual({
+        ok: true,
+        payload: 'peer=[REDACTED_ADDRESS]',
+        source_taint: null,
+        redactions: [{ kind: 'address', count: 1 }],
+      });
+    },
+  );
 
   it.each([
     'alice%40example.com',
@@ -659,6 +735,44 @@ describe('Scribe sanitiser', () => {
       source_taint: null,
       redactions: [],
     });
+
+    const envelope = {
+      ok: true,
+      data: { stdout: 'x'.repeat(cap + 1) },
+      source_taint: null,
+    };
+    const structured = inspect(envelope, 'sandbox_stdout');
+    expect(structured).toMatchObject({
+      ok: true,
+      payload: {
+        ok: true,
+        data: { stdout: expect.stringMatching(/\[truncated, full output at sandbox-output\/\{trace_id\}\]$/) },
+        source_taint: null,
+      },
+    });
+    expect(structured.ok && JSON.stringify(structured.payload).length).toBe(cap);
+
+    const topLevel = inspect({ stdout: 'x'.repeat(cap + 1) }, 'sandbox_stdout');
+    expect(topLevel).toMatchObject({
+      ok: true,
+      payload: {
+        stdout: expect.stringMatching(/\[truncated, full output at sandbox-output\/\{trace_id\}\]$/),
+      },
+    });
+    expect(topLevel.ok && JSON.stringify(topLevel.payload).length).toBe(cap);
+
+    const withoutSandboxStdout: SanitiseInput['payload'][] = [
+      { text: 'x'.repeat(cap) },
+      { data: { text: 'x'.repeat(cap) } },
+    ];
+    for (const withoutStdout of withoutSandboxStdout) {
+      expect(() => inspect(withoutStdout, 'sandbox_stdout')).not.toThrow();
+      expect(inspect(withoutStdout, 'sandbox_stdout')).toEqual({
+        ok: false,
+        check: 'size_cap',
+        reason: 'oversize',
+      });
+    }
   });
 
   it('allows each destination cap exactly and rejects the next value', () => {

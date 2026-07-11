@@ -748,6 +748,64 @@ describe('RunLoopDO full contract FSM', () => {
     expect(persisted.outbox).toEqual([]);
   });
 
+  it.each([
+    ['canary', 'prefix aaaaaaaaaaaaaaaa suffix', 'aaaaaaaaaaaaaaaa'],
+    ['secret', 'Bearer abcdefghijklmnopqrstuvwxyz012345', 'abcdefghijklmnopqrstuvwxyz012345'],
+  ] as const)(
+    'denies hostile provider %s output without checkpoint, trace, replay, outbox, or sink residue',
+    async (label, hostileOutput, forbiddenNeedle) => {
+      const stub = freshStub();
+      const dueAt = soon();
+      const gateway = new ScriptedRunLoopGateway((request) =>
+        response(request.request.model, hostileOutput),
+      );
+
+      const runId = await stub.scheduleFakeRun({
+        scheduleId: `brief:scribe-${label}-denial`,
+        userId: `${USER}-scribe-${label}-denial`,
+        dueAt,
+        occurrenceAt: dueAt,
+      });
+      await runInDurableObject(stub, (instance) => {
+        (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
+      });
+
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+
+      const proof = await stub.readRunProof(runId);
+      const replay = await stub.replayFixture(runId);
+      expect(proof.current.state).toBe('FAILED');
+      expect(proof.outbox).toEqual([]);
+      expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
+      expect(gateway.requests).toHaveLength(1);
+
+      const persisted = await runInDurableObject(stub, (_instance, state) => ({
+        runs: state.storage.sql
+          .exec<{
+            context_json: string | null;
+            scratch_json: string | null;
+            failure_reason: string | null;
+          }>(
+            'SELECT context_json, scratch_json, failure_reason FROM runtime_runs WHERE run_id = ?',
+            runId,
+          )
+          .toArray(),
+        trace: state.storage.sql
+          .exec<{ detail_json: string }>(
+            'SELECT detail_json FROM runtime_trace WHERE run_id = ? ORDER BY seq',
+            runId,
+          )
+          .toArray(),
+        outbox: state.storage.sql
+          .exec<{ payload: string }>('SELECT payload FROM outbox WHERE run_id = ?', runId)
+          .toArray(),
+      }));
+      const serialized = JSON.stringify({ proof, replay, persisted }).toLowerCase();
+      expect(serialized).not.toContain(forbiddenNeedle.toLowerCase());
+      expect(persisted.outbox).toEqual([]);
+    },
+  );
+
   it('scrubs a hostile resumed delivery before gate, outbox, replay, or sink', async () => {
     const stub = freshStub();
     const dueAt = soon();
