@@ -20,6 +20,7 @@ import { z } from 'zod';
 import { errorCodeSchema } from '../core/error';
 import { triggerTypeSchema } from '../core/trigger';
 import {
+  EXTERNAL_ORIGIN_TOOLS,
   externalToolResultSchema,
   GENERAL_AGENT_TOOLS,
   handlerAllowlistMatchesAcl,
@@ -232,6 +233,20 @@ describe('taint gate — hostile path (ADR-0049)', () => {
 describe('general-agent tools — gate coupling (ADR-0049)', () => {
   it('is exactly the three tools that ship only with the taint gate', () => {
     expect(GENERAL_AGENT_TOOLS).toEqual(['web_search', 'read_document', 'call_mcp_tool']);
+  });
+});
+
+describe('external-origin tool classification — ADR-0049', () => {
+  it('covers every connector, calendar, communication, task, web, document, and MCP result', () => {
+    expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
+      'query_calendar',
+      'get_communication',
+      'get_tasks',
+      'web_search',
+      'read_document',
+      'call_mcp_tool',
+      'search_connector',
+    ]);
   });
 });
 

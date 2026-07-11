@@ -25,6 +25,12 @@ describe('medical claim gate', () => {
     'Take sertraline now.',
     'Start insulin today.',
     'Stop warfarin immediately.',
+    'This is a symptom of pneumonia.',
+    'Your HRV indicates cardiovascular disease.',
+    'You should see a cardiologist because your recovery looks unusual.',
+    'Based on your data, you could be at risk for stroke.',
+    'Take 20 milligrams of melatonin tonight.',
+    'Double your insulin tonight.',
   ])('denies immutable medical claims and direct treatment instructions: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: false, reason: 'medical_claim' });
   });

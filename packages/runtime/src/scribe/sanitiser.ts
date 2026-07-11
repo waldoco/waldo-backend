@@ -7,6 +7,7 @@ import {
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
   SANITISE_DESTINATION_POLICIES,
+  TRUNCATION_MARKER,
   sanitiseInputSchema,
   type Redaction,
   type RedactionKind,
@@ -47,12 +48,13 @@ const REDACTION_ORDER: readonly RedactionKind[] = [
   'instruction_pattern',
 ];
 
-const HEALTH_KEY = /(?:^|[^a-z0-9])(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)(?:[^a-z0-9]|$)/i;
-const HEALTH_KEY_COMPACT = /^(?:hrv(?:ms)?|heartratevariability(?:ms)?|restingheartrate(?:bpm)?|heartrate(?:bpm)?|pulse(?:bpm)?|spo2|oxygensaturation(?:percent|pct)?|bloodoxygen(?:percent|pct)?|systolic(?:mmhg)?|diastolic(?:mmhg)?|bloodpressure|bp|bodyweight(?:kg|lb|lbs)?|bodymass(?:kg|lb|lbs)?|weight(?:kg|lb|lbs)?|calorieburn(?:kcal)?|caloriesburned(?:kcal)?|activeenergy(?:kcal)?|sleep(?:hours|duration|minutes|mins)?|remsleep(?:minutes|mins)?|deepsleep(?:minutes|mins)?|crs|form(?:score)?|recovery(?:score)?|load(?:score)?)$/i;
-const HEALTH_INDICATOR_VALUE = /^(?:hrv|heart rate(?: variability)?|resting heart rate|pulse|spo2|oxygen saturation|blood oxygen|systolic|diastolic|blood pressure|bp|body weight|body mass|weight|sleep|rem sleep|deep sleep|active energy|calorie burn|crs|form|recovery|load)$/i;
+const HEALTH_KEY = /(?:^|[^a-z0-9])(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass|temperature)|weight|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|steps|step[\s_-]*count|motion|circadian|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?|efficiency|stages?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)(?:[^a-z0-9]|$)/i;
+const HEALTH_KEY_COMPACT = /^(?:hrv(?:ms)?|heartratevariability(?:ms)?|restingheartrate(?:bpm)?|heartrate(?:bpm)?|pulse(?:bpm)?|spo2|oxygensaturation(?:percent|pct)?|bloodoxygen(?:percent|pct)?|systolic(?:mmhg)?|diastolic(?:mmhg)?|bloodpressure|bp|bodyweight(?:kg|lb|lbs)?|bodymass(?:kg|lb|lbs)?|weight(?:kg|lb|lbs)?|bodytemperature|respiratoryrate|breathingrate|bloodglucose|glucose|steps|stepcount|motion|circadian|calorieburn(?:kcal)?|caloriesburned(?:kcal)?|activeenergy(?:kcal)?|sleep(?:hours|duration|minutes|mins|efficiency|stages?)?|remsleep(?:minutes|mins)?|deepsleep(?:minutes|mins)?|providerpayload|healthpayload|rawpayload|crs|form(?:score)?|recovery(?:score)?|load(?:score)?)$/i;
+const HEALTH_INDICATOR_VALUE = /^(?:hrv|heart rate(?: variability)?|resting heart rate|pulse|spo2|oxygen saturation|blood oxygen|systolic|diastolic|blood pressure|bp|body weight|body mass|weight|body temperature|respiratory rate|breathing rate|blood glucose|glucose|steps|step count|motion|circadian|sleep|sleep efficiency|sleep stage|sleep stages|rem sleep|deep sleep|active energy|calorie burn|provider payload|health payload|raw payload|crs|form|recovery|load)$/i;
 const NUMERIC_VALUE = /^\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*$/;
-const HEALTH_MEASUREMENT_KEY = /^(?:measurement|value|reading|amount|score|sample)$/i;
-const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)$/i;
+const HEALTH_MEASUREMENT_KEY = /^(?:measurement|value|reading|amount|score|sample|quantity|duration|minutes?|mins?)$/i;
+const FORBIDDEN_HEALTH_PAYLOAD_KEY = /^(?:provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload|sleep[\s_-]*stages?)$/i;
+const HEALTH_UNIT_VALUE = /^(?:ms|bpm|beats|breaths?(?: per minute)?|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?|celsius|fahrenheit|mg\/dl|mmol\/l)$/i;
 const HEALTH_FREE_TEXT: readonly RegExp[] = [
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|blood[\s_-]*pressure|bp|body[\s_-]*(?:weight|mass)|weight|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy|sleep(?:[\s_-]*(?:hours?|duration|minutes?|mins?))?|rem[\s_-]*sleep|deep[\s_-]*sleep|crs|form(?:[\s_-]*score)?|recovery(?:[\s_-]*score)?|load(?:[\s_-]*score)?)\b\s*,\s*["']?-?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?["']?\s*,\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|hours?|hrs?|minutes?|mins?)(?=$|[^a-z0-9])/i,
   /\b(?:hrv|heart[\s_-]*rate(?:[\s_-]*variability)?|resting[\s_-]*heart[\s_-]*rate|pulse|spo2|oxygen[\s_-]*saturation|blood[\s_-]*oxygen|systolic|diastolic|body[\s_-]*(?:weight|mass)|calorie[\s_-]*burn|calories[\s_-]*burned|active[\s_-]*energy)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:ms|bpm|beats|percent|pct|%|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories)?(?=$|[^a-z0-9])/i,
@@ -60,6 +62,7 @@ const HEALTH_FREE_TEXT: readonly RegExp[] = [
   /\b(?:blood[\s_-]*pressure|bp)\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*mmhg\b/i,
   /\b(?:sleep|slept|rem[\s_-]*sleep|deep[\s_-]*sleep|time[\s_-]*asleep)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i,
   /\b(?:crs|form|recovery|load)(?:[\s_-]*score)?\b(?:\s+\w+){0,2}?\s*[:=,]?\s*["']?\d{1,3}\b/i,
+  /\b(?:steps|step[\s_-]*count|motion|circadian|sleep[\s_-]*efficiency|sleep[\s_-]*stages?|body[\s_-]*temperature|respiratory[\s_-]*rate|breathing[\s_-]*rate|blood[\s_-]*glucose|glucose|provider[\s_-]*payload|health[\s_-]*payload|raw[\s_-]*payload)\b(?:\s+\w+){0,3}?\s*[:=,]?\s*["']?\d+(?:\.\d+)?(?:\s*\/\s*\d+(?:\.\d+)?)?\s*(?:steps|percent|pct|%|minutes?|mins?|celsius|fahrenheit|breaths?(?:\s+per\s+minute)?|mg\/dl|mmol\/l)?(?=$|[^a-z0-9])/i,
 ];
 
 const SECRET_PATTERNS: readonly RegExp[] = [
@@ -368,6 +371,13 @@ function subtreeHealthFlags(
         ? { indicator: false, measurement: false, numeric: false, unit: false }
         : { indicator: true, measurement: true, numeric: true, unit: false };
     }
+    if (
+      Object.hasOwn(value, 'algorithm_version') &&
+      Object.hasOwn(value, 'form_zone') &&
+      Object.hasOwn(value, 'destination_eligibility')
+    ) {
+      return { indicator: true, measurement: true, numeric: false, unit: false };
+    }
   }
 
   let indicator = false;
@@ -390,7 +400,9 @@ function subtreeHealthFlags(
       const child = subtreeHealthFlags(item, destination);
       indicator ||= child.indicator;
       measurement ||=
-        child.measurement || ((healthKey || HEALTH_MEASUREMENT_KEY.test(key)) && child.numeric);
+        FORBIDDEN_HEALTH_PAYLOAD_KEY.test(key) ||
+        child.measurement ||
+        ((healthKey || HEALTH_MEASUREMENT_KEY.test(key)) && child.numeric);
       numeric ||= child.numeric;
       unit ||= child.unit;
     }
@@ -487,6 +499,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
     if (matches(PII_PATTERNS.cc, view)) return 'credit_card';
     if (matches(PII_PATTERNS.phone, view)) return 'phone';
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
+    if (matches(PII_PATTERNS.ipv6, view)) return 'address';
   }
   return undefined;
 }
@@ -529,6 +542,7 @@ function redactPiiText(
   output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
   output = replaceAndCount(output, PHONE_PATTERN, '[REDACTED_PHONE]', 'phone', counts);
   output = replaceAndCount(output, PII_PATTERNS.ipv4, '[REDACTED_ADDRESS]', 'address', counts);
+  output = replaceAndCount(output, PII_PATTERNS.ipv6, '[REDACTED_ADDRESS]', 'address', counts);
   output = replaceAndCount(output, ADDRESS_PATTERN, '[REDACTED_ADDRESS]', 'address', counts);
 
   if (key !== undefined && ATTENDEE_KEY.test(key) && PERSON_NAME.test(output)) {
@@ -664,7 +678,13 @@ function applyDestinationPolicy(
   }
 
   const serialized = isText ? payload : JSON.stringify(payload);
-  if (serialized.length > policy.max_chars) return deny('size_cap', 'oversize');
+  let boundedPayload = payload;
+  if (serialized.length > policy.max_chars) {
+    if (input.destination !== 'sandbox_stdout' || !isText) {
+      return deny('size_cap', 'oversize');
+    }
+    boundedPayload = `${payload.slice(0, policy.max_chars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+  }
   if (isStructured) {
     const pending: Array<{ value: JsonValue; depth: number }> = [{ value: payload, depth: 1 }];
     while (pending.length > 0) {
@@ -694,7 +714,7 @@ function applyDestinationPolicy(
 
   return {
     ok: true,
-    payload,
+    payload: boundedPayload,
     source_taint: input.source_taint,
     redactions,
   };

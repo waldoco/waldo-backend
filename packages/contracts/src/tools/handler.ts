@@ -52,6 +52,19 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
   'call_mcp_tool',
 ];
 
+// External-origin result classification is broader than the general-agent discovery cluster:
+// calendar, communication, task, and connector reads also carry provider-controlled text. Keeping
+// the complete set here makes a null taint stamp unrepresentable at the dispatcher boundary.
+export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
+  'query_calendar',
+  'get_communication',
+  'get_tasks',
+  'web_search',
+  'read_document',
+  'call_mcp_tool',
+  'search_connector',
+];
+
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
 // superset the taint gate blocks, in tool-union order: the memory/Scribe write, execute_action,
 // external send_message, the MCP write bridge, the copilot writes, and every message/thread

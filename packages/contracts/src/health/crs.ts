@@ -56,7 +56,7 @@ export const derivedHealthDestinationViewSchema = z.strictObject({
   freshness: z.enum(['fresh', 'stale']),
   missing_components: z.array(crsPillarSchema),
   confidence_band: z.enum(['high', 'medium', 'low']),
-  provenance_refs: z.array(opaqueHealthProvenanceRefSchema).max(4),
+  provenance_refs: z.array(opaqueHealthProvenanceRefSchema).min(1).max(4),
   destination_eligibility: z.array(derivedHealthDestinationEligibilitySchema).min(1),
 });
 export type DerivedHealthDestinationView = z.infer<typeof derivedHealthDestinationViewSchema>;

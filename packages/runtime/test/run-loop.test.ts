@@ -153,34 +153,61 @@ class ScriptedRunLoopGateway implements LLMGatewayAdapter {
 }
 
 describe('RunLoopDO full contract FSM', () => {
-  it('replaces denied trace detail with content-free Scribe evidence', async () => {
+  it.each([
+    ['default candidate event id', { scheduleId: 'brief:hrv:58' }],
+    [
+      'explicit candidate event id',
+      {
+        candidate: {
+          push_class: 'brief',
+          trigger: 'brief',
+          event_id: 'event:hrv:58',
+          expires_at: null,
+        } satisfies DeliveryCandidate,
+      },
+    ],
+    ['user id', { userId: `${USER}-hrv:58` }],
+  ] as const)('rejects an unsafe %s before any run persistence', async (_case, unsafe) => {
     const stub = freshStub();
     const dueAt = soon();
-    const runId = await stub.scheduleFakeRun({
-      scheduleId: 'brief:hrv:58',
-      userId: `${USER}-trace-scribe`,
+    const before = await persistedRunRowCounts(stub);
+    const input = {
+      scheduleId: 'brief:safe-ingress',
+      userId: `${USER}-safe-ingress`,
       dueAt,
       occurrenceAt: dueAt,
-    });
+      ...unsafe,
+    };
 
-    const proof = await stub.readRunProof(runId);
-    expect(proof.trace).toEqual([
-      {
-        event: 'scribe_denied',
-        detail: { destination: 'audit_log', reason: 'health_value_leak' },
-      },
-    ]);
-    const persistedTrace = await runInDurableObject(stub, (_instance, state) =>
-      state.storage.sql
-        .exec<{ event: string; detail_json: string }>(
-          'SELECT event, detail_json FROM runtime_trace WHERE run_id = ?',
-          runId,
-        )
-        .one(),
-    );
-    expect(JSON.stringify(persistedTrace).toLowerCase()).not.toContain('hrv');
-    expect(JSON.stringify(persistedTrace)).not.toContain('58');
+    await expect(
+      runInDurableObject(stub, (instance) =>
+        (instance as unknown as { scheduleFakeRun: RunLoopStub['scheduleFakeRun'] }).scheduleFakeRun(
+          input,
+        ),
+      ),
+    ).rejects.toThrow('scribe:health_value_leak');
+
+    expect(await persistedRunRowCounts(stub)).toEqual(before);
   });
+
+  async function persistedRunRowCounts(stub: RunLoopStub): Promise<Record<string, number>> {
+    return runInDurableObject(stub, (_instance, state) => {
+      const count = (table: string): number =>
+        state.storage.sql
+          .exec<RuntimeRunCountRow>(`SELECT COUNT(*) AS n FROM ${table}`)
+          .one().n;
+
+      return {
+        journal: count('journal'),
+        loop_governor_runs: count('loop_governor_runs'),
+        run_candidates: count('run_candidates'),
+        runtime_runs: count('runtime_runs'),
+        runtime_journal: count('runtime_journal'),
+        runtime_trace: count('runtime_trace'),
+        schedule: count('schedule'),
+      };
+    });
+  }
 
   it('walks a scheduled fake-backed run through the full FSM with trace and delivery proof', async () => {
     const stub = freshStub();

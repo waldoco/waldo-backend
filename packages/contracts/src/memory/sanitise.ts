@@ -227,7 +227,7 @@ const KV = String.raw`${QUOTE}\s*[:=\s]\s*${QUOTE}\s*`;
 // colon/equals key carrying a number) is a health value even without a unit; bare-whitespace prose is not.
 const KV_KEY = String.raw`${QUOTE}\s*[:=]\s*${QUOTE}\s*`;
 // Units that also appear glued to a key as a suffix (hrv_ms, weight_kg, systolicMmHg, oxygen…Percent).
-const UNIT = String.raw`ms|millisec|bpm|beats|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?`;
+const UNIT = String.raw`ms|millisec|bpm|beats|breaths?(?:[\s_-]*per[\s_-]*minute)?|mmhg|kg|kgs|lb|lbs|pounds?|kcal|cal|calories|percent|pct|%|hours?|hrs?|mins?|minutes?|celsius|fahrenheit|mg(?:\/|[\s_-]*per[\s_-]*)dl|mmol(?:\/|[\s_-]*per[\s_-]*)l`;
 
 // SPECIFIC token: `\b(?:token)` anchors the WHOLE (possibly multi-word / snake_case) token so an
 // underscore inside `body_weight` cannot defeat it; an optional glued unit suffix follows, then the
@@ -268,6 +268,9 @@ export const RAW_SENSOR_PATTERNS: readonly RegExp[] = [
   specific(String.raw`systolic|diastolic|body[\s_-]?weight|body[\s_-]?mass`),
   specific(String.raw`calorie[\s_-]?burn|calories[\s_-]?burned|active[\s_-]?energy`),
   specific(String.raw`sleep[\s_-]?(?:hours?|duration|mins?|minutes?)`),
+  specific(
+    String.raw`steps|step[\s_-]?count|motion|circadian|sleep[\s_-]?efficiency|sleep[\s_-]?stages?|body[\s_-]?temperature|respiratory[\s_-]?rate|breathing[\s_-]?rate|blood[\s_-]?glucose|glucose|provider[\s_-]?payload|health[\s_-]?payload|raw[\s_-]?payload`,
+  ),
   // Blood pressure reads as a ratio (140/90) or a number with an mmHg unit; a bare `bp` plus an
   // integer (finance basis points) must not match, so `bp` alone requires the ratio or the unit.
   new RegExp(
@@ -328,12 +331,13 @@ export const PII_PATTERNS = {
   phone: /\b(\+?1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g,
   cc: /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,
   ipv4: /\b(?:\d{1,3}\.){3}\d{1,3}\b/g,
+  ipv6: /(?<![0-9a-f:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?:(?::[0-9a-f]{1,4}){1,6})|:(?:(?::[0-9a-f]{1,4}){1,7}|:))(?![0-9a-f:])/gi,
 } as const;
 
 // Check 4 — memory and skill bodies are content, not instructions (ADR-0024). The
 // you-are-now pattern excludes Waldo naming itself.
 export const INSTRUCTION_PATTERNS: readonly RegExp[] = [
-  /ignore\s+(previous|all|prior)\s+(instruction|prompt|message)/i,
+  /ignore\s+(?:(?:all|any)\s+)?(?:previous|prior|all)\s+(?:instructions?|prompts?|messages?)/i,
   /you\s+are\s+(now|actually)\s+(?!waldo)/i,
   /system\s*[:\s]+/i,
   /assistant\s*[:\s]+/i,

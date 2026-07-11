@@ -159,6 +159,42 @@ type StrictSchema<T> = {
   safeParse(value: unknown): { success: true; data: T } | { success: false };
 };
 
+type ScheduleFakeRunIngress = {
+  schedule_id: string;
+  user_id: string;
+  candidate: DeliveryCandidate;
+};
+
+const scheduleFakeRunIngressSchema: StrictSchema<ScheduleFakeRunIngress> = {
+  safeParse(value) {
+    if (!isRecord(value)) return { success: false };
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== 3 ||
+      !Object.prototype.hasOwnProperty.call(value, 'schedule_id') ||
+      !Object.prototype.hasOwnProperty.call(value, 'user_id') ||
+      !Object.prototype.hasOwnProperty.call(value, 'candidate') ||
+      typeof value.schedule_id !== 'string' ||
+      value.schedule_id.length === 0 ||
+      typeof value.user_id !== 'string' ||
+      value.user_id.length === 0
+    ) {
+      return { success: false };
+    }
+    const candidate = deliveryCandidateSchema.safeParse(value.candidate);
+    return candidate.success
+      ? {
+          success: true,
+          data: {
+            schedule_id: value.schedule_id,
+            user_id: value.user_id,
+            candidate: candidate.data,
+          },
+        }
+      : { success: false };
+  },
+};
+
 const deliveryTextSchema: StrictSchema<string> = {
   safeParse(value) {
     return typeof value === 'string' && value.length >= 1 && value.length <= 4_096
@@ -340,32 +376,6 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   async scheduleFakeRun(input: ScheduleFakeRunInput): Promise<string> {
     const parsed = parseScheduleFakeRunInput(input);
-    const decision = triage({
-      kind: 'alarm',
-      alarmName: parsed.scheduleId,
-      scheduleKind: TRIGGER,
-    });
-    if (!decision.ok || decision.trigger !== TRIGGER) {
-      throw new Error('run-loop schedule requires a brief alarm');
-    }
-    const runNonce = await this.scheduledRunNonce({
-      userId: parsed.userId,
-      variant: decision.variant ?? null,
-      scheduleId: parsed.scheduleId,
-      occurrenceAt: parsed.occurrenceAt,
-    });
-    const existingRunId = this.findRuntimeRunByIdentity(parsed.userId, runNonce);
-    if (existingRunId !== null) {
-      await this.scheduler.schedule({
-        id: parsed.scheduleId,
-        kind: TRIGGER,
-        occurrenceAt: parsed.occurrenceAt,
-        dueAt: parsed.dueAt,
-        payloadRefs: { id: parsed.scheduleId, run_id: existingRunId, user_id: parsed.userId },
-      });
-      return existingRunId;
-    }
-
     const candidate =
       parsed.candidate ??
       ({
@@ -374,30 +384,75 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
         event_id: parsed.scheduleId,
         expires_at: null,
       } satisfies DeliveryCandidate);
+    const ingress = prepareWithScribe(
+      {
+        schedule_id: parsed.scheduleId,
+        user_id: parsed.userId,
+        candidate,
+      },
+      scheduleFakeRunIngressSchema,
+      'internal_context',
+      null,
+    );
+    if (!ingress.ok) throw new Error(`scribe:${ingress.reason}`);
+
+    const decision = triage({
+      kind: 'alarm',
+      alarmName: ingress.value.schedule_id,
+      scheduleKind: TRIGGER,
+    });
+    if (!decision.ok || decision.trigger !== TRIGGER) {
+      throw new Error('run-loop schedule requires a brief alarm');
+    }
+    const runNonce = await this.scheduledRunNonce({
+      userId: ingress.value.user_id,
+      variant: decision.variant ?? null,
+      scheduleId: ingress.value.schedule_id,
+      occurrenceAt: parsed.occurrenceAt,
+    });
+    const existingRunId = this.findRuntimeRunByIdentity(ingress.value.user_id, runNonce);
+    if (existingRunId !== null) {
+      await this.scheduler.schedule({
+        id: ingress.value.schedule_id,
+        kind: TRIGGER,
+        occurrenceAt: parsed.occurrenceAt,
+        dueAt: parsed.dueAt,
+        payloadRefs: {
+          id: ingress.value.schedule_id,
+          run_id: existingRunId,
+          user_id: ingress.value.user_id,
+        },
+      });
+      return existingRunId;
+    }
 
     const runId = this.journalOutbox.startRun({
-      userId: parsed.userId,
+      userId: ingress.value.user_id,
       trigger: TRIGGER,
       occurrenceAt: parsed.occurrenceAt,
       occurrenceId: runNonce,
-      candidate,
+      candidate: ingress.value.candidate,
     });
 
     this.openRuntimeRun({
       runId,
-      userId: parsed.userId,
+      userId: ingress.value.user_id,
       variant: decision.variant ?? null,
       runNonce,
-      scheduleId: parsed.scheduleId,
+      scheduleId: ingress.value.schedule_id,
       occurrenceAt: parsed.occurrenceAt,
     });
 
     await this.scheduler.schedule({
-      id: parsed.scheduleId,
+      id: ingress.value.schedule_id,
       kind: TRIGGER,
       occurrenceAt: parsed.occurrenceAt,
       dueAt: parsed.dueAt,
-      payloadRefs: { id: parsed.scheduleId, run_id: runId, user_id: parsed.userId },
+      payloadRefs: {
+        id: ingress.value.schedule_id,
+        run_id: runId,
+        user_id: ingress.value.user_id,
+      },
     });
 
     return runId;
@@ -1478,7 +1533,17 @@ function triggerAllowlistFor(tool: ToolName): TriggerType[] {
 
 function toolContext(ctx: HookRuntimeContext): ToolDispatcherContext {
   if (ctx.session === undefined) throw new Error('tool dispatch requires a session');
-  return { ...ctx, session: ctx.session };
+  if (
+    typeof ctx.authenticatedUserId !== 'string' ||
+    ctx.authenticatedUserId.trim().length === 0
+  ) {
+    throw new Error('tool dispatch requires an authenticated subject');
+  }
+  return {
+    ...ctx,
+    authenticatedUserId: ctx.authenticatedUserId,
+    session: ctx.session,
+  };
 }
 
 function checkpointCallFailure(

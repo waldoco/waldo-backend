@@ -1,7 +1,7 @@
 import {
   TOOL_PERMISSIONS,
   ALWAYS_ON_TOOLS,
-  GENERAL_AGENT_TOOLS,
+  EXTERNAL_ORIGIN_TOOLS,
   LAZY_DISCOVERY_TRIGGERS,
   errorCodeSchema,
   handlerAllowlistMatchesAcl,
@@ -46,6 +46,7 @@ export type ParseToolCallsResult =
   | FailedToolCallParse;
 
 export type ToolDispatcherContext = HookRuntimeContext & {
+  authenticatedUserId: string;
   session: SessionState;
 };
 
@@ -133,6 +134,19 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   const tool = toolNameSchema.safeParse(call.name);
   if (!tool.success) {
     return failDispatch(call.id, null, 'unknown tool', 'invalid_args', 'unknown_tool');
+  }
+
+  if (
+    typeof ctx.authenticatedUserId !== 'string' ||
+    ctx.authenticatedUserId.trim().length === 0
+  ) {
+    return failDispatch(
+      call.id,
+      tool.data,
+      'tool authentication failed',
+      'auth_failed',
+      'hook_halt',
+    );
   }
 
   if (!sessionToolAllowed(ctx.session, tool.data)) {
@@ -588,7 +602,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
     }
     const sourceTaint = sourceTaintSchema.safeParse(value.source_taint);
     if (!sourceTaint.success) return null;
-    const expectsExternal = GENERAL_AGENT_TOOLS.includes(tool);
+    const expectsExternal = EXTERNAL_ORIGIN_TOOLS.includes(tool);
     if (expectsExternal !== (sourceTaint.data === 'external')) return null;
     if (!Object.prototype.hasOwnProperty.call(value, 'card')) {
       return { ok: true, data: value.data, source_taint: sourceTaint.data };

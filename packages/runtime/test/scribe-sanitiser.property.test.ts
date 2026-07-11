@@ -16,6 +16,15 @@ const metricArbitrary = fc.constantFrom(
   'sleep_minutes',
   'crs',
   'recovery_score',
+  'steps',
+  'motion',
+  'circadian',
+  'sleep_stage',
+  'sleep_efficiency',
+  'body_temperature',
+  'respiratory_rate',
+  'glucose',
+  'provider_payload',
 );
 const unitArbitrary = fc.constantFrom('ms', 'bpm', '%', 'mmHg', 'kg', 'minutes');
 const numericArbitrary = fc.integer({ min: 1, max: 240 });

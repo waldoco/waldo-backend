@@ -525,7 +525,7 @@ describe('RuntimeLLMProvider', () => {
             messages: [
               {
                 role: 'user',
-                content: JSON.stringify({ context: { metrics: { hrv: 41 } } }),
+                content: JSON.stringify({ context: { steps: 12345 } }),
               },
             ],
           },
@@ -692,6 +692,35 @@ describe('RuntimeLLMProvider', () => {
     });
   });
 
+  it('rejects an immutable medical claim returned by the gateway', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model, 'This is a symptom of pneumonia.'),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'safe prompt' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'hook_halt',
+      code: 'forbidden',
+    });
+    expect(gateway.requests).toHaveLength(1);
+  });
+
   it.each([
     ['route exhaustion', undefined],
     ['spend cap', { spent_cents_today: 70, cap_cents: 70 }],
@@ -749,7 +778,7 @@ describe('RuntimeLLMProvider', () => {
             temperature: 0.3,
           };
         },
-        renderTemplate: () => 'You may have hypertension.',
+        renderTemplate: () => 'This is a symptom of pneumonia.',
       },
       runtimeCtx(),
     );

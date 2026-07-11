@@ -82,6 +82,12 @@ describe('derived health destination view', () => {
     expect(
       derivedHealthDestinationViewSchema.safeParse({
         ...baseDestinationView,
+        provenance_refs: [],
+      }).success,
+    ).toBe(false);
+    expect(
+      derivedHealthDestinationViewSchema.safeParse({
+        ...baseDestinationView,
         provenance_refs: Array.from(
           { length: 5 },
           (_, index) => `hpr_${index.toString(16).padStart(32, '0')}`,

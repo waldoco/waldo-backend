@@ -4,6 +4,7 @@ import {
   executeActionArgsSchema,
   executeCodeArgsSchema,
   getCrsArgsSchema,
+  queryCalendarArgsSchema,
   sendMessageArgsSchema,
   webSearchArgsSchema,
   writeTaskArgsSchema,
@@ -11,6 +12,7 @@ import {
   type ExecuteCodeArgs,
   type GetCrsArgs,
   type HookHandler,
+  type QueryCalendarArgs,
   type SendMessageArgs,
   type WebSearchArgs,
   type ToolHandler,
@@ -38,6 +40,7 @@ function triggerAllowlistFor(tool: ToolName): TriggerType[] {
 
 function dispatcherContext(trigger: TriggerType): ToolDispatcherContext {
   return {
+    authenticatedUserId: 'user-1',
     trigger,
     session: buildSessionState({
       trigger,
@@ -52,6 +55,67 @@ function dispatcherContext(trigger: TriggerType): ToolDispatcherContext {
 }
 
 describe('ToolDispatcher', () => {
+  it('denies a missing, null, empty, or blank authenticated subject before handler execution', async () => {
+    let handled = 0;
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived summary.',
+      schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      async handle() {
+        handled += 1;
+        return { ok: true, data: { summary: 'steady' }, source_taint: null };
+      },
+    };
+    for (const [label, authenticatedUserId] of [
+      ['missing', undefined],
+      ['null', null],
+      ['empty', ''],
+      ['blank', '   '],
+    ] as const) {
+      await expect(
+        dispatchTool(
+          { id: `call-${label}-subject`, name: 'get_crs', args: {} },
+          { ...dispatcherContext('brief'), authenticatedUserId } as ToolDispatcherContext,
+          { handlers: [handler] },
+        ),
+      ).resolves.toEqual({
+        ok: false,
+        call_id: `call-${label}-subject`,
+        tool: 'get_crs',
+        error: 'tool authentication failed',
+        code: 'auth_failed',
+        reason: 'hook_halt',
+      });
+    }
+    expect(handled).toBe(0);
+  });
+
+  it('passes the authenticated subject to the handler context', async () => {
+    let observedSubject: string | undefined;
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived summary.',
+      schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      async handle(_args, ctx) {
+        observedSubject = ctx.authenticatedUserId;
+        return { ok: true, data: { summary: 'steady' }, source_taint: null };
+      },
+    };
+
+    await expect(
+      dispatchTool(
+        { id: 'call-authenticated-subject', name: 'get_crs', args: {} },
+        dispatcherContext('brief'),
+        { handlers: [handler] },
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(observedSubject).toBe('user-1');
+  });
+
   it('denies nested health in send-message args before handler execution', async () => {
     let handled = 0;
     const handler: ToolHandler<
@@ -177,6 +241,76 @@ describe('ToolDispatcher', () => {
       call_id: 'call-external-taint',
       tool: 'web_search',
       data: { hits: ['safe result'] },
+      source_taint: 'external',
+    });
+  });
+
+  it('rejects missing and null taint stamps from calendar results before returning them', async () => {
+    for (const source_taint of [undefined, null] as const) {
+      const handler: ToolHandler<
+        QueryCalendarArgs,
+        { events: string[] },
+        ToolDispatcherContext
+      > = {
+        name: 'query_calendar',
+        description: 'Read external calendar events.',
+        schema: queryCalendarArgsSchema,
+        trigger_allowlist: triggerAllowlistFor('query_calendar'),
+        autonomy_gated: false,
+        async handle() {
+          return {
+            ok: true,
+            data: { events: ['synthetic event'] },
+            source_taint,
+          } as never;
+        },
+      };
+
+      await expect(
+        dispatchTool(
+          {
+            id: `call-calendar-${String(source_taint)}-taint`,
+            name: 'query_calendar',
+            args: {},
+          },
+          dispatcherContext('brief'),
+          { handlers: [handler] },
+        ),
+      ).resolves.toMatchObject({ ok: false, reason: 'invalid_handler_result' });
+    }
+  });
+
+  it('preserves an external taint stamp from a calendar result', async () => {
+    const handler: ToolHandler<
+      QueryCalendarArgs,
+      { events: string[] },
+      ToolDispatcherContext
+    > = {
+      name: 'query_calendar',
+      description: 'Read external calendar events.',
+      schema: queryCalendarArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('query_calendar'),
+      autonomy_gated: false,
+      async handle() {
+        return {
+          ok: true,
+          data: { events: ['synthetic event'] },
+          source_taint: 'external',
+        };
+      },
+    };
+
+    await expect(
+      dispatchTool(
+        { id: 'call-calendar-external-taint', name: 'query_calendar', args: {} },
+        dispatcherContext('brief'),
+        { handlers: [handler] },
+      ),
+    ).resolves.toEqual({
+      ok: true,
+      call_id: 'call-calendar-external-taint',
+      tool: 'query_calendar',
+      data: { events: ['synthetic event'] },
       source_taint: 'external',
     });
   });
