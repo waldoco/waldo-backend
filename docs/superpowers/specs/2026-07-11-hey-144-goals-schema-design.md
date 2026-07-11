@@ -72,17 +72,17 @@ or other-owner rows never become active-goal output.
 
 ### Criteria
 
-- [ ] ISC-1: Empty storage provisions V1 then V2 in order and reports version 2.
-- [ ] ISC-2: A V1 database preserves its existing rows while V2 adds only `goals`.
-- [ ] ISC-3: A failed V2 statement rolls back both V2 DDL and its metadata version.
-- [ ] ISC-4: No public raw-goal writer, Scribe bypass, or unauthenticated persistence interface is
+- [x] ISC-1: Empty storage provisions V1 then V2 in order and reports version 2.
+- [x] ISC-2: A V1 database preserves its existing rows while V2 adds only `goals`.
+- [x] ISC-3: A failed V2 statement rolls back both V2 DDL and its metadata version.
+- [x] ISC-4: No public raw-goal writer, Scribe bypass, or unauthenticated persistence interface is
   introduced. The missing strict pre-write ingress is explicitly recorded as follow-up work.
-- [ ] ISC-5: `GoalStore.readActive()` returns only valid active records for its owner in stable ID
+- [x] ISC-5: `GoalStore.readActive()` returns only valid active records for its owner in stable ID
   order; it excludes inactive, malformed, legacy, and another-owner rows.
-- [ ] ISC-6: Eviction/reconstruction retains committed V2 goal rows.
-- [ ] ISC-7 Anti: no contract, RunLoop, prompt, Scribe, Wrangler, Supabase, R2, live-provider, or
+- [x] ISC-6: Eviction/reconstruction retains committed V2 goal rows.
+- [x] ISC-7 Anti: no contract, RunLoop, prompt, Scribe, Wrangler, Supabase, R2, live-provider, or
   cloud-mutation surface changes.
-- [ ] ISC-8 Anti: no raw health, provider payload, prompt text, or private content appears in schema,
+- [x] ISC-8 Anti: no raw health, provider payload, prompt text, or private content appears in schema,
   tests, telemetry, or documentation fixtures.
 
 ### Test Strategy
@@ -109,6 +109,20 @@ or other-owner rows never become active-goal output.
 - Required closeout: focused runtime tests, complete verification wall, `git diff --check`, contract
   review, security/privacy review, and adversarial feature break pass.
 
+### Closeout Evidence — 2026-07-11
+
+- Commits `71cb7a8`, `ee80976`, `57e6c08`, and `270eda4` implement the V2 migration, transactional
+  metadata bootstrap, read-only Module, and populated two-owner isolation proof.
+- `npx -y pnpm@10.34.4 verify` passed: typechecks, 1,188 contract tests, 493 runtime tests, and all
+  repository guards. `git diff --check` passed.
+- Independent schema, contract, security/privacy, health-data, workflow-mapping, and adversarial QA
+  passes found no remaining P0–P3 defect after the populated two-owner test was added.
+- `tools/eval/run-suite.ts` is absent; per `/run-eval`, the verification wall is the recorded fallback,
+  not an eval-suite pass.
+- One unrelated `test/tracer.test.ts` `scribe:invalid_payload` failure occurred during a post-mutation
+  focused-suite run; the GoalStore tests passed in that run, an explicit diagnostic rerun and the final
+  full wall passed, and root cause remains unverified.
+
 ### Assumptions And Falsifier
 
 The selected storage-only interface assumes no present caller needs a live `RunLoopDO` integration.
@@ -116,6 +130,17 @@ The original ticket also calls for strict pre-write parsing; that criterion cann
 until an accepted Scribe destination and owner-bound ingress exist. The decision is falsified if a
 current accepted contract establishes either seam; in that case the work stops for an ownership
 decision rather than expanding this branch.
+
+## Lightweight Learning Capture
+
+- **Lesson:** an absent Scribe destination is a hard persistence boundary. `internal_context` is
+  volatile-run context, not an implicit authorization for durable goal writes.
+- **Overlap check:** ADR-0064 and this design already own the goal-state and admission boundary;
+  this capture updates that existing design rather than adding a new governance rule.
+- **Applicability limit:** this does not forbid a future goal writer. It requires an accepted,
+  provenance-aware Scribe/admission and owner-bound ingress design before one is added.
+- **Pressure scenario:** a temporary removal of `user_id = ?` made the populated two-owner test fail;
+  future readers must retain a comparable cross-owner non-vacuity proof.
 
 ## Source Grounding
 

@@ -36,7 +36,7 @@
 - Consumes: `DoMigration`, `DurableObjectStorage`, and V1 schema metadata.
 - Produces: `DO_SCHEMA_VERSION === 2`, `DO_SCHEMA_MIGRATIONS`, V2 `goals` schema assertions, and deterministic V1 -> V2 provisioning.
 
-- [ ] **Step 1: Write the failing V2 migration tests**
+- [x] **Step 1: Write the failing V2 migration tests**
 
 ```ts
 it('migrates an existing V1 database to V2 without changing a V1 row', async () => {
@@ -50,13 +50,13 @@ it('rolls back a failed V2-like migration with its metadata version', async () =
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- do-schema`
 
 Expected: FAIL because current provisioning stops at V1 and `goals` remains deferred.
 
-- [ ] **Step 3: Write minimal ordered migration implementation**
+- [x] **Step 3: Write minimal ordered migration implementation**
 
 ```ts
 export const HEY10_BASE_SCHEMA_MIGRATION: DoMigration = { version: 1, /* unchanged V1 */ };
@@ -73,13 +73,13 @@ for (const migration of DO_SCHEMA_MIGRATIONS) {
 
 Keep V1 text unchanged. Add only `goals` to V2 product-table and required-column checks, remove it from the deferred table list, and run all DDL plus metadata insertion inside `transactionSync`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- do-schema`
 
 Expected: PASS, including V1 preservation, repeated provisioning, and transaction rollback.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add packages/runtime/src/do-schema.ts packages/runtime/test/do-schema.test.ts && git commit -m "feat(runtime): add V2 goals schema"`
 
@@ -95,7 +95,7 @@ Run: `git add packages/runtime/src/do-schema.ts packages/runtime/test/do-schema.
 - Consumes: `GoalRecord`, `goalRecordSchema`, and the V2 `goals` table.
 - Produces: `GoalStore.readActive(ownerId)`.
 
-- [ ] **Step 1: Write the first failing public-interface test**
+- [x] **Step 1: Write the first failing public-interface test**
 
 ```ts
 it('reads a contract-valid committed goal only for its owner', () => {
@@ -106,13 +106,13 @@ it('reads a contract-valid committed goal only for its owner', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- goals-store`
 
 Expected: FAIL because `GoalStore` does not exist.
 
-- [ ] **Step 3: Write the smallest strict read Module**
+- [x] **Step 3: Write the smallest strict read Module**
 
 ```ts
 export class GoalStore {
@@ -128,7 +128,7 @@ export class GoalStore {
 Do not create source vocabulary, telemetry, an autonomous mutation path, an external caller, or a
 writer that accepts raw goal data.
 
-- [ ] **Step 4: Add one behavior at a time**
+- [x] **Step 4: Add one behavior at a time**
 
 ```ts
 it('omits malformed, legacy, and inactive storage rows without returning their content', () => {});
@@ -138,7 +138,7 @@ it('survives eviction and reconstructs the same active owner rows', async () => 
 
 After each test, run the focused command and add only the implementation required for that behavior.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Run: `git add packages/runtime/src/goals/store.ts packages/runtime/test/goals-store.test.ts && git commit -m "feat(runtime): add strict goal store"`
 
@@ -153,17 +153,17 @@ Run: `git add packages/runtime/src/goals/store.ts packages/runtime/test/goals-st
 - Consumes: the V2 migration and `GoalStore` public interface.
 - Produces: auditable proof that this is a storage foundation, not a live routing or prompt feature.
 
-- [ ] **Step 1: Perform non-vacuity checks**
+- [x] **Step 1: Perform non-vacuity checks**
 
 Temporarily demonstrate that a malformed active SQLite row and a removed owner predicate make the focused tests fail; revert the deliberate local break before continuing.
 
-- [ ] **Step 2: Run contract and security review inputs**
+- [x] **Step 2: Run contract and security review inputs**
 
 Run: `rg -n "goalRecordSchema|GoalStore|goals" packages/contracts packages/runtime`
 
 Expected: one existing contract vocabulary and one runtime storage Module; no duplicate schema or caller bypass.
 
-- [ ] **Step 3: Run the verification wall**
+- [x] **Step 3: Run the verification wall**
 
 Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- do-schema goals-store`
 
@@ -173,13 +173,24 @@ Run: `git diff --check`
 
 Expected: focused tests and the full wall pass. If the known unrelated runtime-suite intermittency recurs, classify and record it; do not retry silently.
 
-- [ ] **Step 4: Run adversarial feature review**
+- [x] **Step 4: Run adversarial feature review**
 
 Map empty, V1, malformed, inactive, another-owner, repeated-provisioning, eviction, no-writer, and failed-DDL paths; then run an independent QA break pass against those paths.
 
-- [ ] **Step 5: Commit any test-only correction and write the handoff**
+- [x] **Step 5: Commit test-only correction and write the handoff**
 
 Run: `git add packages/runtime/src packages/runtime/test docs/superpowers && git commit -m "test(runtime): harden goals schema proof"`
 
 Record final verification evidence, the explicit no-live-integration limit, and the unimplemented
 Scribe-backed pre-write boundary in the HEY-144 handoff before opening its draft PR.
+
+## Completion Record — 2026-07-11
+
+- Completed commits: `71cb7a8`, `ee80976`, `57e6c08`, `270eda4`.
+- Final verification: `npx -y pnpm@10.34.4 verify` passed with 1,188 contract tests, 493 runtime
+  tests, typechecks, and all guards; `git diff --check` passed.
+- QA correction: populated two-owner rows, including a SQL-metacharacter owner identifier, prove the
+  bound owner predicate. A deliberate predicate removal failed before restoration.
+- The branch intentionally does **not** close the original durable-write criterion. The required
+  Scribe-backed, provenance-aware goal admission and authenticated owner-routing seam remain a
+  separately accepted follow-up; no draft PR, push, or live action was performed here.
