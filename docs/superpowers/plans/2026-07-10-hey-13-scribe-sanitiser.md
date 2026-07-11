@@ -65,7 +65,7 @@ expect(sanitiseResultSchema.safeParse({
 
 - [ ] **Step 2: Run the focused test and confirm RED**
 
-Run: `npx -y pnpm@10.34.4 --filter @waldo/contracts test -- src/memory/sanitise.test.ts`  
+Run: `npx -y pnpm@10.34.4 --filter @waldo/contracts test -- src/memory/sanitise.test.ts`
 Expected: FAIL because structured payload/input/destination policy exports do not exist.
 
 - [ ] **Step 3: Implement the contract types and supersede old health actions**
@@ -150,7 +150,7 @@ expect(sanitise({
 
 - [ ] **Step 2: Run and confirm RED**
 
-Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- test/scribe-sanitiser.test.ts`  
+Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- test/scribe-sanitiser.test.ts`
 Expected: FAIL because the Module does not exist.
 
 - [ ] **Step 3: Implement the minimal ordered pipeline**
@@ -431,7 +431,7 @@ export default {
 
 - [ ] **Step 4: Run mutation and kill critical survivors**
 
-Run: `npx -y pnpm@10.34.4 verify:mutation`  
+Run: `npx -y pnpm@10.34.4 verify:mutation`
 Expected: no survivor/no-coverage mutant in recursion, check ordering, health correlation, instruction
 threshold, destination eligibility, or denial branches. Equivalent mutants must be documented with
 source proof rather than ignored.

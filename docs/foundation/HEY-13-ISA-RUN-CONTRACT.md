@@ -1,8 +1,8 @@
 # HEY-13 ISA Run Contract
 
-Status: approved for execution on 2026-07-10  
-Issue: [HEY-13](https://linear.app/heywaldo/issue/HEY-13/security-scribe-runtime-sanitiser-boundary-placement-and-article-9)  
-Branch: `codex/hey-13-scribe-sanitiser`  
+Status: implementation complete on 2026-07-11; PR review remains the promotion gate
+Issue: [HEY-13](https://linear.app/heywaldo/issue/HEY-13/security-scribe-runtime-sanitiser-boundary-placement-and-article-9)
+Branch: `codex/hey-13-scribe-sanitiser`
 Base: `407a875a96efe1fc5bac9a1e3cc9f6294c5e3aa5`
 
 ## Current
@@ -34,59 +34,59 @@ source taint, and count-only redaction evidence.
 
 ## Thinking Mode
 
-Mode: First principles + Systems thinking + Red team, with a privacy/health-data pass.  
+Mode: First principles + Systems thinking + Red team, with a privacy/health-data pass.
 Evidence threshold: accepted ADR text, current contract/runtime source, a red test that demonstrates
-each bypass, and a green test through the public interface or actual Workerd owner.  
+each bypass, and a green test through the public interface or actual Workerd owner.
 Hypothesis: a pure recursive Scribe Module plus strict destination-owned persisted schemas closes the
-failure class without per-writer sanitizer forks.  
+failure class without per-writer sanitizer forks.
 Falsifier: any current content-bearing side-effect owner can persist or emit a forbidden value without
 crossing the Module, or mutation/property tests find a surviving recursion, order, or destination
-decision bypass.  
+decision bypass.
 Disposition: adopt, subject to the falsifier and reviewer wall.
 
 ## Criteria
 
-- [ ] **ISC-1:** `sanitise()` returns a strict typed allow/deny union. An allow contains structured
+- [x] **ISC-1:** `sanitise()` returns a strict typed allow/deny union. An allow contains structured
   sanitized JSON, source taint, and count-only redactions. A denial contains no candidate content.
   - Falsifier: an allow can carry non-JSON/unknown fields, or a denial carries payload text.
-- [ ] **ISC-2:** The Module executes checks in the exact order canary/secret, health, PII,
+- [x] **ISC-2:** The Module executes checks in the exact order canary/secret, health, PII,
   instruction, destination policy.
   - Falsifier: an input matching multiple checks reports a later check, or a secret/canary is
     redacted and allowed.
-- [ ] **ISC-3:** Raw and forbidden derived health cannot pass as keys, strings, numbers, nested
+- [x] **ISC-3:** Raw and forbidden derived health cannot pass as keys, strings, numbers, nested
   objects/arrays, CSV, aliases, intervening-word forms, quoted values, BP ratios, or the bounded
   encoded corpus.
   - Falsifier: any generated or golden hostile case is allowed at a prohibited destination.
-- [ ] **ISC-4:** ADR-0081-eligible nonnumeric derived views retain authority, algorithm version,
+- [x] **ISC-4:** ADR-0081-eligible nonnumeric derived views retain authority, algorithm version,
   zone/trend, freshness, missingness, confidence band, opaque provenance, and explicit destination
   eligibility.
   - Falsifier: a view is accepted without required provenance or for a destination it does not name.
-- [ ] **ISC-5:** PII is redacted without storing original values; high-confidence prompt injection
+- [x] **ISC-5:** PII is redacted without storing original values; high-confidence prompt injection
   and medical claims fail closed.
   - Falsifier: email, phone, payment-card, address, IP, diagnosis/risk/prescription/dosage content, or
     a multi-pattern instruction survives output or telemetry.
-- [ ] **ISC-6:** Tool arguments cross Scribe before `handler.handle`; model-provided subject selectors
+- [x] **ISC-6:** Tool arguments cross Scribe before `handler.handle`; model-provided subject selectors
   are rejected and handlers derive identity only from authenticated invocation context.
   - Falsifier: a handler observes unsafe args or `user_id` is accepted by the two affected schemas.
-- [ ] **ISC-7:** Provider requests, gateway responses, and template floors cross the same Module and
+- [x] **ISC-7:** Provider requests, gateway responses, and template floors cross the same Module and
   the medical gate. A denial causes zero provider calls or downstream success values as applicable.
   - Falsifier: any template or custom hook registry bypasses Scribe/medical processing.
-- [ ] **ISC-8:** Runtime context, scratch, taint, trace details, replay evidence, evidence metadata,
+- [x] **ISC-8:** Runtime context, scratch, taint, trace details, replay evidence, evidence metadata,
   metric labels, and failure reasons use bounded strict schemas.
   - Falsifier: harmless keys such as `measurement` or `metadata` can carry sensitive values, or an
     arbitrary failure string parses.
-- [ ] **ISC-9:** Sanitizer denial occurs before checkpoint, trace payload, replay payload, outbox
+- [x] **ISC-9:** Sanitizer denial occurs before checkpoint, trace payload, replay payload, outbox
   commit, sink call, or delivery. External taint survives iteration, crash, eviction, and resume.
   - Falsifier: forbidden bytes occur in SQLite/proof/replay or a tainted privileged follow-up runs.
-- [ ] **ISC-10:** Property and mutation lanes exercise the production Scribe implementation, report
+- [x] **ISC-10:** Property and mutation lanes exercise the production Scribe implementation, report
   reproducible seeds, and kill every critical-policy mutant.
   - Falsifier: the tests pass against a fake, a critical mutant survives, or a failing property lacks
     a seed/path.
-- [ ] **ISC-11 Anti:** No Supabase/migration/RLS, issuer/mint/session, public Brief/OpenAPI/generated
+- [x] **ISC-11 Anti:** No Supabase/migration/RLS, issuer/mint/session, public Brief/OpenAPI/generated
   client, async delivery, Spots, Chat, live-provider, credential, staging, or production-cloud work
   enters the HEY-13 PR.
   - Falsifier: the diff touches an owned/excluded surface or creates an absent production writer.
-- [ ] **ISC-12 Anti:** No second sanitizer, trace store, provider path, schema authority, or fallback
+- [x] **ISC-12 Anti:** No second sanitizer, trace store, provider path, schema authority, or fallback
   runtime is introduced.
   - Falsifier: equivalent policy logic appears outside the canonical contract and Scribe Module.
 
@@ -149,19 +149,40 @@ manifests, lockfile, shared fixtures, and DO schema. Sidecars must not edit them
 - 2026-07-10 baseline: `npx -y pnpm@10.34.4 verify` — PASS; 1,168 contract tests and 182
   runtime/Workerd tests.
 - 2026-07-10 baseline: `git diff --check` — PASS; no output.
-- Implementation evidence is appended here only after fresh command output is read.
+- 2026-07-11 focused Scribe/property lane — PASS; 2 files and 154 tests.
+- 2026-07-11 focused medical/provider lane — PASS; 2 files and 70 tests.
+- 2026-07-11 whole verification wall — PASS; contracts 48 files / 1,188 tests; runtime 19 files /
+  414 tests; both package typechecks and every repository guard passed.
+- 2026-07-11 targeted production-module mutation lane — PASS at 100%; 267 mutants, 258 killed,
+  9 timed out, 0 survived, 0 uncovered, and 0 errors. The target map was realigned after reviewer
+  edits before the score was accepted.
+- The repository has no `tools/eval/run-suite.ts`; `/run-eval` therefore records the missing suite
+  and uses the complete verification wall as the required fallback. This is an explicit tooling gap,
+  not an inferred eval pass.
+- Final whole-branch verification and independent reviewer verdicts are recorded in the phase
+  handoff after fresh output is read.
 
 ## Learning
 
-- Pending. Use `compound-learning-capture` only if the implementation or review reveals a reusable
-  pattern not already owned by ADR-0024, ADR-0081, this contract, or the testing pipeline.
+- An exploratory mutation pass found real CSV/Base64 correlation gaps, but broad full-file mutation
+  also produced equivalent defensive-branch mutants. The durable gate therefore names the critical
+  observable policy decisions, requires zero survivors/no-coverage mutants, and keeps behavior tests
+  for every newly selected decision. This contract and the checked-in Stryker configuration own the
+  lesson; no duplicate learning artifact was created.
+- Taint is a persisted security identity, not transient metadata. External-origin classification,
+  authenticated subject context, checkpoint serialization, restart recovery, and privileged-action
+  denial must be tested as one vertical because testing any one seam alone can conceal laundering.
 
 ## Source Grounding
 
-Retrieved 2026-07-10 unless stated otherwise:
+Retrieved or revalidated 2026-07-11 unless stated otherwise:
 
 - Backend base `407a875a96efe1fc5bac9a1e3cc9f6294c5e3aa5`.
 - Brain base `75591543053dbdda6cf7c7f0210f8d16f36c3db8`.
+- Canonical source blobs at that accepted main: ADR-0024
+  `17f233bfd8d9c50217ff4130eef1a08b59e9adaf`, ADR-0081
+  `f5d993a704b56b9679abfdc308026dc2f669297f`, and medical disclaimers
+  `4d4c9937d031a2a5faf0a22df661345fffd491e3`.
 - [ADR-0024 at the reviewed commit](https://github.com/Pin4sf/waldo-brain/blob/75591543053dbdda6cf7c7f0210f8d16f36c3db8/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0024-scribe-sanitiser-canonical-spec.md).
 - [ADR-0081 at the reviewed commit](https://github.com/Pin4sf/waldo-brain/blob/75591543053dbdda6cf7c7f0210f8d16f36c3db8/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0081-health-derived-fields-form-crs-computation-authority.md).
 - [Medical disclaimers at the reviewed commit](https://github.com/Pin4sf/waldo-brain/blob/75591543053dbdda6cf7c7f0210f8d16f36c3db8/01-Waldo/engineering/agent-soul/rules/MEDICAL_DISCLAIMERS.md).
