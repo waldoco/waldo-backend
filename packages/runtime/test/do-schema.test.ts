@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFERRED_DO_PRODUCT_TABLES,
   DO_SCHEMA_METADATA_TABLE,
+  DO_SCHEMA_VERSION,
   DO_PRODUCT_TABLES,
   DoSchemaDriftError,
   HEY10_BASE_SCHEMA_MIGRATION,
@@ -82,6 +83,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.version).toBe(2);
+    expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
       expect(result.tables).toContain(table);

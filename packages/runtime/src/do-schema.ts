@@ -1,5 +1,4 @@
 export const DO_SCHEMA_METADATA_TABLE = 'do_schema_migrations' as const;
-export const DO_SCHEMA_VERSION = 2;
 
 export const DO_PRODUCT_TABLES = [
   'memory_blocks',
@@ -313,6 +312,8 @@ export const HEY144_GOALS_SCHEMA_MIGRATION: DoMigration = {
   ],
   down: ['DROP TABLE IF EXISTS goals;'],
 };
+
+export const DO_SCHEMA_VERSION = HEY144_GOALS_SCHEMA_MIGRATION.version;
 
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
