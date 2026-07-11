@@ -2,8 +2,8 @@ import {
   CANARY_REGEX,
   DERIVED_SCORE_PATTERNS,
   derivedHealthDestinationViewSchema,
-  INSTRUCTION_PATTERNS,
-  INSTRUCTION_REJECT_THRESHOLD,
+  INJECTION_GUARD_THRESHOLDS,
+  INJECTION_RULES,
   PII_PATTERNS,
   RAW_SENSOR_PATTERNS,
   SANITISE_DESTINATION_POLICIES,
@@ -11,6 +11,8 @@ import {
   sanitiseInputSchema,
   type Redaction,
   type RedactionKind,
+  type GuardVerdict,
+  type InjectionRuleId,
   type SanitiseCheck,
   type SanitiseDestination,
   type SanitiseDestinationPolicy,
@@ -93,7 +95,7 @@ const ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,5}\
 const ATTENDEE_KEY = /^(?:attendee|attendees|attendee_name|participant|participants|participant_name|contact_name)$/i;
 const ADDRESS_KEY = /^(?:address|street_address|mailing_address|home_address|ip|ip_address)$/i;
 const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
-const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:[A-Za-z0-9+\/_-]{4,}={1,2}|[A-Za-z0-9+\/_-]{8,})(?![A-Za-z0-9+\/_=-])/g;
+const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:(?:[A-Za-z0-9+\/_-]{4})*(?:[A-Za-z0-9+\/_-]{2}==|[A-Za-z0-9+\/_-]{3}=)|(?:[A-Za-z0-9+\/_-]{4})+(?:[A-Za-z0-9+\/_-]{2,3})?)(?![A-Za-z0-9+\/_=-])/g;
 const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
@@ -108,6 +110,31 @@ function cloneRegex(pattern: RegExp): RegExp {
 
 function matches(pattern: RegExp, text: string): boolean {
   return cloneRegex(pattern).test(text);
+}
+
+function verdictForMatches(matches: GuardVerdict['matches']): GuardVerdict {
+  const score = matches.reduce((total, match) => total + match.weight, 0);
+  return {
+    decision:
+      score >= INJECTION_GUARD_THRESHOLDS.block
+        ? 'block'
+        : score >= INJECTION_GUARD_THRESHOLDS.review
+          ? 'review'
+          : 'allow',
+    score,
+    matches,
+    matchCount: matches.length,
+  };
+}
+
+function matchingInjectionRules(input: string) {
+  return INJECTION_RULES.filter((rule) => matches(rule.pattern, input));
+}
+
+export function scoreInjection(input: string): GuardVerdict {
+  return verdictForMatches(
+    matchingInjectionRules(input).map((rule) => ({ id: rule.id, weight: rule.weight })),
+  );
 }
 
 function compactKey(key: string): string {
@@ -191,7 +218,7 @@ function decodePercent(text: string): string | null | undefined {
 function printableUtf8FromBase64(token: string): string | undefined {
   if (
     !token.includes('=') &&
-    (!/[A-Z]/.test(token) || !/[a-z]/.test(token) || !/\d/.test(token))
+    (!/[A-Z]/.test(token) || !/[a-z]/.test(token))
   ) {
     return undefined;
   }
@@ -271,10 +298,7 @@ function hasDecodedHealthIndicator(
   destination: SanitiseDestination,
 ): boolean {
   const decoded = decodedViews(text, destination);
-  if (decoded.views.some(isHealthIndicatorText)) return true;
-
-  const shortDecoded = printableUtf8FromBase64(text.trim());
-  return shortDecoded !== undefined && isHealthIndicatorText(shortDecoded);
+  return decoded.views.some(isHealthIndicatorText);
 }
 
 function visitStrings(
@@ -589,19 +613,6 @@ function replacementCount(text: string, pattern: RegExp): number {
   return Array.from(text.matchAll(global)).length;
 }
 
-function directBase64PiiView(token: string): string {
-  const normalized = token.replaceAll('-', '+').replaceAll('_', '/');
-  if (normalized.length < 4 || normalized.length % 4 === 1) return '';
-  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-  try {
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
-  } catch {
-    return '';
-  }
-}
-
 function replaceAndCount(
   text: string,
   pattern: RegExp,
@@ -616,9 +627,14 @@ function replaceAndCount(
   return text.replace(global, replacement);
 }
 
+function isShortUnpaddedBase64Ipv6(text: string): boolean {
+  if (!/^[A-Za-z0-9+\/_-]{3}$/.test(text)) return false;
+  const decoded = printableUtf8FromBase64(text);
+  if (decoded === undefined) return false;
+  return matches(PII_PATTERNS.ipv6, decoded);
+}
+
 function encodedPiiKind(text: string, destination: SanitiseDestination): RedactionKind | undefined {
-  const directBase64 = directBase64PiiView(text);
-  if (matches(PII_PATTERNS.ipv6, directBase64)) return 'address';
   const decoded = decodedViews(text, destination);
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
@@ -628,7 +644,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';
   }
-  return undefined;
+  return isShortUnpaddedBase64Ipv6(text) ? 'address' : undefined;
 }
 
 function redactEncodedPii(
@@ -738,34 +754,34 @@ function inspectInstructions(
   destination: SanitiseDestination,
   redactions: Redaction[],
 ): SanitiseResult | { payload: JsonValue; redactions: Redaction[] } {
-  const matched = new Set<number>();
+  const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
   const scanned = visitStrings(payload, destination, (text) => {
-    INSTRUCTION_PATTERNS.forEach((pattern, index) => {
-      if (matches(pattern, text)) matched.add(index);
-    });
+    for (const match of scoreInjection(text).matches) matched.set(match.id, match);
     return false;
   });
   if (scanned.invalid) return deny('size_cap', 'invalid_payload');
-  if (matched.size >= INSTRUCTION_REJECT_THRESHOLD) {
+  const verdict = verdictForMatches(
+    INJECTION_RULES.flatMap((rule) => {
+      const match = matched.get(rule.id);
+      return match === undefined ? [] : [match];
+    }),
+  );
+  if (verdict.decision === 'block') {
     return deny('instruction_pattern', 'untrusted_instruction');
   }
-  if (matched.size === 0) return { payload, redactions };
+  if (verdict.decision === 'allow') return { payload, redactions };
 
-  const patternIndex = [...matched][0];
-  if (patternIndex === undefined) return { payload, redactions };
-  const pattern = INSTRUCTION_PATTERNS[patternIndex];
-  if (pattern === undefined) return deny('instruction_pattern', 'untrusted_instruction');
   let instructionCount = 0;
   const transformed = transformJsonStrings(payload, (text) => {
     let output = text;
-    if (matches(pattern, text)) {
-      const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
-      const global = new RegExp(pattern.source, flags);
+    for (const rule of matchingInjectionRules(text)) {
+      const flags = rule.pattern.flags.includes('g') ? rule.pattern.flags : `${rule.pattern.flags}g`;
+      const global = new RegExp(rule.pattern.source, flags);
       instructionCount += Array.from(text.matchAll(global)).length;
-      output = text.replace(new RegExp(pattern.source, flags), '[REDACTED_INSTRUCTION]');
+      output = output.replace(global, '[REDACTED_INSTRUCTION]');
     }
     const decoded = decodedViews(output, destination);
-    if (decoded.views.slice(1).some((view) => matches(pattern, view))) {
+    if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
       instructionCount += 1;
       return '[REDACTED_INSTRUCTION]';
     }

@@ -334,20 +334,201 @@ export const PII_PATTERNS = {
   ipv6: /(?<![0-9a-f:])(?:(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?:(?::[0-9a-f]{1,4}){1,6})|:(?:(?::[0-9a-f]{1,4}){1,7}|:))(?![0-9a-f:])/gi,
 } as const;
 
-// Check 4 — memory and skill bodies are content, not instructions (ADR-0024). The
-// you-are-now pattern excludes Waldo naming itself.
-export const INSTRUCTION_PATTERNS: readonly RegExp[] = [
-  /ignore\s+(?:(?:all|any)\s+)?(?:previous|prior|all)\s+(?:instructions?|prompts?|messages?)/i,
-  /you\s+are\s+(now|actually)\s+(?!waldo)/i,
-  /system\s*[:\s]+/i,
-  /assistant\s*[:\s]+/i,
-  /<\s*\/?(system|assistant|user)\s*>/i,
-  /jailbreak|dan|grandma|developer mode/i,
-];
+// Check 4 — memory and skill bodies are content, not instructions. The contract owns the
+// rule table so runtime scoring cannot drift from the shared vocabulary.
+export const injectionRuleIdSchema = z.enum([
+  'instruction_override',
+  'role_reassignment',
+  'privileged_action_bypass',
+  'role_boundary',
+  'role_tag',
+  'jailbreak_marker',
+  'protected_instruction_request',
+  'encoded_instruction_request',
+  'priority_displacement',
+  'constraint_evasion',
+]);
+export type InjectionRuleId = z.infer<typeof injectionRuleIdSchema>;
 
-// Two or more distinct pattern hits reject; exactly one is treated as a low-confidence false
-// positive — redact and allow (ADR-0024).
-export const INSTRUCTION_REJECT_THRESHOLD = 2;
+export const injectionRuleCategorySchema = z.enum([
+  'override',
+  'exfiltrate',
+  'role',
+  'jailbreak',
+  'data',
+]);
+export type InjectionRuleCategory = z.infer<typeof injectionRuleCategorySchema>;
+
+export const injectionRuleSchema = z.strictObject({
+  id: injectionRuleIdSchema,
+  category: injectionRuleCategorySchema,
+  weight: z.number().min(0).max(1),
+  pattern: z.instanceof(RegExp),
+});
+export type InjectionRule = z.infer<typeof injectionRuleSchema>;
+
+const INJECTION_RULE_WEIGHTS = {
+  instruction_override: 0.45,
+  role_reassignment: 0.35,
+  privileged_action_bypass: 0.45,
+  role_boundary: 0.35,
+  role_tag: 0.55,
+  jailbreak_marker: 0.45,
+  protected_instruction_request: 0.55,
+  encoded_instruction_request: 0.55,
+  priority_displacement: 0.15,
+  constraint_evasion: 0.45,
+} as const;
+
+export const INJECTION_RULES = [
+  {
+    id: 'instruction_override',
+    category: 'override',
+    weight: INJECTION_RULE_WEIGHTS.instruction_override,
+    pattern:
+      /\b(?:ignore|disregard|override|bypass)\b(?:\s+(?:all|any|the|prior|previous|earlier|existing)){0,3}\s+\b(?:instructions?|directives?|rules?|constraints?|prompts?|messages?)\b/i,
+  },
+  {
+    id: 'role_reassignment',
+    category: 'role',
+    weight: INJECTION_RULE_WEIGHTS.role_reassignment,
+    pattern:
+      /\b(?:you\s+are\s+(?:now|actually)\s+(?!waldo\b)|act\s+as\s+(?:an?\s+)?(?:privileged|unrestricted|system|administrator|operator)|assume\s+(?:the\s+)?(?:privileged|unrestricted|system|administrator|operator)(?:\s+(?:operator|administrator))?\s+role)\b/i,
+  },
+  {
+    id: 'privileged_action_bypass',
+    category: 'override',
+    weight: INJECTION_RULE_WEIGHTS.privileged_action_bypass,
+    pattern:
+      /\b(?:send|execute|invoke|call)\b(?:\s+\w+){0,4}\s+\b(?:without|bypassing)\s+(?:approval|confirmation|guardrails?)\b/i,
+  },
+  {
+    id: 'role_boundary',
+    category: 'role',
+    weight: INJECTION_RULE_WEIGHTS.role_boundary,
+    pattern: /\b(?:system|assistant)(?:\s*:\s*|\s+)|\b(?:developer|user)\s*:/i,
+  },
+  {
+    id: 'role_tag',
+    category: 'role',
+    weight: INJECTION_RULE_WEIGHTS.role_tag,
+    pattern: /<\s*\/?(?:system|assistant|developer|user)\s*>/i,
+  },
+  {
+    id: 'jailbreak_marker',
+    category: 'jailbreak',
+    weight: INJECTION_RULE_WEIGHTS.jailbreak_marker,
+    pattern:
+      /\b(?:jailbreak|dan|grandma|developer\s+mode|unrestricted\s+mode|do\s+anything\s+now)\b/i,
+  },
+  {
+    id: 'protected_instruction_request',
+    category: 'exfiltrate',
+    weight: INJECTION_RULE_WEIGHTS.protected_instruction_request,
+    pattern:
+      /\b(?:reveal|expose|print|dump|return)\b(?:\s+\w+){0,3}\s+\b(?:system\s+prompt|hidden\s+(?:rules?|instructions?)|internal\s+(?:rules?|instructions?))\b/i,
+  },
+  {
+    id: 'encoded_instruction_request',
+    category: 'data',
+    weight: INJECTION_RULE_WEIGHTS.encoded_instruction_request,
+    pattern:
+      /\b(?:decode|translate|expand)\b(?:\s+\w+){0,3}\s+\b(?:the\s+)?(?:encoded|hidden)\s+(?:instructions?|directives?)\b/i,
+  },
+  {
+    id: 'priority_displacement',
+    category: 'override',
+    weight: INJECTION_RULE_WEIGHTS.priority_displacement,
+    pattern: /\b(?:new|higher|top)\s+(?:instructions?|priority|directive)\b/i,
+  },
+  {
+    id: 'constraint_evasion',
+    category: 'override',
+    weight: INJECTION_RULE_WEIGHTS.constraint_evasion,
+    pattern:
+      /\b(?:do\s+not|don't)\s+(?:follow|obey)\b(?:\s+\w+){0,3}\s+\b(?:rules?|constraints?|guardrails?)\b/i,
+  },
+] as const satisfies readonly InjectionRule[];
+
+export const injectionGuardThresholdsSchema = z
+  .strictObject({
+    review: z.number().positive().max(1),
+    block: z.number().positive().max(1),
+  })
+  .refine((thresholds) => thresholds.block > thresholds.review, {
+    error: 'block threshold must exceed review threshold',
+    path: ['block'],
+  });
+export type InjectionGuardThresholds = z.infer<typeof injectionGuardThresholdsSchema>;
+
+export const INJECTION_GUARD_THRESHOLDS = {
+  review: 0.15,
+  block: 0.7,
+} as const satisfies InjectionGuardThresholds;
+
+export const guardDecisionSchema = z.enum(['allow', 'review', 'block']);
+export type GuardDecision = z.infer<typeof guardDecisionSchema>;
+
+export const injectionRuleMatchSchema = z.strictObject({
+  id: injectionRuleIdSchema,
+  weight: z.number().min(0).max(1),
+});
+export type InjectionRuleMatch = z.infer<typeof injectionRuleMatchSchema>;
+
+export const guardVerdictSchema = z
+  .strictObject({
+    decision: guardDecisionSchema,
+    score: z.number().nonnegative(),
+    matches: z.array(injectionRuleMatchSchema).max(INJECTION_RULES.length),
+    matchCount: z.int().nonnegative().max(INJECTION_RULES.length),
+  })
+  .superRefine((verdict, ctx) => {
+    if (verdict.matchCount !== verdict.matches.length) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'matchCount must equal matches length',
+        path: ['matchCount'],
+      });
+    }
+    if (verdict.score !== verdict.matches.reduce((total, match) => total + match.weight, 0)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'score must equal the sum of match weights',
+        path: ['score'],
+      });
+    }
+    if (new Set(verdict.matches.map((match) => match.id)).size !== verdict.matches.length) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'matches must not repeat a rule id',
+        path: ['matches'],
+      });
+    }
+    for (const match of verdict.matches) {
+      const rule = INJECTION_RULES.find((candidate) => candidate.id === match.id);
+      if (rule?.weight !== match.weight) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'match weight must equal the canonical rule weight',
+          path: ['matches'],
+        });
+      }
+    }
+    const expected =
+      verdict.score >= INJECTION_GUARD_THRESHOLDS.block
+        ? 'block'
+        : verdict.score >= INJECTION_GUARD_THRESHOLDS.review
+          ? 'review'
+          : 'allow';
+    if (verdict.decision !== expected) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'decision must match the weighted thresholds',
+        path: ['decision'],
+      });
+    }
+  });
+export type GuardVerdict = z.infer<typeof guardVerdictSchema>;
 
 // ADR-0024's 2 KB memory-block cap in UTF-16 units — the single owner both the sanitiser
 // table below and memoryContentSchema (hall.ts) derive from, so the schema seam and the
