@@ -152,7 +152,7 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 | ---: | --- | --- | --- |
 | 1 | Journal/outbox | Local workerd/fake-sink proof merged | Preserve; real async adapter proof is HEY-110 |
 | 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
-| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, and HEY-144 goals storage are merged; context Modules remain unwired | HEY-163 contract fulfillment, then HEY-14, HEY-15, and HEY-16 |
+| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, and HEY-144 goals storage are merged; context Modules remain unwired | HEY-163 contract fulfillment, HEY-166 bounded workspace admission, then HEY-14, HEY-15, and HEY-16 |
 | 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
 | 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
 | 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
@@ -163,14 +163,15 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 Wave 0 merged in PR #49. The observed post-Wave-0 merge order was PR #50 (HEY-100), PR #52
 (HEY-144), then PR #51 (HEY-75). HEY-14 preflight passed the `2fd798f8` baseline but found no typed
 WorkspaceMount/R2 seam. HEY-163 is the contract-only ADR-0029/0076 fulfillment and must merge before
-HEY-14 implementation. HEY-144 has released the V2 goals storage seam; the remaining context
-sequence is HEY-163 -> HEY-14 -> HEY-15 -> HEY-16. Complete goal hydration also awaits HEY-162's
+HEY-166 can establish the proposed bounded reader/admission policy; both precede HEY-14
+implementation. HEY-144 has released the V2 goals storage seam; the remaining context sequence is
+HEY-163 -> HEY-166 -> HEY-14 -> HEY-15 -> HEY-16. Complete goal hydration also awaits HEY-162's
 Scribe-backed admission boundary.
 HEY-100 remains a static conformance result only; HEY-160 separately owns future production per-user
 JWT/`db.forUser()` custody. HEY-141 still requires its own Agent-Ready admission.
 
-HEY-143 closure planning requires HEY-163, then the remaining HEY-14, HEY-15, HEY-16, and HEY-141
-work to merge and a fresh clean-main convergence wall, alongside the already merged HEY-100,
+HEY-143 closure planning requires HEY-163, HEY-166, then the remaining HEY-14, HEY-15, HEY-16, and
+HEY-141 work to merge and a fresh clean-main convergence wall, alongside the already merged HEY-100,
 HEY-144, and HEY-75. It does not authorize a live-provider, live-secret, staging, sink, or
 deployment action.
 
@@ -298,8 +299,9 @@ adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate,
 
 Safe parallel work:
 
-- HEY-163 contract-only ADR-0029/0076 fulfillment; HEY-14 implementation remains blocked until it
-  merges, while HEY-15 source/ISA preparation remains read-only and disjoint;
+- HEY-163 contract-only ADR-0029/0076 fulfillment, followed by HEY-166's proposed bounded
+  workspace admission policy; HEY-14 implementation remains blocked until both land, while HEY-15
+  source/ISA preparation remains read-only and disjoint;
 - HEY-16 only after the remaining context interfaces converge; full goal hydration remains gated by
   HEY-162;
 - HEY-110 async delivery with fake adapters;
@@ -348,7 +350,7 @@ Merged:
 Next:
 
 19. HEY-14 preflight passed baseline but found no typed WorkspaceMount/R2 seam. HEY-163 contract-only
-    ADR-0029/0076 fulfillment must merge before HEY-14 -> HEY-15 -> HEY-16.
+    ADR-0029/0076 fulfillment and HEY-166 bounded admission must land before HEY-14 -> HEY-15 -> HEY-16.
 
 Do not infer HEY ticket completion beyond the bounded merged capability named above.
 

@@ -129,6 +129,7 @@ merge barrier clears.
 
 - [verified] The fresh HEY-14 worktree passed its `2fd798f8` baseline wall, then source inspection
   found no typed WorkspaceMount/R2 seam in the current backend contracts or runtime bindings.
-- [decision] HEY-163 is the contract-only ADR-0029/0076 fulfillment and blocks HEY-14 runtime
-  implementation. The remaining serialized context sequence is HEY-163 -> HEY-14 -> HEY-15 ->
-  HEY-16; no raw R2/key workaround is admitted.
+- [decision] HEY-163 is the contract-only ADR-0029/0076 fulfillment. Subsequent review created
+  HEY-166 for proposed bounded workspace admission; the remaining serialized context sequence
+  is HEY-163 -> HEY-166 -> HEY-14 -> HEY-15 -> HEY-16. No raw R2/key workaround or invented
+  universal blob cap is admitted.

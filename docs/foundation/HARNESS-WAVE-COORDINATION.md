@@ -2,7 +2,8 @@
 
 Status: Wave 0 reconciliation merged in PR #49 (`a257a175`). The verified post-Wave-0 merge order
 is PR #50 (`7d02b173`) -> PR #52 (`4e1cac30`) -> PR #51 (`2fd798f8`). HEY-14 preflight passed its
-baseline but found no typed WorkspaceMount/R2 seam; contract-only HEY-163 now blocks HEY-14.
+baseline but found no typed WorkspaceMount/R2 seam; contract-only HEY-163 and bounded-admission
+HEY-166 now block HEY-14.
 
 Updated: 2026-07-12 IST.
 Coordinator: Codex.
@@ -54,9 +55,10 @@ Observed facts:
   merge object, never its working tree.
 
 Decision: retain the pinned merge objects as Wave 0 source truth. The Wave 0 merge barrier is
-cleared. HEY-14 preflight found the typed WorkspaceMount/R2 seam missing, so HEY-163 is now the
-contract-only ADR-0029/0076 prerequisite before HEY-14. Deployment, cloud mutation, and any
-implementation edit still require their own applicable admission and verification.
+cleared. HEY-14 preflight found the typed WorkspaceMount/R2 seam missing, so HEY-163 is the
+contract-only ADR-0029/0076 prerequisite and HEY-166 is the proposed reader-admission-policy
+prerequisite before HEY-14. Deployment, cloud mutation, and any implementation edit still require
+their own applicable admission and verification.
 
 Falsifier: a fresh authenticated remote read shows either baseline is not the named merge, or a
 required tracker/ADR source contradicts a proposed reconciliation. In that case, revise the ledger
@@ -89,6 +91,7 @@ PR #49 Wave 0 reconciliation (merged)
   -> PR #51 HEY-75 injection scoring (merged)
   -> HEY-14 preflight passed baseline; typed WorkspaceMount/R2 seam absent
   -> HEY-163 contract-only ADR-0029/0076 fulfillment
+  -> HEY-166 proposed bounded workspace admission policy
   -> HEY-14, then HEY-15 under its serialized rebase discipline
   -> HEY-16 after the remaining context interfaces converge
      (complete goal hydration additionally awaits HEY-162)
@@ -174,9 +177,22 @@ untrusted inbox rows as recall.
 - Remaining risks: V1 must remain immutable; DDL and schema version must advance atomically.
 - PR URL: GitHub PR #52 (merged).
 
+### HEY-166 / Workspace admission policy
+
+- Owner: Codex security/contract worker, source research and policy design only.
+- Worktree: `/Users/shivanshfulper/.codex/worktrees/hey-166-workspace-policy/waldo-backend`.
+- Branch: `codex/hey-166-workspace-policy`.
+- Status: blocked by HEY-163's merge for any contract extension; it blocks HEY-14 now because the
+  latter must reject oversized content before decoding/cache/prompt admission.
+- Scope: decide proposed reader per-file/total-read bounds and decode/failure/cache/prompt-admission
+  behavior. ADR-0076 separately fixes staged writer-to-commit admission through Scribe/sanitiser,
+  destination, size, and path checks; HEY-166 may identify the later writer-policy owner but cannot
+  implement or unblock a writer/commit path. No arbitrary universal cap, R2 binding, sanitiser
+  widening, or cloud action is admitted.
+
 ### HEY-14 / SkillLoader
 
-- Owner: Codex; preflight complete and implementation blocked by HEY-163.
+- Owner: Codex; preflight complete and implementation blocked by HEY-163 and HEY-166.
 - Worktree: preflight evidence exists; no HEY-14 implementation manifest is accepted yet.
 - Branch: `codex/hey-14-skill-loader`.
 - Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae`.
@@ -187,23 +203,25 @@ untrusted inbox rows as recall.
 - Produced interfaces: `loadForTrigger(ctx)`, typed exclusion evidence, and bounded source-failure
   telemetry.
 - Consumed interfaces: ADR-0028 source merge plus four eligibility filters and terminal top-K,
-  Scribe skill-body seam, and the typed WorkspaceMount/R2 contract to be fulfilled by HEY-163.
+  Scribe skill-body seam, the typed WorkspaceMount/R2 contract from HEY-163, and HEY-166's proposed
+  bounded source-admission policy.
 - Status: baseline preflight passed but found no typed WorkspaceMount/R2 seam. HEY-163 contract-only
-  ADR-0029/0076 fulfillment blocks implementation; contract and Agent-Ready checks remain required.
+  ADR-0029/0076 fulfillment and HEY-166 proposed bounded admission both block implementation;
+  contract and Agent-Ready checks remain required.
 - Commits: none.
 - Verification evidence: baseline preflight passed; source inspection found the typed
   WorkspaceMount/R2 seam absent.
 - Review status: preflight only; no implementation review package is assigned.
-- Merge dependency: HEY-163 must merge before HEY-14; any later binding/config or contract decision
-  still needs its own serialized review.
+- Merge dependency: HEY-163 and HEY-166 must land before HEY-14; any later binding/config or
+  contract decision still needs its own serialized review.
 - Remaining risks: `wrangler.jsonc` and generated binding types become its exclusive write set if
   they change.
 - PR URL: none.
 
 ### HEY-15 / RecallGateway
 
-- Owner: Codex Wave 1 worker, source/ISA preparation only; implementation follows HEY-163 then
-  HEY-14.
+- Owner: Codex Wave 1 worker, source/ISA preparation only; implementation follows HEY-163, HEY-166,
+  then HEY-14.
 - Worktree: not created for implementation.
 - Branch: `codex/hey-15-recall-before-act`.
 - Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae` when its implementation admission begins.
@@ -216,12 +234,12 @@ untrusted inbox rows as recall.
   bounded content-free retrieval-failure telemetry.
 - Consumed interfaces: ADR-0006 provisional union-read rule, ADR-0031 recall interface/fail-open
   behavior, HEY-144 schema result, and Scribe seam.
-- Status: HEY-163 and HEY-14 are the sequencing prerequisites; implementation then remains gated on
-  its own Agent-Ready verification and serialized rebase discipline.
+- Status: HEY-163, HEY-166, and HEY-14 are the sequencing prerequisites; implementation then
+  remains gated on its own Agent-Ready verification and serialized rebase discipline.
 - Commits: none.
 - Verification evidence: none; baseline gate is required before ticket state changes.
 - Review status: no worker or review package assigned.
-- Merge dependency: HEY-163 -> HEY-14, then rebase after the already merged HEY-144 storage seam
+- Merge dependency: HEY-163 -> HEY-166 -> HEY-14, then rebase after the already merged HEY-144 storage seam
   before any additive FTS migration.
 - Remaining risks: FTS may require a next internal DO migration; no Supabase/external migration is in
   scope.
@@ -240,7 +258,7 @@ untrusted inbox rows as recall.
 - Produced interfaces: REASONS prompt Module and fake-provider/fake-sink integration at the existing
   seams.
 - Consumed interfaces: merged HEY-144 storage plus merged HEY-14 and HEY-15 Modules.
-- Status: gated by completion of HEY-163 -> HEY-14 -> HEY-15 and Agent-Ready verification; full
+- Status: gated by completion of HEY-163 -> HEY-166 -> HEY-14 -> HEY-15 and Agent-Ready verification; full
   goal hydration remains gated by HEY-162's Scribe-backed admission boundary.
 - Commits: none.
 - Verification evidence: none.
@@ -299,7 +317,7 @@ untrusted inbox rows as recall.
 - Owner: Codex Wave 3 worker, unassigned.
 - Worktree: not created.
 - Branch: not assigned. HEY-100 merged in PR #50, but HEY-141 still needs its own Agent-Ready
-  admission and does not displace the HEY-163 -> HEY-14 prerequisite path.
+  admission and does not displace the HEY-163 -> HEY-166 -> HEY-14 prerequisite path.
 - Baseline SHA: current `origin/main` after PR #50.
 - Exact owned files: none; no ownership manifest is accepted yet.
 - Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
@@ -356,7 +374,8 @@ untrusted inbox rows as recall.
   history comment.
 - The Wave 0 merge criterion is satisfied. HEY-100, HEY-144, and HEY-75 are merged; HEY-14
   preflight found the typed WorkspaceMount/R2 seam missing, so HEY-163 is its contract-only
-  prerequisite. HEY-15, HEY-16, and HEY-141 retain their own ticket-level admission and dependency
+  prerequisite and HEY-166 owns proposed bounded workspace admission. HEY-15, HEY-16, and HEY-141 retain
+  their own ticket-level admission and dependency
   checks.
 - HEY-75 is assigned, its stale `blocked:harness-runtime` label and HEY-13 blocker are removed, and
   its corpus/provenance/ReDoS/no-snippet requirements are explicit.
