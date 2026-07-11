@@ -4,7 +4,7 @@ Status: implementation and local proof complete on `codex/hey-13-scribe-sanitise
 In Progress until PR review. No merge, deployment, live-provider call, credential use, staging
 traffic, or production cloud effect was performed.
 Date: 2026-07-11 IST.
-Implementation head before this handoff: `fdaad42`.
+Rebased implementation head before this handoff: `2af582a` on `origin/main` `7dfc128`.
 
 ## [observed] Implemented
 
@@ -37,6 +37,8 @@ Implementation head before this handoff: `fdaad42`.
 - Workerd integration proves health, canary, and secret denial leaves no candidate bytes in
   checkpoints, trace details, replay, outbox, or sink delivery.
 - `git diff --check 407a875`: PASS.
+- The branch rebased cleanly onto `origin/main` `7dfc128`; property, mutation, full verification,
+  and `git diff --check origin/main` all passed again after the rebase.
 - Independent contract/integration, security/QA, and health-data/adversarial closure reviews passed
   after their concrete counterexamples were added to the corpus.
 - The standalone eval runner `tools/eval/run-suite.ts` is absent. Per `/run-eval`, this is recorded
