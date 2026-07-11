@@ -1,9 +1,9 @@
 # Phase Wave 0 → Wave 1 Handoff
 
 Status: Wave 0 is documented, independently reviewed, and committed; its current full wall passes,
-but it awaits a coordinator PR, human approval, and a review disposition for an intermittent unchanged
-runtime-suite failure. Do not start a Wave 1 implementation worktree or edit before that merge barrier
-clears.
+but draft coordinator PR #49 awaits human approval and a review disposition for an intermittent
+unchanged runtime-suite failure. Do not start a Wave 1 implementation worktree or edit before that
+merge barrier clears.
 
 ## What Was Built
 
@@ -27,6 +27,7 @@ clears.
   typechecks, and all guards.
 - Independent reviews: spec/standards, security/privacy/source-discipline, and tracker/GitHub audits
   passed after their findings were incorporated.
+- Draft coordinator PR #49 is open; it is not authorization to begin Wave 1.
 - No live credentials, real provider/R2 object, channel effect, staging/production write,
   deployment, Supabase mutation, or Cloudflare mutation occurred.
 

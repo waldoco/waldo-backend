@@ -2,8 +2,8 @@
 
 Status: Wave 0 reconciliation is documented and independently reviewed; the current full wall passes,
 but a prior runtime-suite reliability issue remains recorded for human review before merge. Coordinator
-PR pending. No implementation ticket may begin until this reconciliation PR has human approval and is
-merged.
+Draft coordinator PR #49 is open. No implementation ticket may begin until this reconciliation PR has
+human approval and is merged.
 
 Updated: 2026-07-11 IST.
 Coordinator: Codex.
@@ -117,8 +117,8 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
   historical promotion annotations.
 - Consumed interfaces: accepted ADRs, Brain PR #17, PRs #44/#47, HEY-109, and the named Linear
   tickets.
-- Status: documentation and tracker reconciliation complete; the latest full wall passes and the
-  coordinator draft PR is pending. Wave 1 remains blocked on human approval/merge and a recorded
+- Status: documentation and tracker reconciliation complete; the latest full wall passes and
+  coordinator draft PR #49 is open. Wave 1 remains blocked on human approval/merge and a recorded
   review disposition for the runtime-suite reliability issue.
 - Commits: current coordinator reconciliation commit (`docs: reconcile harness wave coordination`);
   exact SHA is the current branch head and will be recorded in the PR/Linear evidence.
@@ -138,7 +138,7 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
   accepted-ADR snapshot omits newly accepted ADR-0081/0082 and must not be hand-edited; an
   unchanged runtime delivery-gate test is intermittently failing and needs an in-scope diagnosis
   before merge confidence can be restored.
-- PR URL: not opened.
+- PR URL: GitHub PR #49 (draft; canonical repository).
 
 ### HEY-144 / goals DO schema
 
