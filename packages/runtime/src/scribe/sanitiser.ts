@@ -95,7 +95,7 @@ const ADDRESS_PATTERN = /\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,5}\
 const ATTENDEE_KEY = /^(?:attendee|attendees|attendee_name|participant|participants|participant_name|contact_name)$/i;
 const ADDRESS_KEY = /^(?:address|street_address|mailing_address|home_address|ip|ip_address)$/i;
 const PERSON_NAME = /^[\p{L}][\p{L}'-]+(?:\s+[\p{L}][\p{L}'-]+){1,3}$/u;
-const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:[A-Za-z0-9+\/_-]{4,}={1,2}|[A-Za-z0-9+\/_-]{8,})(?![A-Za-z0-9+\/_=-])/g;
+const BASE64_TOKEN = /(?<![A-Za-z0-9+\/_-])(?:(?:[A-Za-z0-9+\/_-]{4})*(?:[A-Za-z0-9+\/_-]{2}==|[A-Za-z0-9+\/_-]{3}=)|(?:[A-Za-z0-9+\/_-]{4})+(?:[A-Za-z0-9+\/_-]{2,3})?)(?![A-Za-z0-9+\/_=-])/g;
 const PHONE_PATTERN = /\+?\b(?:1?[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b/g;
 const JSON_ESCAPE = /\\u[0-9a-fA-F]{4}/;
 const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
@@ -218,7 +218,7 @@ function decodePercent(text: string): string | null | undefined {
 function printableUtf8FromBase64(token: string): string | undefined {
   if (
     !token.includes('=') &&
-    (!/[A-Z]/.test(token) || !/[a-z]/.test(token) || !/\d/.test(token))
+    (!/[A-Z]/.test(token) || !/[a-z]/.test(token))
   ) {
     return undefined;
   }
@@ -298,10 +298,7 @@ function hasDecodedHealthIndicator(
   destination: SanitiseDestination,
 ): boolean {
   const decoded = decodedViews(text, destination);
-  if (decoded.views.some(isHealthIndicatorText)) return true;
-
-  const shortDecoded = printableUtf8FromBase64(text.trim());
-  return shortDecoded !== undefined && isHealthIndicatorText(shortDecoded);
+  return decoded.views.some(isHealthIndicatorText);
 }
 
 function visitStrings(
@@ -616,19 +613,6 @@ function replacementCount(text: string, pattern: RegExp): number {
   return Array.from(text.matchAll(global)).length;
 }
 
-function directBase64PiiView(token: string): string {
-  const normalized = token.replaceAll('-', '+').replaceAll('_', '/');
-  if (normalized.length < 4 || normalized.length % 4 === 1) return '';
-  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), '=');
-  try {
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes);
-  } catch {
-    return '';
-  }
-}
-
 function replaceAndCount(
   text: string,
   pattern: RegExp,
@@ -643,9 +627,14 @@ function replaceAndCount(
   return text.replace(global, replacement);
 }
 
+function isShortUnpaddedBase64Ipv6(text: string): boolean {
+  if (!/^[A-Za-z0-9+\/_-]{3}$/.test(text)) return false;
+  const decoded = printableUtf8FromBase64(text);
+  if (decoded === undefined) return false;
+  return matches(PII_PATTERNS.ipv6, decoded);
+}
+
 function encodedPiiKind(text: string, destination: SanitiseDestination): RedactionKind | undefined {
-  const directBase64 = directBase64PiiView(text);
-  if (matches(PII_PATTERNS.ipv6, directBase64)) return 'address';
   const decoded = decodedViews(text, destination);
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
@@ -655,7 +644,7 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
     if (matches(PII_PATTERNS.ipv4, view)) return 'address';
     if (matches(PII_PATTERNS.ipv6, view)) return 'address';
   }
-  return undefined;
+  return isShortUnpaddedBase64Ipv6(text) ? 'address' : undefined;
 }
 
 function redactEncodedPii(
