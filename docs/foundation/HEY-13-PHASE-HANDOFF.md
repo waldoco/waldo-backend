@@ -5,6 +5,7 @@ In Progress until PR review. No merge, deployment, live-provider call, credentia
 traffic, or production cloud effect was performed.
 Date: 2026-07-11 IST.
 Rebased implementation head before this handoff: `2af582a` on `origin/main` `7dfc128`.
+Review: [waldo-backend PR #47](https://github.com/Pin4sf/waldo-backend/pull/47).
 
 ## [observed] Implemented
 

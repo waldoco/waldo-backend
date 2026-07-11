@@ -1,7 +1,7 @@
 # HEY-13 Scribe Sanitiser Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to
-> implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Install one structured, destination-aware Scribe sanitiser before every current
 content-bearing persistence and egress seam and prove nested, encoded, numeric, restart, and mutation
@@ -46,7 +46,7 @@ fast-check 4.8.0, StrykerJS 9.6.1, pnpm 10.34.4.
   structural policies, and `DerivedHealthDestinationView`.
 - Consumes: `CanaryTokens`, `SourceTaint`, `FormZone`, and `CrsPillar`.
 
-- [ ] **Step 1: Write the failing strict-union test**
+- [x] **Step 1: Write the failing strict-union test**
 
 ```ts
 expect(sanitiseResultSchema.safeParse({
@@ -63,12 +63,12 @@ expect(sanitiseResultSchema.safeParse({
 }).success).toBe(false);
 ```
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Run: `npx -y pnpm@10.34.4 --filter @waldo/contracts test -- src/memory/sanitise.test.ts`
 Expected: FAIL because structured payload/input/destination policy exports do not exist.
 
-- [ ] **Step 3: Implement the contract types and supersede old health actions**
+- [x] **Step 3: Implement the contract types and supersede old health actions**
 
 ```ts
 export const sanitiseInputSchema = z.strictObject({
@@ -96,7 +96,7 @@ export const sanitiseResultSchema = z.discriminatedUnion('ok', [
 Set raw and numeric-derived health actions to `reject` for every current generic destination. Add
 `r2_summary` and `outbox` to the single destination enum and structural policy table.
 
-- [ ] **Step 4: Add and test the strict nonnumeric ADR-0081 view**
+- [x] **Step 4: Add and test the strict nonnumeric ADR-0081 view**
 
 ```ts
 export const derivedHealthDestinationViewSchema = z.strictObject({
@@ -114,7 +114,7 @@ export const derivedHealthDestinationViewSchema = z.strictObject({
 
 Run the two focused contract tests. Expected: PASS.
 
-- [ ] **Step 5: Commit the contract slice**
+- [x] **Step 5: Commit the contract slice**
 
 ```bash
 git add packages/contracts/src/memory/sanitise.ts packages/contracts/src/memory/sanitise.test.ts \
@@ -137,7 +137,7 @@ git commit -m "feat: define structured scribe contract"
 - Consumes: Task 1 `SanitiseInput` and policy exports.
 - Produces: `sanitise(input): SanitiseResult` and `evaluateMedicalClaim(text)`.
 
-- [ ] **Step 1: Add the failing tracer test through the public Module**
+- [x] **Step 1: Add the failing tracer test through the public Module**
 
 ```ts
 expect(sanitise({
@@ -148,12 +148,12 @@ expect(sanitise({
 })).toEqual({ ok: false, check: 'health_value', reason: 'health_value_leak' });
 ```
 
-- [ ] **Step 2: Run and confirm RED**
+- [x] **Step 2: Run and confirm RED**
 
 Run: `npx -y pnpm@10.34.4 --filter @waldo/runtime test -- test/scribe-sanitiser.test.ts`
 Expected: FAIL because the Module does not exist.
 
-- [ ] **Step 3: Implement the minimal ordered pipeline**
+- [x] **Step 3: Implement the minimal ordered pipeline**
 
 ```ts
 export function sanitise(raw: SanitiseInput): SanitiseResult {
@@ -177,7 +177,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
 Keep helpers private. Scan keys and values in one recursive walk; use a `WeakSet` for cycles and
 bounded decode views for JSON escapes, percent encoding, Base64, and Base64URL.
 
-- [ ] **Step 4: Add one hostile behavior at a time**
+- [x] **Step 4: Add one hostile behavior at a time**
 
 For each of nested records, arrays, benign-key siblings, aliases/camelCase, unit suffixes, quoted
 values, BP ratios, CSV, intervening words, each encoding, secret formats, PII redaction, one-pattern
@@ -188,7 +188,7 @@ redaction, two-pattern denial, structured caps, safe numbers, and eligible deriv
 3. write minimal implementation;
 4. rerun and observe GREEN.
 
-- [ ] **Step 5: Add medical golden tests and implementation**
+- [x] **Step 5: Add medical golden tests and implementation**
 
 ```ts
 expect(evaluateMedicalClaim('Based on your data, you are at risk for heart disease.')).toEqual({
@@ -202,7 +202,7 @@ expect(evaluateMedicalClaim('Your recovery pattern suggests taking it easy today
 
 Run both focused test files. Expected: PASS.
 
-- [ ] **Step 6: Install exact aged test dependencies**
+- [x] **Step 6: Install exact aged test dependencies**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime add -D -E fast-check@4.8.0 \
@@ -212,7 +212,7 @@ npx -y pnpm@10.34.4 --filter @waldo/runtime add -D -E fast-check@4.8.0 \
 Run `pnpm install --frozen-lockfile` after the lockfile change. Expected: PASS with no new
 `minimumReleaseAgeExclude` entry.
 
-- [ ] **Step 7: Commit the pure Module slice**
+- [x] **Step 7: Commit the pure Module slice**
 
 ```bash
 git add package.json packages/runtime/package.json pnpm-lock.yaml \
@@ -240,18 +240,18 @@ git commit -m "feat: implement deterministic scribe sanitiser"
 - Produces: pre-side-effect sanitized tool args, contract-required taint-preserving results, and
   terminal provider request/response/template safety.
 
-- [ ] **Step 1: Write a failing handler non-invocation test**
+- [x] **Step 1: Write a failing handler non-invocation test**
 
 Create a counted `send_message` handler, dispatch nested health content, and assert the result is
 `sanitise_denied` and the handler count is zero. Run the focused dispatcher test and confirm RED.
 
-- [ ] **Step 2: Add the PreTool Scribe adapter after strict arg validation**
+- [x] **Step 2: Add the PreTool Scribe adapter after strict arg validation**
 
 The adapter calls the single Module with a deterministic tool-to-destination mapping and returns the
 sanitized replacement payload. Add `tool_arg_sanitise: 250` between strict Zod validation at 200 and
 the autonomy gate at 300. `handler.handle` receives only the replacement args.
 
-- [ ] **Step 3: Preserve result taint**
+- [x] **Step 3: Preserve result taint**
 
 ```ts
 type DispatchToolResult =
@@ -263,12 +263,12 @@ Require `source_taint` on the contract-owned successful `ToolResult`: `external`
 handlers and `null` for internal handlers. Preserve it through PostTool replacement and the public
 dispatcher result. Add a test that a missing stamp fails rather than being inferred.
 
-- [ ] **Step 4: Remove model-selected identities**
+- [x] **Step 4: Remove model-selected identities**
 
 Delete `user_id` from `executeActionArgsSchema` and `sendMessageArgsSchema`. Add rejection tests for
 the now-unknown key. Handler contexts continue to use `authenticatedUserId`.
 
-- [ ] **Step 5: Make custom hooks and provider safety non-bypassable**
+- [x] **Step 5: Make custom hooks and provider safety non-bypassable**
 
 Do not concatenate custom and required registries into one priority-sorted list: a later custom hook
 could restore unsafe args/output after Scribe. Run custom transformations first, then the immutable
@@ -279,7 +279,7 @@ responses, run the final custom response through core PostLLM Scribe then medica
 fallback to this same asynchronous path. Add malicious late-custom-hook, counted-handler,
 counted-gateway, and unsafe-template tests.
 
-- [ ] **Step 6: Run focused tests and commit**
+- [x] **Step 6: Run focused tests and commit**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/contracts test -- \
@@ -305,7 +305,7 @@ git commit -m "feat: enforce scribe across provider and tools"
 - Produces: strict `RuntimeRunContext`, `RuntimeRunScratch`, `RuntimeRunFailureReason`,
   event-discriminated trace details, closed evidence metadata, and closed metric labels.
 
-- [ ] **Step 1: Add negative tests for arbitrary content**
+- [x] **Step 1: Add negative tests for arbitrary content**
 
 ```ts
 expect(runtimeRunRecordSchema.safeParse({
@@ -319,18 +319,18 @@ expect(lowCardinalityMetricLabelSchema.safeParse({ note: 'HRV 58 ms' }).success)
 
 Run focused contract tests and confirm RED.
 
-- [ ] **Step 2: Replace arbitrary shapes with strict schemas**
+- [x] **Step 2: Replace arbitrary shapes with strict schemas**
 
 Use discriminated/strict objects, bounded arrays and strings, roster/error/tool enums, required
 `source_taint`, and a finite run failure vocabulary. Trace detail selection is keyed by the event enum;
 unknown events and unknown detail fields reject.
 
-- [ ] **Step 3: Update replay/eval projection**
+- [x] **Step 3: Update replay/eval projection**
 
 Replace arbitrary synthesized failure text with `RuntimeRunFailureReason | 'unknown'`. Reuse the
 existing HEY-111 trace/replay path; do not create another store.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/contracts test -- \
@@ -354,35 +354,35 @@ git commit -m "feat: close persisted evidence shapes"
 - Produces: pre-transaction sanitized checkpoints, content-free trace denial, pre-outbox delivery
   sanitization, and crash/resume taint restoration.
 
-- [ ] **Step 1: Write the Workerd denial tracer**
+- [x] **Step 1: Write the Workerd denial tracer**
 
 Script hostile provider output containing `{ metric: 'hrv', measurement: 58 }`. Assert FAILED with a
 typed `scribe:*` reason, zero forbidden bytes in runtime tables/proof/replay, zero outbox rows, and zero
 sink calls. Run the focused test and confirm RED.
 
-- [ ] **Step 2: Replace local pass-through safety**
+- [x] **Step 2: Replace local pass-through safety**
 
 Wire `sanitise` and `evaluateMedicalClaim` in fake and gateway adapter sets. Gateway rate/approval/
 spend/sink behavior stays fail-closed.
 
-- [ ] **Step 3: Sanitize before synchronous SQLite writes**
+- [x] **Step 3: Sanitize before synchronous SQLite writes**
 
 Parse and sanitize context/scratch outside `transactionSync`; pass only strict parsed values to
 `advanceRun` and `updateRunScratch`. Validate tool calls before checkpoint. On denial, write only the
 finite failure code.
 
-- [ ] **Step 4: Sanitize trace/replay and delivery**
+- [x] **Step 4: Sanitize trace/replay and delivery**
 
 `recordTrace` sanitizes strict detail as `audit_log`; denied detail becomes one `scribe_denied` event.
 `gate()` sanitizes the delivery candidate for `outbox` and `send_message` before `gateRun()` can commit
 an outbox row.
 
-- [ ] **Step 5: Persist and restore taint**
+- [x] **Step 5: Persist and restore taint**
 
 When a dispatched result is external, set scratch `source_taint: 'external'`. Rebuilt invocation
 context reads it. Add crash-after-tools, eviction, resume, and privileged-follow-up denial proof.
 
-- [ ] **Step 6: Run Workerd tests and commit**
+- [x] **Step 6: Run Workerd tests and commit**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime test -- \
@@ -405,18 +405,18 @@ git commit -m "feat: guard run-loop persistence and delivery"
 - Consumes: production `sanitise()` only.
 - Produces: reproducible property lane and targeted deterministic mutation lane.
 
-- [ ] **Step 1: Add bounded recursive generators**
+- [x] **Step 1: Add bounded recursive generators**
 
 Generate health token aliases, separators/casing, numeric/ratio forms, nested records/arrays, CSV,
 and each supported encoding. Assert insertion anywhere causes denial at prohibited destinations while
 safe numbers remain allowed. Configure fast-check to print seed/path on failure.
 
-- [ ] **Step 2: Prove the property test is sensitive**
+- [x] **Step 2: Prove the property test is sensitive**
 
 Temporarily replace one hostile token with a safe token and observe the property fail, then restore
 the generator/invariant and observe PASS. Do not weaken the invariant to make it green.
 
-- [ ] **Step 3: Configure Node-only mutation against the same production Module**
+- [x] **Step 3: Configure Node-only mutation against the same production Module**
 
 ```js
 export default {
@@ -429,14 +429,14 @@ export default {
 };
 ```
 
-- [ ] **Step 4: Run mutation and kill critical survivors**
+- [x] **Step 4: Run mutation and kill critical survivors**
 
 Run: `npx -y pnpm@10.34.4 verify:mutation`
 Expected: no survivor/no-coverage mutant in recursion, check ordering, health correlation, instruction
 threshold, destination eligibility, or denial branches. Equivalent mutants must be documented with
 source proof rather than ignored.
 
-- [ ] **Step 5: Commit the evidence lane**
+- [x] **Step 5: Commit the evidence lane**
 
 ```bash
 git add package.json packages/runtime/package.json packages/runtime/vitest.scribe.config.ts \
@@ -453,7 +453,7 @@ git commit -m "test: add scribe property and mutation proof"
 **Interfaces:**
 - Produces: reviewer-clean, fully verified branch evidence.
 
-- [ ] **Step 1: Run focused and full contract checks**
+- [x] **Step 1: Run focused and full contract checks**
 
 ```bash
 npx -y pnpm@10.34.4 verify:property
@@ -463,18 +463,18 @@ git diff --check
 git status --short
 ```
 
-- [ ] **Step 2: Run privacy scans**
+- [x] **Step 2: Run privacy scans**
 
 Scan the diff and fixtures for secrets, real personal data, raw health values, broad JSON records,
 pass-through sanitizers, dynamic failure strings, and bypassing provider/tool/persistence calls.
 
-- [ ] **Step 3: Run required review skills**
+- [x] **Step 3: Run required review skills**
 
 Run `check-contract`, workflow-mapper, qa-breaker, security-reviewer, health-data-reviewer,
 e2e-pipeline-tester, `break-feature`, `review-all`, and `run-eval`. Run CRS validation if `crs.ts`
 changed. Fix every Critical/Important finding with a failing test first, then re-review.
 
-- [ ] **Step 4: Append fresh evidence and commit fixes**
+- [x] **Step 4: Append fresh evidence and commit fixes**
 
 Record exact command outputs, test counts, mutation result, reviewer verdicts, and residual unproved
 absent surfaces in the ISA contract. Commit only after the full wall is green.
@@ -489,22 +489,22 @@ absent surfaces in the ISA contract. Commit only after the full wall is green.
 **Interfaces:**
 - Produces: one reviewable HEY-13 PR and durable next-session state.
 
-- [ ] **Step 1: Write the phase handoff**
+- [x] **Step 1: Write the phase handoff**
 
 Include what was built, fresh evidence, what remains absent/unproved, architecture decisions, lessons,
 prerequisites, and all changed files.
 
-- [ ] **Step 2: Capture reusable learning only if novel**
+- [x] **Step 2: Capture reusable learning only if novel**
 
 Run the overlap check required by `compound-learning-capture`. Update an existing home rather than
 creating a duplicate lesson. Do not edit protected ADR/soul/rule files.
 
-- [ ] **Step 3: Rebase/fetch check and final verification**
+- [x] **Step 3: Rebase/fetch check and final verification**
 
 Fetch current `origin/main`, inspect divergence, resolve only in the HEY-13 worktree, and rerun the
 complete verification wall. Do not merge.
 
-- [ ] **Step 4: Push and open one HEY-13 PR**
+- [x] **Step 4: Push and open one HEY-13 PR**
 
 The PR body must include impact surface, rollback, exact proof, missing eval/live/staging evidence,
 and unresolved risks. Update Linear HEY-13 with the commit/PR and evidence. Leave status In Progress

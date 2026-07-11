@@ -159,8 +159,9 @@ manifests, lockfile, shared fixtures, and DO schema. Sidecars must not edit them
 - The repository has no `tools/eval/run-suite.ts`; `/run-eval` therefore records the missing suite
   and uses the complete verification wall as the required fallback. This is an explicit tooling gap,
   not an inferred eval pass.
-- Final whole-branch verification and independent reviewer verdicts are recorded in the phase
-  handoff after fresh output is read.
+- Independent contract/integration, security/QA, and health-data/adversarial reviewers returned
+  PASS after every concrete counterexample was added to the corpus. The final post-rebase proof and
+  PR are recorded in the phase handoff.
 
 ## Learning
 
