@@ -86,6 +86,16 @@ Date: 2026-07-11 IST.
 4. Treat the missing standalone eval runner and the observed tracer intermittency as explicit
    verification/debt items, not silently resolved by a passing rerun.
 
+## PR Packaging Prerequisite
+
+GitHub currently reports `main` at `a257a175d0361df5c129d73144f95ff245cb63d1`. This isolated
+branch descends from local `a886a1a`, a verified tree-equivalent Wave 0 baseline, but not from that
+remote commit object. Local `git fetch origin main` is unavailable in this environment
+(`Repository not found`). Before publishing, use authenticated Git or the GitHub connector to
+materialize the branch from remote `main`, apply this branch's intended diff, rerun the wall/remote
+CI, and open a **draft** PR. Do not let GitHub compare an unrelated local base and reintroduce Wave
+0 documentation into the review.
+
 ## Files Changed
 
 - `packages/runtime/src/do-schema.ts`
