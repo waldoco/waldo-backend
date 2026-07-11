@@ -2,6 +2,7 @@ name: verify
 
 on:
   pull_request:
+  workflow_dispatch:
   push:
     branches:
       - greenfield/harness-foundation
