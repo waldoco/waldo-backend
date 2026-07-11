@@ -22,6 +22,7 @@ export * from './adapters/sheet';
 export * from './adapters/email';
 export * from './adapters/channel';
 export * from './adapters/doc';
+export * from './adapters/workspace';
 export * from './auth/mint';
 export * from './auth/consent';
 export * from './tools/permissions';
