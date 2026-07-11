@@ -111,8 +111,9 @@ or other-owner rows never become active-goal output.
 
 ### Closeout Evidence — 2026-07-11
 
-- Commits `71cb7a8`, `ee80976`, `57e6c08`, and `270eda4` implement the V2 migration, transactional
-  metadata bootstrap, read-only Module, and populated two-owner isolation proof.
+- Commits `71cb7a8`, `ee80976`, `57e6c08`, `270eda4`, `d9a8313`, and `998f304` implement the V2
+  migration, transactional metadata bootstrap, read-only Module, populated two-owner isolation proof,
+  and registry-derived schema-version authority.
 - `npx -y pnpm@10.34.4 verify` passed: typechecks, 1,188 contract tests, 493 runtime tests, and all
   repository guards. `git diff --check` passed.
 - Independent schema, contract, security/privacy, health-data, workflow-mapping, and adversarial QA
