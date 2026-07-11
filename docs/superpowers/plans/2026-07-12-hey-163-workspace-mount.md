@@ -127,13 +127,15 @@ Run: git add packages/contracts/src/adapters/workspace.ts packages/contracts/src
 - Consumes: the Task 1 public contract.
 - Produces: fake-first usability evidence for HEY-14 and adversarial no-path/no-storage-identity proof.
 
-- [ ] **Step 1: Add fake-mount behavior test**
+- [x] **Step 1: Add fake-mount behavior test**
 
     import type { WorkspaceMount } from '../index';
     import {
       stagedWorkspaceWriteSchema,
       workspaceBlobSchema,
+      workspacePrefixSchema,
       workspaceVersionSchema,
+      workspaceWriteIdSchema,
       workspaceWriteOptionsSchema,
     } from './workspace';
 
@@ -154,9 +156,11 @@ Run: git add packages/contracts/src/adapters/workspace.ts packages/contracts/src
       });
     });
 
-- [ ] **Step 2: Add adversarial strict-schema tests**
+- [x] **Step 2: Add adversarial strict-schema tests**
 
     it('rejects raw paths, traversal-like names, unknown kinds, and hidden object keys', () => {
+      expect(workspaceFileSchema.parse({ kind: 'baselines' })).toEqual({ kind: 'baselines' });
+      expect(workspaceFileSchema.parse({ kind: 'patterns' })).toEqual({ kind: 'patterns' });
       expect(workspaceFileSchema.safeParse('skills/user/weekly-review.md').success).toBe(false);
       expect(workspaceFileSchema.safeParse({ kind: 'user_skill', name: '../weekly-review' }).success).toBe(false);
       expect(workspaceFileSchema.safeParse({ kind: 'archive', name: 'manifest' }).success).toBe(false);
@@ -164,20 +168,31 @@ Run: git add packages/contracts/src/adapters/workspace.ts packages/contracts/src
     });
 
     it('rejects generic prefixes and storage identity hidden in result objects', () => {
+      expect(workspacePrefixSchema.parse({ kind: 'user_skills' })).toEqual({ kind: 'user_skills' });
       expect(workspacePrefixSchema.safeParse({ kind: 'archive' }).success).toBe(false);
+      expect(workspaceVersionSchema.safeParse('').success).toBe(false);
+      expect(workspaceWriteIdSchema.safeParse('').success).toBe(false);
+      expect(workspaceBlobSchema.parse({ bytes: Uint8Array.of(1), version: 'v1' }).bytes).toEqual(
+        Uint8Array.of(1),
+      );
+      expect(workspaceBlobSchema.safeParse({ bytes: [1], version: 'v1' }).success).toBe(false);
       expect(workspaceBlobSchema.safeParse({ bytes: Uint8Array.of(1), version: 'v1', bucket: 'r2' }).success).toBe(false);
+      expect(workspaceWriteOptionsSchema.safeParse({ expected_version: '' }).success).toBe(false);
+      expect(workspaceWriteOptionsSchema.safeParse({ owner_id: 'user-a' }).success).toBe(false);
+      expect(stagedWorkspaceWriteSchema.parse({ write_id: 's1' })).toEqual({ write_id: 's1' });
+      expect(stagedWorkspaceWriteSchema.safeParse({ write_id: '' }).success).toBe(false);
       expect(stagedWorkspaceWriteSchema.safeParse({ write_id: 's1', owner_id: 'user-a' }).success).toBe(false);
     });
 
-- [ ] **Step 3: Execute vertical RED/GREEN cycles**
+- [x] **Step 3: Execute vertical RED/GREEN cycles**
 
-After each new test, run npx -y pnpm@10.34.4 --filter @waldo/contracts test -- workspace. If an assertion unexpectedly passes, tighten only the precise strict schema; never blacklist storage-key spellings.
+After each new test, run npx -y pnpm@10.34.4 --filter @waldo/contracts test -- workspace. Each new Zod schema must have one valid and one invalid test before this task is complete. If an assertion unexpectedly passes, tighten only the precise strict schema; never blacklist storage-key spellings.
 
-- [ ] **Step 4: Prove non-vacuity**
+- [x] **Step 4: Prove non-vacuity**
 
 Temporarily replace one relevant z.strictObject with z.object, run the matching extra-key test, confirm failure, then restore the strict schema before continuing. Do not commit the deliberate break.
 
-- [ ] **Step 5: Run walls and commit**
+- [x] **Step 5: Run walls and commit**
 
 Run:
 
@@ -187,6 +202,13 @@ Run:
     git diff --check
     git add packages/contracts/src/adapters/workspace.ts packages/contracts/src/adapters/workspace.test.ts docs/superpowers/specs/2026-07-12-hey-163-workspace-mount-design.md docs/superpowers/plans/2026-07-12-hey-163-workspace-mount.md
     git commit -m "test(contracts): harden workspace mount boundary"
+
+**Task 2 evidence (2026-07-12):** A fake owner-bound mount typechecks with all five methods. The
+focused workspace run passed 49 files / 1,190 tests after each added test slice; contracts
+typecheck and the full `npx -y pnpm@10.34.4 verify` wall passed. Each new workspace Zod schema has
+a valid and invalid fixture. For non-vacuity, temporarily replacing `workspaceBlobSchema`'s
+`z.strictObject` with `z.object` made the hidden `bucket` rejection assertion fail; strictness was
+restored before this commit. No schema correction was needed beyond the Task 1 implementation.
 
 ### Task 3: Review and handoff
 
