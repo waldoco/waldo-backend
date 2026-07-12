@@ -10,6 +10,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "verify:node": "pnpm --filter @waldo/contracts test",
+    "generate:openapi": "node scripts/generate-public-openapi.mjs",
     "verify:supabase": "node scripts/verify-supabase.mjs",
     "verify:workers": "pnpm --filter @waldo/runtime test",
     "verify:property": "pnpm --filter @waldo/runtime test:property",

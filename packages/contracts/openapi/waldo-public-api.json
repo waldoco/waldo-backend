@@ -5,6 +5,178 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/public/v1/briefs/morning/current": {
+      "get": {
+        "operationId": "getCurrentMorningBrief",
+        "summary": "Read the current committed morning Brief projection",
+        "description": "Side-effect-free projection read. The ETag is opaque and subject-bound; 304 is valid only for the same verified subject.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Accept",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "application/vnd.waldo.morning-brief.v1+json"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "Malformed validators are ignored as cache misses; they never produce 304.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\"[A-Za-z0-9_-]{32,128}\"$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ready, pending, or empty current morning Brief state",
+            "headers": {
+              "ETag": {
+                "required": true,
+                "description": "Opaque validator bound to the verified subject and projection revision",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^\"[A-Za-z0-9_-]{32,128}\"$"
+                }
+              },
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "private, no-cache"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/vnd.waldo.morning-brief.v1+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicMorningBriefResponse"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified for this verified subject; no response body and no side effect",
+            "headers": {
+              "ETag": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^\"[A-Za-z0-9_-]{32,128}\"$"
+                }
+              },
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "private, no-cache"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication failed",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaldoUnauthorizedProblemV1"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaldoForbiddenProblemV1"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Unsupported representation",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaldoNotAcceptableProblemV1"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "headers": {
+              "Retry-After": {
+                "required": true,
+                "description": "Must equal retry_after_seconds in the WaldoProblemV1 body.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 300
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaldoRateLimitedProblemV1"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaldoInternalErrorProblemV1"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable",
+            "headers": {
+              "Retry-After": {
+                "required": true,
+                "description": "Must equal retry_after_seconds in the WaldoProblemV1 body.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 300
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaldoTemporarilyUnavailableProblemV1"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/engagement-events": {
       "post": {
         "operationId": "createEngagementEvent",
@@ -45,6 +217,14 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Project Woof ES256 access token"
+      }
+    },
     "schemas": {
       "PublicEngagementEventRequest": {
         "type": "object",
@@ -87,7 +267,8 @@
           },
           "occurred_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
           },
           "run_id": {
             "type": "string",
@@ -139,6 +320,782 @@
         },
         "required": [
           "error"
+        ],
+        "additionalProperties": false
+      },
+      "PublicMorningBriefReady": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ready"
+          },
+          "brief_id": {
+            "type": "string",
+            "pattern": "^brief_[A-Za-z0-9_-]{16,96}$"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "variant": {
+            "type": "string",
+            "const": "morning"
+          },
+          "cards": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^card_[A-Za-z0-9_-]{16,96}$"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "brief_card",
+                    "context_card"
+                  ]
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 120
+                },
+                "body": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "evidence": {
+                  "maxItems": 8,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "ref": {
+                        "type": "string",
+                        "pattern": "^evref_[A-Za-z0-9_-]{16,96}$"
+                      }
+                    },
+                    "required": [
+                      "ref"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "kind",
+                "title",
+                "body",
+                "evidence"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "source_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "stale_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "brief_id",
+          "revision",
+          "variant",
+          "cards",
+          "generated_at",
+          "source_updated_at",
+          "stale_at",
+          "as_of",
+          "freshness"
+        ],
+        "additionalProperties": false,
+        "x-waldo-invariants": [
+          "source_updated_at <= generated_at",
+          "generated_at <= as_of",
+          "generated_at < stale_at",
+          "freshness = fresh iff as_of < stale_at; otherwise stale"
+        ]
+      },
+      "PublicMorningBriefPending": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "pending"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300
+          }
+        },
+        "required": [
+          "status",
+          "as_of",
+          "retry_after_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "PublicMorningBriefEmpty": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "empty"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "not_generated",
+              "no_eligible_content"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "as_of",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "PublicMorningBriefResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "ready"
+              },
+              "brief_id": {
+                "type": "string",
+                "pattern": "^brief_[A-Za-z0-9_-]{16,96}$"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "variant": {
+                "type": "string",
+                "const": "morning"
+              },
+              "cards": {
+                "minItems": 1,
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "pattern": "^card_[A-Za-z0-9_-]{16,96}$"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "brief_card",
+                        "context_card"
+                      ]
+                    },
+                    "title": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120
+                    },
+                    "body": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2000
+                    },
+                    "evidence": {
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string",
+                            "pattern": "^evref_[A-Za-z0-9_-]{16,96}$"
+                          }
+                        },
+                        "required": [
+                          "ref"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "kind",
+                    "title",
+                    "body",
+                    "evidence"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "generated_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "source_updated_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "stale_at": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "as_of": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "freshness": {
+                "type": "string",
+                "enum": [
+                  "fresh",
+                  "stale"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "brief_id",
+              "revision",
+              "variant",
+              "cards",
+              "generated_at",
+              "source_updated_at",
+              "stale_at",
+              "as_of",
+              "freshness"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "pending"
+              },
+              "as_of": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "retry_after_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300
+              }
+            },
+            "required": [
+              "status",
+              "as_of",
+              "retry_after_seconds"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "empty"
+              },
+              "as_of": {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "not_generated",
+                  "no_eligible_content"
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "as_of",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "x-waldo-invariants": [
+          "ready.source_updated_at <= ready.generated_at",
+          "ready.generated_at <= ready.as_of",
+          "ready.generated_at < ready.stale_at",
+          "ready.freshness = fresh iff ready.as_of < ready.stale_at; otherwise stale"
+        ]
+      },
+      "WaldoProblemV1": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "https://api.heywaldo.com/problems/unauthorized"
+              },
+              "title": {
+                "type": "string",
+                "const": "Authentication required"
+              },
+              "status": {
+                "type": "number",
+                "const": 401
+              },
+              "code": {
+                "type": "string",
+                "const": "unauthorized"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "https://api.heywaldo.com/problems/forbidden"
+              },
+              "title": {
+                "type": "string",
+                "const": "Access forbidden"
+              },
+              "status": {
+                "type": "number",
+                "const": 403
+              },
+              "code": {
+                "type": "string",
+                "const": "forbidden"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "https://api.heywaldo.com/problems/not-found"
+              },
+              "title": {
+                "type": "string",
+                "const": "Resource not found"
+              },
+              "status": {
+                "type": "number",
+                "const": 404
+              },
+              "code": {
+                "type": "string",
+                "const": "not_found"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "https://api.heywaldo.com/problems/not-acceptable"
+              },
+              "title": {
+                "type": "string",
+                "const": "Unsupported representation"
+              },
+              "status": {
+                "type": "number",
+                "const": 406
+              },
+              "code": {
+                "type": "string",
+                "const": "not_acceptable"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "https://api.heywaldo.com/problems/rate-limited"
+              },
+              "title": {
+                "type": "string",
+                "const": "Rate limited"
+              },
+              "status": {
+                "type": "number",
+                "const": 429
+              },
+              "code": {
+                "type": "string",
+                "const": "rate_limited"
+              },
+              "retry_after_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "code",
+              "retry_after_seconds"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "https://api.heywaldo.com/problems/internal-error"
+              },
+              "title": {
+                "type": "string",
+                "const": "Internal error"
+              },
+              "status": {
+                "type": "number",
+                "const": 500
+              },
+              "code": {
+                "type": "string",
+                "const": "internal_error"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "code"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "https://api.heywaldo.com/problems/temporarily-unavailable"
+              },
+              "title": {
+                "type": "string",
+                "const": "Temporarily unavailable"
+              },
+              "status": {
+                "type": "number",
+                "const": 503
+              },
+              "code": {
+                "type": "string",
+                "const": "temporarily_unavailable"
+              },
+              "retry_after_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "code",
+              "retry_after_seconds"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "WaldoUnauthorizedProblemV1": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "https://api.heywaldo.com/problems/unauthorized"
+          },
+          "title": {
+            "type": "string",
+            "const": "Authentication required"
+          },
+          "status": {
+            "type": "number",
+            "const": 401
+          },
+          "code": {
+            "type": "string",
+            "const": "unauthorized"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "WaldoForbiddenProblemV1": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "https://api.heywaldo.com/problems/forbidden"
+          },
+          "title": {
+            "type": "string",
+            "const": "Access forbidden"
+          },
+          "status": {
+            "type": "number",
+            "const": 403
+          },
+          "code": {
+            "type": "string",
+            "const": "forbidden"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "WaldoNotFoundProblemV1": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "https://api.heywaldo.com/problems/not-found"
+          },
+          "title": {
+            "type": "string",
+            "const": "Resource not found"
+          },
+          "status": {
+            "type": "number",
+            "const": 404
+          },
+          "code": {
+            "type": "string",
+            "const": "not_found"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "WaldoNotAcceptableProblemV1": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "https://api.heywaldo.com/problems/not-acceptable"
+          },
+          "title": {
+            "type": "string",
+            "const": "Unsupported representation"
+          },
+          "status": {
+            "type": "number",
+            "const": 406
+          },
+          "code": {
+            "type": "string",
+            "const": "not_acceptable"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "WaldoRateLimitedProblemV1": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "https://api.heywaldo.com/problems/rate-limited"
+          },
+          "title": {
+            "type": "string",
+            "const": "Rate limited"
+          },
+          "status": {
+            "type": "number",
+            "const": 429
+          },
+          "code": {
+            "type": "string",
+            "const": "rate_limited"
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "retry_after_seconds"
+        ],
+        "additionalProperties": false
+      },
+      "WaldoInternalErrorProblemV1": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "https://api.heywaldo.com/problems/internal-error"
+          },
+          "title": {
+            "type": "string",
+            "const": "Internal error"
+          },
+          "status": {
+            "type": "number",
+            "const": 500
+          },
+          "code": {
+            "type": "string",
+            "const": "internal_error"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "WaldoTemporarilyUnavailableProblemV1": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "const": "https://api.heywaldo.com/problems/temporarily-unavailable"
+          },
+          "title": {
+            "type": "string",
+            "const": "Temporarily unavailable"
+          },
+          "status": {
+            "type": "number",
+            "const": 503
+          },
+          "code": {
+            "type": "string",
+            "const": "temporarily_unavailable"
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 300
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "retry_after_seconds"
         ],
         "additionalProperties": false
       }
