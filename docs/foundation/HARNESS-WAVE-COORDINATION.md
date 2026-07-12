@@ -1,16 +1,17 @@
 # Harness Wave Coordination Ledger
 
-Status: Wave 0 reconciliation is documented and independently reviewed; the current full wall passes,
-but a prior runtime-suite reliability issue remains recorded for human review before merge. Coordinator
-Draft coordinator PR #49 is open. No implementation ticket may begin until this reconciliation PR has
-human approval and is merged.
+Status: Wave 0 reconciliation merged in PR #49 (`a257a175`). PR #50 (HEY-100), PR #52 (HEY-144
+V2 goals storage foundation), and PR #51 (HEY-75 deterministic Scribe injection scoring) are merged
+through `2fd798f`. Corrective PR #53 (HEY-75 held-out corpus) and PR #54 (HEY-141 declared egress
+policy) are open drafts; neither is merged or production evidence.
 
-Updated: 2026-07-11 IST.
+Updated: 2026-07-12 IST.
 Coordinator: Codex.
 
 ## Authority And Safety
 
 - Backend baseline: `82f582b5a28530c1fb7800b7fad889590b35e57d` (PR #47 merge).
+- Current merge tip: `2fd798f818213b344e700d98def006e80e0d56ae` (contains PRs #49, #50, #52, and #51).
 - Brain baseline: `75591543053dbdda6cf7c7f0210f8d16f36c3db8` (Brain PR #17 merge).
 - This temporary program assigns Codex the listed implementation tickets. It does not amend the
   mirrored universal rules.
@@ -42,16 +43,15 @@ Observed facts:
 - Observed local toolchain versions: Node `v26.4.0`, pnpm `10.34.4`, Zod `4.4.3`, Vitest `4.1.9`,
   `@cloudflare/vitest-pool-workers` `0.16.20`, `@cloudflare/workers-types` `4.20260616.1`, Wrangler
   `4.105.0`, fast-check `4.8.0`, and Stryker `9.6.1`. No dependency upgrade is part of Wave 0.
-- `git fetch origin main` failed because the local remote credential cannot access GitHub. The cached
-  `origin/main` equals the required backend baseline, and GitHub confirms PR #47 merged at that SHA.
-  A fresh GitHub connector commit search also returned that SHA as the newest indexed repository
-  commit. This corroborates the required baseline, while a fresh branch-ref fetch remains unavailable
-  locally.
+- [historical] During Wave 0, `git fetch origin main` failed and the coordinator used the pinned
+  baseline plus GitHub evidence. A later authenticated fetch confirmed current `origin/main` at
+  `2fd798f818213b344e700d98def006e80e0d56ae`.
 - The local Brain checkout is dirty and predates Brain PR #17. Canonical Brain reads use the pinned
   merge object, never its working tree.
 
-Decision: use the pinned merge objects for Wave 0 source truth; stop for human approval before any
-merge, deployment, cloud mutation, or Wave 1 implementation edit.
+Historical Wave 0 decision: use the pinned merge objects for source truth and stop for human
+approval before merge or implementation. PR #49 subsequently merged; the current execution state
+at the top of this ledger supersedes that admission decision.
 
 Falsifier: a fresh authenticated remote read shows either baseline is not the named merge, or a
 required tracker/ADR source contradicts a proposed reconciliation. In that case, revise the ledger
@@ -78,19 +78,21 @@ before writing or merging Wave 0 changes.
 ## Dependency And Merge Order
 
 ```text
-Wave 0 reconciliation PR (human merge)
-  -> Wave 1: HEY-144, HEY-14, HEY-15
-     merge: HEY-144 -> HEY-14 -> HEY-15 after rebase when FTS remains required
-  -> Wave 2: HEY-16, HEY-100 static guard, HEY-75
-  -> Wave 3: HEY-141 after HEY-100 unless write sets are proved disjoint
-  -> clean-main convergence gate
+Merged: #49 (coordination) -> #50 (HEY-100) -> #52 (HEY-144 storage foundation)
+  -> #51 (HEY-75 scorer)
+Open (recommended order): #53 (HEY-75 corpus correction), then #54 (HEY-141 declared egress policy)
+  -> remaining existing convergence prerequisites -> fresh clean-main gate
   -> HEY-143 closure planning only
 ```
 
-HEY-15 is the lead context slice: its pure Module may begin with the Wave 1 barrier, but it is
-read-only at the schema seam until HEY-144 merges. Its default trusted base is committed memory;
-the accepted same-day pending leg, if used, must already be Scribe-sanitized and explicitly
-provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
+PRs #53 and #54 have no code dependency. Merge #53 first so independent held-out evidence is
+restored before making an HEY-75 acceptance claim.
+
+HEY-15 is the lead context slice, but current Linear state blocks it on HEY-14; HEY-14 is in turn
+blocked on HEY-163. Once admitted, HEY-15 remains read-only at the schema seam until its own
+approved additive migration work. Its default trusted base is committed memory; the accepted
+same-day pending leg, if used, must already be Scribe-sanitized and explicitly provisional. This
+preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
 
 ## Work-Item Ledger
 
@@ -117,11 +119,10 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
   historical promotion annotations.
 - Consumed interfaces: accepted ADRs, Brain PR #17, PRs #44/#47, HEY-109, and the named Linear
   tickets.
-- Status: documentation and tracker reconciliation complete; the latest full wall passes and
-  coordinator draft PR #49 is open. Wave 1 remains blocked on human approval/merge and a recorded
-  review disposition for the runtime-suite reliability issue.
-- Commits: current coordinator reconciliation commit (`docs: reconcile harness wave coordination`);
-  exact SHA is the current branch head and will be recorded in the PR/Linear evidence.
+- Status: merged in PR #49 at `a257a175d0361df5c129d73144f95ff245cb63d1`. Historical
+  Wave 0 reliability observations remain recorded below; they are not a claim that current runtime
+  behavior was diagnosed or changed by this documentation PR.
+- Commits: PR #49 merge `a257a175d0361df5c129d73144f95ff245cb63d1`.
 - Verification evidence: baseline, several later, and the most recent `npx -y pnpm@10.34.4 verify`
   walls passed with 1,188 contract tests, 485 runtime tests, workspace typechecks, and every guard;
   `git diff --check` and `verify:guards` passed; no standalone eval suite is claimed. One initial
@@ -131,42 +132,48 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
   and then failed on its sixth attempt. A succeeding later wall does not explain or erase those
   observations. This establishes intermittent behavior, not root cause. No runtime code was changed
   in Wave 0 and the branch must not claim a stable green wall.
+- Current 2026-07-12 diagnostic evidence is recorded in HEY-165: a generated UUID can be
+  credit-card-redacted by Scribe on persisted-candidate revalidation, yielding
+  `scribe:invalid_payload`. The docs-only full wall stopped at that existing runtime failure; no
+  runtime fix is bundled here.
 - Review status: independent spec/standards, security/privacy/source-discipline, and tracker/GitHub
   reviews passed after their findings were resolved.
-- Merge dependency: explicit human approval of the Wave 0 PR.
-- Remaining risks: unauthenticated local fetch prevents fresh remote-tip confirmation; the backend
-  accepted-ADR snapshot omits newly accepted ADR-0081/0082 and must not be hand-edited; an
-  unchanged runtime delivery-gate test is intermittently failing and needs an in-scope diagnosis
-  before merge confidence can be restored.
-- PR URL: GitHub PR #49 (draft; canonical repository).
+- Merge dependency: none for the merged Wave 0 documentation.
+- Remaining risks: the backend accepted-ADR snapshot omits newly accepted ADR-0081/0082 and must
+  not be hand-edited; HEY-165 owns the diagnosed UUID/Scribe revalidation failure and its
+  regression-first repair before stable-green confidence can be restored.
+- PR URL: GitHub PR #49 (merged; canonical repository).
 
 ### HEY-144 / goals DO schema
 
-- Owner: Codex Wave 1 worker, unassigned until Wave 0 merges.
-- Worktree: not created.
-- Branch: `codex/hey-144-goals-do-schema`.
-- Baseline SHA: current `origin/main` only after the human-approved Wave 0 merge.
-- Exact owned files: none; no ownership manifest is accepted yet.
-- Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
-  afterward, Supabase migrations, prompt composition, autonomous goal mutation, and new DO-class
-  migrations remain forbidden.
+- Current execution state: merged in PR #52 at `4e1cac308e935da2b4e514afbe8fe56b94003655`.
+  This is a storage foundation only; it does not claim a durable writer, admission path, or prompt
+  hydration.
+- Owner: merged PR #52; a subsequent slice needs a new, explicit owner.
+- Worktree: historical/dormant; no active worker is assigned.
+- Branch: `codex/hey-144-goals-do-schema` (merged via PR #52).
+- Baseline SHA: `4e1cac308e935da2b4e514afbe8fe56b94003655` merge.
+- Exact owned files: recorded in PR #52; no active ownership manifest remains.
+- Explicitly forbidden files: Supabase migrations, prompt composition, autonomous goal mutation,
+  and new DO-class migrations remain forbidden for follow-up work.
 - Produced interfaces: ordered V2 internal goals migration, strict `GoalRecord` read Module, and
   idempotent provisioning behavior.
 - Consumed interfaces: ADR-0064 `GoalRecord`, current V1 DO schema, and the existing contract.
-- Status: gated by Wave 0 merge and Agent-Ready verification.
-- Commits: none.
-- Verification evidence: none; baseline gate is required before ticket state changes.
-- Review status: no worker or review package assigned.
-- Merge dependency: Wave 0 merge; then human approval for its PR before any downstream rebase.
+- Status: merged storage foundation; downstream writer/admission/hydration work remains separately
+  gated.
+- Commits: PR #52 merge `4e1cac308e935da2b4e514afbe8fe56b94003655`.
+- Verification evidence: recorded in PR #52; this ledger makes no new runtime claim.
+- Review status: merged PR evidence is the authoritative review record.
+- Merge dependency: satisfied for the merged storage foundation; downstream work keeps its own gates.
 - Remaining risks: V1 must remain immutable; DDL and schema version must advance atomically.
-- PR URL: none.
+- PR URL: GitHub PR #52 (merged).
 
 ### HEY-14 / SkillLoader
 
-- Owner: Codex Wave 1 worker, unassigned until Wave 0 merges.
-- Worktree: not created.
-- Branch: `codex/hey-14-skill-loader`.
-- Baseline SHA: current `origin/main` only after the human-approved Wave 0 merge.
+- Owner: unassigned; ticket cannot start until HEY-163 merges.
+- Worktree/branch: any existing historical checkout is not reused; a future activation gets a fresh
+  worktree after HEY-163 merges.
+- Baseline SHA: current `origin/main` after the HEY-163 merge.
 - Exact owned files: none; no ownership manifest is accepted yet.
 - Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
   HEY-16, sanitizer vocabulary, live R2, R2 REST/public buckets, private skill content in telemetry,
@@ -175,22 +182,21 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
   telemetry.
 - Consumed interfaces: ADR-0028 source merge plus four eligibility filters and terminal top-K,
   Scribe skill-body seam, and fake R2 bindings.
-- Status: gated by Wave 0 merge and Agent-Ready verification.
+- Status: Todo; blocked by HEY-163 WorkspaceMount seam.
 - Commits: none.
 - Verification evidence: none; baseline gate is required before ticket state changes.
 - Review status: no worker or review package assigned.
-- Merge dependency: Wave 0 merge; independent of HEY-144 unless it requires a serialized binding
-  change.
+- Merge dependency: HEY-163 first, then a fresh ticket-local ownership/verification gate.
 - Remaining risks: `wrangler.jsonc` and generated binding types become its exclusive write set if
   they change.
 - PR URL: none.
 
 ### HEY-15 / RecallGateway
 
-- Owner: Codex Wave 1 worker, unassigned until Wave 0 merges.
-- Worktree: not created.
-- Branch: `codex/hey-15-recall-before-act`.
-- Baseline SHA: current `origin/main` only after the human-approved Wave 0 merge.
+- Owner: unassigned; ticket cannot start until HEY-14 merges.
+- Worktree/branch: any existing historical checkout is not reused; a future activation gets a fresh
+  worktree after HEY-14 merges.
+- Baseline SHA: current `origin/main` after the HEY-14 merge.
 - Exact owned files: none; no ownership manifest is accepted yet.
 - Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
   `do-schema.ts` and schema-version work until HEY-144 merges, RunLoopDO, prompt composition,
@@ -200,11 +206,11 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
   bounded content-free retrieval-failure telemetry.
 - Consumed interfaces: ADR-0006 provisional union-read rule, ADR-0031 recall interface/fail-open
   behavior, HEY-144 schema result, and Scribe seam.
-- Status: gated by Wave 0 merge and Agent-Ready verification.
+- Status: Todo; blocked by HEY-14.
 - Commits: none.
 - Verification evidence: none; baseline gate is required before ticket state changes.
 - Review status: no worker or review package assigned.
-- Merge dependency: Wave 0 merge; rebase after HEY-144 before any additive FTS migration.
+- Merge dependency: HEY-14 first; rebase after HEY-144 before any additive FTS migration.
 - Remaining risks: FTS may require a next internal DO migration; no Supabase/external migration is in
   scope.
 - PR URL: none.
@@ -232,70 +238,82 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
 
 ### HEY-100 / DO-only static guard
 
-- Owner: Codex Wave 2 worker, unassigned.
-- Worktree: not created.
-- Branch: assigned only after Wave 1 convergence.
-- Baseline SHA: current `origin/main` after Wave 1 convergence.
-- Exact owned files: none; no ownership manifest is accepted yet.
-- Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
-  production JWT minting, `db.forUser()` data-plane implementation, service-role custody changes,
-  and claims that a real custody path exists remain forbidden.
+- Current execution state: merged in PR #50 at `7d02b17370c04a66d3bfb1ed2317c9e563da6910`.
+  It remains a static-only guard and is not a production custody or data-plane claim.
+- Owner: merged PR #50; a subsequent slice needs a new, explicit owner.
+- Worktree: historical/dormant; no active worker is assigned.
+- Branch: `codex/hey-100-do-only-guard` (merged via PR #50).
+- Baseline SHA: `7d02b17370c04a66d3bfb1ed2317c9e563da6910` merge.
+- Exact owned files: recorded in PR #50; no active ownership manifest remains.
+- Explicitly forbidden files: production JWT minting, `db.forUser()` data-plane implementation,
+  service-role custody changes, and claims that a real custody path exists remain forbidden.
 - Produced interfaces: fixture-backed static guards against `invoke-agent` reintroduction and
   service-role reachability in Worker/DO paths.
 - Consumed interfaces: ADR-0052 and ADR-0066 custody constraints.
-- Status: gated by Wave 1 convergence and Agent-Ready verification.
-- Commits: none.
-- Verification evidence: none.
-- Review status: no worker or review package assigned.
-- Merge dependency: Wave 1 convergence; linked non-ready HEY-160 remains the only production-custody
-  follow-up and must not be absorbed.
+- Status: merged static-only guard.
+- Commits: PR #50 merge `7d02b17370c04a66d3bfb1ed2317c9e563da6910`.
+- Verification evidence: recorded in PR #50; this ledger makes no data-plane claim.
+- Review status: merged PR evidence is the authoritative review record.
+- Merge dependency: satisfied for this guard; linked non-ready HEY-160 remains the only
+  production-custody follow-up and must not be absorbed.
 - Remaining risks: false assurance if static protection is described as a production data plane.
-- PR URL: none.
+- PR URL: GitHub PR #50 (merged).
 
 ### HEY-75 / prompt-injection hardening
 
-- Owner: Codex Wave 2 worker, unassigned.
-- Worktree: not created.
-- Branch: assigned only after its Agent-Ready reconciliation.
-- Baseline SHA: current `origin/main` after Wave 1 convergence.
-- Exact owned files: none; no ownership manifest is accepted yet.
-- Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
-  persisted/logged match snippets, copied GPL or unprovenanced corpora, and unrelated sanitizer
-  surfaces remain forbidden.
+- Current execution state: the scorer merged in PR #51 at
+  `2fd798f818213b344e700d98def006e80e0d56ae`; corrective PR #53 is open to restore independent
+  held-out evidence. Linear is In Progress until #53 merges.
+- Owner: Codex corrective worker.
+- Worktree: `/Users/shivanshfulper/.codex/worktrees/hey75-corpus-integrity/waldo-backend`.
+- Branch: `codex/hey-75-corpus-integrity`.
+- Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae`.
+- Exact owned files: held-out hostile/benign fixtures and
+  `packages/runtime/test/scribe-sanitiser.property.test.ts` only.
+- Explicitly forbidden files: persisted/logged match snippets, copied GPL or unprovenanced corpora,
+  and unrelated sanitizer surfaces.
 - Produced interfaces: deterministic prompt-injection scorer with content-free rule/count evidence.
 - Consumed interfaces: ADR-0024 check order, primary OWASP source corpus, and the merged HEY-13
   Scribe surface.
-- Status: gated by Agent-Ready reconciliation and HEY-13 compatibility review.
-- Commits: none.
-- Verification evidence: none.
-- Review status: no worker or review package assigned.
-- Merge dependency: Wave 1 convergence and human approval of its PR.
+- Status: scorer merged; acceptance evidence remains pending PR #53.
+- Commits: PR #51 merge `2fd798f818213b344e700d98def006e80e0d56ae`; PR #53 head
+  `3b0574604b5b908efd63b574abe07ee0800a3c54`.
+- Verification evidence: PR #53 records a fresh full wall, canonical partition-disjointness checks,
+  and a 100% mutation score.
+- Review status: internal security/corpus review evidence passed; GitHub formal review remains
+  pending while PR #53 is a draft.
+- Merge dependency: human approval and merge of PR #53, then fresh-main convergence.
 - Remaining risks: corpus provenance, ReDoS behavior, held-out denominator integrity, and the
   canonical ADR-0024 wording follow-up.
-- PR URL: none.
+- PR URL: GitHub PR #51 (merged); GitHub PR #53 (draft corrective).
 
 ### HEY-141 / egress hardening
 
-- Owner: Codex Wave 3 worker, unassigned.
-- Worktree: not created.
-- Branch: assigned after HEY-100 merges unless the coordinator proves guard/config write sets are
-  disjoint.
-- Baseline SHA: current `origin/main` after HEY-100 human-approved merge.
-- Exact owned files: none; no ownership manifest is accepted yet.
-- Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
-  DNS-rebinding work, redirect chasing, new outbound-fetch adapters, and silent provider behavior
-  expansion remain forbidden.
+- Current execution state: PR #54 is open from a fresh baseline after HEY-100 merged. It is a
+  declared-target parse-only policy, not DNS, redirect, fetch, transport, ACL, or production egress
+  enforcement.
+- Owner: Codex egress-hardening worker.
+- Worktree: `/Users/shivanshfulper/.codex/worktrees/hey141-egress-hardening/waldo-backend`.
+- Branch: `codex/hey-141-egress-hardening`.
+- Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae` after HEY-100 merged.
+- Exact owned files: egress policy/registry plus focused egress policy, schema-conformance, and hook
+  tests.
+- Explicitly forbidden files: DNS-rebinding work, redirect chasing, new outbound-fetch adapters,
+  and silent provider behavior expansion.
 - Produced interfaces: parsed URL conformance guard that covers declared nested URL paths and
   literal-address policy.
 - Consumed interfaces: existing SSRF policy, declared URL schema paths, and primary OWASP guidance.
-- Status: gated by HEY-100 or an explicit disjoint-write proof.
-- Commits: none.
-- Verification evidence: none.
-- Review status: no worker or review package assigned.
-- Merge dependency: HEY-100 merge or documented disjoint-write decision.
+- Status: In Progress in Linear; implementation is in draft PR #54.
+- Commits: PR #54 head `d725c07f9720dadbb58ad6c814fa6467f026355b`.
+- Verification evidence: PR #54 records a fresh full wall plus security, health-data, and
+  adversarial review evidence.
+- Review status: internal security, health-data, and adversarial QA evidence passed; GitHub formal
+  review remains pending while PR #54 is a draft.
+- Merge dependency: HEY-100 dependency is satisfied; human approval/merge of PR #54 and a
+  fresh-main convergence wall remain required.
 - Remaining risks: current nested URL discovery can miss arbitrary fields; literal IPv6 ULA handling
   must not become hostname resolution.
-- PR URL: none.
+- PR URL: GitHub PR #54 (draft).
 
 ### HEY-143 / closure planning
 
@@ -332,14 +350,13 @@ provisional. This preserves ADR-0006 rather than treating raw or untrusted inbox
 
 ## Wave 0 Tracker And GitHub Reconciliation
 
-- Linear HEY-109 is refreshed as the session-bus fallback; its previous state is preserved in a
-  history comment.
-- HEY-14, HEY-15, HEY-144, HEY-75, HEY-100, and HEY-141 have a checked 11-item plan and
-  `agent:codex`; their `ready-for-agent` labels are intentionally withheld until Wave 0 merges and
-  each wave-specific admission gate is true. HEY-16 likewise has `agent:codex` and remains
-  non-ready/Backlog until Wave 1 merges.
-- HEY-75 is assigned, its stale `blocked:harness-runtime` label and HEY-13 blocker are removed, and
-  its corpus/provenance/ReDoS/no-snippet requirements are explicit.
+- Linear HEY-109 remains the session-bus fallback; its 2026-07-12 comment records the current
+  merge tip and draft PRs #53/#54.
+- Wave 0 merge gating is satisfied. Tracker status and labels are refreshed from Linear at update
+  time; this ledger records GitHub merge/draft state and does not replace ticket-specific admission
+  criteria.
+- HEY-75 is In Progress while corrective PR #53 restores held-out corpus independence; HEY-141 is
+  In Progress with draft PR #54. Neither status is a convergence or live-product claim.
 - HEY-16, HEY-75, and HEY-143 no longer list merged HEY-13 as a live blocker. HEY-100 no longer
   lists Done HEY-125; Done HEY-136 no longer lists HEY-15/HEY-16 as live blockers.
 - HEY-143 now directly records its required planning-convergence gates; HEY-14/HEY-144 remain
