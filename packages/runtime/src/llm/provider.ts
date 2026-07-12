@@ -81,7 +81,9 @@ export type RuntimeLLMRequest = {
   trigger: unknown;
   policy?: RoutingPolicy;
   spend?: RouteSpendState;
-  renderRequest(input: RuntimeLLMRenderInput): Omit<LLMRequest, 'model'>;
+  renderRequest(
+    input: RuntimeLLMRenderInput,
+  ): Omit<LLMRequest, 'model'> | Promise<Omit<LLMRequest, 'model'>>;
   renderTemplate?(input: { route: ModelRoute; trigger: ModelRoute['trigger'] }): string;
 };
 
@@ -288,7 +290,7 @@ export class RuntimeLLMProvider {
       }
 
       const skillBudget = this.resolveSkillBudget(plan.step.model);
-      const rendered = input.renderRequest({
+      const rendered = await input.renderRequest({
         route,
         step: plan.step,
         context: plan.context,

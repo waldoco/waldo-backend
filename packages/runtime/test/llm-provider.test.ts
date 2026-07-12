@@ -188,7 +188,7 @@ describe('RuntimeLLMProvider', () => {
     expect(events).toEqual(['factory', 'render', 'gateway']);
   });
 
-  it('resolves a fresh skill budget for every gateway attempt and uses only the chosen model', async () => {
+  it('awaits an async renderer with a fresh skill budget for every gateway attempt', async () => {
     const gateway = new ScriptedGateway((request) =>
       request.step.model === ROSTER.fallback
         ? { ok: true, data: response(request.request.model) }
@@ -199,7 +199,7 @@ describe('RuntimeLLMProvider', () => {
       serializerRevision: typeof SKILL_PROMPT_SERIALIZER_REVISION;
     }> = [];
     const renderedBudgets: ResolvedSkillBudget[] = [];
-    const renderedCounts: Array<Promise<CountResult>> = [];
+    const renderedCounts: CountResult[] = [];
     let minted = 0;
     const provider = new RuntimeLLMProvider({
       gateway,
@@ -217,9 +217,9 @@ describe('RuntimeLLMProvider', () => {
     const result = await provider.complete(
       {
         trigger: 'brief',
-        renderRequest({ context, skillBudget }) {
+        async renderRequest({ context, skillBudget }) {
           renderedBudgets.push(skillBudget);
-          renderedCounts.push(skillBudget.countRenderedSkill(canonicalCountFragment));
+          renderedCounts.push(await skillBudget.countRenderedSkill(canonicalCountFragment));
           return {
             system: context,
             messages: [{ role: 'user', content: 'brief' }],
@@ -241,7 +241,7 @@ describe('RuntimeLLMProvider', () => {
     ]);
     expect(renderedBudgets).toHaveLength(3);
     expect(new Set(renderedBudgets).size).toBe(3);
-    expect(await Promise.all(renderedCounts)).toEqual([
+    expect(renderedCounts).toEqual([
       { ok: true, tokens: 1 },
       { ok: true, tokens: 2 },
       { ok: true, tokens: 3 },
