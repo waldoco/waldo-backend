@@ -177,7 +177,7 @@ follow-up review approved the fix and confirmed primary/retry/fallback each rece
 6. Reconstruct every authority-bearing field from the trusted SkillRow; R2 contributes only body_markdown. Revalidate a full Skill through prepareWithScribe(skill, skillSchema, skill_body, external, currentCanaries) immediately before cache insertion.
 7. Admit an entire refresh atomically only after every candidate succeeds. Store only reconstructed Scribe-admitted Skills and opaque internal version/generation/expiry facts. Do not write any admitted/modified content to storage.
 
-- [ ] **Step 1: Write RED reader tests in small vertical slices**
+- [x] **Step 1: Write RED reader tests in small vertical slices**
 
     1. Exact 20 KiB is permitted while 20 KiB + 1 rejects before any body read, buffer, decoder, parser, cache write, or prompt use.
     2. The list probe rejects 17/truncated/duplicate logical descriptors; all metadata heads happen before the first body request; the 320 KiB aggregate is enforced.
@@ -187,23 +187,32 @@ follow-up review approved the fix and confirmed primary/retry/fallback each rece
     6. Prove Scribe runs before cache entry and re-runs on a cache hit with new canaries; a denial evicts the affected mutable cache entry/source and no raw bytes/frontmatter survive.
     7. A writer-shaped fake's write/commit/discard spies remain untouched. No test fixture contains a real owner/key/bucket or private text.
 
-- [ ] **Step 2: Run focused RED after each slice**
+- [x] **Step 2: Run focused RED after each slice**
 
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- mutable-skill-reader
 
-- [ ] **Step 3: Implement only enough to pass each slice**
+- [x] **Step 3: Implement only enough to pass each slice**
 
     - Use TextDecoder('utf-8', { fatal: true }) with stream decoding and a final decode() call.
     - Use fixed numeric constants scoped to this private reader, with names that make their user-skill-only purpose explicit.
     - Do not log. If an injected telemetry callback is needed for a later seam, give it only a closed failure category and add an assertion that it cannot receive body/identity/version fields.
     - Keep Scribe as an import/call to the existing prepareWithScribe implementation; test its invocation through a module spy that delegates to the real implementation, not an alternate sanitizer.
 
-- [ ] **Step 4: Run GREEN plus adversarial no-sleep proof**
+- [x] **Step 4: Run GREEN plus adversarial no-sleep proof**
 
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- mutable-skill-reader
     npx -y pnpm@10.34.4 --filter @waldo/runtime typecheck
 
     Use fake timers in a race fixture to prove no retry/backoff timer is scheduled. Temporarily remove the generation check, confirm the in-flight invalidation assertion fails, restore it, and do not commit the deliberate mutation.
+
+**Task 3 evidence (2026-07-12):** The deterministic fake-reader suite passed 23 runtime test
+files / 593 tests, runtime typecheck passed, and git diff --check was clean. It covers exact and
+over raw/list boundaries, all-heads-before-open, list/head/body validator races, exact stream
+length, final-flush UTF-8, strict 13-field JSON frontmatter, trusted reconstruction, body-only
+canonical-Scribe admission followed by full-Skill revalidation, cache TTL/current-canary
+re-admission/eviction, inactive-record complete attestation, generation invalidation/no timers,
+and writer-operation spies. Removing the generation guard made the in-flight invalidation assertion
+fail; it was restored. Two independent reviews plus package re-review approved a6d9480..b138338.
 
 ---
 
