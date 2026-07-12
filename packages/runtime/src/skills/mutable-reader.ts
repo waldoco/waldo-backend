@@ -183,9 +183,6 @@ export class MutableSkillReader {
 
       const admitted: Skill[] = [];
       for (const candidate of headed) {
-        // Stale and archived trusted records are intentionally omitted rather than fabricated
-        // as typed loader exclusions. They are still headed above so no body opens early.
-        if (!candidate.active) continue;
         const opened = await this.deps.source.open(
           candidate.descriptor,
           candidate.head,
@@ -201,7 +198,9 @@ export class MutableSkillReader {
         if (preparedBody === null || !this.isCurrent(generation)) return SOURCE_FAILURE;
         const revalidated = revalidateSkillWithBody(reconstructed, preparedBody);
         if (revalidated === null) return SOURCE_FAILURE;
-        admitted.push(copySkill(revalidated));
+        // Lifecycle status controls prompt eligibility only after the complete source object is
+        // version-attested and Scribe-admitted. An inactive malformed object is never ignored.
+        if (candidate.active) admitted.push(copySkill(revalidated));
       }
 
       if (!this.isCurrent(generation)) return SOURCE_FAILURE;

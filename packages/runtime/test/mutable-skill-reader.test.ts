@@ -1,4 +1,4 @@
-import { skillRowSchema, type CanaryTokens, type SkillRow } from '@waldo/contracts';
+import { skillRowSchema, skillSchema, type CanaryTokens, type SkillRow } from '@waldo/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import {
   MutableSkillReader,
@@ -13,6 +13,11 @@ const CANARIES: CanaryTokens = [
   '1111111111111111',
   '2222222222222222',
   '3333333333333333',
+];
+const CANARIES_B: CanaryTokens = [
+  'aaaaaaaaaaaaaaaa',
+  'bbbbbbbbbbbbbbbb',
+  'cccccccccccccccc',
 ];
 
 const encoder = new TextEncoder();
@@ -202,6 +207,23 @@ function fixtureEntry(row: SkillRow, text = frontmatter(row)): FixtureEntry {
   };
 }
 
+function fixtureEntryAtRawBytes(row: SkillRow, byteLength: number): FixtureEntry {
+  const headerOnly = frontmatter(row, '');
+  const bodyUnits = byteLength - encoder.encode(headerOnly).byteLength;
+  if (bodyUnits < 0) throw new Error('fixture byte target is smaller than frontmatter');
+  return fixtureEntry(row, frontmatter(row, 'x'.repeat(bodyUnits)));
+}
+
+function fixtureEntryWithClaimedRawBytes(row: SkillRow, byteLength: number): FixtureEntry {
+  const entry = fixtureEntry(row);
+  const validator = entry.descriptor.validator;
+  return {
+    ...entry,
+    descriptor: { ...entry.descriptor, byteLength },
+    head: { byteLength, validator },
+  };
+}
+
 function readerFor(source: MutableSkillReadSource, rows: readonly SkillRow[]): MutableSkillReader {
   return new MutableSkillReader({
     source,
@@ -239,18 +261,61 @@ describe('MutableSkillReader', () => {
 
   it('rejects an over-20KiB declared object before opening, decoding, or caching it', async () => {
     const row = trustedRow();
-    const entry = fixtureEntry(row);
-    const source = new ObservedLogicalSource([
-      {
-        ...entry,
-        head: { byteLength: 20 * 1024 + 1, validator: entry.head?.validator ?? Symbol('missing') },
-      },
-    ]);
+    const source = new ObservedLogicalSource([fixtureEntryWithClaimedRawBytes(row, 20 * 1024 + 1)]);
 
     const result = await readerFor(source, [row]).load(CANARIES);
 
     expect(result).toEqual({ ok: false, failure: 'source_unavailable' });
     expect(source.openCalls).toEqual([]);
+  });
+
+  it('allows exact 20KiB descriptor preflight to reach the bounded body path', async () => {
+    const row = trustedRow();
+    const source = new ObservedLogicalSource([fixtureEntryAtRawBytes(row, 20 * 1024)]);
+
+    // The body intentionally exceeds its separate 5,120-unit policy, but only after the exact
+    // raw descriptor has passed list/head admission and opened one bounded stream.
+    expect(await readerFor(source, [row]).load(CANARIES)).toEqual({
+      ok: false,
+      failure: 'source_unavailable',
+    });
+    expect(source.events.filter((event) => event === 'head')).toHaveLength(1);
+    expect(source.openCalls).toEqual([{ rangeBytes: 20 * 1024 + 1 }]);
+  });
+
+  it('admits an exact 320KiB aggregate preflight and rejects 320KiB plus one before any head or open', async () => {
+    const exactRows = Array.from({ length: 16 }, (_, index) =>
+      trustedRow({ name: `boundary-skill-${index}` }),
+    );
+    const exactSource = new ObservedLogicalSource(
+      exactRows.map((row) => fixtureEntryAtRawBytes(row, 20 * 1024)),
+    );
+
+    // The first body later fails its independent decoded-body cap; all 16 metadata heads prove
+    // that the exact aggregate completed preflight before the first body path began.
+    expect(await readerFor(exactSource, exactRows).load(CANARIES)).toEqual({
+      ok: false,
+      failure: 'source_unavailable',
+    });
+    expect(exactSource.events.filter((event) => event === 'head')).toHaveLength(16);
+    expect(exactSource.openCalls).toHaveLength(1);
+
+    // With at most 16 files and each capped at 20KiB, aggregate overflow is reachable only when
+    // a per-file cap also fails. This is 16 × 20KiB + 1 and must still stop before any I/O.
+    const overRows = Array.from({ length: 16 }, (_, index) =>
+      trustedRow({ name: `overflow-skill-${index}` }),
+    );
+    const overSource = new ObservedLogicalSource(
+      overRows.map((row, index) =>
+        fixtureEntryWithClaimedRawBytes(row, 20 * 1024 + (index === 0 ? 1 : 0)),
+      ),
+    );
+    expect(await readerFor(overSource, overRows).load(CANARIES)).toEqual({
+      ok: false,
+      failure: 'source_unavailable',
+    });
+    expect(overSource.events.filter((event) => event === 'head')).toHaveLength(0);
+    expect(overSource.openCalls).toEqual([]);
   });
 
   it('rejects a truncated, seventeenth, or duplicate logical descriptor before body admission', async () => {
@@ -437,7 +502,7 @@ describe('MutableSkillReader', () => {
     }
   });
 
-  it('omits stale and archived trusted records while retaining independently active mutable candidates', async () => {
+  it('attests stale and archived records before omitting them from active mutable candidates', async () => {
     const active = trustedRow();
     const stale = trustedRow({ name: 'stale-brief', status: 'stale' });
     const archived = trustedRow({ name: 'archived-brief', status: 'archived' });
@@ -453,7 +518,23 @@ describe('MutableSkillReader', () => {
       skills: [expect.objectContaining({ name: active.name })],
     });
     expect(source.events.filter((event) => event === 'head')).toHaveLength(3);
-    expect(source.openCalls).toHaveLength(1);
+    expect(source.openCalls).toHaveLength(3);
+  });
+
+  it('drops the whole source when an otherwise inactive record fails complete admission', async () => {
+    const active = trustedRow();
+    const stale = trustedRow({ name: 'stale-brief', status: 'stale' });
+    const malformedStale = frontmatter(stale).replace('---\n', '--\n');
+    const source = new ObservedLogicalSource([
+      fixtureEntry(active),
+      fixtureEntry(stale, malformedStale),
+    ]);
+
+    expect(await readerFor(source, [active, stale]).load(CANARIES)).toEqual({
+      ok: false,
+      failure: 'source_unavailable',
+    });
+    expect(source.openCalls).toHaveLength(2);
   });
 
   it('drops the entire mutable source for missing, malformed, or non-mutable trusted records', async () => {
@@ -595,7 +676,7 @@ describe('MutableSkillReader', () => {
       if (!first.ok || first.skills[0] === undefined) throw new Error('expected initial admission');
       first.skills[0].body_markdown = 'Caller mutation must not alter the cache.';
 
-      const hit = await reader.load(CANARIES);
+      const hit = await reader.load(CANARIES_B);
       expect(hit).toEqual({
         ok: true,
         skills: [expect.objectContaining({ body_markdown: 'A calm reminder supports the planned brief.' })],
@@ -604,12 +685,20 @@ describe('MutableSkillReader', () => {
       expect(scribeSpy).toHaveBeenCalledTimes(2);
 
       now += 60 * 60 * 1_000;
-      expect(await reader.load(CANARIES)).toEqual({
+      expect(await reader.load(CANARIES_B)).toEqual({
         ok: true,
         skills: [expect.objectContaining({ name: row.name })],
       });
       expect(source.opened).toHaveLength(2);
       expect(scribeSpy).toHaveBeenCalledTimes(3);
+      const expectedCanaries = [CANARIES, CANARIES_B, CANARIES_B] as const;
+      for (const [index, call] of scribeSpy.mock.calls.entries()) {
+        expect(call[0]).toBe('A calm reminder supports the planned brief.');
+        expect(call[1]).toBe(skillSchema.shape.body_markdown);
+        expect(call[2]).toBe('skill_body');
+        expect(call[3]).toBe('external');
+        expect(call[4]).toBe(expectedCanaries[index]);
+      }
     } finally {
       scribeSpy.mockRestore();
     }
@@ -639,6 +728,40 @@ describe('MutableSkillReader', () => {
       expect((await reader.load(CANARIES)).ok).toBe(true);
       expect(source.opened).toHaveLength(2);
       expect(scribeSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      scribeSpy.mockRestore();
+    }
+  });
+
+  it('rejects an invalid body returned by Scribe during full-Skill revalidation without caching it', async () => {
+    const row = trustedRow();
+    const source = new SingleLogicalSource(frontmatter(row));
+    const reader = new MutableSkillReader({
+      source,
+      trustedRecords: { resolve: async () => row },
+    });
+    const original = scribe.prepareWithScribe;
+    let returnInvalidBody = true;
+    const scribeSpy = vi.spyOn(scribe, 'prepareWithScribe').mockImplementation(
+      ((...args: Parameters<typeof original>) => {
+        const actual = original(...args);
+        return returnInvalidBody ? { ok: true, value: '</skill>' } : actual;
+      }) as typeof original,
+    );
+
+    try {
+      expect(await reader.load(CANARIES)).toEqual({ ok: false, failure: 'source_unavailable' });
+      expect(source.opened).toHaveLength(1);
+      expect(scribeSpy.mock.calls[0]?.slice(1)).toEqual([
+        skillSchema.shape.body_markdown,
+        'skill_body',
+        'external',
+        CANARIES,
+      ]);
+
+      returnInvalidBody = false;
+      expect((await reader.load(CANARIES)).ok).toBe(true);
+      expect(source.opened).toHaveLength(2);
     } finally {
       scribeSpy.mockRestore();
     }
