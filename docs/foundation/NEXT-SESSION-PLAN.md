@@ -145,9 +145,13 @@ execution slice.
    remaining HEY-14, HEY-15, and HEY-16 work alongside the already merged HEY-100, HEY-144,
    HEY-75, HEY-141, HEY-163, and HEY-166 foundations before HEY-143 closure planning. This
    authorizes planning only.
-6. **Reliability parallel root:** HEY-165 owns diagnosis of the recurring unchanged
-   `scribe:invalid_payload` tracer/outbox test failure. It does not authorize a workaround or a
-   sanitizer weakening; record its unresolved status on every affected verification wall.
+6. **Reliability parallel root:** HEY-165's draft repair establishes that a numeric-heavy generated
+   UUID v4 is falsely redacted on candidate re-read only when revalidation loses the matching
+   generated `runId` context. It restores the original `event_id` only when it exactly matches that
+   run's generated `runId`; caller-supplied, malformed, and nonmatching IDs remain fail-closed, and
+   Scribe's general detection is unchanged. Keep the deterministic regression and negative cases in
+   the verification wall. Three clean full `verify` runs remain required before merge; local
+   `verify:supabase` is currently blocked by unavailable Docker.
 
 Every wave remains fake-first and forbids live providers, credentials, app traffic, channel delivery,
 production data, and cloud side effects.
