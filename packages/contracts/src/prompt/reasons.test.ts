@@ -165,6 +165,13 @@ describe('canonical skill prompt artifacts', () => {
     expect(renderBlock([])).toBe('');
   });
 
+  it('accepts only canonical skill fragments', () => {
+    if (false) {
+      // @ts-expect-error renderBlock accepts only fragments produced by renderSkill.
+      renderBlock(['unbranded']);
+    }
+  });
+
   it('renders one canonical fragment inside the exact outer fence', () => {
     expect(renderBlock([renderSkill(skillA)])).toBe(
       '<available-skills>\n' +
