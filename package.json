@@ -11,10 +11,11 @@
     "test": "pnpm -r test",
     "verify:node": "pnpm --filter @waldo/contracts test",
     "verify:supabase": "node scripts/verify-supabase.mjs",
+    "verify:supabase:discipline": "node scripts/verify-hey-114-discipline.mjs",
     "verify:workers": "pnpm --filter @waldo/runtime test",
     "verify:property": "pnpm --filter @waldo/runtime test:property",
     "verify:mutation": "pnpm --filter @waldo/runtime test:mutation",
     "verify:guards": "node scripts/guards/run-all.mjs",
-    "verify": "node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:workers && pnpm verify:guards"
+    "verify": "node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase:discipline && pnpm verify:supabase && pnpm verify:workers && pnpm verify:guards"
   }
 }
