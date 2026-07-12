@@ -1,7 +1,7 @@
 # Deferred DO Schema Coverage
 
-Status: HEY-10 scope map.
-Date: 2026-07-09.
+Status: HEY-10 scope map, reconciled after the HEY-144 storage merge.
+Date: 2026-07-12.
 
 Purpose: map the DO SQLite tables deferred from HEY-10 to their owning ADRs and Linear
 implementation tickets, so future work is tracked without expanding the HEY-10 base schema by
@@ -16,7 +16,7 @@ accident.
 | `schedules` | Alarm multiplexer/runtime wake state, explicitly excluded from HEY-10. | ADR-0065 | HEY-123, HEY-135 |
 | `daily_push_budget` | DeliveryGate policy state, not context/memory base schema. | ADR-0068 | HEY-124, HEY-137, HEY-138 |
 | FTS virtual/shadow tables | Retrieval implementation detail; excluded from HEY-10's exact ten-table V1. | ADR-0031, ADR-0007 | HEY-15 |
-| `goals` | Coordinator scope decision: HEY-10 stays exact 10 tables; goals land separately. | ADR-0064 | HEY-144; blocks HEY-16 |
+| `goals` | HEY-10 stays exact 10 tables; the separate V2 storage foundation merged in PR #52. | ADR-0064 | HEY-144 complete; HEY-162 gates full HEY-16 goal hydration |
 | `memory_edges` | Future graph/activation retrieval, not needed for HEY-15 base recall. | ADR-0078 proposed | HEY-145 |
 | `handoff_state` | Future Handoff plan/progress state, not current context lane. | ADR-0080 proposed | HEY-147 |
 | `commitments` | Future prospective-intent state, not current context lane. | ADR-0079 proposed | HEY-146 |
@@ -42,7 +42,8 @@ table.
 
 HEY-10 should create only source-backed tables that directly unblock HEY-15 recall, HEY-14 skill
 loader, HEY-16 prompt hydration, or HEY-13 Scribe proposal lifecycle. HEY-16 can start partial
-prompt hydration from the HEY-10 tables, but full goal hydration remains blocked by HEY-144.
+prompt hydration from the HEY-10 tables and the merged V2 goals storage, but full goal hydration
+still awaits HEY-162's Scribe-backed admission boundary.
 
 If a table is source-backed but not needed by those flows, it should have an ADR/ticket and stay out
 of HEY-10. If a table is needed by those flows but omitted from HEY-10, treat that as a scope
@@ -58,12 +59,12 @@ conflict and rescope before DDL.
 - HEY-10's exact table list excludes `goals`.
 
 Coordinator resolution: keep HEY-10 as the exact 10-table base schema and make HEY-144 the
-dedicated goals DDL slice. HEY-144 blocks full HEY-16 goal hydration before prompt-builder work
-claims complete `active_goals` support.
+dedicated goals DDL slice. HEY-144's storage foundation merged in PR #52; HEY-162 now gates full
+HEY-16 goal hydration before prompt-builder work claims complete `active_goals` support.
 
-Migration order: HEY-144 adds the ordered V2 internal goals migration without mutating V1. If HEY-15
-still needs BM25/FTS5 after rebasing on that merge, it owns the next additive internal DO SQLite
-migration. Supabase and external migrations remain out of scope for both tickets.
+Migration order: HEY-144 added the ordered V2 internal goals migration without mutating V1. If
+HEY-15 still needs BM25/FTS5 after rebasing on that merge, it owns the next additive internal DO
+SQLite migration. Supabase and external migrations remain out of scope for both tickets.
 
 ## Privacy Boundary
 

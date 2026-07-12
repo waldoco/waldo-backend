@@ -1,10 +1,12 @@
 # Next Session Plan - Harness Foundation Waves
 
 Status: Wave 0 reconciliation merged in PR #49. PRs #50 (HEY-100), #52 (HEY-144 storage
-foundation), and #51 (HEY-75 scorer) are merged through `2fd798f`; draft PRs #53 (HEY-75 corpus
-correction) and #54 (HEY-141 egress hardening) remain pending review and merge.
+foundation), #51 (HEY-75 scorer), #53 (HEY-75 corpus correction), #54 (HEY-141 egress
+hardening), #56 (HEY-163 WorkspaceMount seam), and #58 (HEY-166 proposed reader-admission
+policy) are merged through `aff9b51`. HEY-167 is the outstanding canonical
+reader-admission/prompt-budget decision before HEY-14.
 Date: 2026-07-12 IST.
-Baseline: `2fd798f818213b344e700d98def006e80e0d56ae`. HEY-143 remains In Progress because
+Baseline: `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`. HEY-143 remains In Progress because
 provider-readiness is fail-closed and has no real context, provider, sink, staging, or Alpha proof.
 
 ## Start Here
@@ -96,15 +98,21 @@ Built and merged:
 - PR #50's static DO-only runtime guard; it is not a production custody/data-plane claim.
 - PR #52's V2 goals storage foundation; it does not add a durable writer, admission path, or prompt
   hydration.
-- PR #51's deterministic injection scorer; its independent held-out acceptance evidence remains
-  pending corrective PR #53.
+- PR #51's deterministic injection scorer and PR #53's independently held-out corpus correction.
+- PR #54's parse-only declared-target egress policy; it adds no DNS, redirect, fetch, transport, or
+  ACL expansion.
+- PR #56's typed WorkspaceMount contract seam; it adds no R2 binding, runtime mount, writer,
+  deployment, or raw-key API.
+- PR #58's proposed user-skill reader-admission policy; it does not ratify the reader-Scribe boundary
+  or model-aware token counter, which HEY-167 owns.
 
 Not built or not proven:
 
 - a public authenticated product route; the default Worker still returns 404;
 - verified ES256 subject to owner-bound DO routing and two-user negative proof;
 - merged Supabase migrations, RLS, Vault, R2, consent middleware, or all-store deletion runtime;
-- a wired production context schema, recall, skills, or prompt builder;
+- wired context recall, skills, or prompt hydration; the merged goals table has no admitted writer,
+  authenticated routing, or prompt hydration;
 - a real provider RunLoop call, atomic provider-spend reservation, or staging smoke;
 - an asynchronous idempotent in-app adapter; the current runtime sink is synchronous/fake;
 - the morning Brief public projection/OpenAPI/generated client;
@@ -119,20 +127,27 @@ product capability.
 HEY-13 is historical and Done. Its Scribe/taint interface is a consumed foundation, not the next
 execution slice.
 
-1. **Wave 0:** reconciliation merged in PR #49. The numbered sequence below remains the structural
-   dependency plan; it is not an inventory of unstarted work.
-2. **Wave 1:** HEY-144's V2 goals storage foundation is merged. HEY-14 is Todo and blocked by
-   HEY-163's WorkspaceMount seam; HEY-15 is Todo and blocked by HEY-14. Any later FTS work remains
-   an additive internal DO migration after rebase. HEY-14's source merge plus trigger, ACL,
-   connector, and user-state checks form its five-stage eligibility pipeline; deterministic top-K is
-   terminal selection.
-3. **Wave 2:** HEY-100's static guard and HEY-75's initial scorer are merged. Corrective PR #53
-   must merge before an HEY-75 acceptance claim; HEY-160 separately owns any future production
-   per-user JWT/`db.forUser()` custody path and is not convergence proof.
-4. **Wave 3:** HEY-100 is merged and HEY-141 is implemented in draft PR #54. It remains a
-   parse-only declared-target policy with no DNS, redirect, fetch, transport, or ACL expansion.
-5. **Convergence:** a fresh clean `origin/main` must prove HEY-14, HEY-15, HEY-144, HEY-16, HEY-100,
-   HEY-75, and HEY-141 merged before HEY-143 closure planning. This authorizes planning only.
+1. **Wave 0:** reconciliation merged in PR #49. PRs #50, #52, #51/#53, #54, #56, and #58 are
+   merged foundations; this is not a claim of live product capability.
+2. **Current gate:** HEY-163's typed WorkspaceMount seam and HEY-166's proposed reader-admission
+   policy are Done. The dependency lineage is `HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15
+   -> HEY-16`; the remaining execution path starts at HEY-167. HEY-167 owns the required canonical
+   reader-Scribe and model-token-counter decision and must be ratified in `waldo-brain` before
+   HEY-14 implementation.
+3. **Remaining context:** `HEY-167 -> HEY-14 -> HEY-15 -> HEY-16`. HEY-15 retains its serialized
+   schema/rebase discipline, and HEY-16 composes merged HEY-14/15 interfaces; its full goal-
+   hydration path still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
+   static-only, and HEY-160 separately owns any future production per-user JWT/`db.forUser()`
+   custody path.
+4. **Wave 3:** HEY-141 merged in PR #54. It remains a parse-only declared-target policy with no DNS,
+   redirect, fetch, transport, or ACL expansion.
+5. **Convergence:** After an accepted HEY-167 decision, a fresh clean `origin/main` must prove the
+   remaining HEY-14, HEY-15, and HEY-16 work alongside the already merged HEY-100, HEY-144,
+   HEY-75, HEY-141, HEY-163, and HEY-166 foundations before HEY-143 closure planning. This
+   authorizes planning only.
+6. **Reliability parallel root:** HEY-165 owns diagnosis of the recurring unchanged
+   `scribe:invalid_payload` tracer/outbox test failure. It does not authorize a workaround or a
+   sanitizer weakening; record its unresolved status on every affected verification wall.
 
 Every wave remains fake-first and forbids live providers, credentials, app traffic, channel delivery,
 production data, and cloud side effects.
@@ -229,5 +244,5 @@ The Brief seam is not complete until:
   terminal error states without samples or fabricated effects;
 - HEY-156 proves one-path staging cutover and rollback with no legacy fallback.
 
-For this docs promotion, run the docs/guard wall and inspect the complete diff. Do not mark any
-runtime ticket complete.
+For documentation-only updates, run the docs/guard wall and inspect the complete diff. Do not infer
+ticket completion beyond the recorded PR merges.

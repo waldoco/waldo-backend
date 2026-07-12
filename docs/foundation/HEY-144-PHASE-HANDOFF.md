@@ -1,7 +1,7 @@
 # HEY-144 Goals DO Schema Handoff
 
-Status: draft PR [#52](https://github.com/Pin4sf/waldo-backend/pull/52) is open from
-`codex/hey-144-goals-do-schema`; no deployment or live cloud action has been performed.
+Status: merged in [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52); no deployment or live
+cloud action has been performed.
 Date: 2026-07-11 IST.
 
 ## What Was Built
@@ -67,7 +67,7 @@ Date: 2026-07-11 IST.
   raw-health, provider, prompt, logging, or external-service path was introduced.
 - Workflow mapping and adversarial QA found the populated-second-owner proof gap; `661d55e` adds the
   parameterized SQL-metacharacter fixture and a recorded predicate-removal failure.
-- Tracker evidence and future boundary: [HEY-144](https://linear.app/heywaldo/issue/HEY-144/schema-do-sqlite-goals-table-adr-0064-goalrecord-state-home) remains In Progress, while
+- Tracker evidence and future boundary: [HEY-144](https://linear.app/heywaldo/issue/HEY-144/schema-do-sqlite-goals-table-adr-0064-goalrecord-state-home) is Done, while
   [HEY-162](https://linear.app/heywaldo/issue/HEY-162/securitybackend-goal-ingress-scribe-admission-owner-bound-persistence) owns durable goal admission.
 
 ## Hard-Won Lessons
@@ -79,14 +79,15 @@ Date: 2026-07-11 IST.
 
 ## Prerequisites for Next Work
 
-1. Review and merge this branch before an HEY-15 rebase that needs any later schema work.
+1. PR #52 is merged. Any HEY-15 rebase that needs later schema work starts from a fresh current
+   mainline baseline.
 2. Before adding a goal writer or HEY-16 goal hydration, accept a provenance-aware Scribe/admission
    design that separates user intent from measured/provider facts and binds the verified owner.
 3. Keep all raw health values, provider payloads, prompt bodies, and credentials out of the DO.
 4. Treat the missing standalone eval runner and the observed tracer intermittency as explicit
    verification/debt items, not silently resolved by a passing rerun.
 
-## PR Publication Record
+## Historical PR Publication Record
 
 The branch was rebased onto remote `main` at `a257a175d0361df5c129d73144f95ff245cb63d1`, pushed,
 and opened as draft [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52). GitHub compares only
@@ -105,3 +106,12 @@ status until human review and applicable remote CI evidence are available.
 - `docs/superpowers/specs/2026-07-11-hey-144-goals-schema-design.md`
 - `docs/superpowers/plans/2026-07-11-hey-144-goals-schema.md`
 - `docs/foundation/HEY-144-PHASE-HANDOFF.md`
+
+## Post-Merge Record — 2026-07-12 IST
+
+- [observed] The publication-time draft PR #52 merged as
+  `4e1cac308e935da2b4e514afbe8fe56b94003655`.
+- [observed] The merged result establishes V2 goals storage only. It does not add a goal writer,
+  authenticated owner routing, Scribe admission, RunLoop use, or prompt hydration.
+- [decision] HEY-162 retains the durable Scribe-backed admission boundary. Full goal hydration
+  remains deferred until that boundary is implemented and verified.

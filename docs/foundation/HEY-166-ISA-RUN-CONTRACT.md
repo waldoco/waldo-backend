@@ -1,6 +1,7 @@
 # HEY-166 — Workspace Reader Admission ISA Run Contract
 
-**Status:** proposal package; no runtime or provider implementation is admitted by this ticket.
+**Status:** proposal package merged in PR #58; no runtime or provider implementation is admitted by
+this ticket.
 
 ## Current
 
@@ -70,6 +71,6 @@ Explicitly forbidden:
 
 ## Stop Gate
 
-HEY-166 may be reviewed as a proposed policy package. HEY-14 remains blocked by HEY-163, HEY-166,
-and HEY-167 until their relevant PRs/ADR decision are human-approved and merged. This ticket does
-not authorize a live R2 binding, an R2 writer, a deployment, or a canonical ADR edit.
+PR #56 merged HEY-163's contract and PR #58 merged this proposed policy package. HEY-14 remains
+blocked by HEY-167's human-approved canonical ADR decision. This ticket does not authorize a live
+R2 binding, an R2 writer, a deployment, or a canonical ADR edit.

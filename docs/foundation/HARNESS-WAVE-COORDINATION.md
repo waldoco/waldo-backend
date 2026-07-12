@@ -1,9 +1,10 @@
 # Harness Wave Coordination Ledger
 
-Status: Wave 0 reconciliation merged in PR #49 (`a257a175`). PR #50 (HEY-100), PR #52 (HEY-144
-V2 goals storage foundation), and PR #51 (HEY-75 deterministic Scribe injection scoring) are merged
-through `2fd798f`. Corrective PR #53 (HEY-75 held-out corpus) and PR #54 (HEY-141 declared egress
-policy) are open drafts; neither is merged or production evidence.
+Status: Wave 0 reconciliation merged in PR #49 (`a257a175`). The current verified
+`origin/main` tip is `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`: PR #50 (HEY-100),
+PR #52 (HEY-144), PR #51 and corrective PR #53 (HEY-75), PR #54 (HEY-141), PR #56
+(HEY-163), PR #55 (ledger refresh), and PR #58 (HEY-166) are merged. HEY-163 and
+HEY-166 are Done; HEY-167 is the remaining canonical-decision gate for HEY-14.
 
 Updated: 2026-07-12 IST.
 Coordinator: Codex.
@@ -11,7 +12,8 @@ Coordinator: Codex.
 ## Authority And Safety
 
 - Backend baseline: `82f582b5a28530c1fb7800b7fad889590b35e57d` (PR #47 merge).
-- Current merge tip: `2fd798f818213b344e700d98def006e80e0d56ae` (contains PRs #49, #50, #52, and #51).
+- Current verified backend merge tip: `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`
+  after PR #49 -> #50 -> #52 -> #51 -> #53 -> #54 -> #56 -> #55 -> #58.
 - Brain baseline: `75591543053dbdda6cf7c7f0210f8d16f36c3db8` (Brain PR #17 merge).
 - This temporary program assigns Codex the listed implementation tickets. It does not amend the
   mirrored universal rules.
@@ -33,6 +35,8 @@ the applicable command output. A worker report alone is not proof.
 
 Observed facts:
 
+- PR #49 merged the Wave 0 reconciliation at `a257a175`; the subsequent first-parent history is
+  PR #50 at `7d02b173`, PR #52 at `4e1cac30`, and PR #51 at `2fd798f8`.
 - The original `main` checkout is dirty and behind; it is not used for edits, commits, or branches.
 - The coordinator worktree started clean on `codex/hey-109-harness-wave-coordination` at the
   backend baseline and now contains only this coordinator-owned Wave 0 documentation diff.
@@ -44,18 +48,21 @@ Observed facts:
   `@cloudflare/vitest-pool-workers` `0.16.20`, `@cloudflare/workers-types` `4.20260616.1`, Wrangler
   `4.105.0`, fast-check `4.8.0`, and Stryker `9.6.1`. No dependency upgrade is part of Wave 0.
 - [historical] During Wave 0, `git fetch origin main` failed and the coordinator used the pinned
-  baseline plus GitHub evidence. A later authenticated fetch confirmed current `origin/main` at
+  baseline plus GitHub evidence. A later authenticated fetch confirmed then-current `origin/main` at
   `2fd798f818213b344e700d98def006e80e0d56ae`.
 - The local Brain checkout is dirty and predates Brain PR #17. Canonical Brain reads use the pinned
   merge object, never its working tree.
 
-Historical Wave 0 decision: use the pinned merge objects for source truth and stop for human
-approval before merge or implementation. PR #49 subsequently merged; the current execution state
-at the top of this ledger supersedes that admission decision.
+Decision: retain the pinned merge objects as Wave 0 source truth. The Wave 0 merge barrier and the
+HEY-163/HEY-166 engineering prerequisites are complete: PR #56 supplies the typed WorkspaceMount
+seam and PR #58 records the proposed reader-admission policy. That proposal is not a canonical
+reader-Scribe/token-counter decision; HEY-167 must be human-approved in waldo-brain before HEY-14
+begins. Deployment, cloud mutation, and any implementation edit still require their own applicable
+admission and verification.
 
 Falsifier: a fresh authenticated remote read shows either baseline is not the named merge, or a
 required tracker/ADR source contradicts a proposed reconciliation. In that case, revise the ledger
-before writing or merging Wave 0 changes.
+before using it to admit subsequent work.
 
 ## Primary-Source Research Decisions
 
@@ -78,18 +85,20 @@ before writing or merging Wave 0 changes.
 ## Dependency And Merge Order
 
 ```text
-Merged: #49 (coordination) -> #50 (HEY-100) -> #52 (HEY-144 storage foundation)
-  -> #51 (HEY-75 scorer)
-Open (recommended order): #53 (HEY-75 corpus correction), then #54 (HEY-141 declared egress policy)
-  -> remaining existing convergence prerequisites -> fresh clean-main gate
-  -> HEY-143 closure planning only
+Merged history:
+PR #49 -> PR #50 -> PR #52 -> PR #51 -> PR #53 -> PR #54 -> PR #56 -> PR #55 -> PR #58
+
+Remaining critical path:
+HEY-167 canonical reader-Scribe/token-counter ADR ratification
+  -> HEY-14 fresh Agent-Ready admission and implementation
+  -> HEY-15 under its serialized rebase discipline
+  -> HEY-16 after the remaining context interfaces converge
+     (complete goal hydration additionally awaits HEY-162)
+  -> clean-main convergence gate -> HEY-143 closure planning only
 ```
 
-PRs #53 and #54 have no code dependency. Merge #53 first so independent held-out evidence is
-restored before making an HEY-75 acceptance claim.
-
-HEY-15 is the lead context slice, but current Linear state blocks it on HEY-14; HEY-14 is in turn
-blocked on HEY-163. Once admitted, HEY-15 remains read-only at the schema seam until its own
+HEY-15 is the lead recall context slice and is directly blocked by HEY-14; it is indirectly gated by
+HEY-167 through HEY-14. Once admitted, HEY-15 remains read-only at the schema seam until its own
 approved additive migration work. Its default trusted base is committed memory; the accepted
 same-day pending leg, if used, must already be Scribe-sanitized and explicitly provisional. This
 preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
@@ -134,8 +143,8 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
   in Wave 0 and the branch must not claim a stable green wall.
 - Current 2026-07-12 diagnostic evidence is recorded in HEY-165: a generated UUID can be
   credit-card-redacted by Scribe on persisted-candidate revalidation, yielding
-  `scribe:invalid_payload`. The docs-only full wall stopped at that existing runtime failure; no
-  runtime fix is bundled here.
+  `scribe:invalid_payload`. Later passing walls do not establish a fix or erase the recorded
+  intermittent failures; no runtime fix is bundled here.
 - Review status: independent spec/standards, security/privacy/source-discipline, and tracker/GitHub
   reviews passed after their findings were resolved.
 - Merge dependency: none for the merged Wave 0 documentation.
@@ -168,12 +177,93 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
 - Remaining risks: V1 must remain immutable; DDL and schema version must advance atomically.
 - PR URL: GitHub PR #52 (merged).
 
+### HEY-163 / WorkspaceMount contract seam
+
+- Owner: merged PR #56; a subsequent slice needs a new, explicit owner.
+- Worktree: historical/dormant; no active worker is assigned.
+- Branch: `codex/hey-163-workspace-mount` (merged via PR #56).
+- Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae`.
+- Exact owned files: `packages/contracts/src/adapters/workspace.ts`, its tests and barrel export, plus
+  HEY-163's contract plan/design/handoff documents.
+- Explicitly forbidden files: runtime, bindings, R2 client/configuration, writer implementation,
+  sanitiser vocabulary, deployment, and live cloud actions.
+- Produced interfaces: typed allowlisted `WorkspaceMount`, opaque version/write ids, and
+  `WorkspaceBlob` transport seam; no provider mapping or byte-admission policy.
+- Consumed interfaces: ADR-0029, ADR-0076, and existing skill-name contract.
+- Status: Done in Linear; PR #56 merged at `79eb6ef74b2990c367fe15ac046b2c38d97ec236`.
+- Commits: PR #56 merge `79eb6ef74b2990c367fe15ac046b2c38d97ec236`.
+- Verification evidence: PR #56 records a final wall with 49 contract files / 1,190 tests and 20
+  runtime files / 514 tests; typechecks, guards, and diff check passed. Eval suite is absent and no
+  eval pass is claimed.
+- Review status: merged PR evidence is the authoritative review record.
+- Merge dependency: satisfied by PR #56. A later implementation still requires HEY-167 and its own
+  serialized admission.
+- Remaining risks: ADR-0076 writer discipline remains separate; no reader byte policy is accepted.
+- PR URL: GitHub PR #56 (merged).
+
+### HEY-166 / Workspace admission policy
+
+- Owner: merged PR #58; a subsequent slice needs a new, explicit owner.
+- Worktree: historical/dormant; no active worker is assigned.
+- Branch: `codex/hey-166-workspace-policy` (merged via PR #58).
+- Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae`.
+- Exact owned files: HEY-166's ISA contract, phase handoff, research, policy proposal, and plan only.
+- Explicitly forbidden files: `packages/**`, bindings, `wrangler.jsonc`, provider clients, R2 object
+  access, writer/commit code, deployment, cloud actions, and sanitiser vocabulary.
+- Produced interfaces: proposed user-skill reader-admission policy and fake-R2 test matrix only; no
+  runtime interface or accepted ADR change.
+- Consumed interfaces: ADR-0024/0028/0076, current Scribe/Skill contracts, HEY-14 acceptance, and
+  official Cloudflare R2 behavior.
+- Status: Done in Linear; PR #58 merged at `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`. It records
+  a proposed reader-admission policy, not an accepted ADR.
+- Scope: decide proposed reader per-file/total-read bounds and decode/failure/cache/prompt-admission
+  behavior. ADR-0076 separately fixes staged writer-to-commit admission through Scribe/sanitiser,
+  destination, size, and path checks; HEY-166 may identify the later writer-policy owner but cannot
+  implement or unblock a writer/commit path. No arbitrary universal cap, R2 binding, sanitiser
+  widening, or cloud action is admitted.
+- Commits: PR #58 merge `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`.
+- Verification evidence: PR #58 records a final wall with 48 contract files / 1,186 tests and 20
+  runtime files / 514 tests; typechecks, guards, and diff check passed. Eval suite is absent and no
+  eval pass is claimed.
+- Review status: merged PR evidence is the authoritative review record.
+- Merge dependency: HEY-163 is satisfied. HEY-167 must ratify the canonical
+  reader-Scribe/token-counter authority before HEY-14 implementation.
+- Remaining risks: numeric limits and hard token rejections are proposed, not accepted ADR facts.
+- PR URL: GitHub PR #58 (merged).
+
+### HEY-167 / Reader-Scribe and token-budget ADR ratification
+
+- Owner: Codex architecture/security coordinator; canonical-decision proposal only.
+- Worktree: none; a waldo-brain worktree is not admitted until the proposal receives human review.
+- Branch: none.
+- Baseline SHA: not applicable; no canonical-repository branch is admitted.
+- Exact owned files: none until a human-reviewed canonical ADR proposal is admitted.
+- Explicitly forbidden files: backend runtime/contracts, R2 binding/configuration, writer/commit,
+  sanitiser implementation, deployment, and cloud actions.
+- Status: Backlog. HEY-166's proposal is merged; HEY-167 is the remaining active HEY-14 admission
+  gate.
+- Scope: ratify the owner, interface, and fail-closed behavior for a model-aware token counter and
+  clarify whether the existing single Scribe seam admits mutable R2 skills in memory before
+  cache/prompt use. It does not implement a reader, writer, binding, prompt builder, or sanitizer
+  vocabulary change.
+- Produced interfaces: accepted ADR wording only, once reviewed.
+- Consumed interfaces: accepted ADR-0024/0028/0076, HEY-166's proposed reader policy, and current
+  Scribe/Skill contracts.
+- Commits: none.
+- Verification evidence: source conflict and proposal evidence are recorded in HEY-166; no code or
+  canonical ADR diff exists yet.
+- Review status: not started; requires human architecture/ADR review.
+- Merge dependency: HEY-166's proposal prerequisite is satisfied. A human-approved canonical
+  decision must precede HEY-14.
+- Remaining risks: no model-aware counter or read-admission authority is currently accepted.
+- PR URL: none.
+
 ### HEY-14 / SkillLoader
 
-- Owner: unassigned; ticket cannot start until HEY-163 merges.
-- Worktree/branch: any existing historical checkout is not reused; a future activation gets a fresh
-  worktree after HEY-163 merges.
-- Baseline SHA: current `origin/main` after the HEY-163 merge.
+- Owner: unassigned; historical preflight remains evidence only.
+- Worktree/branch: do not reuse a historical checkout. Create a fresh worktree only after HEY-167
+  is accepted and HEY-14 receives a new ownership manifest.
+- Baseline SHA: pin the then-current `origin/main` SHA in that fresh admission record.
 - Exact owned files: none; no ownership manifest is accepted yet.
 - Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
   HEY-16, sanitizer vocabulary, live R2, R2 REST/public buckets, private skill content in telemetry,
@@ -181,12 +271,15 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
 - Produced interfaces: `loadForTrigger(ctx)`, typed exclusion evidence, and bounded source-failure
   telemetry.
 - Consumed interfaces: ADR-0028 source merge plus four eligibility filters and terminal top-K,
-  Scribe skill-body seam, and fake R2 bindings.
-- Status: Todo; blocked by HEY-163 WorkspaceMount seam.
+  Scribe skill-body seam, merged HEY-163 WorkspaceMount seam, merged HEY-166 proposed policy, and
+  HEY-167's future canonical decision.
+- Status: Todo. HEY-163 and HEY-166 are complete; HEY-167 is the remaining active gate.
 - Commits: none.
-- Verification evidence: none; baseline gate is required before ticket state changes.
+- Verification evidence: historical preflight found the typed WorkspaceMount/R2 seam absent before
+  PR #56; a fresh baseline gate is required before ticket state changes.
 - Review status: no worker or review package assigned.
-- Merge dependency: HEY-163 first, then a fresh ticket-local ownership/verification gate.
+- Merge dependency: accepted HEY-167 ADR decision, then a fresh ticket-local ownership/verification
+  gate; any binding/configuration decision remains serialized.
 - Remaining risks: `wrangler.jsonc` and generated binding types become its exclusive write set if
   they change.
 - PR URL: none.
@@ -199,18 +292,19 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
 - Baseline SHA: current `origin/main` after the HEY-14 merge.
 - Exact owned files: none; no ownership manifest is accepted yet.
 - Explicitly forbidden files: all repository files until a coordinator-approved manifest exists;
-  `do-schema.ts` and schema-version work until HEY-144 merges, RunLoopDO, prompt composition,
-  memory writes, raw health, live providers, channel effects, and sanitizer vocabulary remain
-  forbidden.
+  `do-schema.ts` and schema-version work outside an explicitly admitted FTS migration, RunLoopDO,
+  prompt composition, memory writes, raw health, live providers, channel effects, and sanitizer
+  vocabulary remain forbidden.
 - Produced interfaces: deterministic fail-open RecallGateway, fenced sanitized recall output, and
   bounded content-free retrieval-failure telemetry.
 - Consumed interfaces: ADR-0006 provisional union-read rule, ADR-0031 recall interface/fail-open
   behavior, HEY-144 schema result, and Scribe seam.
-- Status: Todo; blocked by HEY-14.
+- Status: Todo; directly blocked by HEY-14 and indirectly gated by HEY-167 through HEY-14.
 - Commits: none.
 - Verification evidence: none; baseline gate is required before ticket state changes.
 - Review status: no worker or review package assigned.
-- Merge dependency: HEY-14 first; rebase after HEY-144 before any additive FTS migration.
+- Merge dependency: HEY-167 -> HEY-14, then rebase after the merged HEY-144 storage seam before
+  any additive FTS migration.
 - Remaining risks: FTS may require a next internal DO migration; no Supabase/external migration is in
   scope.
 - PR URL: none.
@@ -227,8 +321,9 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
   interfaces remain forbidden.
 - Produced interfaces: REASONS prompt Module and fake-provider/fake-sink integration at the existing
   seams.
-- Consumed interfaces: merged HEY-14, HEY-15, and HEY-144 Modules only.
-- Status: gated by Wave 1 convergence and Agent-Ready verification.
+- Consumed interfaces: merged HEY-144 storage plus merged HEY-14 and HEY-15 Modules.
+- Status: gated by completion of HEY-167 -> HEY-14 -> HEY-15 and Agent-Ready verification; full
+  goal hydration remains gated by HEY-162's Scribe-backed admission boundary.
 - Commits: none.
 - Verification evidence: none.
 - Review status: no worker or review package assigned.
@@ -261,41 +356,39 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
 
 ### HEY-75 / prompt-injection hardening
 
-- Current execution state: the scorer merged in PR #51 at
-  `2fd798f818213b344e700d98def006e80e0d56ae`; corrective PR #53 is open to restore independent
-  held-out evidence. Linear is In Progress until #53 merges.
-- Owner: Codex corrective worker.
-- Worktree: `/Users/shivanshfulper/.codex/worktrees/hey75-corpus-integrity/waldo-backend`.
-- Branch: `codex/hey-75-corpus-integrity`.
-- Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae`.
-- Exact owned files: held-out hostile/benign fixtures and
-  `packages/runtime/test/scribe-sanitiser.property.test.ts` only.
+- Current execution state: scorer merged in PR #51 and its held-out corpus correction merged in PR
+  #53 at `bbb8e91b740c07cbb0c5d7643b7adf26ceaab55a`.
+- Owner: merged PRs #51/#53; no active worker is assigned.
+- Worktree: historical/dormant; no active worker is assigned.
+- Branch: `codex/hey-75-corpus-integrity` (merged via PR #53).
+- Baseline SHA: `bbb8e91b740c07cbb0c5d7643b7adf26ceaab55a` merge.
+- Exact owned files: PR #51 scorer implementation and PR #53 held-out hostile/benign fixtures plus
+  `packages/runtime/test/scribe-sanitiser.property.test.ts`.
 - Explicitly forbidden files: persisted/logged match snippets, copied GPL or unprovenanced corpora,
   and unrelated sanitizer surfaces.
 - Produced interfaces: deterministic prompt-injection scorer with content-free rule/count evidence.
 - Consumed interfaces: ADR-0024 check order, primary OWASP source corpus, and the merged HEY-13
   Scribe surface.
-- Status: scorer merged; acceptance evidence remains pending PR #53.
-- Commits: PR #51 merge `2fd798f818213b344e700d98def006e80e0d56ae`; PR #53 head
-  `3b0574604b5b908efd63b574abe07ee0800a3c54`.
-- Verification evidence: PR #53 records a fresh full wall, canonical partition-disjointness checks,
-  and a 100% mutation score.
-- Review status: internal security/corpus review evidence passed; GitHub formal review remains
-  pending while PR #53 is a draft.
-- Merge dependency: human approval and merge of PR #53, then fresh-main convergence.
+- Status: Done in Linear.
+- Commits: PR #51 merge `2fd798f818213b344e700d98def006e80e0d56ae`; PR #53 merge
+  `bbb8e91b740c07cbb0c5d7643b7adf26ceaab55a`.
+- Verification evidence: PR #53 records a full wall, canonical partition-disjointness checks, and a
+  100% mutation score.
+- Review status: merged PR evidence is authoritative.
+- Merge dependency: satisfied.
 - Remaining risks: corpus provenance, ReDoS behavior, held-out denominator integrity, and the
   canonical ADR-0024 wording follow-up.
-- PR URL: GitHub PR #51 (merged); GitHub PR #53 (draft corrective).
+- PR URL: GitHub PR #51 (merged); GitHub PR #53 (merged corrective).
 
 ### HEY-141 / egress hardening
 
-- Current execution state: PR #54 is open from a fresh baseline after HEY-100 merged. It is a
-  declared-target parse-only policy, not DNS, redirect, fetch, transport, ACL, or production egress
-  enforcement.
-- Owner: Codex egress-hardening worker.
-- Worktree: `/Users/shivanshfulper/.codex/worktrees/hey141-egress-hardening/waldo-backend`.
-- Branch: `codex/hey-141-egress-hardening`.
-- Baseline SHA: `2fd798f818213b344e700d98def006e80e0d56ae` after HEY-100 merged.
+- Current execution state: merged in PR #54 at `3283ea16996143d4b9d6205978e640b630f25fef`. It
+  remains a declared-target parse-only policy, not DNS, redirect, fetch, transport, ACL, or
+  production egress enforcement.
+- Owner: merged PR #54; no active worker is assigned.
+- Worktree: historical/dormant; no active worker is assigned.
+- Branch: `codex/hey-141-egress-hardening` (merged via PR #54).
+- Baseline SHA: `3283ea16996143d4b9d6205978e640b630f25fef` merge.
 - Exact owned files: egress policy/registry plus focused egress policy, schema-conformance, and hook
   tests.
 - Explicitly forbidden files: DNS-rebinding work, redirect chasing, new outbound-fetch adapters,
@@ -303,17 +396,15 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
 - Produced interfaces: parsed URL conformance guard that covers declared nested URL paths and
   literal-address policy.
 - Consumed interfaces: existing SSRF policy, declared URL schema paths, and primary OWASP guidance.
-- Status: In Progress in Linear; implementation is in draft PR #54.
-- Commits: PR #54 head `d725c07f9720dadbb58ad6c814fa6467f026355b`.
+- Status: Done in Linear.
+- Commits: PR #54 merge `3283ea16996143d4b9d6205978e640b630f25fef`.
 - Verification evidence: PR #54 records a fresh full wall plus security, health-data, and
   adversarial review evidence.
-- Review status: internal security, health-data, and adversarial QA evidence passed; GitHub formal
-  review remains pending while PR #54 is a draft.
-- Merge dependency: HEY-100 dependency is satisfied; human approval/merge of PR #54 and a
-  fresh-main convergence wall remain required.
+- Review status: merged PR evidence is authoritative.
+- Merge dependency: satisfied for the declared policy guard.
 - Remaining risks: current nested URL discovery can miss arbitrary fields; literal IPv6 ULA handling
   must not become hostname resolution.
-- PR URL: GitHub PR #54 (draft).
+- PR URL: GitHub PR #54 (merged).
 
 ### HEY-143 / closure planning
 
@@ -350,17 +441,18 @@ preserves ADR-0006 rather than treating raw or untrusted inbox rows as recall.
 
 ## Wave 0 Tracker And GitHub Reconciliation
 
-- Linear HEY-109 remains the session-bus fallback; its 2026-07-12 comment records the current
-  merge tip and draft PRs #53/#54.
-- Wave 0 merge gating is satisfied. Tracker status and labels are refreshed from Linear at update
-  time; this ledger records GitHub merge/draft state and does not replace ticket-specific admission
-  criteria.
-- HEY-75 is In Progress while corrective PR #53 restores held-out corpus independence; HEY-141 is
-  In Progress with draft PR #54. Neither status is a convergence or live-product claim.
+- Linear HEY-109 remains the session-bus fallback. Its post-merge comment should record
+  `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65` and the completed PRs #53, #54, #56, and #58.
+- Wave 0 gating is satisfied. HEY-75, HEY-141, HEY-163, and HEY-166 are Done; HEY-14 is Todo,
+  HEY-15 is Todo, and HEY-16 and HEY-167 are Backlog. HEY-167 is the sole unresolved
+  canonical-decision gate before HEY-14; its completion does not waive HEY-14's own Agent-Ready
+  requirements.
+- The ledger records merged/draft state and does not replace ticket-specific admission criteria.
 - HEY-16, HEY-75, and HEY-143 no longer list merged HEY-13 as a live blocker. HEY-100 no longer
   lists Done HEY-125; Done HEY-136 no longer lists HEY-15/HEY-16 as live blockers.
-- HEY-143 now directly records its required planning-convergence gates; HEY-14/HEY-144 remain
-  transitive through HEY-16, while HEY-153/HEY-110/HEY-156 stay separate Alpha dependencies.
+- HEY-143 now directly records its required planning-convergence gates; HEY-14 remains transitive
+  through HEY-16, while the HEY-144 storage prerequisite is merged and HEY-153/HEY-110/HEY-156 stay
+  separate Alpha dependencies.
 - New non-ready HEY-160 owns future production ES256 per-user JWT, `db.forUser()`, RLS isolation,
   refresh/rotation, and service-role-custody proof. It is related to HEY-100/HEY-125 but is not a
   HEY-143 convergence gate.

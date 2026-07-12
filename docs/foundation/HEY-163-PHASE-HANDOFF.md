@@ -1,7 +1,7 @@
 # Phase HEY-163 → HEY-14 Handoff
 
-Status: contract-only slice independently reviewed and ready for draft-PR publication; HEY-166
-blocks HEY-14 admission and every workspace writer until its bounded-read/admission policy lands.
+Status: contract-only slice merged in PR #56. PR #58 merged HEY-166's proposed bounded
+reader-admission policy; HEY-167 is the remaining canonical ratification gate before HEY-14.
 Date: 2026-07-12 IST.
 Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
 
@@ -42,8 +42,9 @@ Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
   bounds, decode failure, cache, and prompt-budget behavior. `WorkspaceBlob` is deliberately a
   strict materialized transport shape, not a universal numeric-cap policy: its allowed file classes
   need different future limits, and no accepted source supplies one shared byte value. ADR-0076
-  requires numeric size enforcement only for the staged writer/commit path. HEY-14 must not
-  read/cache/decode a blob until HEY-166 supplies its proposed bounded policy and tests.
+  requires numeric size enforcement only for the staged writer/commit path. PR #58 merged the
+  proposed bounded policy and future fake-R2 test matrix; HEY-14 must not read/cache/decode a blob
+  until HEY-167 ratifies the reader-Scribe/token-counter boundary.
 - The initial vocabulary does not admit cold-archive manifests. This does not block HEY-14; a later
   `retrieve()` slice must define its manifest descriptor and conformance fixture rather than pass a
   generic string path.
@@ -94,9 +95,9 @@ Merge base: `2fd798f818213b344e700d98def006e80e0d56ae`.
 
 ## Prerequisites for Next Phase
 
-1. Merge HEY-163, then complete HEY-166's proposed bounded reader/admission policy before
-   starting HEY-14 implementation.
-2. After that policy lands, HEY-14 receives only an already owner-bound `WorkspaceMount`; it may
+1. PR #56 merged HEY-163 and PR #58 merged HEY-166's proposed bounded reader/admission policy.
+   HEY-167 must ratify the canonical reader-Scribe/token-counter boundary before HEY-14 starts.
+2. After that ratification, HEY-14 receives only an already owner-bound `WorkspaceMount`; it may
    call `list({ kind: 'user_skills' })` and `readFile(file)` within the policy's count/byte/decode
    bounds and cache opaque blob versions.
 3. HEY-14 must not construct a user prefix/key, access a bucket/binding, use generic filesystem

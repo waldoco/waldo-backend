@@ -197,3 +197,12 @@ Scribe-backed pre-write boundary in the HEY-144 handoff before opening its draft
   separately accepted follow-up in [HEY-162](https://linear.app/heywaldo/issue/HEY-162/securitybackend-goal-ingress-scribe-admission-owner-bound-persistence).
   Draft [PR #52](https://github.com/Pin4sf/waldo-backend/pull/52) is open; no live action was
   performed.
+
+## Post-Merge Record — 2026-07-12 IST
+
+- [observed] The preceding draft publication record is historical. PR #52 merged as
+  `4e1cac308e935da2b4e514afbe8fe56b94003655`.
+- [observed] V2 goals storage is now on `main`; the plan's intentionally omitted durable admission,
+  authenticated owner-routing, and prompt-hydration behavior remains omitted.
+- [decision] HEY-162 remains the required Scribe-backed admission boundary before full goal
+  hydration can be claimed.

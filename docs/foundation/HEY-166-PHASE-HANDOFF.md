@@ -1,7 +1,7 @@
 # HEY-166 — Workspace Reader Admission Proposal Handoff
 
-**Phase status:** research and policy-design package ready for review. HEY-166 is not complete and
-does not authorize HEY-14 implementation until the proposed decision is accepted.
+**Phase status:** research and policy-design package merged in PR #58. It remains a proposal, not
+an accepted canonical decision, and does not authorize HEY-14 implementation.
 
 ## Delivered
 
@@ -35,10 +35,10 @@ and R2 list/get configuration is bounded and metadata-minimising.
 
 ## Next Owner And Gate
 
-1. Review the HEY-166 policy PR as a proposal, not a deployment or implementation PR.
+1. PR #58 records the HEY-166 policy as a proposal, not a deployment or implementation decision.
 2. HEY-167 must ratify the canonical reader-Scribe/token-counter owner/interface/fail-closed behavior.
-3. After HEY-163, HEY-166, and HEY-167 are human-approved and merged, create a fresh HEY-14 worktree
-   and implement the private R2 mount/SkillLoader through vertical TDD using the proposal's fake-R2
-   matrix.
+3. After HEY-167 is human-approved and merged, create a fresh HEY-14 worktree and implement the
+   private R2 mount/SkillLoader through vertical TDD using the proposal's fake-R2 matrix.
 
-The current merge sequence is `HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15 -> HEY-16`.
+The completed prerequisite lineage is `HEY-163 -> HEY-166`; the remaining merge sequence is
+`HEY-167 -> HEY-14 -> HEY-15 -> HEY-16`.
