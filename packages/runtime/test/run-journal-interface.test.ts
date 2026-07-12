@@ -1,6 +1,9 @@
 import { env } from 'cloudflare:workers';
-import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { RunJournalOutbox } from '../src/run-journal/outbox-runtime';
+import { Scheduler } from '../src/scheduler/multiplexer';
+import type { Deps } from '../src/seams/deps';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -8,6 +11,8 @@ import type { TracerDO } from '../src/tracer/tracer-do';
 const KIND = 'fetch_alert';
 const USER = 'user-runtime-interface-01';
 const CALLER_SUPPLIED_KEY = 'd'.repeat(64);
+const CARD_LIKE_GENERATED_RUN_ID = '40000000-0000-4000-8000-000000000000';
+const OTHER_CARD_LIKE_EVENT_ID = '41111111-1111-4111-8111-111111111111';
 
 type RuntimeInterfaceStub = DurableObjectStub<TracerDO> & {
   startRun(input: StartRunInput): Promise<string>;
@@ -24,6 +29,15 @@ type CrashPoint = 'post_attempt_pre_send' | 'post_sink_pre_ack';
 
 function futureOccurrence(): number {
   return Date.now() + 3_600_000;
+}
+
+function cardLikeRunDeps(): Deps {
+  return {
+    now: () => Date.now(),
+    newRunId: () => CARD_LIKE_GENERATED_RUN_ID,
+    newOutboxId: () => 'outbox-card-like-run-id',
+    sha256Hex: async () => '0'.repeat(64),
+  };
 }
 
 function utcLocalDate(at: number): string {
@@ -143,6 +157,121 @@ async function flush(stub: RuntimeInterfaceStub, runId: string): Promise<void> {
 }
 
 describe('promoted run journal/outbox runtime interface', () => {
+  it('delivers a generated numeric-heavy v4 run ID through scheduled resume after eviction', async () => {
+    const runtime = freshRuntimeStub();
+    const occurrenceAt = Date.now() + 500;
+    const sink = new FakeSink();
+
+    await runInDurableObject(runtime, async (_instance, state) => {
+      const deps = cardLikeRunDeps();
+      const journalOutbox = new RunJournalOutbox(state.storage, deps, sink);
+      const runId = journalOutbox.startRun({
+        userId: USER,
+        trigger: KIND,
+        occurrenceAt,
+      });
+      const scheduled = await new Scheduler(state.storage.sql, state.storage, deps).schedule({
+        id: `handoff:${runId}`,
+        kind: 'handoff',
+        occurrenceAt,
+        dueAt: occurrenceAt,
+        payloadRefs: { run_id: runId },
+      });
+      const persistedCandidate = state.storage.sql
+        .exec<{ candidate_json: string }>('SELECT candidate_json FROM run_candidates WHERE run_id = ?', runId)
+        .one();
+
+      expect(runId).toBe(CARD_LIKE_GENERATED_RUN_ID);
+      expect(JSON.parse(persistedCandidate.candidate_json).event_id).toBe(
+        CARD_LIKE_GENERATED_RUN_ID,
+      );
+      expect(scheduled.payload_refs.run_id).toBe(CARD_LIKE_GENERATED_RUN_ID);
+    });
+
+    await evictDurableObject(runtime);
+
+    await expect(runDurableObjectAlarm(runtime)).resolves.toBe(true);
+
+    expect(sink.observedDeliveries()).toBe(1);
+    expect(await readOutbox(runtime, CARD_LIKE_GENERATED_RUN_ID)).toMatchObject({
+      journalState: 'DONE',
+      outboxRows: 1,
+      status: 'acked',
+    });
+  });
+
+  it('rejects caller-supplied or nonmatching card-like event IDs', async () => {
+    const callerSuppliedRuntime = freshRuntimeStub();
+    const occurrenceAt = futureOccurrence();
+
+    await expect(
+      runInDurableObject(callerSuppliedRuntime, (_instance, state) =>
+        new RunJournalOutbox(state.storage, cardLikeRunDeps(), new FakeSink()).startRun({
+          userId: USER,
+          trigger: KIND,
+          occurrenceAt,
+          candidate: {
+            push_class: KIND,
+            trigger: KIND,
+            event_id: CARD_LIKE_GENERATED_RUN_ID,
+            expires_at: null,
+          },
+        }),
+      ),
+    ).rejects.toThrow('scribe:invalid_payload');
+
+    expect(await runInDurableObject(callerSuppliedRuntime, (_instance, state) => ({
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates')
+        .one().n,
+      governor: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM loop_governor_runs')
+        .one().n,
+      journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
+    }))).toEqual({ candidates: 0, governor: 0, journal: 0 });
+
+    const persistedRuntime = freshRuntimeStub();
+    await runInDurableObject(persistedRuntime, (_instance, state) => {
+      const journalOutbox = new RunJournalOutbox(state.storage, cardLikeRunDeps(), new FakeSink());
+      const runId = journalOutbox.startRun({
+        userId: USER,
+        trigger: KIND,
+        occurrenceAt,
+      });
+      state.storage.sql.exec(
+        'UPDATE run_candidates SET candidate_json = ? WHERE run_id = ?',
+        JSON.stringify({
+          push_class: KIND,
+          trigger: KIND,
+          event_id: OTHER_CARD_LIKE_EVENT_ID,
+          expires_at: null,
+        }),
+        runId,
+      );
+    });
+
+    await evictDurableObject(persistedRuntime);
+
+    await expect(
+      runInDurableObject(persistedRuntime, (_instance, state) =>
+        new RunJournalOutbox(state.storage, cardLikeRunDeps(), new FakeSink()).resumeRun(
+          CARD_LIKE_GENERATED_RUN_ID,
+        ),
+      ),
+    ).rejects.toThrow('scribe:invalid_payload');
+
+    const repaired = await runInDurableObject(persistedRuntime, (_instance, state) => ({
+      candidates: state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM run_candidates')
+        .one().n,
+      outbox: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM outbox').one().n,
+      state: state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', CARD_LIKE_GENERATED_RUN_ID)
+        .one().state,
+    }));
+    expect(repaired).toEqual({ candidates: 0, outbox: 0, state: 'FAILED' });
+  });
+
   it('rejects malformed start input before opening a journal row', async () => {
     const runtime = freshRuntimeStub();
 

@@ -515,7 +515,7 @@ export class RunJournalOutbox {
       } catch {
         throw new Error('scribe:invalid_payload');
       }
-      return prepareCandidateForPersistence(candidate);
+      return prepareCandidateForPersistence(candidate, runId);
     } catch (error) {
       this.storage.transactionSync(() => {
         this.store.deleteCandidate(runId);
