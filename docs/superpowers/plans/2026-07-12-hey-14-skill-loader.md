@@ -312,11 +312,21 @@ also passed.
     - Run a focused security review for untrusted mutable prompt content, cache data minimization, content-free telemetry, and the no-writer boundary.
     - Run a contract review against ADR-0024, ADR-0028, ADR-0076, ADR-0083, and the HEY-166 bounds. Resolve all P0/P1 findings before PR.
 
-- [ ] **Step 4: Publish state without advancing dependent work**
+- [x] **Step 4: Publish state without advancing dependent work**
 
     - Update HEY-14 with source links, test evidence, the Docker verification gap if still present, and its actual status.
     - Create the phase handoff with [observed]/[inference]/[proposed]/[blocked] sections. State that HEY-15 becomes ready only after HEY-14's reviewed merge; HEY-16 remains blocked by HEY-14/15; HEY-143 remains independent and still lacks real-provider/R2/staging/sink/deployment proof.
     - Do not start HEY-15, HEY-16, or HEY-143 until HEY-14 is reviewed and merged.
+
+**Task 5 evidence (2026-07-12):** The targeted matrix passed: contracts 49 files / 1,197 tests;
+the mutable-reader, loader, and provider focused runs each reported 24 runtime files / 625 tests;
+and workspace typechecks/diff check passed. The eval probe found no `tools/eval/run-suite.ts` or
+project eval command. The repository wall passed install, workspace typechecks, and the complete
+contracts suite, then stopped at `verify:supabase` because the local Supabase stack/database
+container is absent; Docker is reachable and no service was started. Follow-up security and contract
+reviews plus the workflow-map/QA-break pass approved the implementation. PR #62 is open and Linear
+HEY-14 records the evidence, P2 static-registry note, and exact downstream blockers. The phase
+handoff is `docs/foundation/HEY-14-PHASE-HANDOFF.md`; HEY-15/16/143 were not started.
 
 ## Acceptance Evidence Map
 
