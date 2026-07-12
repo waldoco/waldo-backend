@@ -15,6 +15,9 @@ import {
   layerInputSchema,
   REASONS_LAYER_INPUTS,
   REASONS_LAYER_JOIN,
+  SKILL_PROMPT_SERIALIZER_REVISION,
+  renderBlock,
+  renderSkill,
   reasonsLayerSchema,
   wrapSkills,
 } from './reasons';
@@ -146,6 +149,55 @@ describe('wrapSkills', () => {
 
   it('renders effectiveness with two decimals (0.925 rounds to 0.93)', () => {
     expect(wrapSkills([skillB])).toContain('effectiveness="0.93"');
+  });
+});
+
+describe('canonical skill prompt artifacts', () => {
+  it('renders one skill as only the inner skill element', () => {
+    expect(renderSkill(skillA)).toBe(
+      '<skill name="monday-team-update" effectiveness="0.70" provenance="user">\n' +
+        'Pull the schedule, draft the update.\n' +
+        '</skill>',
+    );
+  });
+
+  it('renders no fragments as the empty block', () => {
+    expect(renderBlock([])).toBe('');
+  });
+
+  it('renders one canonical fragment inside the exact outer fence', () => {
+    expect(renderBlock([renderSkill(skillA)])).toBe(
+      '<available-skills>\n' +
+        '<skill name="monday-team-update" effectiveness="0.70" provenance="user">\n' +
+        'Pull the schedule, draft the update.\n' +
+        '</skill>\n' +
+        '</available-skills>',
+    );
+  });
+
+  it('joins canonical fragments with exactly one blank line', () => {
+    expect(renderBlock([renderSkill(skillA), renderSkill(skillB)])).toBe(
+      '<available-skills>\n' +
+        '<skill name="monday-team-update" effectiveness="0.70" provenance="user">\n' +
+        'Pull the schedule, draft the update.\n' +
+        '</skill>\n\n' +
+        '<skill name="prep-for-event" effectiveness="0.93" provenance="system">\n' +
+        'Scan the calendar for the next high-stakes event.\n' +
+        '</skill>\n' +
+        '</available-skills>',
+    );
+  });
+
+  it('keeps wrapSkills as the compatibility composition of canonical artifacts', () => {
+    expect(wrapSkills([skillA, skillB])).toBe(
+      renderBlock([renderSkill(skillA), renderSkill(skillB)]),
+    );
+  });
+
+  it('pins a fixed serializer revision without accepting one from callers', () => {
+    expect(SKILL_PROMPT_SERIALIZER_REVISION).toBe('reasons-skill-fence-v1');
+    expect(renderSkill).toHaveLength(1);
+    expect(renderBlock).toHaveLength(1);
   });
 });
 
