@@ -97,6 +97,15 @@ type FaultHooks = {
   crashPoint?: () => RunJournalOutboxCrashPoint | undefined;
 };
 
+type GateCommitInput = {
+  runId: string;
+  kind: PushClass;
+  candidate: DeliveryCandidate;
+  admissionAt: number;
+  outbox: OutboxIntent;
+  expectedVerdict?: 'send' | 'degrade';
+};
+
 export class RunJournalOutbox {
   private readonly journal: Journal;
   private readonly outbox: Outbox;
@@ -325,8 +334,8 @@ export class RunJournalOutbox {
     return runId;
   }
 
-  // Gate-owned enqueue: caller supplies the verdict and timing, while the runtime owns the opaque
-  // payload and deterministic idempotency key.
+  // Public enqueue keeps its caller-provided verdict as an assertion. The internal gate path
+  // commits its own current decision after hashing, so an async yield cannot stale that decision.
   async enqueueOutbox(input: EnqueueOutboxInput): Promise<OutboxRow> {
     const verdict = deliveryVerdictSchema.parse(input.verdict);
     if (verdict !== 'send' && verdict !== 'degrade') {
@@ -334,60 +343,111 @@ export class RunJournalOutbox {
     }
     const candidate = this.readPreparedCandidate(input.run_id);
     const admissionAt = input.admissionAt ?? this.deps.now();
+    const outbox = await this.createOutboxIntent(input.run_id, input.kind, input.created_at);
+    const row = this.commitGate({
+      runId: input.run_id,
+      kind: input.kind,
+      candidate,
+      admissionAt,
+      outbox,
+      expectedVerdict: verdict,
+    });
+    if (row === null) throw new Error(`enqueueOutbox: no outbox row for ${outbox.run_id}`);
+    return row;
+  }
+
+  private async createOutboxIntent(
+    runId: string,
+    kind: PushClass,
+    createdAt: number,
+  ): Promise<OutboxIntent> {
     const idempotencyKey = await this.deps.sha256Hex(
       canonicalDeliverySerialization({
-        run_id: input.run_id,
-        kind: input.kind,
+        run_id: runId,
+        kind,
         payload: PAYLOAD,
       }),
     );
-    const parsed = outboxIntentSchema.parse({
-      run_id: input.run_id,
-      kind: input.kind,
+    return outboxIntentSchema.parse({
+      run_id: runId,
+      kind,
       idempotency_key: idempotencyKey,
       payload: PAYLOAD,
-      created_at: input.created_at,
+      created_at: createdAt,
     });
+  }
+
+  private commitGate(input: GateCommitInput): OutboxRow | null {
     let row: OutboxRow | null = null;
     this.storage.transactionSync(() => {
-      if (input.kind !== candidate.push_class) {
+      if (input.kind !== input.candidate.push_class) {
         throw new Error(
-          `enqueueOutbox kind ${input.kind} does not match candidate ${candidate.push_class}`,
+          `enqueueOutbox kind ${input.kind} does not match candidate ${input.candidate.push_class}`,
         );
       }
-      const run = this.journal.read(input.run_id);
-      if (run === null) throw new Error(`enqueueOutbox: no journal row for ${input.run_id}`);
+      const run = this.journal.read(input.runId);
+      if (run === null) throw new Error(`enqueueOutbox: no journal row for ${input.runId}`);
       if (run.state !== 'GOVERNOR_ADMITTED') {
+        // A duplicate internal tick can yield while hashing, then find that the first tick already
+        // committed the run. Public enqueue and unexpected state regressions remain loud.
+        if (
+          input.expectedVerdict === undefined &&
+          (run.state === 'GATED' ||
+            run.state === 'SINK_SENT' ||
+            run.state === 'ACK_RECORDED' ||
+            run.state === 'DONE' ||
+            run.state === 'FAILED')
+        ) {
+          return;
+        }
         throw new Error(`enqueueOutbox requires GOVERNOR_ADMITTED, got ${run.state}`);
       }
-      const admission = computeAdmission({
-        candidate,
-        classState: this.store.readClassState(run.user_id, candidate, admissionAt),
-        subKindState:
-          candidate.push_class === 'adjustment' && candidate.sub_kind !== undefined
-            ? this.store.readSubKindState(
-                run.user_id,
-                candidate.push_class,
-                candidate.sub_kind,
-                admissionAt,
-              )
-            : undefined,
-        countedSends: this.store.readBudget(run.user_id, admissionAt).sends_total,
-        now: admissionAt,
-      });
-      if (admission.verdict !== verdict) {
+      const admission = this.computeGateAdmission(run, input.candidate, input.admissionAt);
+      if (input.expectedVerdict !== undefined && admission.verdict !== input.expectedVerdict) {
         throw new Error(
-          `enqueueOutbox verdict ${verdict} does not match admission ${admission.verdict}`,
+          `enqueueOutbox verdict ${input.expectedVerdict} does not match admission ${admission.verdict}`,
         );
       }
-      this.journal.stampVerdict(run.run_id, verdict, admission.reason);
-      this.store.applyAdmission(run.user_id, candidate, admission, admissionAt);
-      this.outbox.insert(parsed);
+      if (admission.verdict === 'hold') {
+        this.journal.stampVerdict(run.run_id, admission.verdict, admission.reason);
+        this.store.recordHeld(run.user_id, input.candidate, admission);
+        this.journal.advance(run.run_id, 'FAILED');
+        return;
+      }
+      if (admission.verdict === 'drop') {
+        this.journal.stampVerdict(run.run_id, admission.verdict, admission.reason);
+        this.journal.advance(run.run_id, 'FAILED');
+        return;
+      }
+      this.journal.stampVerdict(run.run_id, admission.verdict, admission.reason);
+      this.store.applyAdmission(run.user_id, input.candidate, admission, input.admissionAt);
+      this.outbox.insert(input.outbox);
       this.journal.advance(run.run_id, 'GATED');
-      row = this.outbox.readRow(parsed.run_id, parsed.kind);
+      row = this.outbox.readRow(input.outbox.run_id, input.outbox.kind);
     });
-    if (row === null) throw new Error(`enqueueOutbox: no outbox row for ${parsed.run_id}`);
     return row;
+  }
+
+  private computeGateAdmission(
+    run: JournalRow,
+    candidate: DeliveryCandidate,
+    admissionAt: number,
+  ) {
+    return computeAdmission({
+      candidate,
+      classState: this.store.readClassState(run.user_id, candidate, admissionAt),
+      subKindState:
+        candidate.push_class === 'adjustment' && candidate.sub_kind !== undefined
+          ? this.store.readSubKindState(
+              run.user_id,
+              candidate.push_class,
+              candidate.sub_kind,
+              admissionAt,
+            )
+          : undefined,
+      countedSends: this.store.readBudget(run.user_id, admissionAt).sends_total,
+      now: admissionAt,
+    });
   }
 
   // kind is a single literal in SLICE-3b; the parameter keeps the call site ready for the deferred
@@ -455,23 +515,7 @@ export class RunJournalOutbox {
   private async runGate(run: JournalRow): Promise<void> {
     const candidate = this.readPreparedCandidate(run.run_id);
     const gateAt = run.occurrence_at;
-    const classState = this.store.readClassState(run.user_id, candidate, gateAt);
-    const budget = this.store.readBudget(run.user_id, gateAt);
-    const admission = computeAdmission({
-      candidate,
-      classState,
-      subKindState:
-        candidate.push_class === 'adjustment' && candidate.sub_kind !== undefined
-          ? this.store.readSubKindState(
-              run.user_id,
-              candidate.push_class,
-              candidate.sub_kind,
-              gateAt,
-            )
-          : undefined,
-      countedSends: budget.sends_total,
-      now: gateAt,
-    });
+    const admission = this.computeGateAdmission(run, candidate, gateAt);
 
     if (admission.verdict === 'hold') {
       this.storage.transactionSync(() => {
@@ -490,14 +534,15 @@ export class RunJournalOutbox {
       return;
     }
 
-    this.crash('pre_gate_commit');
+    const outbox = await this.createOutboxIntent(run.run_id, candidate.push_class, gateAt);
 
-    await this.enqueueOutbox({
-      run_id: run.run_id,
+    this.crash('pre_gate_commit');
+    this.commitGate({
+      runId: run.run_id,
       kind: candidate.push_class,
-      created_at: gateAt,
-      verdict: admission.verdict,
+      candidate,
       admissionAt: gateAt,
+      outbox,
     });
   }
 

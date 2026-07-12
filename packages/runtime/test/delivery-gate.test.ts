@@ -2,6 +2,8 @@ import { env } from 'cloudflare:workers';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import type { PushClass, TriggerType } from '@waldo/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { RunJournalOutbox } from '../src/run-journal/outbox-runtime';
+import type { Deps } from '../src/seams/deps';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -57,6 +59,21 @@ type GateState = {
   countedSends: number;
   heldRows: number;
 };
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  return {
+    promise: new Promise<T>((next) => {
+      resolve = next;
+    }),
+    resolve,
+  };
+}
 
 beforeEach(() => {
   new FakeSink().reset();
@@ -1196,6 +1213,48 @@ describe('DeliveryGate runtime policy state', () => {
     expect(sink.observedDeliveries()).toBe(1);
   });
 
+  it('does not resurrect constellation_first on a new UTC local date', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+
+    const firstRun = await runtime.startRun({
+      userId: USER,
+      trigger: 'dreaming_mode',
+      occurrenceAt: utcOccurrence('2026-01-01'),
+      candidate: {
+        push_class: CONSTELLATION_FIRST,
+        trigger: 'dreaming_mode',
+        event_id: 'constellation-first-2026-01-01',
+        expires_at: null,
+      },
+    });
+    await tick(runtime, firstRun);
+
+    const nextDayRun = await runtime.startRun({
+      userId: USER,
+      trigger: 'dreaming_mode',
+      occurrenceAt: utcOccurrence('2026-01-02'),
+      candidate: {
+        push_class: CONSTELLATION_FIRST,
+        trigger: 'dreaming_mode',
+        event_id: 'constellation-first-2026-01-02',
+        expires_at: null,
+      },
+    });
+    await tick(runtime, nextDayRun);
+
+    expect(await readGateState(runtime, nextDayRun, CONSTELLATION_FIRST)).toMatchObject({
+      journalState: 'FAILED',
+      verdict: 'drop',
+      gateReason: 'once_ever_already_sent',
+      outboxRows: 0,
+    });
+    expect(await classCountForDate(runtime, CONSTELLATION_FIRST, '2026-01-01')).toBe(1);
+    expect(await classCountForDate(runtime, CONSTELLATION_FIRST, '2026-01-02')).toBe(0);
+    expect(sink.observedSendAttempts()).toBe(1);
+    expect(sink.observedDeliveries()).toBe(1);
+  });
+
   it('applies adjustment proposed sub-cap without capping executed adjustments', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
@@ -1302,6 +1361,179 @@ describe('DeliveryGate runtime policy state', () => {
       exemptSends: 0,
       dailyExemptSends: 0,
       countedSends: 3,
+    });
+    expect(sink.observedSendAttempts()).toBe(1);
+    expect(sink.observedDeliveries()).toBe(1);
+  });
+
+  it('serializes two final-slot candidates across async hashing', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const admissionAt = utcOccurrence('2026-01-01');
+    const hashes = [deferred<string>(), deferred<string>()] as const;
+    let hashCalls = 0;
+    let runSequence = 0;
+    let outboxSequence = 0;
+
+    const result = await runInDurableObject(runtime, async (_instance, state) => {
+      state.storage.sql.exec(
+        'INSERT INTO daily_push_budget (user_id, local_date, sends_total) VALUES (?, ?, 2)',
+        USER,
+        utcLocalDate(admissionAt),
+      );
+      const deps: Deps = {
+        now: () => admissionAt,
+        newRunId: () => `delivery-race-run-${++runSequence}`,
+        newOutboxId: () => `delivery-race-outbox-${++outboxSequence}`,
+        sha256Hex: () => {
+          const hash = hashCalls === 0 ? hashes[0] : hashCalls === 1 ? hashes[1] : undefined;
+          hashCalls += 1;
+          if (hash === undefined) throw new Error('unexpected additional hash');
+          return hash.promise;
+        },
+      };
+      const journalOutbox = new RunJournalOutbox(state.storage, deps, sink);
+      const firstRunId = journalOutbox.startRun({
+        userId: USER,
+        trigger: PRE_ACTIVITY_SPOT,
+        occurrenceAt: admissionAt,
+        candidate: {
+          push_class: PRE_ACTIVITY_SPOT,
+          trigger: PRE_ACTIVITY_SPOT,
+          event_id: 'final-slot-a',
+          expires_at: null,
+        },
+      });
+      const secondRunId = journalOutbox.startRun({
+        userId: USER,
+        trigger: PRE_ACTIVITY_SPOT,
+        occurrenceAt: admissionAt,
+        candidate: {
+          push_class: PRE_ACTIVITY_SPOT,
+          trigger: PRE_ACTIVITY_SPOT,
+          event_id: 'final-slot-b',
+          expires_at: null,
+        },
+      });
+
+      const first = journalOutbox.tickRun(firstRunId);
+      const second = journalOutbox.tickRun(secondRunId);
+      expect(hashCalls).toBe(2);
+      hashes[0].resolve('a'.repeat(64));
+      hashes[1].resolve('b'.repeat(64));
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+      return {
+        budget: state.storage.sql
+          .exec<{ sends_total: number }>(
+            'SELECT sends_total FROM daily_push_budget WHERE user_id = ? AND local_date = ?',
+            USER,
+            utcLocalDate(admissionAt),
+          )
+          .one().sends_total,
+        journal: state.storage.sql
+          .exec<{ state: string; verdict: string | null; gate_reason: string | null }>(
+            `SELECT state, verdict, gate_reason
+               FROM journal
+              WHERE run_id IN (?, ?)
+              ORDER BY verdict`,
+            firstRunId,
+            secondRunId,
+          )
+          .toArray(),
+        outboxRows: state.storage.sql
+          .exec<{ n: number }>('SELECT count(*) AS n FROM outbox')
+          .one().n,
+      };
+    });
+
+    expect(result).toEqual({
+      budget: 3,
+      journal: [
+        { state: 'DONE', verdict: 'degrade', gate_reason: 'budget_cap_exhausted' },
+        { state: 'DONE', verdict: 'send', gate_reason: null },
+      ],
+      outboxRows: 2,
+    });
+    expect(sink.observedSendAttempts()).toBe(2);
+    expect(sink.observedDeliveries()).toBe(2);
+  });
+
+  it('treats a duplicate tick that overlaps hashing as a durable no-op', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const admissionAt = utcOccurrence('2026-01-01');
+    const hashes = [deferred<string>(), deferred<string>()] as const;
+    let hashCalls = 0;
+    let outboxSequence = 0;
+
+    const result = await runInDurableObject(runtime, async (_instance, state) => {
+      const deps: Deps = {
+        now: () => admissionAt,
+        newRunId: () => 'delivery-duplicate-tick-run',
+        newOutboxId: () => `delivery-duplicate-tick-outbox-${++outboxSequence}`,
+        sha256Hex: () => {
+          const hash = hashCalls === 0 ? hashes[0] : hashCalls === 1 ? hashes[1] : undefined;
+          hashCalls += 1;
+          if (hash === undefined) throw new Error('unexpected additional hash');
+          return hash.promise;
+        },
+      };
+      const journalOutbox = new RunJournalOutbox(state.storage, deps, sink);
+      const runId = journalOutbox.startRun({
+        userId: USER,
+        trigger: PRE_ACTIVITY_SPOT,
+        occurrenceAt: admissionAt,
+        candidate: {
+          push_class: PRE_ACTIVITY_SPOT,
+          trigger: PRE_ACTIVITY_SPOT,
+          event_id: 'duplicate-tick-event',
+          expires_at: null,
+        },
+      });
+
+      const first = journalOutbox.tickRun(runId);
+      const second = journalOutbox.tickRun(runId);
+      expect(hashCalls).toBe(2);
+      hashes[0].resolve('c'.repeat(64));
+      hashes[1].resolve('c'.repeat(64));
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+      return {
+        budget: state.storage.sql
+          .exec<{ sends_total: number }>(
+            'SELECT sends_total FROM daily_push_budget WHERE user_id = ? AND local_date = ?',
+            USER,
+            utcLocalDate(admissionAt),
+          )
+          .one().sends_total,
+        classCount: state.storage.sql
+          .exec<{ count: number }>(
+            `SELECT count
+               FROM class_state
+              WHERE user_id = ? AND local_date = ? AND push_class = ?`,
+            USER,
+            utcLocalDate(admissionAt),
+            PRE_ACTIVITY_SPOT,
+          )
+          .one().count,
+        journal: state.storage.sql
+          .exec<{ state: string; verdict: string | null }>(
+            'SELECT state, verdict FROM journal WHERE run_id = ?',
+            runId,
+          )
+          .one(),
+        outboxRows: state.storage.sql
+          .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', runId)
+          .one().n,
+      };
+    });
+
+    expect(result).toEqual({
+      budget: 1,
+      classCount: 1,
+      journal: { state: 'DONE', verdict: 'send' },
+      outboxRows: 1,
     });
     expect(sink.observedSendAttempts()).toBe(1);
     expect(sink.observedDeliveries()).toBe(1);
