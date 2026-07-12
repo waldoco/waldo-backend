@@ -121,28 +121,35 @@ approved.
 - The provider-owned factory receives the actual attempted model and serializer revision, closes over the pin/revision/counter, and returns a capability that exposes none of those values to the loader/caller.
 - When no capability is injected, it returns unavailable. There is no character/byte approximation and no live tokenizer integration in HEY-14.
 
-- [ ] **Step 1: Write RED provider tests**
+- [x] **Step 1: Write RED provider tests**
 
     - A render callback receives one opaque capability for the configured model attempt.
     - A gateway-failed primary/fallback path causes a second render with a newly resolved capability for the fallback model; a first-attempt count cannot be reused.
     - The factory receives the exact canonical serializer revision and only the provider's chosen model, never a model from prompt/loader input.
     - Existing render callbacks and provider behavior remain compatible when they ignore the new field.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- llm-provider
 
-- [ ] **Step 3: Implement the minimal closed capability**
+- [x] **Step 3: Implement the minimal closed capability**
 
     - Add the capability to RuntimeLLMRenderInput and mint it immediately before each input.renderRequest call in RuntimeLLMProvider.complete().
     - Keep the resolver dependency optional and fail closed by default.
     - Do not modify gateway request construction, provider network behavior, model roster, or fallback policy.
     - Do not put tokenizer model/revision strings on RuntimeLLMRenderInput or telemetry.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- llm-provider
     npx -y pnpm@10.34.4 --filter @waldo/runtime typecheck
+
+**Task 2 evidence (2026-07-12):** RED observed missing factory/capability delivery, then
+capability opacity/count-normalisation failures before their implementations. The final focused
+runtime run passed 22 files / 570 tests, runtime typecheck passed, and git diff --check was clean.
+Independent review found that asynchronous counter proof could not traverse a synchronous renderer;
+cac6c80 widened the renderer return source-compatibly and awaits it before validation/egress. The
+follow-up review approved the fix and confirmed primary/retry/fallback each receive a fresh capability.
 
 ---
 
