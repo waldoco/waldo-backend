@@ -238,7 +238,7 @@ fail; it was restored. Two independent reviews plus package re-review approved a
 5. A counter unavailable/unmapped/unpinned/mismatched/error, a static fragment above 600, or a final canonical block above 600 × K clears selected so the existing empty wrapSkills result emits no available-skills fence.
 6. Immediately before a selected cached mutable candidate contributes to the result, call the same canonical Scribe seam with current canaries. A denial evicts mutable cache and drops the whole mutable source before static reselection. The final block counted in this task must equal the canonical block later obtained by wrapSkills(selected).
 
-- [ ] **Step 1: Write RED filter/rank tests**
+- [x] **Step 1: Write RED filter/rank tests**
 
     - Zero sources returns { selected: [], excluded: [] }.
     - Each of the five eligibility stages produces the closed contract reason, including ACL privilege escalation and disconnected connector.
@@ -246,7 +246,7 @@ fail; it was restored. Two independent reviews plus package re-review approved a
     - Rank order covers priority pin, effectiveness, last_used, null last_used, and name tie-break; default K and user_message K=8 are locked.
     - A malformed/unavailable mutable source leaves independently loaded system and connector candidates selectable with no mutable-source SkillExclusion.
 
-- [ ] **Step 2: Add RED budget/preference tests**
+- [x] **Step 2: Add RED budget/preference tests**
 
     - Exact 600 fragment passes; mutable 601 with a viable counter drops the entire mutable source and reselects static candidates.
     - unavailable, unmapped_model, unpinned_revision, count_failed, or serializer mismatch produces selected: [] and therefore no available-skills block.
@@ -254,23 +254,33 @@ fail; it was restored. Two independent reviews plus package re-review approved a
     - Default K and user_message K=8 final-block envelopes are tested against canonical renderBlock artifacts, not body lengths.
     - Current-canary re-admission on a mutable cache hit is observable; prompt denial evicts it and reselects static sources.
 
-- [ ] **Step 3: Run RED**
+- [x] **Step 3: Run RED**
 
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- skill-loader
 
-- [ ] **Step 4: Implement minimal deep composition**
+- [x] **Step 4: Implement minimal deep composition**
 
     - Keep helper functions private to loader.ts unless a test needs fake construction through the documented constructor.
     - Preserve only the existing SkillFilterResult output shape and exclusion vocabulary.
     - Keep source failure and token proof state separate from per-skill exclusions.
     - Do not construct REASONS wrapper text in runtime; use only canonical renderSkill/renderBlock/wrapSkills artifacts.
 
-- [ ] **Step 5: Run GREEN and correctness mutation checks**
+- [x] **Step 5: Run GREEN and correctness mutation checks**
 
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- skill-loader
     npx -y pnpm@10.34.4 --filter @waldo/runtime typecheck
 
     Temporarily reverse the final name tie-break and temporarily replace the 601 mutable branch with truncation. Confirm the matching assertions fail, restore both, and do not commit either deliberate mutation.
+
+**Task 4 evidence (2026-07-12):** The focused loader suite passed 24 runtime test files / 625
+tests, runtime and contracts typechecks passed, and `git diff --check` was clean. Independent
+security and contract review found three P1 issues in the initial composition: mutable provenance
+could enter a static source, caller-owned skills could mutate across an awaited counter, and a
+mutable/static name collision was unhandled. Commit `d9cc178` resolves them by atomically
+normalizing/freeze-snapshotting each static source before mutable I/O, rejecting a mismatched static
+source locally, dropping a colliding mutable source, and returning only immutable strict-shape
+snapshots. Follow-up security and contract review approved the result; the adversarial QA break pass
+also passed.
 
 ---
 
@@ -281,7 +291,7 @@ fail; it was restored. Two independent reviews plus package re-review approved a
 - Modify only if verification reveals a task-owned defect: files in the manifest above.
 - Add: docs/foundation/HEY-14-PHASE-HANDOFF.md after all evidence is complete.
 
-- [ ] **Step 1: Run the targeted matrix**
+- [x] **Step 1: Run the targeted matrix**
 
     npx -y pnpm@10.34.4 --filter @waldo/contracts test -- reasons
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- mutable-skill-reader
@@ -289,14 +299,14 @@ fail; it was restored. Two independent reviews plus package re-review approved a
     npx -y pnpm@10.34.4 --filter @waldo/runtime test -- llm-provider
     npx -y pnpm@10.34.4 -r typecheck
 
-- [ ] **Step 2: Run the repository wall**
+- [x] **Step 2: Run the repository wall**
 
     npx -y pnpm@10.34.4 verify
     git diff --check
 
     [blocked] The initial baseline's Docker-backed Supabase verification cannot run in this environment. Record that environmental limitation precisely; do not represent full verify as green unless its Docker subset actually passes.
 
-- [ ] **Step 3: Adversarial QA and review**
+- [x] **Step 3: Adversarial QA and review**
 
     - Invoke the project break-feature workflow: map all reader/cache/prompt paths, then run adversarial QA against the exact failure matrix.
     - Run a focused security review for untrusted mutable prompt content, cache data minimization, content-free telemetry, and the no-writer boundary.
