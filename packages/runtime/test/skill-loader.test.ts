@@ -1,6 +1,7 @@
 import {
   renderBlock,
   renderSkill,
+  skillFilterResultSchema,
   skillSchema,
   wrapSkills,
   type CanaryTokens,
@@ -191,6 +192,7 @@ describe('RuntimeSkillLoader', () => {
       { pinned: true },
     ) as Skill;
     const explicitPriority = makeSkill('priority-pinned', {
+      provenance: 'connector',
       trigger_types: ['user_message'],
       effectiveness: 0.1,
       last_used: null,
@@ -219,6 +221,7 @@ describe('RuntimeSkillLoader', () => {
       last_used: '2026-07-02T00:00:00Z',
     });
     const nullLast = makeSkill('null-last', {
+      provenance: 'connector',
       trigger_types: ['user_message'],
       effectiveness: 0.8,
       last_used: null,
@@ -248,6 +251,10 @@ describe('RuntimeSkillLoader', () => {
       legacyPinned.name,
     ]);
     expect(result.excluded).toEqual([]);
+    expect(skillFilterResultSchema.safeParse(result).success).toBe(true);
+    const returnedLegacyPinned = result.selected.find((skill) => skill.name === legacyPinned.name);
+    expect(returnedLegacyPinned).toBeDefined();
+    expect(Object.hasOwn(returnedLegacyPinned as object, 'pinned')).toBe(false);
   });
 
   it('uses the default top-K when a trigger has no published override', async () => {
@@ -298,7 +305,7 @@ describe('RuntimeSkillLoader', () => {
     ['returns a malformed result', async () => ({ ok: true, skills: 'not-a-skill-list' })],
   ])('keeps independently loaded static sources when mutable reader %s', async (_case, read) => {
     const system = makeSkill('static-system', { effectiveness: 0.7 });
-    const connector = makeSkill('static-connector', { effectiveness: 0.9 });
+    const connector = makeSkill('static-connector', { provenance: 'connector', effectiveness: 0.9 });
     const mutableReader = { load: vi.fn(read) };
     const { skillBudget } = fixtureBudget();
     const loader = new RuntimeSkillLoader({
@@ -330,6 +337,128 @@ describe('RuntimeSkillLoader', () => {
     const result = await loader.loadForTrigger(fixtureContext(skillBudget));
 
     expect(result).toEqual({ selected: [staticSkill], excluded: [] });
+  });
+
+  it('drops the entire system dependency source when it contains a user-authored payload', async () => {
+    const validSystem = makeSkill('valid-system-in-tainted-source', { effectiveness: 0.95 });
+    const injectedUser = makeSkill('injected-user-in-system', {
+      provenance: 'user',
+      effectiveness: 1,
+    });
+    const validConnector = makeSkill('independent-valid-connector', {
+      provenance: 'connector',
+      effectiveness: 0.1,
+    });
+    const { skillBudget } = fixtureBudget();
+    const loader = new RuntimeSkillLoader({
+      systemSkills: [validSystem, injectedUser],
+      connectorSkills: [validConnector],
+      mutableReader: readerWith(),
+    });
+
+    const result = await loader.loadForTrigger(fixtureContext(skillBudget));
+
+    expect(result).toEqual({ selected: [validConnector], excluded: [] });
+  });
+
+  it('drops the entire connector dependency source when it contains an agent-authored payload', async () => {
+    const validSystem = makeSkill('independent-valid-system', { effectiveness: 0.1 });
+    const validConnector = makeSkill('valid-connector-in-tainted-source', {
+      provenance: 'connector',
+      effectiveness: 0.95,
+    });
+    const injectedAgent = makeSkill('injected-agent-in-connector', {
+      provenance: 'agent_authored',
+      effectiveness: 1,
+    });
+    const { skillBudget } = fixtureBudget();
+    const loader = new RuntimeSkillLoader({
+      systemSkills: [validSystem],
+      connectorSkills: [validConnector, injectedAgent],
+      mutableReader: readerWith(),
+    });
+
+    const result = await loader.loadForTrigger(fixtureContext(skillBudget));
+
+    expect(result).toEqual({ selected: [validSystem], excluded: [] });
+  });
+
+  it('drops the whole mutable source on a normalized name collision with a bundled candidate', async () => {
+    const bundled = makeSkill('shared-skill-name', { effectiveness: 0.7 });
+    const mutableDuplicate = makeSkill('shared-skill-name', {
+      provenance: 'user',
+      effectiveness: 1,
+    });
+    const countRenderedSkill = vi.fn(async (fragment: SkillPromptFragment) => {
+      expect(fragment).toBe(renderSkill(bundled));
+      return { ok: true as const, tokens: 1 };
+    });
+    const countRenderedBlock = vi.fn(async (block: SkillPromptBlock) => {
+      expect(block).toBe(renderBlock([renderSkill(bundled)]));
+      return { ok: true as const, tokens: 1 };
+    });
+    const loader = new RuntimeSkillLoader({
+      systemSkills: [bundled],
+      connectorSkills: [],
+      mutableReader: readerWith([mutableDuplicate]),
+    });
+
+    const result = await loader.loadForTrigger(
+      fixtureContext({ countRenderedSkill, countRenderedBlock }),
+    );
+
+    expect(result).toEqual({ selected: [bundled], excluded: [] });
+    expect(countRenderedSkill).toHaveBeenCalledOnce();
+    expect(countRenderedBlock).toHaveBeenCalledOnce();
+    expect(wrapSkills(result.selected)).toBe(renderBlock([renderSkill(bundled)]));
+  });
+
+  it('keeps a frozen canonical snapshot across an asynchronous counter race', async () => {
+    const dependencyOwned = makeSkill('async-snapshot', {
+      body_markdown: 'original snapshot body',
+      required_tools: [],
+    });
+    const expectedFragment = renderSkill(dependencyOwned);
+    const expectedBlock = renderBlock([expectedFragment]);
+    let countedBlock: string | undefined;
+    const countRenderedSkill = vi.fn(async (fragment: SkillPromptFragment) => {
+      expect(fragment).toBe(expectedFragment);
+      await Promise.resolve();
+      dependencyOwned.body_markdown = 'mutated after the fragment was counted';
+      return { ok: true as const, tokens: 1 };
+    });
+    const countRenderedBlock = vi.fn(async (block: SkillPromptBlock) => {
+      countedBlock = block;
+      return { ok: true as const, tokens: 1 };
+    });
+    const mutableReader = {
+      load: vi.fn(async () => {
+        await Promise.resolve();
+        dependencyOwned.body_markdown = 'mutated while the mutable reader awaited';
+        dependencyOwned.required_tools.push('execute_code');
+        return { ok: true as const, skills: [] };
+      }),
+    };
+    const loader = new RuntimeSkillLoader({
+      systemSkills: [dependencyOwned],
+      connectorSkills: [],
+      mutableReader,
+    });
+
+    const result = await loader.loadForTrigger(
+      fixtureContext({ countRenderedSkill, countRenderedBlock }),
+    );
+    const returned = result.selected[0];
+    if (returned === undefined) throw new Error('expected immutable selected snapshot');
+
+    expect(returned.body_markdown).toBe('original snapshot body');
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(returned)).toBe(true);
+    expect(Object.isFrozen(returned.required_tools)).toBe(true);
+    expect(Object.isFrozen(result.selected)).toBe(true);
+    expect(skillFilterResultSchema.safeParse(result).success).toBe(true);
+    expect(countedBlock).toBe(expectedBlock);
+    expect(wrapSkills(result.selected)).toBe(countedBlock);
   });
 
   it('counts the canonical fragment and block artifacts before admitting an exact-600 static skill', async () => {

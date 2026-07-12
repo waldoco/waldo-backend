@@ -38,6 +38,7 @@ export type RuntimeSkillLoaderDeps = Readonly<{
 }>;
 
 type SkillSource = 'system' | 'connector' | 'mutable';
+type StaticSkillSource = Exclude<SkillSource, 'mutable'>;
 
 type Candidate = Readonly<{
   skill: Skill;
@@ -58,12 +59,16 @@ export class RuntimeSkillLoader implements SkillLoader<RuntimeSkillLoadContext> 
   constructor(private readonly deps: RuntimeSkillLoaderDeps) {}
 
   async loadForTrigger(ctx: RuntimeSkillLoadContext): Promise<SkillFilterResult> {
-    const mutableSkills = await this.readMutable(ctx.canaryTokens);
     const staticCandidates = [
-      ...tagSkills(this.deps.systemSkills, 'system'),
-      ...tagSkills(this.deps.connectorSkills, 'connector'),
+      ...tagStaticSource(this.deps.systemSkills, 'system'),
+      ...tagStaticSource(this.deps.connectorSkills, 'connector'),
     ];
-    const selection = selectCandidates([...staticCandidates, ...tagSkills(mutableSkills, 'mutable')], ctx);
+    const mutableSkills = await this.readMutable(ctx.canaryTokens);
+    const staticNames = new Set(staticCandidates.map(({ skill }) => skill.name));
+    const mutableCandidates = mutableSkills.some((skill) => staticNames.has(skill.name))
+      ? []
+      : tagMutableSkills(mutableSkills);
+    const selection = selectCandidates([...staticCandidates, ...mutableCandidates], ctx);
     const proof = await proveSelection(selection.selected, ctx);
     if (proof.kind === 'global_failure') return noFence(selection);
     if (proof.kind === 'admit') return resultFromSelection(selection);
@@ -81,14 +86,14 @@ export class RuntimeSkillLoader implements SkillLoader<RuntimeSkillLoadContext> 
       if (candidate.ok !== true || !Array.isArray(candidate.skills)) return [];
       const skills: Skill[] = [];
       for (const value of candidate.skills) {
-        const parsed = skillSchema.safeParse(value);
+        const parsed = normaliseSkill(value);
         if (
-          !parsed.success ||
-          (parsed.data.provenance !== 'user' && parsed.data.provenance !== 'agent_authored')
+          parsed === null ||
+          (parsed.provenance !== 'user' && parsed.provenance !== 'agent_authored')
         ) {
           return [];
         }
-        skills.push(parsed.data);
+        skills.push(parsed);
       }
       return skills;
     } catch {
@@ -99,18 +104,92 @@ export class RuntimeSkillLoader implements SkillLoader<RuntimeSkillLoadContext> 
 }
 
 function resultFromSelection(selection: CandidateSelection): SkillFilterResult {
-  return {
-    selected: selection.selected.map(({ skill }) => skill),
-    excluded: [...selection.excluded],
-  };
+  return immutableResult(selection.selected.map(({ skill }) => skill), selection.excluded);
 }
 
 function noFence(selection: CandidateSelection): SkillFilterResult {
-  return { selected: [], excluded: [...selection.excluded] };
+  return immutableResult([], selection.excluded);
 }
 
-function tagSkills(skills: readonly Skill[], source: SkillSource): readonly Candidate[] {
-  return skills.map((skill) => ({ skill, source }));
+function tagStaticSource(
+  skills: readonly Skill[],
+  source: StaticSkillSource,
+): readonly Candidate[] {
+  const candidates: Candidate[] = [];
+  for (const value of skills) {
+    const skill = normaliseSkill(value);
+    // A declared bundled source is atomic: a user/agent provenance here would bypass its
+    // separate admission path, so no member of that source is allowed into the merge.
+    if (skill === null || skill.provenance !== source) return [];
+    candidates.push(candidateFor(skill, source));
+  }
+  return candidates;
+}
+
+function tagMutableSkills(skills: readonly Skill[]): readonly Candidate[] {
+  return skills.map((skill) => candidateFor(skill, 'mutable'));
+}
+
+function candidateFor(skill: Skill, source: SkillSource): Candidate {
+  return Object.freeze({ skill, source });
+}
+
+function normaliseSkill(value: unknown): Skill | null {
+  if (value === null || typeof value !== 'object') return null;
+  const candidate = value as Partial<Skill>;
+  const parsed = skillSchema.safeParse({
+    name: candidate.name,
+    version: candidate.version,
+    provenance: candidate.provenance,
+    identity_locked: candidate.identity_locked,
+    provisional: candidate.provisional,
+    trigger_types: candidate.trigger_types,
+    trigger_condition: candidate.trigger_condition,
+    required_tools: candidate.required_tools,
+    required_connectors: candidate.required_connectors,
+    effectiveness: candidate.effectiveness,
+    invocations: candidate.invocations,
+    last_used: candidate.last_used,
+    body_markdown: candidate.body_markdown,
+    created_at: candidate.created_at,
+  });
+  return parsed.success ? snapshotSkill(parsed.data) : null;
+}
+
+function snapshotSkill(skill: Skill): Skill {
+  return Object.freeze({
+    name: skill.name,
+    version: skill.version,
+    provenance: skill.provenance,
+    identity_locked: skill.identity_locked,
+    provisional: skill.provisional,
+    trigger_types: frozenArray(skill.trigger_types),
+    trigger_condition: skill.trigger_condition,
+    required_tools: frozenArray(skill.required_tools),
+    required_connectors: frozenArray(skill.required_connectors),
+    effectiveness: skill.effectiveness,
+    invocations: skill.invocations,
+    last_used: skill.last_used,
+    body_markdown: skill.body_markdown,
+    created_at: skill.created_at,
+  }) as Skill;
+}
+
+function immutableResult(
+  selected: readonly Skill[],
+  excluded: readonly SkillExclusion[],
+): SkillFilterResult {
+  const immutableExcluded = excluded.map((exclusion) =>
+    Object.freeze({ skill_name: exclusion.skill_name, reason: exclusion.reason }) as SkillExclusion,
+  );
+  return Object.freeze({
+    selected: frozenArray(selected),
+    excluded: frozenArray(immutableExcluded),
+  }) as SkillFilterResult;
+}
+
+function frozenArray<T>(values: readonly T[]): T[] {
+  return Object.freeze([...values]) as unknown as T[];
 }
 
 function selectCandidates(
