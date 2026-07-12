@@ -13,10 +13,10 @@ runtime looping are merged.
 PR #44 merged HEY-143 provider-readiness/fail-closed hardening at `b311d54`. HEY-143 remains In
 Progress: no real context/provider/source/sink/staging path has been proved. PR #47 merged HEY-13
 Scribe/sanitizer at `82f582b5`; HEY-13 is historical and Done. Wave 0 merged in PR #49, followed
-by the verified PR #50 -> PR #52 -> PR #51 sequence. HEY-14 preflight passed baseline but found no
-typed WorkspaceMount/R2 seam; contract-only HEY-163 now precedes HEY-166's bounded workspace
-read/admission policy and HEY-167's canonical reader-Scribe/token-budget decision, then HEY-14.
-HEY-144's V2 goals storage foundation is already merged.
+by PRs #50, #52, #51/#53, #54, #56, #55, and #58. HEY-14's historical preflight found no typed
+WorkspaceMount/R2 seam; PR #56 now supplies the contract and PR #58 records the proposed bounded
+reader-admission policy. HEY-167's canonical reader-Scribe/token-budget decision is the remaining
+gate before HEY-14. HEY-144's V2 goals storage foundation is already merged.
 
 The canonical deployable app is
 [`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app), audited at
@@ -47,8 +47,8 @@ closed tickets, retired package names, or pre-HEY-142 sequencing.
 
 | Lane | Next work | Notes |
 | --- | --- | --- |
-| Runtime safety | HEY-141 egress hardening after its own admission | HEY-75 merged in PR #51; HEY-13's single Scribe seam and content-free evidence remain mandatory. |
-| Context | HEY-163 contract fulfillment, HEY-166 bounded workspace admission, HEY-167 canonical reader-Scribe/token budget, then HEY-14, HEY-15 recall, and HEY-16 prompt builder | HEY-14 preflight found no typed WorkspaceMount/R2 seam; do not invent a universal blob cap or a second sanitizer. HEY-144 V2 goals storage merged in PR #52; full goal hydration still awaits HEY-162. |
+| Runtime safety | HEY-141's parse-only egress policy is merged | HEY-75 and its corpus correction are merged in PRs #51/#53; HEY-13's single Scribe seam and content-free evidence remain mandatory. |
+| Context | HEY-167 canonical reader-Scribe/token budget, then HEY-14, HEY-15 recall, and HEY-16 prompt builder | PR #56 merged the WorkspaceMount seam and PR #58 merged the proposed bounded policy; do not invent a universal blob cap or a second sanitizer. HEY-144 V2 goals storage merged in PR #52; full goal hydration still awaits HEY-162. |
 | Provider | HEY-143 remains In Progress | PR #44 is merged; real context/provider/spend/secret/staging proof remains. |
 | Evidence | HEY-111/HEY-142 local evidence is available | Reuse `readRunEvidence`, `replayFixture`, and `scoreRun`; do not create a parallel trace path. |
 | Public Brief seam | HEY-151 -> 153 -> 154 -> 132 -> 28/35/47 -> 156 -> 155 | Side-effect-free GET first; generated client only; no legacy fallback. |
@@ -154,9 +154,9 @@ Completed:
 
 Next:
 
-- HEY-14 preflight passed the `2fd798f8` baseline but found no typed WorkspaceMount/R2 seam.
-  HEY-163 is the contract-only ADR-0029/0076 prerequisite, followed by HEY-166's proposed bounded
-  reader/admission policy and HEY-167's canonical decision, before HEY-14 implementation.
+- HEY-14's historical preflight found no typed WorkspaceMount/R2 seam. PR #56 merged the
+  ADR-0029/0076 contract seam and PR #58 merged the proposed reader/admission policy; HEY-167's
+  canonical decision is the remaining prerequisite before HEY-14 implementation.
 
 After the convergence gate:
 
@@ -173,7 +173,7 @@ Status: active in parallel with auth/public-contract lanes.
 
 Order:
 
-`HEY-10 -> [HEY-144 + (HEY-163 -> HEY-166 -> HEY-167 -> HEY-14) + HEY-15] -> HEY-16`
+`HEY-10 -> [HEY-144 + (HEY-167 -> HEY-14) + HEY-15] -> HEY-16`
 
 Merged evidence:
 
@@ -181,15 +181,14 @@ Merged evidence:
 
 Current and next:
 
-- `HEY-14` SkillLoader preflight passed baseline but found no typed WorkspaceMount/R2 seam.
-  `HEY-163` is the contract-only ADR-0029/0076 prerequisite; `HEY-166` then owns the bounded
-  reader/admission policy and `HEY-167` owns canonical reader-Scribe/token-budget ratification
-  before HEY-14 implementation.
+- `HEY-14` SkillLoader's historical preflight found no typed WorkspaceMount/R2 seam. PR #56 merged
+  the ADR-0029/0076 contract seam and PR #58 merged the proposed reader/admission policy;
+  `HEY-167` owns canonical reader-Scribe/token-budget ratification before HEY-14 implementation.
 - `HEY-15` recall-before-act source/ISA preparation may remain read-only at the schema seam.
 - `HEY-144` V2 goals migration and active-goal storage Module merged in PR #52.
 - `HEY-11` AuditedDB wrapper alongside where its write set is disjoint.
 
-After HEY-163, HEY-166, HEY-167, HEY-14, and HEY-15 interfaces merge:
+After HEY-167, HEY-14, and HEY-15 interfaces merge:
 
 - `HEY-16` REASONS prompt builder. Its complete goal-hydration path also awaits HEY-162's
   Scribe-backed admission boundary.
@@ -363,13 +362,15 @@ Suggested owner: none for V1. Keep this lane parked while Phases 1-6 remain open
 
 ## What To Assign Now
 
-1. Current: `HEY-14` preflight passed the `2fd798f8` baseline but found no typed
-   WorkspaceMount/R2 seam. Contract-only `HEY-163`, then bounded-admission `HEY-166` and canonical
-   ratification `HEY-167`, must land before HEY-14 implementation.
-2. Remaining context: `HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15 -> HEY-16`; HEY-15 source/ISA
-   preparation remains read-only at the schema seam, and full goal hydration awaits `HEY-162`.
-3. Merged post-Wave-0 work: `HEY-100` in PR #50, `HEY-144` in PR #52, and `HEY-75` in PR #51.
-4. `HEY-141` requires its own admission even though HEY-100 is merged.
+1. Current: `HEY-14`'s historical preflight found no typed WorkspaceMount/R2 seam. PR #56 merged
+   the contract and PR #58 merged the proposed policy; canonical ratification `HEY-167` must land
+   before HEY-14 implementation.
+2. Remaining context: `HEY-167 -> HEY-14 -> HEY-15 -> HEY-16`; HEY-15 source/ISA preparation remains
+   read-only at the schema seam, and full goal hydration awaits `HEY-162`.
+3. Merged post-Wave-0 work: `HEY-100` in PR #50, `HEY-144` in PR #52, `HEY-75` in PRs #51/#53,
+   `HEY-141` in PR #54, `HEY-163` in PR #56, and HEY-166's proposal in PR #58.
+4. `HEY-141`'s parse-only policy is merged; any DNS/redirect/fetch/transport/ACL expansion needs
+   its own admission.
 5. Delivery parallel: `HEY-110` Backlog/Phase 5 async idempotent in-app adapter.
 6. Auth/data parallel: `HEY-125` is Done; `HEY-134` and `HEY-114` remain open.
 7. Product contract lane: HEY-151/153/154 first Brief seam, HEY-158 Spots, and the HEY-126 bounded
@@ -652,12 +653,12 @@ For harness/runtime changes, include focused runtime or contract tests and evide
 
 Start from Linear and the active docs, not from archived plans:
 
-- Runtime/safety builder: HEY-13 is historical and Done; HEY-75 merged in PR #51, and HEY-141
-  remains separately admitted work.
-- Context builder: Wave 0 and the PR #50 -> #52 -> #51 sequence are merged. HEY-14 preflight
-  found no typed WorkspaceMount/R2 seam; contract-only HEY-163 is next, then HEY-166 bounded
-  admission and HEY-167 canonical ratification -> HEY-14 -> HEY-15 -> HEY-16 under their documented
-  interface and hydration dependencies.
+- Runtime/safety builder: HEY-13 is historical and Done; HEY-75 and its corpus correction are
+  merged in PRs #51/#53, and HEY-141's parse-only policy is merged in PR #54. Any egress transport
+  expansion remains separately admitted work.
+- Context builder: Wave 0 and PRs #50, #52, #51/#53, #54, #56, and #58 are merged. HEY-14's
+  historical preflight found no typed WorkspaceMount/R2 seam; HEY-167 canonical ratification is
+  next, then HEY-14 -> HEY-15 -> HEY-16 under their documented interface and hydration dependencies.
 - Delivery builder: HEY-110 async idempotent in-app adapter.
 - Infra/provider builder: HEY-125 is Done; HEY-134/114 and the remaining HEY-143 live-path
   dependencies remain.

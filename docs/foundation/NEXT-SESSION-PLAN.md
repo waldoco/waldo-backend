@@ -1,13 +1,13 @@
 # Next Session Plan - Harness Foundation Waves
 
-Status: Wave 0 merged in PR #49. The verified post-Wave-0 order is PR #50 -> PR #52 -> PR #51.
-HEY-14 preflight passed the baseline but found no typed WorkspaceMount/R2 seam; contract-only
-HEY-163, bounded-admission HEY-166, and canonical-decision HEY-167 are now the prerequisites before
-HEY-14.
+Status: Wave 0 reconciliation merged in PR #49. PRs #50 (HEY-100), #52 (HEY-144 storage
+foundation), #51 (HEY-75 scorer), #53 (HEY-75 corpus correction), #54 (HEY-141 egress
+hardening), #56 (HEY-163 WorkspaceMount seam), and #58 (HEY-166 proposed reader-admission
+policy) are merged through `aff9b51`. HEY-167 is the outstanding canonical
+reader-admission/prompt-budget decision before HEY-14.
 Date: 2026-07-12 IST.
-Baseline: `2fd798f818213b344e700d98def006e80e0d56ae`; PR #47 merged HEY-13, and PR #52 merged the
-V2 goals storage foundation. HEY-143 remains In Progress because provider-readiness is fail-closed
-and has no real context, provider, sink, staging, or Alpha proof.
+Baseline: `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`. HEY-143 remains In Progress because
+provider-readiness is fail-closed and has no real context, provider, sink, staging, or Alpha proof.
 
 ## Start Here
 
@@ -95,8 +95,16 @@ Built and merged:
   evidence;
 - the HEY-10 ten-table context schema artifact.
 - HEY-13's destination-aware Scribe/taint runtime and its final property/mutation proof.
-- PR #50's HEY-100 static DO-only conformance guard, PR #52's HEY-144 V2 goals storage foundation,
-  and PR #51's HEY-75 deterministic Scribe injection scorer.
+- PR #50's static DO-only runtime guard; it is not a production custody/data-plane claim.
+- PR #52's V2 goals storage foundation; it does not add a durable writer, admission path, or prompt
+  hydration.
+- PR #51's deterministic injection scorer and PR #53's independently held-out corpus correction.
+- PR #54's parse-only declared-target egress policy; it adds no DNS, redirect, fetch, transport, or
+  ACL expansion.
+- PR #56's typed WorkspaceMount contract seam; it adds no R2 binding, runtime mount, writer,
+  deployment, or raw-key API.
+- PR #58's proposed user-skill reader-admission policy; it does not ratify the reader-Scribe boundary
+  or model-aware token counter, which HEY-167 owns.
 
 Not built or not proven:
 
@@ -119,21 +127,24 @@ product capability.
 HEY-13 is historical and Done. Its Scribe/taint interface is a consumed foundation, not the next
 execution slice.
 
-1. **Wave 0:** the reconciliation merged in PR #49. The observed next merges were PR #50 (HEY-100),
-   PR #52 (HEY-144), and PR #51 (HEY-75).
-2. **Current:** HEY-14 preflight passed the `2fd798f8` baseline but found no typed
-   WorkspaceMount/R2 seam. HEY-163 is the contract-only ADR-0029/0076 fulfillment; HEY-166 owns
-   proposed bounded reader/admission policy; HEY-167 owns the required canonical reader-Scribe and
-   model-token-counter decision. All three block HEY-14 implementation.
-3. **Remaining context:** HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15 -> HEY-16. HEY-15 retains its serialized
-   schema/rebase discipline, and HEY-16 composes merged HEY-14/15 interfaces; its full
-   goal-hydration path still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
+1. **Wave 0:** reconciliation merged in PR #49. PRs #50, #52, #51/#53, #54, #56, and #58 are
+   merged foundations; this is not a claim of live product capability.
+2. **Current gate:** HEY-163's typed WorkspaceMount seam and HEY-166's proposed reader-admission
+   policy are Done. The dependency lineage is `HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15
+   -> HEY-16`; the remaining execution path starts at HEY-167. HEY-167 owns the required canonical
+   reader-Scribe and model-token-counter decision and must be ratified in `waldo-brain` before
+   HEY-14 implementation.
+3. **Remaining context:** `HEY-167 -> HEY-14 -> HEY-15 -> HEY-16`. HEY-15 retains its serialized
+   schema/rebase discipline, and HEY-16 composes merged HEY-14/15 interfaces; its full goal-
+   hydration path still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
    static-only, and HEY-160 separately owns any future production per-user JWT/`db.forUser()`
    custody path.
-4. **Wave 3:** HEY-141 requires its own Agent-Ready admission even though HEY-100 is merged.
-5. **Convergence:** HEY-163, HEY-166, and HEY-167 must land before the remaining HEY-14, HEY-15, HEY-16, and HEY-141
-   work. A fresh clean `origin/main` must prove those results alongside the already merged HEY-100,
-   HEY-144, and HEY-75 before HEY-143 closure planning. This authorizes planning only.
+4. **Wave 3:** HEY-141 merged in PR #54. It remains a parse-only declared-target policy with no DNS,
+   redirect, fetch, transport, or ACL expansion.
+5. **Convergence:** After an accepted HEY-167 decision, a fresh clean `origin/main` must prove the
+   remaining HEY-14, HEY-15, and HEY-16 work alongside the already merged HEY-100, HEY-144,
+   HEY-75, HEY-141, HEY-163, and HEY-166 foundations before HEY-143 closure planning. This
+   authorizes planning only.
 6. **Reliability parallel root:** HEY-165 owns diagnosis of the recurring unchanged
    `scribe:invalid_payload` tracer/outbox test failure. It does not authorize a workaround or a
    sanitizer weakening; record its unresolved status on every affected verification wall.

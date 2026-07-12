@@ -322,35 +322,17 @@ describe('hook registry', () => {
     });
   });
 
-  it('blocks local and metadata hosts at the egress allowlist hook', async () => {
-    await expect(
-      runHooks(
-        'PreToolUse',
-        {
-          event: 'PreToolUse',
-          tool: 'web_search',
-          args: { url: 'http://169.254.169.254/latest/meta-data' },
-        },
-        runtimeCtx(),
-        { registry: [egressAllowlistHook] },
-      ),
-    ).rejects.toMatchObject({
-      hook: 'egress_allowlist_check',
-      code: 'forbidden',
-    });
-  });
-
-  it('blocks IPv6 localhost and IPv4-mapped loopback at the egress allowlist hook', async () => {
-    for (const url of ['http://[::1]/', 'http://[::ffff:127.0.0.1]/']) {
+  it('blocks private hosts at declared egress paths', async () => {
+    for (const host of ['169.254.169.254', 'fc00::1', '::ffff:127.0.0.1']) {
       await expect(
         runHooks(
           'PreToolUse',
           {
             event: 'PreToolUse',
-            tool: 'web_search',
-            args: { url },
+            tool: 'execute_code',
+            args: { allow_hosts: [host] },
           },
-          runtimeCtx(),
+          runtimeCtx({ egressAllowlist: ['fcc.gov'] }),
           { registry: [egressAllowlistHook] },
         ),
       ).rejects.toMatchObject({
@@ -358,6 +340,21 @@ describe('hook registry', () => {
         code: 'forbidden',
       });
     }
+  });
+
+  it('allows a declared public host only when it is configured', async () => {
+    await expect(
+      runHooks(
+        'PreToolUse',
+        {
+          event: 'PreToolUse',
+          tool: 'execute_code',
+          args: { allow_hosts: ['fcc.gov'] },
+        },
+        runtimeCtx({ egressAllowlist: ['fcc.gov'] }),
+        { registry: [egressAllowlistHook] },
+      ),
+    ).resolves.toMatchObject({ event: 'PreToolUse', tool: 'execute_code' });
   });
 
   it('routes PostToolUse text through the injected Scribe sanitiser and replaces safe output', async () => {

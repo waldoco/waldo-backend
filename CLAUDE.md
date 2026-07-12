@@ -31,17 +31,18 @@ Current facts:
 - HEY-13 structured Scribe/sanitizer runtime is merged and Done at `82f582b5`; its final local
   evidence is 1,188 contract tests, 485 runtime tests, 235 property tests, and a 351-mutant lane
   with 342 killed, 9 timed out, and no survivors, uncovered mutants, or errors.
-- Wave 0 reconciliation merged in PR #49 (`a257a175`). The verified subsequent merge order was
-  PR #50 (`7d02b173`, HEY-100) -> PR #52 (`4e1cac30`, HEY-144) -> PR #51 (`2fd798f8`, HEY-75).
-- HEY-14's fresh preflight passed the `2fd798f8` baseline but found no typed WorkspaceMount/R2 seam.
-  HEY-163 is the contract-only ADR-0029/0076 fulfillment; HEY-166 now owns the proposed bounded
-  blob/admission policy; HEY-167 owns the required canonical reader-Scribe/token-budget decision.
-  All three block HEY-14 implementation.
+- Wave 0 reconciliation merged in PR #49 (`a257a175`). The verified current `origin/main` tip is
+  `aff9b518`: PR #50 (HEY-100), #52 (HEY-144), #51/#53 (HEY-75), #54 (HEY-141), #56 (HEY-163),
+  #55 (ledger refresh), and #58 (HEY-166) are merged.
+- HEY-14's historical preflight found no typed WorkspaceMount/R2 seam. PR #56 merged the typed
+  WorkspaceMount contract and PR #58 merged the proposed reader-admission policy. HEY-167 must
+  ratify the reader-Scribe/model-aware token-counter boundary; it is the sole remaining prerequisite
+  for HEY-14 implementation.
 - HEY-150 matrix review and HEY-151/152 contract/cutover work can proceed alongside HEY-125;
   HEY-157 and HEY-159 are parallel roots, not children of HEY-150.
-- HEY-144's V2 goals storage foundation is merged. The remaining context sequence is HEY-163 ->
-  HEY-166 -> HEY-167 -> HEY-14 -> HEY-15 -> HEY-16; HEY-15 retains its admission/rebase discipline.
-  Full goal hydration still awaits HEY-162's Scribe-backed admission boundary.
+- HEY-144's V2 goals storage foundation is merged. The remaining context sequence is HEY-167 ->
+  HEY-14 -> HEY-15 -> HEY-16; HEY-15 retains its admission/rebase discipline. Full goal hydration
+  still awaits HEY-162's Scribe-backed admission boundary.
 - Do not call the harness a complete Pi/Hermes-style agent loop until real context/recall/provider,
   Scribe, delivery, staging, and Alpha proof are wired and verified.
 - The 16-table Supabase/RLS data plane is intended/contracted, not merged or staging-proven.

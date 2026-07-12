@@ -1,9 +1,8 @@
 # Phase Wave 0 → Wave 1 Handoff
 
-Status: Wave 0 is documented, independently reviewed, and committed; its current full wall passes,
-but draft coordinator PR #49 awaits human approval and a review disposition for an intermittent
-unchanged runtime-suite failure. Do not start a Wave 1 implementation worktree or edit before that
-merge barrier clears.
+Status: historical Wave 0 handoff. PR #49 is merged; its pre-merge verification and intermittent
+runtime-suite observations remain evidence only. Current implementation admission follows the active
+coordinator ledger and ticket-local gates.
 
 ## What Was Built
 
@@ -27,20 +26,21 @@ merge barrier clears.
   typechecks, and all guards.
 - Independent reviews: spec/standards, security/privacy/source-discipline, and tracker/GitHub audits
   passed after their findings were incorporated.
-- Draft coordinator PR #49 is open; it is not authorization to begin Wave 1.
+- [historical] Draft coordinator PR #49 was open; it was not authorization to begin Wave 1.
 - No live credentials, real provider/R2 object, channel effect, staging/production write,
   deployment, Supabase mutation, or Cloudflare mutation occurred.
 
 ## What Does Not Work Yet (known issues)
 
-- Wave 1 implementation is not authorized until the reconciliation PR is human-approved and merged.
+- Wave 1 implementation remains gated by ticket-local admission. HEY-167 is the active canonical
+  decision gate before HEY-14; its completion does not waive HEY-14's own Agent-Ready requirements.
 - A first post-edit full verification run had one unchanged tracer idempotency assertion failure.
   The isolated target and ten tracer-file repetitions passed. A later post-commit full wall failed
   in the unchanged `delivery-gate` runtime test with `scribe:invalid_payload`; an isolated repeated
   file run passed five times then failed on its sixth attempt. A succeeding later full wall does not
   establish a cause or erase those observations. Root cause is unconfirmed, so this branch must not
   claim stable runtime-suite health; no runtime change belongs in this documentation phase.
-- Local `git fetch origin main` cannot authenticate. A fresh GitHub connector commit search returned
+- [historical] Local `git fetch origin main` could not authenticate. A fresh GitHub connector commit search returned
   the required SHA as the newest indexed repository commit, but a local branch-ref fetch remains
   unavailable.
 - The standalone eval suite is absent. This phase records a verification-wall result, not an eval
@@ -54,7 +54,7 @@ merge barrier clears.
   If still required after rebase, HEY-15 owns the next additive internal FTS migration.
 - HEY-100 is a static conformance guard only. HEY-160 owns any future production custody/data-plane
   design and is not a HEY-143 convergence gate.
-- Agent-Ready labels are withheld until both the 11-item plan and the real wave admission barrier are
+- Agent-Ready labels were withheld until both the 11-item plan and the Wave 0 admission barrier were
   satisfied; a complete plan is not permission to start early.
 
 ## Hard-Won Lessons
@@ -86,7 +86,7 @@ merge barrier clears.
 - **Impact surface:** coordinator docs and tracker hygiene only; no universal-rule, runtime, or
   external-state mutation.
 
-## Prerequisites for Wave 1
+## Historical Prerequisites for Wave 1
 
 1. Human approval and merge of the Wave 0 coordinator PR.
 2. Fetch/verify the merged baseline; create three new worktrees only then:
@@ -134,3 +134,12 @@ merge barrier clears.
   HEY-167 for canonical reader-Scribe and model-token-budget ratification; the remaining serialized
   context sequence is HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15 -> HEY-16. No raw R2/key
   workaround, invented universal blob cap, or second sanitizer is admitted.
+
+## Post-Prerequisite Merge Outcome — 2026-07-12 IST
+
+- [observed] PR #56 merged the HEY-163 typed WorkspaceMount contract and PR #58 merged the HEY-166
+  proposed reader-admission policy. Neither merge creates an R2 binding, reader implementation,
+  writer, deployment, or accepted model-token-counter decision.
+- [decision] HEY-167 is now the sole remaining canonical-decision gate before a fresh HEY-14
+  ownership/verification admission. The remaining execution sequence is HEY-167 -> HEY-14 ->
+  HEY-15 -> HEY-16.

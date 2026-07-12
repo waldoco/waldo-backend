@@ -62,6 +62,7 @@ import {
   writeTaskArgsSchema,
   archiveThreadArgsSchema,
 } from '@waldo/contracts';
+import { EGRESS_TARGET_PATHS, evaluateDeclaredEgress } from './egress-policy';
 
 export type HookRegistry<Ctx> = readonly HookHandler<Ctx>[];
 
@@ -74,6 +75,7 @@ type HookDecision =
 
 type ToolArgSchema = {
   safeParse(input: unknown): { success: boolean };
+  toJSONSchema(): unknown;
 };
 
 export type HookRuntimeContext = {
@@ -108,7 +110,7 @@ const halt = (reason: string, code: ErrorCode): HookResult => ({
   code,
 });
 
-const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object.freeze({
+export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object.freeze({
   get_crs: getCrsArgsSchema,
   get_health: getHealthArgsSchema,
   query_calendar: queryCalendarArgsSchema,
@@ -342,20 +344,16 @@ export const egressAllowlistHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    for (const host of collectEgressHosts(payload.args)) {
-      if (isBlockedEgressHost(host)) {
-        return halt('blocked egress host', 'forbidden');
-      }
+    const tool = parseToolName(payload.tool);
+    if (!tool.parsed) return tool.result;
 
-      if (
-        ctx.egressAllowlist !== undefined &&
-        !ctx.egressAllowlist.some((allowed) => hostMatchesAllowlist(host, allowed))
-      ) {
-        return halt('host outside egress allowlist', 'forbidden');
-      }
-    }
-
-    return ok();
+    return evaluateDeclaredEgress(
+      payload.args,
+      EGRESS_TARGET_PATHS[tool.data] ?? [],
+      ctx.egressAllowlist,
+    ).ok
+      ? ok()
+      : halt('egress destination denied', 'forbidden');
   },
 };
 
@@ -658,132 +656,6 @@ function decisionToHookResult(
   }
 
   return halt(decision.reason, decision.code ?? defaultCode);
-}
-
-function collectEgressHosts(value: unknown, key = ''): string[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => collectEgressHosts(item, key));
-  }
-
-  if (value === null || typeof value !== 'object') {
-    return typeof value === 'string' && isEgressKey(key) ? hostCandidatesFromString(value) : [];
-  }
-
-  return Object.entries(value).flatMap(([entryKey, entryValue]) =>
-    collectEgressHosts(entryValue, entryKey),
-  );
-}
-
-function isEgressKey(key: string): boolean {
-  return /^(url|uri|host|hostname|endpoint|allow_hosts?)$/i.test(key);
-}
-
-function hostCandidatesFromString(value: string): string[] {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return [];
-  }
-
-  try {
-    return [normaliseHost(new URL(trimmed).hostname)];
-  } catch {
-    const withoutPort = trimmed.replace(/^\[/, '').replace(/\]$/, '').split(':')[0] ?? '';
-    if (/^[a-z0-9.-]+$/i.test(withoutPort) || withoutPort === '::1') {
-      return [normaliseHost(withoutPort)];
-    }
-    return [];
-  }
-}
-
-function normaliseHost(host: string): string {
-  const withoutTrailingDot = host.toLowerCase().replace(/\.$/, '');
-  if (withoutTrailingDot.startsWith('[') && withoutTrailingDot.endsWith(']')) {
-    return withoutTrailingDot.slice(1, -1);
-  }
-
-  return withoutTrailingDot;
-}
-
-function isBlockedEgressHost(host: string): boolean {
-  const normalised = normaliseHost(host);
-  if (
-    normalised === 'localhost' ||
-    normalised.endsWith('.localhost') ||
-    normalised === '::1' ||
-    normalised.startsWith('fe80:') ||
-    normalised.startsWith('fc') ||
-    normalised.startsWith('fd') ||
-    normalised === '0.0.0.0' ||
-    normalised === '169.254.169.254' ||
-    normalised === 'metadata.google.internal'
-  ) {
-    return true;
-  }
-
-  const mappedIpv4 = ipv4FromMappedIpv6(normalised);
-  if (mappedIpv4 !== null) {
-    return isBlockedEgressHost(mappedIpv4);
-  }
-
-  const parts = normalised.split('.').map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-
-  const first = parts[0] ?? Number.NaN;
-  const second = parts[1] ?? Number.NaN;
-  return (
-    first === 10 ||
-    first === 127 ||
-    (first === 169 && second === 254) ||
-    (first === 172 && second >= 16 && second <= 31) ||
-    (first === 192 && second === 168)
-  );
-}
-
-function ipv4FromMappedIpv6(host: string): string | null {
-  if (!host.startsWith('::ffff:')) {
-    return null;
-  }
-
-  const tail = host.slice('::ffff:'.length);
-  if (tail.includes('.')) {
-    return tail;
-  }
-
-  const groups = tail.split(':');
-  if (groups.length === 0 || groups.length > 2) {
-    return null;
-  }
-
-  const high = Number.parseInt(groups[0] ?? '0', 16);
-  const low = Number.parseInt(groups[1] ?? '0', 16);
-  if (
-    !Number.isInteger(high) ||
-    !Number.isInteger(low) ||
-    high < 0 ||
-    high > 0xffff ||
-    low < 0 ||
-    low > 0xffff
-  ) {
-    return null;
-  }
-
-  const value = high * 0x10000 + low;
-  return [
-    Math.floor(value / 0x1000000) % 0x100,
-    Math.floor(value / 0x10000) % 0x100,
-    Math.floor(value / 0x100) % 0x100,
-    value % 0x100,
-  ].join('.');
-}
-
-function hostMatchesAllowlist(host: string, allowed: string): boolean {
-  const normalisedHost = normaliseHost(host);
-  const normalisedAllowed = normaliseHost(allowed);
-  return (
-    normalisedHost === normalisedAllowed || normalisedHost.endsWith(`.${normalisedAllowed}`)
-  );
 }
 
 async function sanitiseHookPayload(

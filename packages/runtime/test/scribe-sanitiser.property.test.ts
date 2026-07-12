@@ -81,6 +81,10 @@ const corpusSets = [
   },
 ] as const;
 
+function normaliseFixtureInput(input: string): string {
+  return input.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+}
+
 const metricArbitrary = fc.constantFrom(
   'hrv',
   'heart_rate',
@@ -455,8 +459,30 @@ describe('Scribe injection corpus', () => {
     expect(calibrationBenign.cases.length + heldOutBenign.cases.length).toBe(100);
   });
 
+  it('keeps held-out inputs disjoint from calibration after canonical normalisation', () => {
+    const calibrationInputs = new Set(
+      [...calibrationHostile.cases, ...calibrationBenign.cases].map((fixture) =>
+        normaliseFixtureInput(fixture.input),
+      ),
+    );
+    const heldOutFixtures = [...heldOutHostile.cases, ...heldOutBenign.cases];
+    const heldOutInputs = heldOutFixtures.map((fixture) => normaliseFixtureInput(fixture.input));
+    const overlappingHeldOutIds = heldOutFixtures
+      .filter((fixture) => calibrationInputs.has(normaliseFixtureInput(fixture.input)))
+      .map((fixture) => fixture.id);
+
+    expect(overlappingHeldOutIds).toEqual([]);
+    expect(new Set(heldOutInputs).size).toBe(heldOutInputs.length);
+  });
+
   it('keeps the calibration decisions fixed without emitting fixture content', () => {
     for (const fixture of [...calibrationHostile.cases, ...calibrationBenign.cases]) {
+      expect(scoreInjection(fixture.input).decision, fixture.id).toBe(fixture.expected);
+    }
+  });
+
+  it('keeps declared held-out labels fixed without emitting fixture content', () => {
+    for (const fixture of [...heldOutHostile.cases, ...heldOutBenign.cases]) {
       expect(scoreInjection(fixture.input).decision, fixture.id).toBe(fixture.expected);
     }
   });

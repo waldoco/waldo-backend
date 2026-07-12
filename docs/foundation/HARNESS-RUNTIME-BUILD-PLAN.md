@@ -2,8 +2,8 @@
 
 Status: active source for the promoted Waldo backend and app-integration build.
 Date: 2026-07-12.
-Baseline: `2fd798f818213b344e700d98def006e80e0d56ae` after the verified PR #49 -> #50 -> #52 -> #51
-merge sequence.
+Baseline: `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65` at the current merged mainline tip
+(PRs #49–#56 and #58).
 
 ## Source Map
 
@@ -152,7 +152,7 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 | ---: | --- | --- | --- |
 | 1 | Journal/outbox | Local workerd/fake-sink proof merged | Preserve; real async adapter proof is HEY-110 |
 | 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
-| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, and HEY-144 goals storage are merged; context Modules remain unwired | HEY-163 contract fulfillment, HEY-166 bounded workspace admission, HEY-167 canonical ratification, then HEY-14, HEY-15, and HEY-16 |
+| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, HEY-144 goals storage, HEY-163 WorkspaceMount contract, and HEY-166's proposed reader-admission policy are merged; context Modules remain unwired | HEY-167 canonical ADR ratification, then HEY-14 -> HEY-15 -> HEY-16 |
 | 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
 | 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
 | 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
@@ -160,20 +160,24 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 
 ## Current Coordinator Program
 
-Wave 0 merged in PR #49. The observed post-Wave-0 merge order was PR #50 (HEY-100), PR #52
-(HEY-144), then PR #51 (HEY-75). HEY-14 preflight passed the `2fd798f8` baseline but found no typed
-WorkspaceMount/R2 seam. HEY-163 is the contract-only ADR-0029/0076 fulfillment and must merge before
-HEY-166 can establish the proposed bounded reader/admission policy; HEY-167 then ratifies the
-reader-Scribe/token-counter boundary before HEY-14 implementation. HEY-144 has released the V2
-goals storage seam; the remaining context sequence is HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 ->
-HEY-15 -> HEY-16. Complete goal hydration also awaits HEY-162's Scribe-backed admission boundary.
-HEY-100 remains a static conformance result only; HEY-160 separately owns future production per-user
-JWT/`db.forUser()` custody. HEY-141 still requires its own Agent-Ready admission.
+Wave 0 merged in PR #49. PR #50's static-only DO guard, PR #52's V2 goals storage foundation,
+PR #51's deterministic injection scorer, PR #53's held-out corpus independence fix, PR #54's
+declared-target parse-only egress hardening, PR #56's typed WorkspaceMount contract, and PR #58's
+proposed workspace reader-admission policy are merged. These merges do not authorize a live provider,
+credential, transport, R2 binding, staging, sink, or deployment action.
 
-HEY-143 closure planning requires HEY-163, HEY-166, HEY-167, then the remaining HEY-14, HEY-15,
-HEY-16, and HEY-141 work to merge and a fresh clean-main convergence wall, alongside the already
-merged HEY-100, HEY-144, and HEY-75. It does not authorize a live-provider, live-secret, staging,
-sink, or deployment action.
+HEY-167 must ratify the reader-Scribe/token-counter boundary before HEY-14 implementation. The
+remaining context sequence is HEY-167 -> HEY-14 -> HEY-15 -> HEY-16. HEY-144 has released the V2
+goals storage seam; complete goal hydration also awaits HEY-162's Scribe-backed admission boundary.
+HEY-100 remains a static conformance result only; HEY-160 separately owns future production per-user
+JWT/`db.forUser()` custody. HEY-141 remains bounded to its declared-target policy until a separate
+adapter/transport scope is admitted.
+
+HEY-143 closure planning requires HEY-167 ratification, then the remaining HEY-14, HEY-15, and
+HEY-16 work to merge and a fresh clean-main convergence wall, alongside the already merged
+HEY-100, HEY-144, HEY-75, HEY-141, HEY-163, and HEY-166 foundations. Any transport or adapter
+expansion beyond HEY-141's declared-target policy needs separate admission. This does not authorize
+a live-provider, live-secret, staging, sink, or deployment action.
 
 ## First Public Seam
 
@@ -299,17 +303,16 @@ adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate,
 
 Safe parallel work:
 
-- HEY-163 contract-only ADR-0029/0076 fulfillment, followed by HEY-166's proposed bounded
-  workspace admission policy and HEY-167's canonical reader-Scribe/token-budget decision; HEY-14
-  implementation remains blocked until all three land, while HEY-15 source/ISA preparation remains
-  read-only and disjoint;
+- HEY-167's canonical reader-Scribe/token-budget decision; HEY-14 implementation remains blocked
+  until it is ratified, while HEY-15 source/ISA preparation remains read-only and disjoint;
 - HEY-16 only after the remaining context interfaces converge; full goal hydration remains gated by
   HEY-162;
 - HEY-110 async delivery with fake adapters;
 - HEY-158 backend Spots vertical;
 - HEY-100 static guard plus the separate future custody/data-plane issue;
 - HEY-125 is Done; HEY-134/114 remain auth/data/environment proof;
-- HEY-137/138/135 reliability and HEY-141 egress after HEY-100 unless write sets are disjoint;
+- HEY-137/138/135 reliability; HEY-141's parse-only egress policy is merged, while any
+  DNS/redirect/fetch/transport/ACL expansion needs separate admission;
 - strict Brief contract fixtures and generated-client scaffolding after contract approval;
 - HEY-126 Chat transport/replay spike;
 - HEY-159 app account/consent lifecycle alongside accepted ADR-0082;
@@ -347,11 +350,15 @@ Merged:
 16. PR #50 HEY-100 static DO-only guard.
 17. PR #52 HEY-144 V2 goals storage foundation.
 18. PR #51 HEY-75 deterministic Scribe injection scoring.
+19. PR #53 HEY-75 held-out corpus independence correction.
+20. PR #54 HEY-141 declared-target parse-only egress policy.
+21. PR #56 HEY-163 typed WorkspaceMount contract seam.
+22. PR #58 HEY-166 proposed reader-admission policy.
 
 Next:
 
-19. HEY-14 preflight passed baseline but found no typed WorkspaceMount/R2 seam. HEY-163 contract-only
-    ADR-0029/0076 fulfillment, HEY-166 bounded admission, and HEY-167 canonical ratification must
+23. HEY-14 preflight found no typed WorkspaceMount/R2 seam; PR #56 now provides the contract seam
+    and PR #58 provides the proposed bounded admission policy. HEY-167 canonical ratification must
     land before HEY-14 -> HEY-15 -> HEY-16.
 
 Do not infer HEY ticket completion beyond the bounded merged capability named above.
