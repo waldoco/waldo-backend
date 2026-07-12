@@ -66,7 +66,7 @@ Not owned: packages/contracts/src/adapters/workspace.ts, packages/runtime/src/do
 - Produces: branded opaque SkillPromptFragment and SkillPromptBlock string artifacts, a fixed serializer revision, renderSkill(skill), renderBlock(fragments), and the existing wrapSkills(skills).
 - Compatibility requirement: wrapSkills([]) stays the empty string; every nonempty current fixture stays byte-for-byte identical.
 
-- [ ] **Step 1: Write RED renderer tests before implementation**
+- [x] **Step 1: Write RED renderer tests before implementation**
 
     - A one-skill fragment is exactly the inner skill element and never includes available-skills.
     - renderBlock([fragment]) creates the exact outer fence and renderBlock([]) is the empty block.
@@ -74,25 +74,31 @@ Not owned: packages/contracts/src/adapters/workspace.ts, packages/runtime/src/do
     - wrapSkills([skillA, skillB]) equals renderBlock([renderSkill(skillA), renderSkill(skillB)]) and preserves all existing locked fixtures.
     - The revision is fixed and only consumed by the budget factory; no caller supplies it.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
     npx -y pnpm@10.34.4 --filter @waldo/contracts test -- reasons
 
     Expected: fail because the artifact types/functions/revision do not yet exist.
 
-- [ ] **Step 3: Implement the smallest canonical artifact seam**
+- [x] **Step 3: Implement the smallest canonical artifact seam**
 
     - Keep the actual skill-tag string construction in renderSkill only.
     - Compose the outer wrapper and separator in renderBlock only.
     - Make wrapSkills a compatibility delegator through those two functions; do not change its signature, schema, empty result, tag spelling, whitespace, escaping behavior, or output.
     - Keep artifacts opaque at TypeScript boundaries; do not add a second renderer, parser, or renderer input sourced from user content.
 
-- [ ] **Step 4: Run GREEN and non-vacuity check**
+- [x] **Step 4: Run GREEN and non-vacuity check**
 
     npx -y pnpm@10.34.4 --filter @waldo/contracts test -- reasons
     npx -y pnpm@10.34.4 --filter @waldo/contracts typecheck
 
     Temporarily alter the block separator in the implementation, confirm the exact-output test fails, restore it, and do not commit the deliberate mutation.
+
+**Task 1 evidence (2026-07-12):** RED observed the missing artifact exports. The final focused
+contracts run passed 49 files / 1,197 tests, contracts typecheck passed, and git diff --check was
+clean. A separator mutation made the exact-output assertions fail and was restored. Independent
+review found no P0/P1 issue; its P2 opacity-test finding was fixed in 04a13b8 and re-reviewed
+approved.
 
 ---
 
