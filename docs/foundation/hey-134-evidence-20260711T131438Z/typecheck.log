@@ -1,0 +1,9 @@
+npm notice run npx
+npm notice run 'pnpm' -r typecheck
+Scope: 3 of 4 workspace projects
+packages/contracts typecheck$ tsc --noEmit
+packages/mint-agent-jwt typecheck$ tsc --noEmit
+packages/mint-agent-jwt typecheck: Done
+packages/contracts typecheck: Done
+packages/runtime typecheck$ tsc --noEmit
+packages/runtime typecheck: Done

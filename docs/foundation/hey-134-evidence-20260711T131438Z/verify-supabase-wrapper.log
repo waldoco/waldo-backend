@@ -1,0 +1,78 @@
+npm notice run npx
+npm notice run 'pnpm' verify:supabase
+
+> waldo-backend@ verify:supabase /home/dev_086/Projects/waldo-backend
+> node scripts/verify-supabase.mjs
+
+canonical Supabase migration list verified (7 migrations)
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' db reset --local --no-seed
+Resetting local database...
+Recreating database...
+Initialising schema...
+Seeding globals from roles.sql...
+Applying migration 20260709171312_0001_identity.sql...
+Applying migration 20260709171336_0002_health.sql...
+Applying migration 20260709171359_0003_intelligence.sql...
+Applying migration 20260709171417_0004_comms.sql...
+Applying migration 20260709171953_0005_integrations.sql...
+Applying migration 20260709172043_0006_harden_rls_auto_enable_execute.sql...
+Applying migration 20260710182949_reconcile_contract_spine.sql...
+Restarting containers...
+Finished supabase db reset on branch hey-134-canonical-migrations.
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' test db
+Connecting to local database...
+psql:/home/dev_086/Projects/waldo-backend/supabase/tests/schema_contract.sql:3: NOTICE:  extension "pgtap" already exists, skipping
+/home/dev_086/Projects/waldo-backend/supabase/tests/schema_contract.sql .. ok
+All tests successful.
+Files=1, Tests=44,  1 wallclock secs ( 0.03 usr  0.01 sys +  0.01 cusr  0.00 csys =  0.05 CPU)
+Result: PASS
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' migration list --local
+Connecting to local database...
+
+
+   Local            | Remote           | Time (UTC)
+  ------------------|------------------|-----------------------
+   `20260709171312` | `20260709171312` | `2026-07-09 17:13:12`
+   `20260709171336` | `20260709171336` | `2026-07-09 17:13:36`
+   `20260709171359` | `20260709171359` | `2026-07-09 17:13:59`
+   `20260709171417` | `20260709171417` | `2026-07-09 17:14:17`
+   `20260709171953` | `20260709171953` | `2026-07-09 17:19:53`
+   `20260709172043` | `20260709172043` | `2026-07-09 17:20:43`
+   `20260710182949` | `20260710182949` | `2026-07-10 18:29:49`
+
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' db query --local --file supabase/fixtures/assert-canonical-migration-history.sql
+Connecting to local database...
+DO
+npm warn Unknown env config "minimum-release-age". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "npm-globalconfig". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "verify-deps-before-run". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "_jsr-registry". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm warn Unknown env config "overrides". This will error in a future major version of npm. See `npm help npmrc` for supported config options.
+npm notice run npx
+npm notice run 'supabase' migration up --local
+Connecting to local database...
+Local database is up to date.
