@@ -75,13 +75,31 @@ export type PromptBuilderDeps<Ctx> = {
 // The A-layer fence, verbatim ADR-0028: deterministic top-K FULL bodies — deliberately not
 // name-first progressive disclosure. Zero selected skills render as the empty string, so an
 // empty fence never reaches the model.
+// Token counts bind to these exact bytes. Increment this revision with any rendered-byte
+// change so an older counter capability cannot be reused for a new serializer.
+export const SKILL_PROMPT_SERIALIZER_REVISION = 'reasons-skill-fence-v1' as const;
+
+declare const skillPromptFragmentBrand: unique symbol;
+
+export type SkillPromptFragment = string & {
+  readonly [skillPromptFragmentBrand]: 'SkillPromptFragment';
+};
+
+declare const skillPromptBlockBrand: unique symbol;
+
+export type SkillPromptBlock = string & {
+  readonly [skillPromptBlockBrand]: 'SkillPromptBlock';
+};
+
+export function renderSkill(skill: Skill): SkillPromptFragment {
+  return `<skill name="${skill.name}" effectiveness="${skill.effectiveness.toFixed(2)}" provenance="${skill.provenance}">\n${skill.body_markdown}\n</skill>` as SkillPromptFragment;
+}
+
+export function renderBlock(fragments: readonly SkillPromptFragment[]): SkillPromptBlock {
+  if (fragments.length === 0) return '' as SkillPromptBlock;
+  return `<available-skills>\n${fragments.join('\n\n')}\n</available-skills>` as SkillPromptBlock;
+}
+
 export function wrapSkills(skills: readonly Skill[]): string {
-  if (skills.length === 0) return '';
-  const bodies = skills
-    .map(
-      (s) =>
-        `<skill name="${s.name}" effectiveness="${s.effectiveness.toFixed(2)}" provenance="${s.provenance}">\n${s.body_markdown}\n</skill>`,
-    )
-    .join('\n\n');
-  return `<available-skills>\n${bodies}\n</available-skills>`;
+  return renderBlock(skills.map(renderSkill));
 }

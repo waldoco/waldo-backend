@@ -3,6 +3,7 @@ import {
   FALLBACK_LADDER,
   GATEWAY_CONSTANT_HEADERS,
   ROUTING_TABLE,
+  SKILL_PROMPT_SERIALIZER_REVISION,
   sanitiseFailureReasonSchema,
   sanitiseInputSchema,
   sanitiseResultSchema,
@@ -33,6 +34,12 @@ import {
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
+import {
+  createUnavailableSkillBudget,
+  type CountResult,
+  type ResolvedSkillBudget,
+  type SkillBudgetFactory,
+} from '../skills/budget';
 
 export type LLMContextMode = 'full_context' | 'reduced_context';
 export type RuntimeFallbackStep = (typeof FALLBACK_LADDER)[number] | 'defer';
@@ -67,13 +74,16 @@ export type RuntimeLLMRenderInput = {
   context: LLMContextMode;
   fallback_step: Extract<RuntimeFallbackStep, 'configured_model' | 'gateway_chain'>;
   attempt: number;
+  skillBudget: ResolvedSkillBudget;
 };
 
 export type RuntimeLLMRequest = {
   trigger: unknown;
   policy?: RoutingPolicy;
   spend?: RouteSpendState;
-  renderRequest(input: RuntimeLLMRenderInput): Omit<LLMRequest, 'model'>;
+  renderRequest(
+    input: RuntimeLLMRenderInput,
+  ): Omit<LLMRequest, 'model'> | Promise<Omit<LLMRequest, 'model'>>;
   renderTemplate?(input: { route: ModelRoute; trigger: ModelRoute['trigger'] }): string;
 };
 
@@ -224,6 +234,7 @@ export type RuntimeLLMProviderOptions = {
   gateway: LLMGatewayAdapter;
   circuitBreaker?: CircuitBreaker;
   hooks?: HookRegistry<HookRuntimeContext>;
+  skillBudgetFactory?: SkillBudgetFactory;
 };
 
 export function selectModelRoute(input: SelectModelRouteInput): ModelRoute {
@@ -241,11 +252,13 @@ export class RuntimeLLMProvider {
   private readonly gateway: LLMGatewayAdapter;
   private readonly circuitBreaker: CircuitBreaker;
   private readonly customHooks: HookRegistry<HookRuntimeContext>;
+  private readonly skillBudgetFactory: SkillBudgetFactory | undefined;
 
   constructor(options: RuntimeLLMProviderOptions) {
     this.gateway = options.gateway;
     this.circuitBreaker = options.circuitBreaker ?? new InMemoryCircuitBreaker();
     this.customHooks = options.hooks ?? [];
+    this.skillBudgetFactory = options.skillBudgetFactory;
   }
 
   selectModelRoute(input: SelectModelRouteInput): ModelRoute {
@@ -276,12 +289,14 @@ export class RuntimeLLMProvider {
         continue;
       }
 
-      const rendered = input.renderRequest({
+      const skillBudget = this.resolveSkillBudget(plan.step.model);
+      const rendered = await input.renderRequest({
         route,
         step: plan.step,
         context: plan.context,
         fallback_step: plan.fallback_step,
         attempt: attempts.length,
+        skillBudget,
       });
       const request = llmRequestSchema.parse({ ...rendered, model: plan.step.model });
       const customPreHook = await this.runCustomPreLlmHooks(request, ctx);
@@ -432,6 +447,22 @@ export class RuntimeLLMProvider {
     }
   }
 
+  private resolveSkillBudget(model: ModelName): ResolvedSkillBudget {
+    if (this.skillBudgetFactory === undefined) {
+      return createUnavailableSkillBudget();
+    }
+
+    try {
+      const budget = this.skillBudgetFactory({
+        model,
+        serializerRevision: SKILL_PROMPT_SERIALIZER_REVISION,
+      });
+      return opaqueSkillBudget(budget) ?? createUnavailableSkillBudget();
+    } catch {
+      return createUnavailableSkillBudget();
+    }
+  }
+
   private async runCorePreLlmHooks(
     request: LLMRequest,
     ctx: HookRuntimeContext,
@@ -536,6 +567,65 @@ export class RuntimeLLMProvider {
       routing_log: routingLog,
     };
   }
+}
+
+function opaqueSkillBudget(value: unknown): ResolvedSkillBudget | null {
+  if (value === null || typeof value !== 'object') return null;
+  const budget = value as Partial<ResolvedSkillBudget>;
+  if (
+    typeof budget.countRenderedSkill !== 'function' ||
+    typeof budget.countRenderedBlock !== 'function'
+  ) {
+    return null;
+  }
+  const countRenderedSkill = budget.countRenderedSkill;
+  const countRenderedBlock = budget.countRenderedBlock;
+  const opaque: ResolvedSkillBudget = {
+    countRenderedSkill(fragment) {
+      return countFactoryResult(() => countRenderedSkill.call(value, fragment));
+    },
+    countRenderedBlock(block) {
+      return countFactoryResult(() => countRenderedBlock.call(value, block));
+    },
+  };
+  return Object.freeze(opaque);
+}
+
+async function countFactoryResult(count: () => unknown): Promise<CountResult> {
+  try {
+    return normaliseCountResult(await count());
+  } catch {
+    return { ok: false, code: 'count_failed' };
+  }
+}
+
+function normaliseCountResult(value: unknown): CountResult {
+  if (value === null || typeof value !== 'object') {
+    return { ok: false, code: 'count_failed' };
+  }
+  const result = value as { ok?: unknown; tokens?: unknown; code?: unknown };
+  if (
+    result.ok === true &&
+    typeof result.tokens === 'number' &&
+    Number.isFinite(result.tokens) &&
+    Number.isInteger(result.tokens) &&
+    result.tokens >= 0
+  ) {
+    return { ok: true, tokens: result.tokens };
+  }
+  if (result.ok === false && isCountFailureCode(result.code)) {
+    return { ok: false, code: result.code };
+  }
+  return { ok: false, code: 'count_failed' };
+}
+
+function isCountFailureCode(value: unknown): value is Extract<CountResult, { ok: false }>['code'] {
+  return (
+    value === 'unavailable' ||
+    value === 'unmapped_model' ||
+    value === 'unpinned_revision' ||
+    value === 'count_failed'
+  );
 }
 
 function invalidResponseFailure(

@@ -2,7 +2,11 @@ import {
   GATEWAY_CONSTANT_HEADERS,
   ROSTER,
   ROUTING_TABLE,
+  SKILL_PROMPT_SERIALIZER_REVISION,
   buildSessionState,
+  renderBlock,
+  renderSkill,
+  skillSchema,
   triggerTypeSchema,
   type AdapterResult,
   type HookHandler,
@@ -18,11 +22,32 @@ import {
   type LLMGatewayAdapter,
   type LLMGatewayRequest,
 } from '../src/llm/provider';
+import type { CountResult, ResolvedSkillBudget, SkillBudgetFactory } from '../src/skills/budget';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
 import { sanitise } from '../src/scribe/sanitiser';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
+
+const canonicalCountFragment = renderSkill(
+  skillSchema.parse({
+    name: 'brief-context',
+    version: 1,
+    provenance: 'system',
+    identity_locked: true,
+    provisional: false,
+    trigger_types: ['brief'],
+    trigger_condition: 'brief context is available',
+    required_tools: [],
+    required_connectors: [],
+    effectiveness: 1,
+    invocations: 0,
+    last_used: null,
+    body_markdown: 'Use the scheduled context.',
+    created_at: '2026-07-12T00:00:00Z',
+  }),
+);
+const canonicalCountBlock = renderBlock([canonicalCountFragment]);
 
 function runtimeCtx(overrides: Partial<HookRuntimeContext> = {}): HookRuntimeContext {
   return {
@@ -93,6 +118,294 @@ describe('RuntimeLLMProvider', () => {
 
     expect(route.primary.model).toBe(ROSTER.fallback);
     expect(route.fallback.map((step) => step.model)).toEqual([ROSTER.primary]);
+  });
+
+  it('mints an opaque skill budget for the configured model immediately before rendering', async () => {
+    const events: string[] = [];
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const complete = gateway.complete.bind(gateway);
+    gateway.complete = async (request) => {
+      events.push('gateway');
+      return complete(request);
+    };
+    const factoryCalls: Array<{
+      model: ModelName;
+      serializerRevision: typeof SKILL_PROMPT_SERIALIZER_REVISION;
+    }> = [];
+    let receivedBudget: ResolvedSkillBudget | undefined;
+    let renderedSkillCount: Promise<CountResult> | undefined;
+    let renderedBlockCount: Promise<CountResult> | undefined;
+    const provider = new RuntimeLLMProvider({
+      gateway,
+      skillBudgetFactory({ model, serializerRevision }) {
+        events.push('factory');
+        factoryCalls.push({ model, serializerRevision });
+        const capability = {
+          countRenderedSkill: async () => ({ ok: true as const, tokens: 7 }),
+          countRenderedBlock: async () => ({ ok: true as const, tokens: 11 }),
+        };
+        Object.assign(capability, {
+          model,
+          tokenizer: 'test-tokenizer',
+          serializerRevision,
+        });
+        return capability;
+      },
+    });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest({ context, skillBudget }) {
+          events.push('render');
+          receivedBudget = skillBudget;
+          renderedSkillCount = skillBudget.countRenderedSkill(canonicalCountFragment);
+          renderedBlockCount = skillBudget.countRenderedBlock(canonicalCountBlock);
+          return {
+            system: context,
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(factoryCalls).toEqual([
+      { model: ROSTER.primary, serializerRevision: SKILL_PROMPT_SERIALIZER_REVISION },
+    ]);
+    expect(receivedBudget).toBeDefined();
+    expect(receivedBudget).not.toHaveProperty('model');
+    expect(receivedBudget).not.toHaveProperty('tokenizer');
+    expect(receivedBudget).not.toHaveProperty('serializerRevision');
+    expect(await renderedSkillCount).toEqual({ ok: true, tokens: 7 });
+    expect(await renderedBlockCount).toEqual({ ok: true, tokens: 11 });
+    expect(events).toEqual(['factory', 'render', 'gateway']);
+  });
+
+  it('awaits an async renderer with a fresh skill budget for every gateway attempt', async () => {
+    const gateway = new ScriptedGateway((request) =>
+      request.step.model === ROSTER.fallback
+        ? { ok: true, data: response(request.request.model) }
+        : { ok: false, error: 'provider saturated', code: 'rate_limited' },
+    );
+    const factoryCalls: Array<{
+      model: ModelName;
+      serializerRevision: typeof SKILL_PROMPT_SERIALIZER_REVISION;
+    }> = [];
+    const renderedBudgets: ResolvedSkillBudget[] = [];
+    const renderedCounts: CountResult[] = [];
+    let minted = 0;
+    const provider = new RuntimeLLMProvider({
+      gateway,
+      skillBudgetFactory({ model, serializerRevision }) {
+        factoryCalls.push({ model, serializerRevision });
+        minted += 1;
+        const count = minted;
+        return Object.freeze({
+          countRenderedSkill: async () => ({ ok: true as const, tokens: count }),
+          countRenderedBlock: async () => ({ ok: true as const, tokens: count }),
+        });
+      },
+    });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        async renderRequest({ context, skillBudget }) {
+          renderedBudgets.push(skillBudget);
+          renderedCounts.push(await skillBudget.countRenderedSkill(canonicalCountFragment));
+          return {
+            system: context,
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.response.model).toBe(ROSTER.fallback);
+    expect(factoryCalls).toEqual([
+      { model: ROSTER.primary, serializerRevision: SKILL_PROMPT_SERIALIZER_REVISION },
+      { model: ROSTER.primary, serializerRevision: SKILL_PROMPT_SERIALIZER_REVISION },
+      { model: ROSTER.fallback, serializerRevision: SKILL_PROMPT_SERIALIZER_REVISION },
+    ]);
+    expect(renderedBudgets).toHaveLength(3);
+    expect(new Set(renderedBudgets).size).toBe(3);
+    expect(renderedCounts).toEqual([
+      { ok: true, tokens: 1 },
+      { ok: true, tokens: 2 },
+      { ok: true, tokens: 3 },
+    ]);
+  });
+
+  it('keeps render callbacks compatible when they ignore the skill budget capability', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    ['no factory', undefined],
+    [
+      'synchronously throwing factory',
+      (() => {
+        throw new Error('unavailable counter');
+      }) as SkillBudgetFactory,
+    ],
+    ['invalid factory result', (() => ({})) as unknown as SkillBudgetFactory],
+  ] as const)('substitutes an unavailable budget when the %s cannot resolve', async (_case, factory) => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const countResults: Array<Promise<CountResult>> = [];
+    const provider = new RuntimeLLMProvider({ gateway, skillBudgetFactory: factory });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest({ skillBudget }) {
+          countResults.push(skillBudget.countRenderedSkill(canonicalCountFragment));
+          countResults.push(skillBudget.countRenderedBlock(canonicalCountBlock));
+          return {
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(await Promise.all(countResults)).toEqual([
+      { ok: false, code: 'unavailable' },
+      { ok: false, code: 'unavailable' },
+    ]);
+    expect(gateway.requests).toHaveLength(1);
+  });
+
+  it('fails closed when a factory counter throws, rejects, or returns an invalid count', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const skillCountOutcomes: Array<() => unknown> = [
+      () => {
+        throw new Error('counter unavailable');
+      },
+      () => Promise.reject(new Error('counter rejected')),
+      () => Promise.resolve({ ok: true, tokens: -1 }),
+      () => Promise.resolve({ ok: true, tokens: 1.5 }),
+      () => Promise.resolve({ ok: false, code: 'unmapped_model' }),
+    ];
+    const countResults: Array<Promise<CountResult>> = [];
+    let nextOutcome = 0;
+    const provider = new RuntimeLLMProvider({
+      gateway,
+      skillBudgetFactory: (() => ({
+        countRenderedSkill: () => skillCountOutcomes[nextOutcome++]?.(),
+        countRenderedBlock: () => {
+          throw new Error('block counter unavailable');
+        },
+      })) as unknown as SkillBudgetFactory,
+    });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest({ skillBudget }) {
+          for (const _outcome of skillCountOutcomes) {
+            countResults.push(skillBudget.countRenderedSkill(canonicalCountFragment));
+          }
+          countResults.push(skillBudget.countRenderedBlock(canonicalCountBlock));
+          return {
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(await Promise.all(countResults)).toEqual([
+      { ok: false, code: 'count_failed' },
+      { ok: false, code: 'count_failed' },
+      { ok: false, code: 'count_failed' },
+      { ok: false, code: 'count_failed' },
+      { ok: false, code: 'unmapped_model' },
+      { ok: false, code: 'count_failed' },
+    ]);
+    expect(gateway.requests).toHaveLength(1);
+  });
+
+  it('does not mint a skill budget for circuit-open attempts', async () => {
+    const circuitBreaker = new InMemoryCircuitBreaker({ failureThreshold: 1 });
+    circuitBreaker.recordFailure('workers_ai');
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const factoryModels: ModelName[] = [];
+    const provider = new RuntimeLLMProvider({
+      gateway,
+      circuitBreaker,
+      skillBudgetFactory({ model }) {
+        factoryModels.push(model);
+        return {
+          countRenderedSkill: async () => ({ ok: true as const, tokens: 1 }),
+          countRenderedBlock: async () => ({ ok: true as const, tokens: 1 }),
+        };
+      },
+    });
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(factoryModels).toEqual([ROSTER.fallback]);
+    expect(gateway.requests.map((request) => request.request.model)).toEqual([ROSTER.fallback]);
   });
 
   it('routes through gateway headers, re-renders each fallback hop, and returns metering only', async () => {
