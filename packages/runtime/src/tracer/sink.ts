@@ -1,86 +1,104 @@
 import type { DeliverySink, SinkAck, SinkRequest } from '@waldo/contracts';
 
-// Module-scoped so the fake models the EXTERNAL service's own persistence: APNs/Telegram
-// keep their receipt state when a DO instance dies, so it must survive eviction within the
-// test process. This store is deliberately NOT the exactly-once proof — the tests assert
-// the runtime's behavior through sendAttempts/keys and the durable outbox columns;
-// `deliveries` only corroborates that a declared-idempotent sink collapses a same-key
-// re-send to one physical delivery.
-const acks = new Map<string, SinkAck>();
-let deliveries = 0;
-let sendAttempts = 0;
-const keys: string[] = [];
-let failNext: string | null = null;
-let invalidAckNext = false;
-let wrongAckKeyNext: string | null = null;
-
-// In-memory stand-in for APNs/Telegram, satisfying the DeliverySink idempotency duty:
-// a repeat key returns the prior ack WITHOUT recording a second delivery.
 export class FakeSink implements DeliverySink {
   readonly idempotentOnKey = true;
+  private acks = new Map<string, SinkAck>();
+  private deliveries = 0;
+  private sendAttempts = 0;
+  private keys: string[] = [];
+  private failNext: string | null = null;
+  private invalidAckNext = false;
+  private wrongAckKeyNext: string | null = null;
 
-  // Arms a one-shot send failure, modelling a sink outage on the next attempt.
-  static failNextSend(message: string): void {
-    failNext = message;
+  // Shared singleton for tests that don't use per-DO sinks (kept for backward compatibility).
+  private static defaultSink: FakeSink | null = null;
+
+  static get shared(): FakeSink {
+    if (FakeSink.defaultSink === null) FakeSink.defaultSink = new FakeSink();
+    return FakeSink.defaultSink;
   }
 
-  static returnInvalidAckOnce(): void {
-    invalidAckNext = true;
+  /** @deprecated Use per-DO-instance sinks via FakeSink.forDO() instead. */
+  static reset(): void {
+    FakeSink.shared.reset();
   }
 
-  static returnWrongAckKeyOnce(idempotencyKey: string): void {
-    wrongAckKeyNext = idempotencyKey;
+  // Per-DO-instance sink registry. Each TracerDO creates/retrieves its own FakeSink keyed by
+  // ctx.id.toString() so eviction + resume preserves the delivery counter across instances.
+  private static instances = new Map<string, FakeSink>();
+
+  static forDO(doName: string): FakeSink {
+    let sink = FakeSink.instances.get(doName);
+    if (sink === undefined) {
+      sink = new FakeSink();
+      FakeSink.instances.set(doName, sink);
+    }
+    return sink;
+  }
+
+  static resetAll(): void {
+    FakeSink.instances.clear();
+  }
+
+  failNextSend(message: string): void {
+    this.failNext = message;
+  }
+
+  returnInvalidAckOnce(): void {
+    this.invalidAckNext = true;
+  }
+
+  returnWrongAckKeyOnce(idempotencyKey: string): void {
+    this.wrongAckKeyNext = idempotencyKey;
   }
 
   send(req: SinkRequest): SinkAck {
-    sendAttempts += 1;
-    keys.push(req.idempotency_key);
-    if (failNext !== null) {
-      const message = failNext;
-      failNext = null;
+    this.sendAttempts += 1;
+    this.keys.push(req.idempotency_key);
+    if (this.failNext !== null) {
+      const message = this.failNext;
+      this.failNext = null;
       throw new Error(message);
     }
-    const prior = acks.get(req.idempotency_key);
+    const prior = this.acks.get(req.idempotency_key);
     if (prior) return prior;
-    if (invalidAckNext) {
-      invalidAckNext = false;
-      deliveries += 1;
+    if (this.invalidAckNext) {
+      this.invalidAckNext = false;
+      this.deliveries += 1;
       return { idempotency_key: req.idempotency_key, accepted: false } as unknown as SinkAck;
     }
-    if (wrongAckKeyNext !== null) {
-      const ack: SinkAck = { idempotency_key: wrongAckKeyNext, accepted: true };
-      wrongAckKeyNext = null;
-      acks.set(req.idempotency_key, ack);
-      deliveries += 1;
+    if (this.wrongAckKeyNext !== null) {
+      const ack: SinkAck = { idempotency_key: this.wrongAckKeyNext, accepted: true };
+      this.wrongAckKeyNext = null;
+      this.acks.set(req.idempotency_key, ack);
+      this.deliveries += 1;
       return ack;
     }
     const ack: SinkAck = { idempotency_key: req.idempotency_key, accepted: true };
-    acks.set(req.idempotency_key, ack);
-    deliveries += 1;
+    this.acks.set(req.idempotency_key, ack);
+    this.deliveries += 1;
     return ack;
   }
 
   observedDeliveries(): number {
-    return deliveries;
+    return this.deliveries;
   }
 
-  // Every send call, including same-key repeats and failed attempts — the runtime-side
-  // at-least-once/at-most-once assertions read this, not the deduped delivery count.
   observedSendAttempts(): number {
-    return sendAttempts;
+    return this.sendAttempts;
   }
 
   observedKeys(): readonly string[] {
-    return keys;
+    return this.keys;
   }
 
   reset(): void {
-    acks.clear();
-    deliveries = 0;
-    sendAttempts = 0;
-    keys.length = 0;
-    failNext = null;
-    invalidAckNext = false;
-    wrongAckKeyNext = null;
+    this.acks.clear();
+    this.deliveries = 0;
+    this.sendAttempts = 0;
+    this.keys = [];
+    this.failNext = null;
+    this.invalidAckNext = false;
+    this.wrongAckKeyNext = null;
   }
 }

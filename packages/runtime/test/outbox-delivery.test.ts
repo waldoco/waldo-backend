@@ -4,7 +4,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -17,8 +17,8 @@ function futureOccurrence(): number {
   return Date.now() + 500;
 }
 
-beforeEach(() => {
-  new FakeSink().reset();
+afterEach(() => {
+  FakeSink.resetAll();
 });
 
 let seq = 0;
@@ -113,8 +113,8 @@ async function makeScheduleDue(stub: DurableObjectStub<TracerDO>) {
 
 describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', () => {
   it('resumes after post-send/pre-ack eviction without a second physical delivery', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     await poke(stub, 'post_sink_pre_ack');
@@ -161,8 +161,8 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
   });
 
   it('never re-sends after the ack is durable: post-ack crash resumes without touching the sink', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     await poke(stub, 'post_ack_pre_return');
@@ -184,8 +184,8 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
   });
 
   it('crash after the attempt marker but before the send: no delivery yet, resume delivers once', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     await poke(stub, 'post_attempt_pre_send');
@@ -211,11 +211,11 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
   });
 
   it('degraded: the sink throws on the first attempt — the error is durably recorded and the retry acks', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
-    FakeSink.failNextSend('sink unavailable');
+    sink.failNextSend('sink unavailable');
     // The scheduler records the executor failure and rearms the journal handoff; the outbox keeps
     // the durable in-doubt marker so the next due wake retries with the same idempotency key.
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -240,8 +240,8 @@ describe('SLICE-3a golden proof: exactly-once delivery at the durable layer', ()
 
 describe('SLICE-3a red proofs: the guard and the durable marker are load-bearing', () => {
   it('a durably acked row is never re-sent, even from a forged in-doubt journal state', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -262,8 +262,8 @@ describe('SLICE-3a red proofs: the guard and the durable marker are load-bearing
   });
 
   it('a corrupt outbox status fails loudly at the read seam instead of silently re-sending', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);

@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { JournalRow, OutboxRow } from '@waldo/contracts';
+import type { DeliverySink, JournalRow, OutboxRow } from '@waldo/contracts';
 import type {
   GovernorDecision,
   LoopEgressInput,
@@ -39,18 +39,22 @@ export class TracerDO extends DurableObject<Cloudflare.Env> {
   private readonly scheduler: Scheduler;
   private readonly deps: Deps;
 
+  // Exposed for tests to read sink state via runInDurableObject. Each DO instance gets its own
+  // FakeSink keyed by its durable name so that eviction + resume preserves the delivery counter.
+  readonly sink: DeliverySink;
+
   // Crash-injection seam. Undefined in production; poked ONLY by tests via runInDurableObject before
   // the alarm is re-driven. This is the sole spot test-serving state touches the production handler.
   __crashAfter?: CrashPoint;
 
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
+    this.sink = FakeSink.forDO(ctx.id.toString());
     const deps = productionDeps();
-    const sink = new FakeSink();
     ensureSchema(ctx.storage);
     this.deps = deps;
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, deps);
-    this.runtime = new RunJournalOutbox(ctx.storage, deps, sink, {
+    this.runtime = new RunJournalOutbox(ctx.storage, deps, this.sink, {
       crashPoint: () => this.__crashAfter,
     });
   }

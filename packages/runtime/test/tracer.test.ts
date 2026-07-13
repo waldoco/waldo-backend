@@ -4,7 +4,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { scheduleEntrySchema } from '@waldo/contracts';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
@@ -24,15 +24,14 @@ function utcLocalDate(at: number): string {
   return new Date(at).toISOString().slice(0, 10);
 }
 
-// The FakeSink counter/ack map is module-scoped so an evicted-then-rebuilt DO still observes prior
-// deliveries within one process. That same global state leaks across tests, so reset it per test —
-// otherwise observedDeliveries() accumulates and the exactly-once corroboration goes vacuous.
-beforeEach(() => {
-  new FakeSink().reset();
+// Each test creates its own TracerDO instances with unique names, and each gets its own
+// FakeSink via FakeSink.forDO(). Reset the registry between tests so no sink retains state
+// from the previous test's DOs.
+afterEach(() => {
+  FakeSink.resetAll();
 });
 
-// Each test gets a fresh DO id so its journal/outbox/class_state SQLite is isolated. crash #5 relies
-// on the process-global sink surviving eviction, which the per-test sink.reset() above scopes cleanly.
+// Each test gets a fresh DO id so its journal/outbox/class_state SQLite is isolated.
 let seq = 0;
 function freshStub() {
   seq += 1;
@@ -215,8 +214,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   });
 
   it('happy path: a scheduled alarm drives the run to DONE and the sink observes exactly one send', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
 
@@ -233,8 +232,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   });
 
   it('#1 crash after RUN_OPENED: evict before the alarm; resume reaches DONE exactly once', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub); // commits RUN_OPENED
     await evictDurableObject(stub); // wipe in-memory state; SQLite holds only RUN_OPENED
@@ -246,8 +245,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   });
 
   it('#2 crash after GOVERNOR_ADMITTED: resume enters at GOVERNOR_ADMITTED and reaches DONE once', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     // pre_gate_commit throws AFTER the admit advance has committed but BEFORE the gate transaction,
@@ -266,8 +265,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   });
 
   it('#3 crash before/inside GATED commit: full rollback, then resume re-evaluates the gate once', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     await poke(stub, 'pre_gate_commit');
@@ -294,8 +293,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   });
 
   it('#4 crash after the attempt marker, before the send: resume reads the verdict, skips the gate', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     // The attempt marker commits BEFORE the sink is reached, so this crash point isolates the
@@ -321,8 +320,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   });
 
   it('#5 crash after sink call before ack recorded: idempotent sink re-send yields no second delivery', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     await poke(stub, 'post_sink_pre_ack');
@@ -345,8 +344,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   });
 
   it('#6 crash after ack recorded before handler returns: resume enters at ACK_RECORDED, skips the sink', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     await poke(stub, 'post_ack_pre_return');
@@ -371,8 +370,8 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
 
 describe('TracerDO edge lanes', () => {
   it('null: an alarm with no scheduled run is a no-op (nothing to resume, nothing delivered)', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     // No schedule() call: findOpenRun returns null, the handler returns early.
     const ran = await runDurableObjectAlarm(stub);
@@ -386,8 +385,8 @@ describe('TracerDO edge lanes', () => {
   });
 
   it('hostile: a duplicate alarm delivery after DONE is a no-op — no second send, counters hold at 1', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -403,8 +402,8 @@ describe('TracerDO edge lanes', () => {
   });
 
   it('serialized re-entry: the DO input gate collapses a racing second alarm to a no-op after DONE', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     // The DO input gate serializes every call, so a "concurrent" second alarm cannot interleave with
     // the first. One schedule arms one alarm; one wake drives that single open run through the path.
@@ -421,8 +420,8 @@ describe('TracerDO edge lanes', () => {
   });
 
   it('degraded: sink no-ack on the first attempt, ack on retry — still exactly one delivery', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     // Model a no-ack-then-ack sink by crashing after the sink send but before the ack is recorded
@@ -441,8 +440,8 @@ describe('TracerDO edge lanes', () => {
 
 describe('TracerDO red proofs: the durable-layer assertions are load-bearing, not the sink dedupe', () => {
   it('a second outbox row for the same (run, kind) is refused by UNIQUE(run_id, kind)', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -500,8 +499,8 @@ describe('TracerDO red proofs: the durable-layer assertions are load-bearing, no
   });
 
   it('a state that skipped the gate cannot deliver: resume from a forged GATED has no outbox row', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub); // state RUN_OPENED, no gate side effects yet
 
@@ -524,8 +523,8 @@ describe('TracerDO red proofs: the durable-layer assertions are load-bearing, no
   });
 
   it('a corrupt journal state fails loudly at the read seam instead of silently stalling the run', async () => {
-    const sink = new FakeSink();
     const stub = freshStub();
+    const sink = FakeSink.forDO(stub.id.toString());
 
     await schedule(stub);
 
