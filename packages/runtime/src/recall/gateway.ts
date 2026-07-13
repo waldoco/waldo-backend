@@ -3,12 +3,14 @@ import {
   episodeHitSchema,
   episodeSearchArgsSchema,
   formZoneSchema,
+  RECALL_QUERY_MAX_CHARS,
   RECALL_CONFIG,
   recallKeySchema,
   recallMemoryHitSchema,
   recallResultSchema,
   retrieveArgsSchema,
   retrieveHitSchema,
+  skillSchema,
   sourceTaintSchema,
   taintStampSchema,
   type CanaryTokens,
@@ -31,6 +33,10 @@ const ISO8601_4_DIGIT_MAX_MS = 253_402_300_799_999;
 const UNMAPPED_QUERY = 'recall unavailable';
 
 type SourceClass = 'memory' | 'episode';
+type RecallAdmissionClass = SourceClass | 'hint';
+
+const sourceUnavailableErrors = new WeakSet<object>();
+const recallSecurityHalts = new WeakSet<object>();
 
 class RecallSourceUnavailable extends Error {
   constructor(
@@ -38,6 +44,7 @@ class RecallSourceUnavailable extends Error {
     cause?: unknown,
   ) {
     super('recall source unavailable', { cause });
+    sourceUnavailableErrors.add(this);
   }
 }
 
@@ -53,7 +60,7 @@ type RowAdmission<T> = Readonly<{
 
 export type RecallTelemetryEvent = Readonly<{
   recall_status: RecallStatus;
-  source_class: SourceClass;
+  source_class: RecallAdmissionClass;
   count: number;
   error_class: 'source_unavailable' | 'row_rejected' | 'canary_leak';
 }>;
@@ -65,9 +72,10 @@ export type RecallTelemetry = Readonly<{
 export class RecallSecurityHalt extends Error {
   readonly code = 'canary_leak' as const;
 
-  constructor(readonly sourceClass: SourceClass) {
+  constructor(readonly sourceClass: RecallAdmissionClass) {
     super('recall security halt');
     this.name = 'RecallSecurityHalt';
+    recallSecurityHalts.add(this);
   }
 }
 
@@ -96,10 +104,16 @@ export function createRuntimeRecallGateway(
     if (!key.success) return empty(UNMAPPED_QUERY, 0);
 
     const zone = formZoneSchema.safeParse(ctx.zone);
+    let admittedHint: string | undefined;
+    try {
+      admittedHint = admitRecallHint(hint, ctx.canaryTokens);
+    } catch (error) {
+      rethrowWithSecurityTelemetry(deps, error);
+    }
     const query = buildRecallQuery(
       key.data,
       zone.success ? zone.data : '',
-      typeof hint === 'string' ? hint : undefined,
+      admittedHint,
     );
     const config = RECALL_CONFIG[key.data];
     if (config.skip) return empty(query, 0);
@@ -126,23 +140,25 @@ export function createRuntimeRecallGateway(
         readSource('episode', EPISODE_LIMIT, () => deps.reads.searchEpisodes(episodeArgs)),
       ]);
     } catch (error) {
-      if (error instanceof RecallSourceUnavailable) {
+      if (isRecallSourceUnavailable(error)) {
         // The private error retains its cause; only this closed classification crosses telemetry's interface.
+        const result = empty(query, duration(deps, startedAt));
         emit(deps, {
           recall_status: 'failed',
           source_class: error.sourceClass,
           count: 0,
           error_class: 'source_unavailable',
         });
-        return empty(query, duration(deps, startedAt));
+        return result;
       }
       throw error;
     }
 
     try {
+      const telemetryEvents: RecallTelemetryEvent[] = [];
       const memory = admitMemoryRows(memoryRows, ctx.canaryTokens);
       if (memory.rejected > 0) {
-        emit(deps, {
+        telemetryEvents.push({
           recall_status: 'partial',
           source_class: 'memory',
           count: memory.rejected,
@@ -151,32 +167,61 @@ export function createRuntimeRecallGateway(
       }
       const episodes = admitEpisodeRows(episodeRows, ctx.canaryTokens);
       if (episodes.rejected > 0) {
-        emit(deps, {
+        telemetryEvents.push({
           recall_status: 'partial',
           source_class: 'episode',
           count: episodes.rejected,
           error_class: 'row_rejected',
         });
       }
-      return recallResultSchema.parse({
+      const result = recallResultSchema.parse({
         memory_hits: memory.rows,
         episode_hits: episodes.rows,
         evolution_hits: [],
         query_used: query,
         duration_ms: duration(deps, startedAt),
       });
+      for (const event of telemetryEvents) emit(deps, event);
+      return result;
     } catch (error) {
-      if (error instanceof RecallSecurityHalt) {
-        emit(deps, {
-          recall_status: 'failed',
-          source_class: error.sourceClass,
-          count: 1,
-          error_class: 'canary_leak',
-        });
-      }
-      throw error;
+      rethrowWithSecurityTelemetry(deps, error);
     }
   };
+}
+
+function admitRecallHint(hint: unknown, canaries: CanaryTokens): string | undefined {
+  if (typeof hint !== 'string' || hint.length === 0) return undefined;
+
+  const prepared = prepareWithScribe(
+    hint.slice(0, RECALL_QUERY_MAX_CHARS),
+    skillSchema.shape.trigger_condition,
+    'system_prompt',
+    'external',
+    canaries,
+  );
+  if (prepared.ok) return prepared.value;
+  if (prepared.reason === 'canary_leak') throw new RecallSecurityHalt('hint');
+  return undefined;
+}
+
+function isRecallSourceUnavailable(error: unknown): error is RecallSourceUnavailable {
+  return typeof error === 'object' && error !== null && sourceUnavailableErrors.has(error);
+}
+
+function isRecallSecurityHalt(error: unknown): error is RecallSecurityHalt {
+  return typeof error === 'object' && error !== null && recallSecurityHalts.has(error);
+}
+
+function rethrowWithSecurityTelemetry(deps: RuntimeRecallGatewayDeps, error: unknown): never {
+  if (isRecallSecurityHalt(error)) {
+    emit(deps, {
+      recall_status: 'failed',
+      source_class: error.sourceClass,
+      count: 1,
+      error_class: 'canary_leak',
+    });
+  }
+  throw error;
 }
 
 async function readSource(
@@ -277,7 +322,7 @@ function admitMemoryRow(value: unknown, canaries: CanaryTokens): RecallMemoryHit
     const result = recallMemoryHitSchema.safeParse({ ...memoryHit, content: prepared.value });
     return result.success ? result.data : null;
   } catch (error) {
-    if (error instanceof RecallSecurityHalt) throw error;
+    if (isRecallSecurityHalt(error)) throw error;
     return null;
   }
 }
@@ -320,7 +365,7 @@ function admitEpisodeRow(value: unknown, canaries: CanaryTokens): EpisodeHit | n
     const result = episodeHitSchema.safeParse({ ...hit.data, summary: prepared.value });
     return result.success ? result.data : null;
   } catch (error) {
-    if (error instanceof RecallSecurityHalt) throw error;
+    if (isRecallSecurityHalt(error)) throw error;
     return null;
   }
 }
