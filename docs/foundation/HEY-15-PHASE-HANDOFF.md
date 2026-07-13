@@ -2,6 +2,8 @@
 
 Status: local implementation/review evidence is complete; HEY-15 remains **In Progress** until the reviewed branch is PR-merged. HEY-16 remains blocked on that merge.
 
+- [observed] On 2026-07-13, the [HEY-15 Linear ticket](https://linear.app/heywaldo/issue/HEY-15/backend-recall-before-act-module-deterministic-memory-consult-before) was reconciled to the implemented fake-first scope and received a verification-evidence comment. Its state intentionally remains **In Progress**: this branch is local, no PR exists, and review/merge evidence is not yet available.
+
 ### What Was Built
 
 - [observed] A fake-first, owner-bound `createRuntimeRecallGateway()` that consumes the existing `RecallGateway<RuntimeRecallContext>` contract without a new public seam.

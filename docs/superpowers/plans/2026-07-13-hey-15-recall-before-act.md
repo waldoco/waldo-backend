@@ -662,6 +662,7 @@ The plan has no contradiction with the Global Constraints: it adds no durable sc
 - [observed] Independent standards/spec, security, health/privacy, contract, and adversarial feature-break reviews passed after the final repair. The implementation has no contract, writer, storage, R2, prompt-builder, provider, deployment, or migration change.
 - [blocked] `npx -y pnpm@10.34.4 verify` passed package-manager, frozen install, recursive typecheck, and contracts (`49 files / 1197 tests`), then stopped at `verify:supabase` because `supabase start is not running`. No service was started. `tools/eval/run-suite.ts` is absent, so no eval-suite pass is claimed.
 - [observed] `docs/foundation/HEY-15-PHASE-HANDOFF.md` records the local implementation evidence and preserves the HEY-16 merge gate.
+- [observed] The live HEY-15 Linear description and evidence comment were reconciled on 2026-07-13. The ticket remains **In Progress** because the local branch has not been published as a reviewable PR; HEY-16 remains merge-blocked and HEY-15 must not be marked Done before merge evidence.
 
 ## Learning
 
