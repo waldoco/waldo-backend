@@ -27,14 +27,16 @@ import { prepareWithScribe } from '../scribe/prepare';
 const MEMORY_LIMIT = 5;
 const EPISODE_LIMIT = 3;
 const DAY_MS = 86_400_000;
-const ECMASCRIPT_DATE_MAX_MS = 8_640_000_000_000_000;
+const ISO8601_4_DIGIT_MAX_MS = 253_402_300_799_999;
 const UNMAPPED_QUERY = 'recall unavailable';
 
 type SourceClass = 'memory' | 'episode';
 
-type CapturedSource =
-  | Readonly<{ ok: true; rows: unknown }>
-  | Readonly<{ ok: false }>;
+class RecallSourceUnavailable extends Error {
+  constructor(readonly sourceClass: SourceClass) {
+    super('recall source unavailable');
+  }
+}
 
 type RecallEnvelope = Readonly<{
   hit: unknown;
@@ -113,50 +115,28 @@ export function createRuntimeRecallGateway(
         to: new Date(startedAt).toISOString(),
       },
     });
-    const [memorySource, episodeSource] = await Promise.all([
-      captureSource(() => deps.reads.retrieve(retrieveArgs)),
-      captureSource(() => deps.reads.searchEpisodes(episodeArgs)),
-    ]);
-
-    if (!memorySource.ok) {
-      emit(deps, {
-        recall_status: 'failed',
-        source_class: 'memory',
-        count: 0,
-        error_class: 'source_unavailable',
-      });
-      return empty(query, duration(deps, startedAt));
-    }
-    if (!episodeSource.ok) {
-      emit(deps, {
-        recall_status: 'failed',
-        source_class: 'episode',
-        count: 0,
-        error_class: 'source_unavailable',
-      });
-      return empty(query, duration(deps, startedAt));
-    }
-    if (!Array.isArray(memorySource.rows) || memorySource.rows.length > MEMORY_LIMIT) {
-      emit(deps, {
-        recall_status: 'failed',
-        source_class: 'memory',
-        count: 0,
-        error_class: 'source_unavailable',
-      });
-      return empty(query, duration(deps, startedAt));
-    }
-    if (!Array.isArray(episodeSource.rows) || episodeSource.rows.length > EPISODE_LIMIT) {
-      emit(deps, {
-        recall_status: 'failed',
-        source_class: 'episode',
-        count: 0,
-        error_class: 'source_unavailable',
-      });
-      return empty(query, duration(deps, startedAt));
+    let memoryRows: readonly unknown[];
+    let episodeRows: readonly unknown[];
+    try {
+      [memoryRows, episodeRows] = await Promise.all([
+        readSource('memory', MEMORY_LIMIT, () => deps.reads.retrieve(retrieveArgs)),
+        readSource('episode', EPISODE_LIMIT, () => deps.reads.searchEpisodes(episodeArgs)),
+      ]);
+    } catch (error) {
+      if (error instanceof RecallSourceUnavailable) {
+        emit(deps, {
+          recall_status: 'failed',
+          source_class: error.sourceClass,
+          count: 0,
+          error_class: 'source_unavailable',
+        });
+        return empty(query, duration(deps, startedAt));
+      }
+      throw error;
     }
 
     try {
-      const memory = admitMemoryRows(memorySource.rows, ctx.canaryTokens);
+      const memory = admitMemoryRows(memoryRows, ctx.canaryTokens);
       if (memory.rejected > 0) {
         emit(deps, {
           recall_status: 'partial',
@@ -165,7 +145,7 @@ export function createRuntimeRecallGateway(
           error_class: 'row_rejected',
         });
       }
-      const episodes = admitEpisodeRows(episodeSource.rows, ctx.canaryTokens);
+      const episodes = admitEpisodeRows(episodeRows, ctx.canaryTokens);
       if (episodes.rejected > 0) {
         emit(deps, {
           recall_status: 'partial',
@@ -195,11 +175,45 @@ export function createRuntimeRecallGateway(
   };
 }
 
-async function captureSource(source: () => Promise<unknown>): Promise<CapturedSource> {
+async function readSource(
+  sourceClass: SourceClass,
+  limit: number,
+  source: () => Promise<unknown>,
+): Promise<readonly unknown[]> {
   try {
-    return { ok: true, rows: await source() };
+    const snapshot = boundedRowSnapshot(await source(), limit);
+    if (snapshot === null) throw new RecallSourceUnavailable(sourceClass);
+    return snapshot;
   } catch {
-    return { ok: false };
+    throw new RecallSourceUnavailable(sourceClass);
+  }
+}
+
+function boundedRowSnapshot(value: unknown, limit: number): readonly unknown[] | null {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
+
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    const length = lengthDescriptor?.value;
+    if (
+      lengthDescriptor === undefined ||
+      !('value' in lengthDescriptor) ||
+      !Number.isSafeInteger(length) ||
+      length < 0 ||
+      length > limit
+    ) {
+      return null;
+    }
+
+    const snapshot: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !('value' in descriptor)) return null;
+      snapshot[index] = descriptor.value;
+    }
+    return snapshot;
+  } catch {
+    return null;
   }
 }
 
@@ -209,7 +223,8 @@ function admitMemoryRows(
 ): RowAdmission<RecallMemoryHit> {
   const admitted: RecallMemoryHit[] = [];
   let rejected = 0;
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
     const memory = admitMemoryRow(row, canaries);
     if (memory === null) {
       rejected += 1;
@@ -261,7 +276,8 @@ function admitMemoryRow(value: unknown, canaries: CanaryTokens): RecallMemoryHit
 function admitEpisodeRows(rows: readonly unknown[], canaries: CanaryTokens): RowAdmission<EpisodeHit> {
   const admitted: EpisodeHit[] = [];
   let rejected = 0;
-  for (const row of rows) {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
     const episode = admitEpisodeRow(row, canaries);
     if (episode === null) {
       rejected += 1;
@@ -372,9 +388,9 @@ function now(deps: RuntimeRecallGatewayDeps): number {
   if (
     !Number.isSafeInteger(value) ||
     value < 0 ||
-    value > ECMASCRIPT_DATE_MAX_MS
+    value > ISO8601_4_DIGIT_MAX_MS
   ) {
-    throw new Error('recall clock must be a non-negative safe integer within the ECMAScript Date range');
+    throw new Error('recall clock must be a non-negative safe integer within the four-digit ISO range');
   }
   return value;
 }

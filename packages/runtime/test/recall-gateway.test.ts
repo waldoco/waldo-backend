@@ -1,5 +1,6 @@
 import {
   buildRecallQuery,
+  episodeSearchArgsSchema,
   RECALL_CONFIG,
   recallResultSchema,
   type CanaryTokens,
@@ -18,7 +19,7 @@ const CANARIES: CanaryTokens = [
 ];
 const FIXED_NOW = Date.parse('2026-07-13T12:00:00.000Z');
 const DAY_MS = 86_400_000;
-const ECMASCRIPT_DATE_MAX_MS = 8_640_000_000_000_000;
+const ISO8601_4_DIGIT_MAX_MS = 253_402_300_799_999;
 const RECALL_KEYS = Object.keys(RECALL_CONFIG) as Array<
   Exclude<RuntimeRecallContext['recallKey'], undefined>
 >;
@@ -75,6 +76,20 @@ function telemetry(events: unknown[]) {
       events.push(event);
     },
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
@@ -160,6 +175,88 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
     });
   });
 
+  it('fails open before a pending episode sibling settles when memory rejects', async () => {
+    const pendingEpisodes = deferred<readonly unknown[]>();
+    const events: unknown[] = [];
+    const source: OwnerBoundRecallReads = {
+      retrieve: vi.fn(async () => {
+        throw new Error('synthetic memory failure');
+      }),
+      searchEpisodes: vi.fn(async () => pendingEpisodes.promise),
+    };
+    const recall = createRuntimeRecallGateway({
+      reads: source,
+      now: () => FIXED_NOW,
+      telemetry: telemetry(events),
+    });
+    let settled = false;
+    const pending = recall(context('user_message')).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    expect(source.retrieve).toHaveBeenCalledOnce();
+    expect(source.searchEpisodes).toHaveBeenCalledOnce();
+    await flushMicrotasks();
+    expect(settled).toBe(true);
+    expect(events).toEqual([
+      {
+        recall_status: 'failed',
+        source_class: 'memory',
+        count: 0,
+        error_class: 'source_unavailable',
+      },
+    ]);
+
+    pendingEpisodes.resolve([]);
+    await expect(pending).resolves.toMatchObject({
+      memory_hits: [],
+      episode_hits: [],
+      evolution_hits: [],
+    });
+  });
+
+  it('fails open before a pending memory sibling settles when episode rejects', async () => {
+    const pendingMemory = deferred<readonly unknown[]>();
+    const events: unknown[] = [];
+    const source: OwnerBoundRecallReads = {
+      retrieve: vi.fn(async () => pendingMemory.promise),
+      searchEpisodes: vi.fn(async () => {
+        throw new Error('synthetic episode failure');
+      }),
+    };
+    const recall = createRuntimeRecallGateway({
+      reads: source,
+      now: () => FIXED_NOW,
+      telemetry: telemetry(events),
+    });
+    let settled = false;
+    const pending = recall(context('user_message')).then((result) => {
+      settled = true;
+      return result;
+    });
+
+    expect(source.retrieve).toHaveBeenCalledOnce();
+    expect(source.searchEpisodes).toHaveBeenCalledOnce();
+    await flushMicrotasks();
+    expect(settled).toBe(true);
+    expect(events).toEqual([
+      {
+        recall_status: 'failed',
+        source_class: 'episode',
+        count: 0,
+        error_class: 'source_unavailable',
+      },
+    ]);
+
+    pendingMemory.resolve([]);
+    await expect(pending).resolves.toMatchObject({
+      memory_hits: [],
+      episode_hits: [],
+      evolution_hits: [],
+    });
+  });
+
   it('re-admits prompt-safe rows and removes memory-only rank fields', async () => {
     const result = await createRuntimeRecallGateway({
       reads: reads([memoryHit('safe memory')], [episodeHit('safe episode')]),
@@ -205,6 +302,26 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
       expect.objectContaining({ summary: 'first supplied episode', fts_rank: -2 }),
       expect.objectContaining({ summary: 'second supplied episode', fts_rank: -1 }),
     ]);
+  });
+
+  it('admits bounded own data values without invoking a hostile source iterator', async () => {
+    const sourceRows = [memoryHit('first supplied memory'), memoryHit('second supplied memory')];
+    const iterator = vi.fn(() => {
+      throw new Error('source iterator must not run');
+    });
+    Object.defineProperty(sourceRows, Symbol.iterator, { value: iterator });
+    Object.defineProperty(sourceRows, 'unused', { value: 'ignored source metadata' });
+
+    const result = await createRuntimeRecallGateway({
+      reads: unsafeReads(sourceRows),
+      now: () => FIXED_NOW,
+    })(context('user_message'));
+
+    expect(result.memory_hits.map((hit) => hit.content)).toEqual([
+      'first supplied memory',
+      'second supplied memory',
+    ]);
+    expect(iterator).not.toHaveBeenCalled();
   });
 
   it('keeps an admitted sibling when one row is malformed or Scribe-rejected', async () => {
@@ -406,7 +523,7 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
     expect(JSON.stringify(events)).not.toContain('private episode failure');
   });
 
-  it('uses memory-first telemetry when both enabled sources fail', async () => {
+  it('keeps both-source failure telemetry closed without scheduler-order attribution', async () => {
     const events: unknown[] = [];
     const source: OwnerBoundRecallReads = {
       retrieve: vi.fn(async () => {
@@ -424,6 +541,94 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
         telemetry: telemetry(events),
       })(context('user_message')),
     ).resolves.toMatchObject({ memory_hits: [], episode_hits: [], evolution_hits: [] });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual({
+      recall_status: 'failed',
+      source_class: expect.stringMatching(/^(memory|episode)$/),
+      count: 0,
+      error_class: 'source_unavailable',
+    });
+    expect(JSON.stringify(events)).not.toContain('memory failed');
+    expect(JSON.stringify(events)).not.toContain('episode failed');
+  });
+
+  it.each([
+    ['memory non-array response', 'memory', () => unsafeReads({ not: 'an array' })],
+    ['episode non-array response', 'episode', () => unsafeReads([], { not: 'an array' })],
+    [
+      'memory over-limit response',
+      'memory',
+      () => unsafeReads([{}, {}, {}, {}, {}, {}]),
+    ],
+    ['episode over-limit response', 'episode', () => unsafeReads([], [{}, {}, {}, {}])],
+    ['memory sparse response', 'memory', () => unsafeReads(new Array(1))],
+    [
+      'memory array subclass response',
+      'memory',
+      () => {
+        class SourceRows extends Array<unknown> {}
+        const rows = new SourceRows();
+        rows[0] = {};
+        return unsafeReads(rows);
+      },
+    ],
+    [
+      'memory revoked proxy response',
+      'memory',
+      () => {
+        const rows = Proxy.revocable([{}], {});
+        rows.revoke();
+        return unsafeReads(rows.proxy);
+      },
+    ],
+    [
+      'memory descriptor-inspection proxy response',
+      'memory',
+      () =>
+        unsafeReads(
+          new Proxy([{}], {
+            getOwnPropertyDescriptor() {
+              throw new Error('synthetic descriptor inspection failure');
+            },
+          }),
+        ),
+    ],
+  ] as const)(
+    'fails open atomically for a %s',
+    async (_case, sourceClass, makeReads) => {
+      const events: unknown[] = [];
+      const result = await createRuntimeRecallGateway({
+        reads: makeReads(),
+        now: () => FIXED_NOW,
+        telemetry: telemetry(events),
+      })(context('user_message'));
+
+      expect(result).toMatchObject({ memory_hits: [], episode_hits: [], evolution_hits: [] });
+      expect(events).toEqual([
+        {
+          recall_status: 'failed',
+          source_class: sourceClass,
+          count: 0,
+          error_class: 'source_unavailable',
+        },
+      ]);
+    },
+  );
+
+  it('rejects an accessor source index without invoking its getter', async () => {
+    const sourceRows: unknown[] = [];
+    const index = vi.fn(() => memoryHit('accessor source value'));
+    Object.defineProperty(sourceRows, '0', { enumerable: true, get: index });
+    const events: unknown[] = [];
+
+    const result = await createRuntimeRecallGateway({
+      reads: unsafeReads(sourceRows),
+      now: () => FIXED_NOW,
+      telemetry: telemetry(events),
+    })(context('user_message'));
+
+    expect(index).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ memory_hits: [], episode_hits: [], evolution_hits: [] });
     expect(events).toEqual([
       {
         recall_status: 'failed',
@@ -435,28 +640,46 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
   });
 
   it.each([
-    ['memory', unsafeReads({ not: 'an array' })],
-    ['episode', unsafeReads([], { not: 'an array' })],
-    ['memory', unsafeReads(Array.from({ length: 6 }, () => ({})))],
-    ['episode', unsafeReads([], Array.from({ length: 4 }, () => ({})))],
-  ] as const)('fails open atomically for a %s nonconforming source envelope', async (sourceClass, source) => {
-    const events: unknown[] = [];
-    const result = await createRuntimeRecallGateway({
-      reads: source,
-      now: () => FIXED_NOW,
-      telemetry: telemetry(events),
-    })(context('user_message'));
+    ['non-array response', () => ({ not: 'an array' })],
+    ['over-limit response', () => [{}, {}, {}, {}, {}, {}]],
+    ['sparse response', () => new Array(1)],
+  ] as const)(
+    'fails open before a pending episode sibling settles for a memory %s',
+    async (_case, createResponse) => {
+      const pendingEpisodes = deferred<readonly unknown[]>();
+      const events: unknown[] = [];
+      const source = unsafeReads(createResponse(), pendingEpisodes.promise);
+      let settled = false;
+      const pending = createRuntimeRecallGateway({
+        reads: source,
+        now: () => FIXED_NOW,
+        telemetry: telemetry(events),
+      })(context('user_message')).then((result) => {
+        settled = true;
+        return result;
+      });
 
-    expect(result).toMatchObject({ memory_hits: [], episode_hits: [], evolution_hits: [] });
-    expect(events).toEqual([
-      {
-        recall_status: 'failed',
-        source_class: sourceClass,
-        count: 0,
-        error_class: 'source_unavailable',
-      },
-    ]);
-  });
+      expect(source.retrieve).toHaveBeenCalledOnce();
+      expect(source.searchEpisodes).toHaveBeenCalledOnce();
+      await flushMicrotasks();
+      expect(settled).toBe(true);
+      expect(events).toEqual([
+        {
+          recall_status: 'failed',
+          source_class: 'memory',
+          count: 0,
+          error_class: 'source_unavailable',
+        },
+      ]);
+
+      pendingEpisodes.resolve([]);
+      await expect(pending).resolves.toMatchObject({
+        memory_hits: [],
+        episode_hits: [],
+        evolution_hits: [],
+      });
+    },
+  );
 
   it('halts rather than failing open when current canary content is re-admitted', async () => {
     const events: unknown[] = [];
@@ -546,12 +769,29 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
     expect(events).toEqual([]);
   });
 
-  it('rejects an injected clock outside the ECMAScript date range before either source runs', async () => {
+  it('accepts the exact four-digit ISO clock maximum with schema-valid episode arguments', async () => {
+    const source = reads();
+    await expect(
+      createRuntimeRecallGateway({
+        reads: source,
+        now: () => ISO8601_4_DIGIT_MAX_MS,
+      })(context('user_message')),
+    ).resolves.toMatchObject({ memory_hits: [], episode_hits: [], evolution_hits: [] });
+
+    const episodeArgs = (source.searchEpisodes as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(episodeArgs?.time_range).toEqual({
+      from: new Date(ISO8601_4_DIGIT_MAX_MS - 30 * DAY_MS).toISOString(),
+      to: '9999-12-31T23:59:59.999Z',
+    });
+    expect(episodeSearchArgsSchema.safeParse(episodeArgs).success).toBe(true);
+  });
+
+  it('rejects the first expanded-year clock millisecond before either source runs', async () => {
     const source = reads();
     const events: unknown[] = [];
     const recall = createRuntimeRecallGateway({
       reads: source,
-      now: () => ECMASCRIPT_DATE_MAX_MS + 1,
+      now: () => ISO8601_4_DIGIT_MAX_MS + 1,
       telemetry: telemetry(events),
     });
 
