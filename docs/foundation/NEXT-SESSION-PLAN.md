@@ -1,12 +1,10 @@
 # Next Session Plan - Harness Foundation Waves
 
-Status: Wave 0 reconciliation merged in PR #49. PRs #50 (HEY-100), #52 (HEY-144 storage
-foundation), #51 (HEY-75 scorer), #53 (HEY-75 corpus correction), #54 (HEY-141 egress
-hardening), #56 (HEY-163 WorkspaceMount seam), and #58 (HEY-166 proposed reader-admission
-policy) are merged through `aff9b51`. HEY-167 is the outstanding canonical
-reader-admission/prompt-budget decision before HEY-14.
-Date: 2026-07-12 IST.
-Baseline: `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`. HEY-143 remains In Progress because
+Status: Wave 0 reconciliation and the H14/H15 context Modules are merged: PR #62 (HEY-14),
+PR #64 (HEY-15), and waldo-brain PR #18 (HEY-167) are Done. HEY-16 is locally implemented and
+under review on its ticket branch; it is not Done until its PR merges.
+Date: 2026-07-13 IST.
+Baseline: `be8af3a feat(runtime): implement HEY-15 recall gateway (#64)`. HEY-143 remains In Progress because
 provider-readiness is fail-closed and has no real context, provider, sink, staging, or Alpha proof.
 
 ## Start Here
@@ -129,20 +127,17 @@ execution slice.
 
 1. **Wave 0:** reconciliation merged in PR #49. PRs #50, #52, #51/#53, #54, #56, and #58 are
    merged foundations; this is not a claim of live product capability.
-2. **Current gate:** HEY-163's typed WorkspaceMount seam and HEY-166's proposed reader-admission
-   policy are Done. The dependency lineage is `HEY-163 -> HEY-166 -> HEY-167 -> HEY-14 -> HEY-15
-   -> HEY-16`; the remaining execution path starts at HEY-167. HEY-167 owns the required canonical
-   reader-Scribe and model-token-counter decision and must be ratified in `waldo-brain` before
-   HEY-14 implementation.
-3. **Remaining context:** `HEY-167 -> HEY-14 -> HEY-15 -> HEY-16`. HEY-15 retains its serialized
-   schema/rebase discipline, and HEY-16 composes merged HEY-14/15 interfaces; its full goal-
-   hydration path still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
+2. **Current gate:** HEY-163/166/167 and HEY-14/15 are Done. HEY-16 is the current bounded
+   fake-first composition slice and remains In Progress until its reviewed PR merges.
+3. **Remaining context:** merge HEY-16, then run the fresh clean-main convergence wall before
+   HEY-143 closure planning. HEY-16 composes merged HEY-14/15 interfaces; full goal hydration
+   still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
    static-only, and HEY-160 separately owns any future production per-user JWT/`db.forUser()`
    custody path.
 4. **Wave 3:** HEY-141 merged in PR #54. It remains a parse-only declared-target policy with no DNS,
    redirect, fetch, transport, or ACL expansion.
-5. **Convergence:** After an accepted HEY-167 decision, a fresh clean `origin/main` must prove the
-   remaining HEY-14, HEY-15, and HEY-16 work alongside the already merged HEY-100, HEY-144,
+5. **Convergence:** After HEY-16 merges, a fresh clean `origin/main` must prove it alongside the
+   already merged HEY-14, HEY-15, HEY-100, HEY-144,
    HEY-75, HEY-141, HEY-163, and HEY-166 foundations before HEY-143 closure planning. This
    authorizes planning only.
 6. **Reliability parallel root:** HEY-165's draft repair establishes that a numeric-heavy generated
