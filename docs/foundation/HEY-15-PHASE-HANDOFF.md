@@ -2,7 +2,7 @@
 
 Status: local implementation/review evidence is complete; HEY-15 remains **In Progress** until the reviewed branch is PR-merged. HEY-16 remains blocked on that merge.
 
-- [observed] On 2026-07-13, the [HEY-15 Linear ticket](https://linear.app/heywaldo/issue/HEY-15/backend-recall-before-act-module-deterministic-memory-consult-before) was reconciled to the implemented fake-first scope and received a verification-evidence comment. Its state intentionally remains **In Progress**: this branch is local, no PR exists, and review/merge evidence is not yet available.
+- [observed] On 2026-07-13, the [HEY-15 Linear ticket](https://linear.app/heywaldo/issue/HEY-15/backend-recall-before-act-module-deterministic-memory-consult-before) was reconciled to the implemented fake-first scope and received a verification-evidence comment. [Draft PR #64](https://github.com/Pin4sf/waldo-backend/pull/64) now contains the branch. The ticket intentionally remains **In Progress** while the PR is a draft; a human must mark it ready, review it, and merge it before HEY-15 can be Done or HEY-16 can proceed.
 
 ### What Was Built
 
