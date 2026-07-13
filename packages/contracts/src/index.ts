@@ -45,5 +45,6 @@ export * from './runtime/routing';
 export * from './runtime/evidence';
 export * from './telemetry/engagement';
 export * from './public/dto';
+export * from './public/morning-brief';
 export * from './public/openapi';
 export * from './testing/evidence';
