@@ -33,8 +33,11 @@ const UNMAPPED_QUERY = 'recall unavailable';
 type SourceClass = 'memory' | 'episode';
 
 class RecallSourceUnavailable extends Error {
-  constructor(readonly sourceClass: SourceClass) {
-    super('recall source unavailable');
+  constructor(
+    readonly sourceClass: SourceClass,
+    cause?: unknown,
+  ) {
+    super('recall source unavailable', { cause });
   }
 }
 
@@ -124,6 +127,7 @@ export function createRuntimeRecallGateway(
       ]);
     } catch (error) {
       if (error instanceof RecallSourceUnavailable) {
+        // The private error retains its cause; only this closed classification crosses telemetry's interface.
         emit(deps, {
           recall_status: 'failed',
           source_class: error.sourceClass,
@@ -180,41 +184,46 @@ async function readSource(
   limit: number,
   source: () => Promise<unknown>,
 ): Promise<readonly unknown[]> {
+  let response: unknown;
   try {
-    const snapshot = boundedRowSnapshot(await source(), limit);
-    if (snapshot === null) throw new RecallSourceUnavailable(sourceClass);
-    return snapshot;
-  } catch {
-    throw new RecallSourceUnavailable(sourceClass);
+    response = await source();
+  } catch (error) {
+    throw new RecallSourceUnavailable(sourceClass, error);
   }
+
+  let snapshot: readonly unknown[] | null;
+  try {
+    snapshot = boundedRowSnapshot(response, limit);
+  } catch (error) {
+    throw new RecallSourceUnavailable(sourceClass, error);
+  }
+
+  if (snapshot === null) throw new RecallSourceUnavailable(sourceClass);
+  return snapshot;
 }
 
 function boundedRowSnapshot(value: unknown, limit: number): readonly unknown[] | null {
-  try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return null;
 
-    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
-    const length = lengthDescriptor?.value;
-    if (
-      lengthDescriptor === undefined ||
-      !('value' in lengthDescriptor) ||
-      !Number.isSafeInteger(length) ||
-      length < 0 ||
-      length > limit
-    ) {
-      return null;
-    }
-
-    const snapshot: unknown[] = [];
-    for (let index = 0; index < length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (descriptor === undefined || !('value' in descriptor)) return null;
-      snapshot[index] = descriptor.value;
-    }
-    return snapshot;
-  } catch {
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  const length = lengthDescriptor?.value;
+  if (
+    lengthDescriptor === undefined ||
+    !('value' in lengthDescriptor) ||
+    !Number.isSafeInteger(length) ||
+    length < 0 ||
+    length > limit
+  ) {
     return null;
   }
+
+  const snapshot: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !('value' in descriptor)) return null;
+    snapshot[index] = descriptor.value;
+  }
+  return snapshot;
 }
 
 function admitMemoryRows(
