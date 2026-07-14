@@ -1,6 +1,6 @@
 # HEY-114 Disposable Supabase Proof Result
 
-Status: **NEEDS WORK**
+Status: **SUCCESSFUL FAILURE-DISCOVERY RUN; NOT A PASSING ENVIRONMENT PROOF**
 Date: 2026-07-14
 Branch: `hey-114-disposable-proof`
 Repository revision used for every remote action: `fd663b65305973f19c318bb8acad067cc6798493`
@@ -78,8 +78,8 @@ MCP generated new disposable-project history versions while retaining each exact
 | Public function ACL | **FAIL** | `anon` retained EXECUTE on `app_user_id`, `enforce_consent_audit_history`, and `health_daily_requires_consent` |
 | Exact routine privilege contract | **FAIL** | Expected only authenticated EXECUTE on `app_user_id`; observed additional explicit role grants |
 | Migration history stability | PASS | Same seven ordered version/name pairs before and after tests |
-| Canonical migration-history compatibility | **FAIL** | MCP versions differ from all seven repository timestamp versions |
-| Apply-again/history idempotency | **FAIL/LIMITED** | No second apply was authorized; version mismatch prevents a canonical no-pending claim |
+| Canonical migration-history compatibility | **NOT PROVEN — MCP LIMITATION** | MCP versions differ from all seven repository timestamp versions |
+| Apply-again/history idempotency | **NOT PROVEN** | No second apply was authorized; CLI `db push` on a fresh project is the required proof |
 | Data API grant posture | PASS/LIMITED | RLS/grants passed; MCP session did not expose the project Data API schema-setting value |
 | Synthetic cleanup | PASS | 0 auth users and 0 application rows remained |
 
@@ -167,13 +167,43 @@ All seven manifest hashes were recomputed successfully. This is a captured local
 ## Current Supabase guidance consulted
 
 - Supabase changelog index fetched 2026-07-14; no migration/RLS/advisor breaking change altered this run.
+- [Revoking Postgres function execution](https://supabase.com/docs/guides/troubleshooting/how-can-i-revoke-execution-of-a-postgresql-function-2GYb0A)
 - [Database migrations](https://supabase.com/docs/guides/deployment/database-migrations)
 - [Database testing](https://supabase.com/docs/guides/database/testing)
 - [Securing the Data API](https://supabase.com/docs/guides/api/securing-your-api)
 
+## Reusable lesson: MCP application versus canonical migration proof
+
+- **Lesson:** Supabase MCP `apply_migration` is unsuitable for proving canonical repository
+  timestamp history because it assigns new application-time versions. It remains useful for
+  isolated schema, RLS, grant, advisor, and synthetic-data probes. Canonical remote migration
+  proof requires `supabase db push` from the exact committed migration tree against a fresh
+  disposable project, followed by two migration-list checks that show the repository timestamps
+  and no pending files.
+- **Mode:** Lightweight.
+- **Track:** Knowledge/practice.
+- **Overlap check:** This result file is the existing home for the observed MCP version behavior;
+  no prior reusable MCP-versus-CLI rule existed elsewhere in repository docs.
+- **Destination:** This proof result and future HEY-114 clean-proof runbook.
+- **Source/provenance:** This run's observed MCP history plus Supabase's database-migration guide.
+- **Applicability limit:** This does not prohibit MCP migrations for deliberately isolated schema
+  probes where canonical repository history is not an acceptance criterion.
+- **Eval/pressure scenario:** Given seven timestamped repository migrations and an empty hosted
+  project, the selected proof method must preserve all seven timestamp identifiers and a second
+  list must show no pending migration.
+- **Refresh outcome:** Update the HEY-114 proof method from MCP application to pinned CLI `db push`.
+- **Evidence Trail:** 2026-07-14 — MCP applied all seven SQL files but recorded versions
+  `20260714105523` through `20260714105541`, not the repository versions.
+- **Impact surface:** HEY-114 disposable proof, staging preflight, drift checks, and future migration
+  verification guidance; no migration or remote project is changed by this lesson.
+
 ## Verdict and remaining HEY-114 gates
 
-This branch is **not ready for PR review as passing proof**. It is ready only for review of the captured failure. A separately reviewed forward migration must normalize explicit function grants on hosted Supabase, then a new clean disposable cycle would require separate authorization because reset/deletion/reapplication was not authorized here.
+This branch is **not ready for PR review as passing proof**. It is ready only for review of the
+successful failure-discovery run. A separately reviewed forward migration must normalize explicit
+function grants on hosted Supabase. After that migration merges, a new clean disposable cycle must
+use pinned CLI `db push` and requires separate authorization; the current project remains preserved
+as failure evidence.
 
 HEY-114 must remain In Progress. Still required separately:
 

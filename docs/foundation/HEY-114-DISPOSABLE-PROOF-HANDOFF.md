@@ -12,13 +12,14 @@
 ## What Does Not Work Yet
 
 - **MEDIUM, merge-blocking:** The committed 44-assertion database contract passed only 42 assertions. Hosted-project default privileges left `anon` EXECUTE on three public functions. No cross-user bypass was demonstrated.
-- **FAIL:** MCP-generated migration versions differ from repository timestamp versions. Exact SQL names, order, and hashes are preserved, but canonical drift/no-pending compatibility is not.
+- **NOT PROVEN — proof-method limitation:** MCP-generated migration versions differ from repository timestamp versions. Exact SQL names, order, and hashes are preserved; a fresh project plus CLI `db push` is required for canonical drift/no-pending evidence.
 - **LIMITED:** A second apply/idempotency cycle was not authorized, and the project Data API exposed-schema setting was not observable through this MCP session.
 
 ## Decisions
 
 - Preserve the failed evidence without patching migrations, repairing history, resetting the project, or weakening tests.
 - Require a separately reviewed forward migration for hosted-project function ACL normalization.
+- Preserve this project as failure evidence; use a second fresh project and CLI `db push` only after separate approval.
 
 ## Next Steps
 
