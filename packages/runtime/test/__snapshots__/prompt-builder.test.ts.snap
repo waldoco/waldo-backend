@@ -1,0 +1,469 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > brief 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, query_calendar, get_communication, get_tasks, get_master_metrics, get_context, read_memory, search_episodes, search_connector, propose_action, send_message.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > dreaming_mode 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: read_memory, update_memory, search_episodes.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > fetch_alert 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, read_memory, propose_action, send_message.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > handoff_act 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: execute_action, write_task, update_task, draft_document, draft_email, propose_schedule, write_sheet_cell, send_message.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > handoff_explore 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, query_calendar, get_communication, get_tasks, get_master_metrics, get_context, read_memory, search_episodes, search_connector, web_search, read_document, search_tools.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > handoff_plan 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, query_calendar, get_tasks, propose_action.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > handoff_replan 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, query_calendar, get_tasks, update_task, propose_action.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > intervention 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, read_memory, update_task, propose_action.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > patrol 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, read_memory, search_connector, propose_action.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > pre_activity_spot 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, query_calendar, read_memory, propose_schedule, propose_action, send_message.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > pre_brief_sweep 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, query_calendar, get_communication, get_tasks, get_master_metrics, get_context, read_memory, search_episodes, search_connector.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > user_message 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: get_crs, get_health, query_calendar, get_communication, get_tasks, get_master_metrics, get_context, read_memory, update_memory, search_episodes, search_connector, web_search, read_document, call_mcp_tool, write_task, update_task, draft_document, draft_email, propose_schedule, write_sheet_cell, propose_action, execute_action, send_message, create_thread, delete_message, restore_message, archive_thread, update_thread_topics, search_tools.
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;

@@ -152,7 +152,7 @@ behavior with fakes/mocks. It does not prove a real context/provider/channel pat
 | ---: | --- | --- | --- |
 | 1 | Journal/outbox | Local workerd/fake-sink proof merged | Preserve; real async adapter proof is HEY-110 |
 | 2 | Governor/scheduler/DeliveryGate | Core local runtime merged | HEY-135/137/138 and held-candidate re-admission contract |
-| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, HEY-144 goals storage, HEY-163 WorkspaceMount contract, and HEY-166's proposed reader-admission policy are merged; context Modules remain unwired | HEY-167 canonical ADR ratification, then HEY-14 -> HEY-15 -> HEY-16 |
+| 3 | Context/memory/safety | HEY-10 schema, HEY-13 Scribe, HEY-144 goals storage, HEY-163 WorkspaceMount contract, HEY-166 policy, HEY-167 ADR, and HEY-14/15 Modules are merged; HEY-16 is locally implemented and pending review/merge | Merge HEY-16, then run the clean-main convergence wall |
 | 4 | Tools/adapters/provider | Dispatcher/ACL and fake-first provider merged | real context/provider/source, spend, egress, custody |
 | 5 | Delivery/product loops | Policies and generic contracts only | HEY-110 async adapter, Brief seam, HEY-158 Spots, HEY-126 Chat spike |
 | 6 | Eval/launch | local replay/conformance only | two-user staging, rollback, deletion/privacy, eval/load/ops proof |
@@ -166,15 +166,15 @@ declared-target parse-only egress hardening, PR #56's typed WorkspaceMount contr
 proposed workspace reader-admission policy are merged. These merges do not authorize a live provider,
 credential, transport, R2 binding, staging, sink, or deployment action.
 
-HEY-167 must ratify the reader-Scribe/token-counter boundary before HEY-14 implementation. The
-remaining context sequence is HEY-167 -> HEY-14 -> HEY-15 -> HEY-16. HEY-144 has released the V2
-goals storage seam; complete goal hydration also awaits HEY-162's Scribe-backed admission boundary.
+HEY-167 ratified the reader-Scribe/token-counter boundary, and HEY-14/15 merged the consumed
+loader/recall Modules. HEY-16 is the remaining local review/merge step. HEY-144 has released the
+V2 goals storage seam; complete goal hydration also awaits HEY-162's Scribe-backed admission boundary.
 HEY-100 remains a static conformance result only; HEY-160 separately owns future production per-user
 JWT/`db.forUser()` custody. HEY-141 remains bounded to its declared-target policy until a separate
 adapter/transport scope is admitted.
 
-HEY-143 closure planning requires HEY-167 ratification, then the remaining HEY-14, HEY-15, and
-HEY-16 work to merge and a fresh clean-main convergence wall, alongside the already merged
+HEY-143 closure planning requires HEY-16 to merge and a fresh clean-main convergence wall,
+alongside the already merged
 HEY-100, HEY-144, HEY-75, HEY-141, HEY-163, and HEY-166 foundations. Any transport or adapter
 expansion beyond HEY-141's declared-target policy needs separate admission. This does not authorize
 a live-provider, live-secret, staging, sink, or deployment action.
@@ -303,10 +303,7 @@ adopted dogfood gate follows HEY-156 and precedes HEY-155 as an acceptance gate,
 
 Safe parallel work:
 
-- HEY-167's canonical reader-Scribe/token-budget decision; HEY-14 implementation remains blocked
-  until it is ratified, while HEY-15 source/ISA preparation remains read-only and disjoint;
-- HEY-16 only after the remaining context interfaces converge; full goal hydration remains gated by
-  HEY-162;
+- HEY-16 local composition review/merge; full goal hydration remains gated by HEY-162;
 - HEY-110 async delivery with fake adapters;
 - HEY-158 backend Spots vertical;
 - HEY-100 static guard plus the separate future custody/data-plane issue;
@@ -357,9 +354,9 @@ Merged:
 
 Next:
 
-23. HEY-14 preflight found no typed WorkspaceMount/R2 seam; PR #56 now provides the contract seam
-    and PR #58 provides the proposed bounded admission policy. HEY-167 canonical ratification must
-    land before HEY-14 -> HEY-15 -> HEY-16.
+23. HEY-14 preflight found no typed WorkspaceMount/R2 seam; PR #56 provides the contract seam,
+    PR #58 the proposed bounded admission policy, and waldo-brain PR #18 the canonical
+    ratification. HEY-14 and HEY-15 are merged; HEY-16 remains under local review.
 
 Do not infer HEY ticket completion beyond the bounded merged capability named above.
 
