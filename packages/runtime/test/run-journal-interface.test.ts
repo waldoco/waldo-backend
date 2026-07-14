@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -30,8 +30,8 @@ function utcLocalDate(at: number): string {
   return new Date(at).toISOString().slice(0, 10);
 }
 
-afterEach(() => {
-  FakeSink.resetAll();
+beforeEach(() => {
+  new FakeSink().reset();
 });
 
 let seq = 0;
@@ -170,8 +170,8 @@ describe('promoted run journal/outbox runtime interface', () => {
   });
 
   it('resumes the promoted journal/outbox interface across eviction without re-sending', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
 
     const runId = await runtime.startRun({
       userId: USER,
@@ -214,8 +214,8 @@ describe('promoted run journal/outbox runtime interface', () => {
   });
 
   it('fails closed without outbox when the gate verdict is not send', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const sentAt = futureOccurrence();
 
     const sentRun = await runtime.startRun({
@@ -275,8 +275,8 @@ describe('promoted run journal/outbox runtime interface', () => {
   });
 
   it('rejects malformed committed journal and outbox rows at the promoted read seam', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
 
     const corruptJournalRun = await runtime.startRun({
       userId: USER,
@@ -475,8 +475,8 @@ describe('promoted run journal/outbox runtime interface', () => {
   });
 
   it('fails before the sink when flush lacks a send-bearing journal row', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const runId = await runtime.startRun({
       userId: USER,
       trigger: KIND,
@@ -519,7 +519,7 @@ describe('promoted run journal/outbox runtime interface', () => {
       occurrenceAt: futureOccurrence(),
     });
 
-    FakeSink.forDO(invalidAckRuntime.id.toString()).returnInvalidAckOnce();
+    FakeSink.returnInvalidAckOnce();
     await expect(tick(invalidAckRuntime, invalidAckRun)).rejects.toThrow(/Invalid input/i);
     const invalidAckRow = await readOutbox(invalidAckRuntime, invalidAckRun);
     expect(invalidAckRow.journalState).toBe('SINK_SENT');
@@ -533,7 +533,7 @@ describe('promoted run journal/outbox runtime interface', () => {
       occurrenceAt: futureOccurrence(),
     });
 
-    FakeSink.forDO(wrongKeyRuntime.id.toString()).returnWrongAckKeyOnce('c'.repeat(64));
+    FakeSink.returnWrongAckKeyOnce('c'.repeat(64));
     await expect(tick(wrongKeyRuntime, wrongKeyRun)).rejects.toThrow(/idempotency key mismatch/);
     const wrongKeyRow = await readOutbox(wrongKeyRuntime, wrongKeyRun);
     expect(wrongKeyRow.journalState).toBe('SINK_SENT');

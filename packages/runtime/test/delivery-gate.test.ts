@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import type { PushClass, TriggerType } from '@waldo/contracts';
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -58,8 +58,8 @@ type GateState = {
   heldRows: number;
 };
 
-afterEach(() => {
-  FakeSink.resetAll();
+beforeEach(() => {
+  new FakeSink().reset();
 });
 
 let seq = 0;
@@ -715,8 +715,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('commits fetch_alert gate state and outbox intent atomically, then resumes without re-stamping', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const runId = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
@@ -763,8 +763,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('revalidates the committed candidate before a direct outbox flush', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const runId = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
@@ -801,8 +801,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('freezes held fetch_alert candidates without outbox or counter mutation', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const firstAt = futureOccurrence();
     const firstRun = await runtime.startRun({
       userId: USER,
@@ -842,8 +842,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('drops expired candidates before counters or outbox mutate', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const occurrenceAt = futureOccurrence();
     const runId = await runtime.startRun({
       userId: USER,
@@ -876,8 +876,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('releases a held candidate through a fresh GATED step', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const firstRun = await runtime.startRun({
       userId: USER,
       trigger: FETCH_ALERT,
@@ -928,8 +928,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('deletes an expired held candidate without opening a release run', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const firstAt = futureOccurrence();
     const firstRun = await runtime.startRun({
       userId: USER,
@@ -984,8 +984,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('charges counted budget for pre_activity_spot without exempt telemetry', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const occurrenceAt = futureOccurrence();
     const runId = await runtime.startRun({
       userId: USER,
@@ -1018,8 +1018,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('scopes pre_activity_spot cooldown by event id while class count still accumulates', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const occurrenceAt = futureOccurrence();
 
     const firstRun = await runtime.startRun({
@@ -1065,8 +1065,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('sends brief without charging APNs budget or exempt telemetry', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const runId = await runtime.startRun({
       userId: USER,
       trigger: BRIEF,
@@ -1098,8 +1098,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('keeps intervention_knock exempt and capped at two sends', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     for (const eventId of ['intervention-01', 'intervention-02']) {
       const runId = await runtime.startRun({
         userId: USER,
@@ -1145,8 +1145,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('drops repeated constellation_first instead of holding a once-ever milestone', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     for (const eventId of ['constellation-01', 'constellation-02']) {
       const runId = await runtime.startRun({
         userId: USER,
@@ -1197,8 +1197,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('applies adjustment proposed sub-cap without capping executed adjustments', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const proposedRun = await runtime.startRun({
       userId: USER,
       trigger: 'handoff_act',
@@ -1267,8 +1267,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('degrades counted classes without charging budget when the Pro cap is full', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     const occurrenceAt = futureOccurrence();
     await runInDurableObject(runtime, (_instance, state) => {
       state.storage.sql.exec(
@@ -1308,8 +1308,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('scopes counted budget by UTC local date fallback', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     await runInDurableObject(runtime, (_instance, state) => {
       state.storage.sql.exec(
         `INSERT INTO daily_push_budget (user_id, local_date, sends_total)
@@ -1346,8 +1346,8 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it('scopes class daily caps by UTC local date fallback while preserving class identity', async () => {
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
-    const sink = FakeSink.forDO(runtime.id.toString());
     for (const [day, eventId] of [
       ['2026-01-01', 'constellation-update-a'],
       ['2026-01-02', 'constellation-update-b'],

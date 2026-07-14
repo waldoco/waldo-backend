@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import type { Deps } from '../src/seams/deps';
 import { FakeSink } from '../src/tracer/sink';
@@ -21,8 +21,8 @@ type SchedulerStub = DurableObjectStub<TracerDO> & {
   }): Promise<void>;
 };
 
-afterEach(() => {
-  FakeSink.resetAll();
+beforeEach(() => {
+  new FakeSink().reset();
 });
 
 let seq = 0;
@@ -201,8 +201,8 @@ describe('scheduler alarm multiplexer', () => {
   });
 
   it('dispatches due run resume, outbox retry, and scheduled proactive wake from one alarm', async () => {
+    const sink = new FakeSink();
     const stub = freshStub();
-    const sink = FakeSink.forDO(stub.id.toString());
     const dueAt = soon();
 
     const resumeRunId = await stub.startRun({
@@ -269,8 +269,8 @@ describe('scheduler alarm multiplexer', () => {
   });
 
   it('survives eviction before the alarm and treats duplicate delivery after success as a no-op', async () => {
+    const sink = new FakeSink();
     const stub = freshStub();
-    const sink = FakeSink.forDO(stub.id.toString());
     const dueAt = soon();
 
     await startScheduledRun(stub, { userId: 'user-scheduler-evict', dueAt });
@@ -307,8 +307,8 @@ describe('scheduler alarm multiplexer', () => {
   });
 
   it('picks up a lost due schedule row on the next in-scope wake', async () => {
+    const sink = new FakeSink();
     const stub = freshStub();
-    const sink = FakeSink.forDO(stub.id.toString());
     const dueAt = soon();
 
     await startScheduledRun(stub, { userId: 'user-scheduler-lost', dueAt });

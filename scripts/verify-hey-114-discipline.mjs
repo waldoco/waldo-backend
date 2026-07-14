@@ -11,13 +11,10 @@ const run = (command, args) => {
 // Keep the migration inventory single-owned by the existing HEY-134 verifier.
 run(process.execPath, ['scripts/verify-supabase-migrations.mjs']);
 
-const documentPaths = [
-  '../docs/foundation/HEY-114-ENVIRONMENT-MIGRATION-DISCIPLINE.md',
-  '../docs/foundation/HEY-114-ARCH-LOCAL-PROOF-INSTRUCTIONS.md',
-];
-const document = documentPaths
-  .map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'))
-  .join('\n');
+const document = readFileSync(
+  new URL('../docs/foundation/HEY-114-ENVIRONMENT-MIGRATION-DISCIPLINE.md', import.meta.url),
+  'utf8',
+);
 const normalizedDocument = document.toLowerCase();
 
 const required = [

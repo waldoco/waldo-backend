@@ -47,7 +47,7 @@ type RuntimeStub = DurableObjectStub<TracerDO> & {
 };
 
 beforeEach(() => {
-  FakeSink.shared.reset();
+  new FakeSink().reset();
 });
 
 let seq = 0;
@@ -193,7 +193,7 @@ describe('Loop Governor runtime gate', () => {
   });
 
   it('denies an unregistered loop before DeliveryGate or outbox side effects', async () => {
-    const sink = FakeSink.shared;
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     const runId = await runtime.startRun({
       userId: USER,
@@ -361,7 +361,7 @@ describe('Loop Governor runtime gate', () => {
   });
 
   it('persists a global kill flag across eviction and blocks before DeliveryGate', async () => {
-    const sink = FakeSink.shared;
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     await setKillFlag(runtime, { scope: 'global', loopType: null, active: true });
     await evictDurableObject(runtime);
@@ -399,7 +399,7 @@ describe('Loop Governor runtime gate', () => {
   });
 
   it('fails closed on malformed kill flags before DeliveryGate side effects', async () => {
-    const sink = FakeSink.shared;
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     await runInDurableObject(runtime, (_instance, state) => {
       state.storage.sql.exec(
@@ -437,7 +437,7 @@ describe('Loop Governor runtime gate', () => {
   });
 
   it('honors a loop kill flag set after admission before the next governed seam', async () => {
-    const sink = FakeSink.shared;
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     const runId = await runtime.startRun({
       userId: USER,
@@ -627,7 +627,7 @@ describe('Loop Governor runtime gate', () => {
   });
 
   it('admits floor-safe egress without DeliveryGate side effects', async () => {
-    const sink = FakeSink.shared;
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     const runId = await runtime.startRun({
       userId: USER,
@@ -671,7 +671,7 @@ describe('Loop Governor runtime gate', () => {
   });
 
   it('blocks floor-unsafe egress before DeliveryGate side effects', async () => {
-    const sink = FakeSink.shared;
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     const runId = await runtime.startRun({
       userId: USER,
@@ -717,7 +717,7 @@ describe('Loop Governor runtime gate', () => {
   });
 
   it('fails closed on malformed loop progress rows before outbox side effects', async () => {
-    const sink = FakeSink.shared;
+    const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     const runId = await runtime.startRun({
       userId: USER,
