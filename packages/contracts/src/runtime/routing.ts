@@ -339,6 +339,27 @@ export const DREAMING_P6_ROUTE: ModelRoute = {
   floor: 'defer',
 };
 
+// P6 is a structural route, not a broad model-family heuristic. A future dreaming
+// Sonnet row must not silently inherit the P6 liveness rule unless it carries this
+// exact reasoning-chain shape.
+export function isStructuralP6Route(route: ModelRoute): boolean {
+  const [haikuFallback, primaryFallback] = route.fallback;
+  return (
+    route.trigger === 'dreaming_mode' &&
+    route.floor === 'defer' &&
+    route.primary.provider === 'anthropic' &&
+    route.primary.model === ROSTER.reasoning &&
+    route.primary.cache === 'anthropic_native' &&
+    route.fallback.length === 2 &&
+    haikuFallback?.provider === 'anthropic' &&
+    haikuFallback.model === ROSTER.fallback &&
+    haikuFallback.cache === 'none' &&
+    primaryFallback?.provider === 'workers_ai' &&
+    primaryFallback.model === ROSTER.primary &&
+    primaryFallback.cache === 'none'
+  );
+}
+
 // The §2 judge/classifier rows are roster roles, not trigger types — they key their own
 // table. Aux runs never escalate and never compete with delivery: the production judge
 // sheds to off-peak backfill, a harness-judge failure aborts the run, and the classifier

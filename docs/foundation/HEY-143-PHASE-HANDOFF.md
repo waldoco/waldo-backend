@@ -66,3 +66,34 @@ two-user staging parity/rollback remain separate Alpha dependencies.
 
 The clean-main convergence wall authorizes planning only. It does not authorize a live provider,
 Secrets Store use, staging write, sink effect, or deployment.
+
+## Provider Contract Convergence — 2026-07-14
+
+[observed] This local, fake-first slice starts from `origin/main`
+`845cbf441fbf5e075d8ca70dbf98a17d6565e770` (merged HEY-16).
+
+[observed] The slice pins documented Cloudflare chat-completions identities in the canonical
+model roster, emits every selected `fallback_step` to the gateway, applies the ADR-0051/0069
+spend clamp to the primary before normal availability fallback, and preserves bounded typed
+routing metadata in durable trace evidence. It accepts neither malformed spend-reader envelopes
+nor accessor-backed spend records before provider admission.
+
+[observed] Structural P6 is explicitly recognized by its full route shape, fails closed without
+a valid durable deferral count, and retains both `spend_cap_degrade` and `p6_degraded` on its
+eighth primary-only escape. Ambiguous multi-row trigger policies fail closed rather than choosing
+by array order.
+
+[observed] Final local verification passed: contracts tests (1,207), runtime tests (718),
+Scribe property tests (258), contracts/runtime typechecks, the full guard wall, and
+`git diff --check`. The repository-wide `verify` command reaches the expected environmental stop
+at `verify:supabase` because local Supabase is not running; its independent worker/property/guard
+checks are run separately. No network provider call, credential read, cloud write, or deployment
+occurred.
+
+[blocked] This does not add atomic daily reservation/reconciliation, durable P6 retry state or
+scheduling, real source/identity composition, safety callback wiring, a real sink, credential
+provisioning, staging deployment, or Alpha evidence. HEY-143 remains In Progress.
+
+[proposed] Next owner action: merge the reviewed local correctness PR, then prepare a separately
+authorized plan for atomic metering and durable P6 ownership before any live-provider or
+cloud-side action.

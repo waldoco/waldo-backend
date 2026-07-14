@@ -1,5 +1,6 @@
 import {
   GATEWAY_CONSTANT_HEADERS,
+  DREAMING_P6_ROUTE,
   ROSTER,
   ROUTING_TABLE,
   SKILL_PROMPT_SERIALIZER_REVISION,
@@ -21,7 +22,9 @@ import {
   selectModelRoute,
   type LLMGatewayAdapter,
   type LLMGatewayRequest,
+  type RuntimeLLMRequest,
 } from '../src/llm/provider';
+import { createUnavailableSkillBudget } from '../src/skills/budget';
 import type { CountResult, ResolvedSkillBudget, SkillBudgetFactory } from '../src/skills/budget';
 import type { HookRuntimeContext } from '../src/hooks/registry';
 import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
@@ -118,6 +121,19 @@ describe('RuntimeLLMProvider', () => {
 
     expect(route.primary.model).toBe(ROSTER.fallback);
     expect(route.fallback.map((step) => step.model)).toEqual([ROSTER.primary]);
+  });
+
+  it('fails closed when a policy leaves a trigger route ambiguous', () => {
+    expect(() =>
+      selectModelRoute({
+        trigger: 'dreaming_mode',
+        policy: {
+          routes: [...Object.values(ROUTING_TABLE), DREAMING_P6_ROUTE],
+          escalation: [],
+          template_fallback: true,
+        },
+      }),
+    ).toThrow('routing policy ambiguous trigger: dreaming_mode');
   });
 
   it('mints an opaque skill budget for the configured model immediately before rendering', async () => {
@@ -622,16 +638,116 @@ describe('RuntimeLLMProvider', () => {
     expect(gateway.requests).toHaveLength(1);
   });
 
-  it('uses the deterministic floor without a gateway call when spend cap is reached', async () => {
+  it('clamps a capped route to the primary before L1 and excludes cross-provider fallback', async () => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
       data: response(request.request.model, 'primary degraded answer'),
     }));
-    const provider = new RuntimeLLMProvider({ gateway });
+    const budgetModels: ModelName[] = [];
+    const provider = new RuntimeLLMProvider({
+      gateway,
+      skillBudgetFactory({ model }) {
+        budgetModels.push(model);
+        return createUnavailableSkillBudget();
+      },
+    });
+    const higherCostBriefRoute = {
+      ...ROUTING_TABLE.brief,
+      primary: { provider: 'anthropic' as const, model: ROSTER.reasoning, cache: 'none' as const },
+      fallback: [{ provider: 'anthropic' as const, model: ROSTER.fallback, cache: 'none' as const }],
+    };
+    let templateCalls = 0;
 
     const result = await provider.complete(
       {
         trigger: 'brief',
+        policy: {
+          routes: Object.values({ ...ROUTING_TABLE, brief: higherCostBriefRoute }),
+          escalation: [],
+          template_fallback: true,
+        },
+        spend: { spent_cents_today: 70, cap_cents: 70 },
+        renderRequest({ step, context }) {
+          return {
+            system: `${context}:${step.model}`,
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+        renderTemplate: () => {
+          templateCalls += 1;
+          return 'template fallback';
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.routing_logs).toEqual(['spend_cap_degrade']);
+    expect(result.response).toEqual({
+      model: ROSTER.primary,
+      text: 'primary degraded answer',
+      input_tokens: 20,
+      output_tokens: 5,
+      cache_read_input_tokens: 0,
+      latency_ms: 11,
+    });
+    expect(result.fallback_step).toBe('spend_cap_clamp');
+    expect(result.degraded).toBe(true);
+    expect(result.attempts).toEqual([
+      {
+        outcome: 'success',
+        model: ROSTER.primary,
+        provider: 'workers_ai',
+        context: 'full_context',
+        fallback_step: 'spend_cap_clamp',
+        usage: {
+          model: ROSTER.primary,
+          input_tokens: 20,
+          output_tokens: 5,
+          cache_read_input_tokens: 0,
+          latency_ms: 11,
+        },
+      },
+    ]);
+    expect(gateway.requests).toHaveLength(1);
+    expect(budgetModels).toEqual([ROSTER.primary]);
+    expect(gateway.requests[0]).toMatchObject({
+      request: { model: ROSTER.primary },
+      step: { provider: 'workers_ai', model: ROSTER.primary, cache: 'none' },
+      route: {
+        primary: { provider: 'workers_ai', model: ROSTER.primary, cache: 'none' },
+        fallback: [],
+      },
+      context: 'full_context',
+      fallback_step: 'spend_cap_clamp',
+    });
+    expect(templateCalls).toBe(0);
+  });
+
+  it('reaches the template only after capped primary-only availability attempts', async () => {
+    const gateway = new ScriptedGateway(() => ({
+      ok: false,
+      error: 'gateway unavailable',
+      code: 'transient',
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const higherCostBriefRoute = {
+      ...ROUTING_TABLE.brief,
+      primary: { provider: 'anthropic' as const, model: ROSTER.reasoning, cache: 'none' as const },
+      fallback: [{ provider: 'anthropic' as const, model: ROSTER.fallback, cache: 'none' as const }],
+    };
+
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        policy: {
+          routes: Object.values({ ...ROUTING_TABLE, brief: higherCostBriefRoute }),
+          escalation: [],
+          template_fallback: true,
+        },
         spend: { spent_cents_today: 70, cap_cents: 70 },
         renderRequest({ step, context }) {
           return {
@@ -646,21 +762,93 @@ describe('RuntimeLLMProvider', () => {
       runtimeCtx(),
     );
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.routing_log).toBe('spend_cap_degrade');
-    expect(result.response).toEqual({
-      model: ROSTER.primary,
-      text: 'template fallback',
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_input_tokens: 0,
-      latency_ms: 0,
+    expect(result).toMatchObject({
+      ok: true,
+      fallback_step: 'template',
+      routing_logs: ['spend_cap_degrade'],
     });
-    expect(result.fallback_step).toBe('template');
-    expect(result.degraded).toBe(true);
-    expect(result.attempts).toEqual([]);
+    expect(
+      gateway.requests.map((request) => ({
+        model: request.step.model,
+        provider: request.step.provider,
+        fallback_step: request.fallback_step,
+        context: request.context,
+      })),
+    ).toEqual([
+      {
+        model: ROSTER.primary,
+        provider: 'workers_ai',
+        fallback_step: 'spend_cap_clamp',
+        context: 'full_context',
+      },
+      {
+        model: ROSTER.primary,
+        provider: 'workers_ai',
+        fallback_step: 'spend_cap_clamp',
+        context: 'reduced_context',
+      },
+    ]);
+  });
+
+  it('fails closed for a capped structural P6 route until its durable count reaches the primary floor', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const p6Request: RuntimeLLMRequest = {
+      trigger: 'dreaming_mode',
+      policy: {
+        routes: Object.values({ ...ROUTING_TABLE, dreaming_mode: DREAMING_P6_ROUTE }),
+        escalation: [],
+        template_fallback: true,
+      },
+      spend: { spent_cents_today: 70, cap_cents: 70 },
+      renderRequest({ step, context }) {
+        return {
+          system: `${context}:${step.model}`,
+          messages: [{ role: 'user', content: 'dreaming' }],
+          max_tokens: 512,
+          temperature: 0.3,
+        };
+      },
+    };
+    const dreamingCtx = runtimeCtx({
+      trigger: 'dreaming_mode',
+      session: buildSessionState({
+        trigger: 'dreaming_mode',
+        canary_tokens: canaryTokens,
+        started_at: 1_700_000_000_000,
+      }),
+    });
+
+    for (const p6ConsecutiveDeferrals of [undefined, -1, 0.5, Number.NaN]) {
+      await expect(
+        provider.complete({ ...p6Request, p6ConsecutiveDeferrals }, dreamingCtx),
+      ).resolves.toMatchObject({
+        ok: false,
+        reason: 'gateway_exhausted',
+        fallback_step: 'defer',
+        routing_logs: ['spend_cap_degrade'],
+      });
+    }
     expect(gateway.requests).toEqual([]);
+
+    const eighth = await provider.complete(
+      { ...p6Request, p6ConsecutiveDeferrals: 7 },
+      dreamingCtx,
+    );
+    expect(eighth).toMatchObject({
+      ok: true,
+      response: { model: ROSTER.primary },
+      fallback_step: 'spend_cap_clamp',
+      routing_logs: ['spend_cap_degrade', 'p6_degraded'],
+    });
+    expect(gateway.requests).toHaveLength(1);
+    expect(gateway.requests[0]).toMatchObject({
+      step: { model: ROSTER.primary, provider: 'workers_ai', cache: 'none' },
+      fallback_step: 'spend_cap_clamp',
+    });
   });
 
   it('halts before gateway egress when request sanitisation rejects prompt text', async () => {
@@ -696,6 +884,43 @@ describe('RuntimeLLMProvider', () => {
       ok: false,
       reason: 'hook_halt',
       fallback_step: 'configured_model',
+    });
+    expect(gateway.requests).toEqual([]);
+  });
+
+  it('halts a capped primary-only request before gateway egress when Scribe rejects prompt text', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    await expect(
+      provider.complete(
+        {
+          trigger: 'brief',
+          spend: { spent_cents_today: 70, cap_cents: 70 },
+          renderRequest() {
+            return {
+              messages: [{ role: 'user', content: 'unsafe prompt text' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+        },
+        runtimeCtx({
+          sanitise: () => ({
+            ok: false,
+            check: 'instruction_pattern',
+            reason: 'untrusted_instruction',
+          }),
+        }),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      reason: 'hook_halt',
+      fallback_step: 'spend_cap_clamp',
+      routing_logs: ['spend_cap_degrade'],
     });
     expect(gateway.requests).toEqual([]);
   });
@@ -1110,7 +1335,7 @@ describe('RuntimeLLMProvider', () => {
 
   it.each([
     ['route exhaustion', undefined, 3],
-    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }, 0],
+    ['spend cap', { spent_cents_today: 70, cap_cents: 70 }, 2],
   ] as const)(
     'redacts safe template PII and preserves the terminal tool source on %s',
     async (_case, spend, gatewayCalls) => {

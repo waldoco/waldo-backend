@@ -15,6 +15,7 @@ import { runStateSchema } from './journal';
 import { loopDispositionSchema, loopTypeSchema } from './loop-policy';
 import { outboxStatusSchema } from './outbox';
 import { pushClassSchema } from './push-class';
+import { routingLogEventSchema } from './routing';
 import {
   runtimeGovernorDenyReasonSchema,
   runtimeOperationalRefSchema,
@@ -101,15 +102,18 @@ const sessionResetDetailSchema = z.strictObject({
 const contextBuiltDetailSchema = z.strictObject({
   source: z.literal('fake-derived'),
 });
+const routingLogsSchema = z.array(routingLogEventSchema).max(2);
 const llmCalledDetailSchema = z.strictObject({
   model: modelNameSchema,
   fallback_step: runtimeRunFallbackStepSchema,
   tool_call_count: z.int().nonnegative().max(16),
+  routing_logs: routingLogsSchema.optional(),
 });
 const llmObservedDetailSchema = z.strictObject({
   model: modelNameSchema,
   fallback_step: runtimeRunFallbackStepSchema,
   delivery_text_source: deliveryTextSourceSchema,
+  routing_logs: routingLogsSchema.optional(),
 });
 const toolParseFailedDetailSchema = z.strictObject({
   code: errorCodeSchema,
@@ -149,6 +153,8 @@ const deliveredDetailSchema = z.strictObject({
 const doneDetailSchema = z.strictObject({ terminal: z.literal(true) });
 const failedDetailSchema = z.strictObject({
   reason: z.union([runtimeRunFailureReasonSchema, z.literal('unknown')]),
+  fallback_step: runtimeRunFallbackStepSchema.optional(),
+  routing_logs: routingLogsSchema.optional(),
 });
 const scribeDeniedDetailSchema = z.strictObject({
   destination: sanitiseDestinationSchema,

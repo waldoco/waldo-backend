@@ -1,11 +1,11 @@
 # Next Session Plan - Harness Foundation Waves
 
-Status: Wave 0 reconciliation and the H14/H15 context Modules are merged: PR #62 (HEY-14),
-PR #64 (HEY-15), and waldo-brain PR #18 (HEY-167) are Done. HEY-16 is locally implemented and
-under review on its ticket branch; it is not Done until its PR merges.
-Date: 2026-07-13 IST.
-Baseline: `be8af3a feat(runtime): implement HEY-15 recall gateway (#64)`. HEY-143 remains In Progress because
-provider-readiness is fail-closed and has no real context, provider, sink, staging, or Alpha proof.
+Status: Wave 0 reconciliation and the H14/H15/H16 context Modules are merged: PR #62 (HEY-14),
+PR #64 (HEY-15), PR #65 (HEY-16), and waldo-brain PR #18 (HEY-167) are Done. HEY-143 remains
+In Progress; its local provider-contract convergence slice is under review and is not real-path proof.
+Date: 2026-07-14 IST.
+Baseline: `845cbf4 feat(runtime): implement HEY-16 REASONS canvas builder (#65)`. Provider
+readiness remains fail-closed and has no real provider, source, sink, staging, or Alpha proof.
 
 ## Start Here
 
@@ -101,8 +101,8 @@ Built and merged:
   ACL expansion.
 - PR #56's typed WorkspaceMount contract seam; it adds no R2 binding, runtime mount, writer,
   deployment, or raw-key API.
-- PR #58's proposed user-skill reader-admission policy; it does not ratify the reader-Scribe boundary
-  or model-aware token counter, which HEY-167 owns.
+- HEY-167's ratified user-skill reader-admission and model-aware budget contract; it does not add
+  a runtime reader, R2 binding, writer/commit path, or prompt hydration.
 
 Not built or not proven:
 
@@ -127,19 +127,17 @@ execution slice.
 
 1. **Wave 0:** reconciliation merged in PR #49. PRs #50, #52, #51/#53, #54, #56, and #58 are
    merged foundations; this is not a claim of live product capability.
-2. **Current gate:** HEY-163/166/167 and HEY-14/15 are Done. HEY-16 is the current bounded
-   fake-first composition slice and remains In Progress until its reviewed PR merges.
-3. **Remaining context:** merge HEY-16, then run the fresh clean-main convergence wall before
-   HEY-143 closure planning. HEY-16 composes merged HEY-14/15 interfaces; full goal hydration
-   still awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
+2. **Current gate:** HEY-163/166/167 and HEY-14/15/16 are Done. HEY-143 is the current bounded
+   fake-first provider-contract convergence slice; it does not authorize a live provider path.
+3. **Remaining context:** HEY-16 composes merged HEY-14/15 interfaces; full goal hydration still
+   awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
    static-only, and HEY-160 separately owns any future production per-user JWT/`db.forUser()`
    custody path.
 4. **Wave 3:** HEY-141 merged in PR #54. It remains a parse-only declared-target policy with no DNS,
    redirect, fetch, transport, or ACL expansion.
-5. **Convergence:** After HEY-16 merges, a fresh clean `origin/main` must prove it alongside the
-   already merged HEY-14, HEY-15, HEY-100, HEY-144,
-   HEY-75, HEY-141, HEY-163, and HEY-166 foundations before HEY-143 closure planning. This
-   authorizes planning only.
+5. **Convergence:** A fresh clean `origin/main` must prove the merged HEY-14, HEY-15, HEY-16,
+   HEY-100, HEY-144, HEY-75, HEY-141, HEY-163, and HEY-166 foundations before HEY-143 closure
+   planning. This authorizes planning only.
 6. **Reliability parallel root:** HEY-165's draft repair establishes that a numeric-heavy generated
    UUID v4 is falsely redacted on candidate re-read only when revalidation loses the matching
    generated `runId` context. It restores the original `event_id` only when it exactly matches that

@@ -1,4 +1,10 @@
-import { GATEWAY_CONSTANT_HEADERS, ROSTER } from '@waldo/contracts';
+import {
+  CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS,
+  GATEWAY_CONSTANT_HEADERS,
+  GATEWAY_STEP_HEADER,
+  PROVIDER_OF,
+  ROSTER,
+} from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { CloudflareAIGatewayAdapter } from '../src/llm/gateway';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -8,6 +14,7 @@ function credential(value = 'cf-token-123') {
 }
 
 function request(model = ROSTER.primary): LLMGatewayRequest {
+  const step = { provider: PROVIDER_OF[model], model, cache: 'none' as const };
   return {
     request: {
       model,
@@ -18,11 +25,11 @@ function request(model = ROSTER.primary): LLMGatewayRequest {
     },
     route: {
       trigger: 'brief',
-      primary: { provider: 'workers_ai', model: ROSTER.primary, cache: 'none' },
-      fallback: [{ provider: 'anthropic', model: ROSTER.fallback, cache: 'none' }],
+      primary: step,
+      fallback: [],
       floor: 'template',
     },
-    step: { provider: 'workers_ai', model, cache: 'none' },
+    step,
     context: 'full_context',
     fallback_step: 'configured_model',
     headers: GATEWAY_CONSTANT_HEADERS,
@@ -30,6 +37,67 @@ function request(model = ROSTER.primary): LLMGatewayRequest {
 }
 
 describe('CloudflareAIGatewayAdapter', () => {
+  it.each([ROSTER.reasoning, ROSTER.fallback] as const)(
+    'uses the documented Cloudflare Anthropic ID and accepts exact response identities for %s',
+    async (model) => {
+      const cloudflareModel = CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[model];
+      const acceptedResponses = Array.from(
+        new Set([cloudflareModel.request, ...cloudflareModel.response]),
+      );
+      const calls: RequestInit[] = [];
+      const adapter = new CloudflareAIGatewayAdapter({
+        accountId: 'account-123',
+        gatewayId: 'waldo-staging',
+        credential: credential(),
+        fetch: async (_url: string | URL | Request, init?: RequestInit) => {
+          calls.push(init ?? {});
+          const responseIdentity = acceptedResponses[calls.length - 1];
+          return new Response(
+            JSON.stringify({
+              model: responseIdentity,
+              choices: [{ message: { content: 'safe response' } }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+            { status: 200 },
+          );
+        },
+      });
+
+      for (const _response of acceptedResponses) {
+        await expect(adapter.complete(request(model))).resolves.toMatchObject({
+          ok: true,
+          data: { model },
+        });
+      }
+      expect(calls.map((call) => JSON.parse(String(call.body)).model)).toEqual(
+        acceptedResponses.map(() => cloudflareModel.request),
+      );
+    },
+  );
+
+  it('rejects a near-miss Anthropic response identity', async () => {
+    const adapter = new CloudflareAIGatewayAdapter({
+      accountId: 'account-123',
+      gatewayId: 'waldo-staging',
+      credential: credential(),
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            model: `${CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.reasoning].request}-unexpected`,
+            choices: [{ message: { content: 'safe response' } }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(adapter.complete(request(ROSTER.reasoning))).resolves.toEqual({
+      ok: false,
+      code: 'invalid_args',
+      error: 'gateway_invalid_response',
+    });
+  });
+
   it('sends metadata-only Cloudflare AI Gateway chat requests and normalizes usage', async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const adapter = new CloudflareAIGatewayAdapter({
@@ -81,6 +149,7 @@ describe('CloudflareAIGatewayAdapter', () => {
     expect(headers.get('authorization')).toBe('Bearer cf-token-123');
     expect(headers.get('cf-aig-gateway-id')).toBe('waldo-staging');
     expect(headers.get('cf-aig-collect-log-payload')).toBe('false');
+    expect(headers.get(GATEWAY_STEP_HEADER)).toBe('configured_model');
     expect(headers.get('content-type')).toBe('application/json');
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
       model: ROSTER.primary,
@@ -139,12 +208,14 @@ describe('CloudflareAIGatewayAdapter', () => {
 
     const result = await adapter.complete({
       ...request(),
+      fallback_step: 'spend_cap_clamp',
       headers: { 'cf-aig-collect-log-payload': 'true' } as never,
     });
 
     expect(result.ok).toBe(true);
     const headers = new Headers(calls[0]?.headers);
     expect(headers.get('cf-aig-collect-log-payload')).toBe('false');
+    expect(headers.get(GATEWAY_STEP_HEADER)).toBe('spend_cap_clamp');
     expect(headers.get('cf-aig-skip-cache')).toBe('true');
   });
 

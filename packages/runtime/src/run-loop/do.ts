@@ -26,10 +26,12 @@ import {
   type GetCrsArgs,
   type RuntimeReplayFixture,
   type RuntimeRunContext,
+  type RuntimeRunFallbackStep,
   type RuntimeRunFailureReason,
   type RuntimeRunRecord,
   type RuntimeRunScratch,
   type RuntimeRunState,
+  type RoutingLogEvent,
   type SanitiseDestination,
   type SanitiseFailureReason,
   type SourceTaint,
@@ -151,6 +153,11 @@ type ToolResultSummary = NonNullable<RuntimeRunScratch['tool_results']>[number];
 type ProviderSpendPreflight =
   | { ok: true; spend: RouteSpendState | undefined }
   | { ok: false };
+
+type LlmFailureTrace = {
+  fallbackStep: RuntimeRunFallbackStep;
+  routingLogs: readonly RoutingLogEvent[];
+};
 
 type ScheduleFakeRunIngress = {
   schedule_id: string;
@@ -742,9 +749,15 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if (!result.ok) {
       if (result.scribe !== undefined) {
         this.recordTrace(run.run_id, 'scribe_denied', result.scribe);
-        return this.failRun(run.run_id, `scribe:${result.scribe.reason}`);
+        return this.failRun(run.run_id, `scribe:${result.scribe.reason}`, {
+          fallbackStep: result.fallback_step,
+          routingLogs: result.routing_logs,
+        });
       }
-      return this.failRun(run.run_id, `llm:${result.reason}`);
+      return this.failRun(run.run_id, `llm:${result.reason}`, {
+        fallbackStep: result.fallback_step,
+        routingLogs: result.routing_logs,
+      });
     }
 
     const parsedCalls = await parseToolCalls(result.tool_call_source.text);
@@ -785,6 +798,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       model: result.response.model,
       fallback_step: result.fallback_step,
       tool_call_count: parsedCalls.calls.length,
+      routing_logs: result.routing_logs,
     });
     if (usageDecision.verdict === 'deny') {
       this.recordGovernorDenied(run.run_id, usageDecision);
@@ -897,9 +911,15 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     if (!result.ok) {
       if (result.scribe !== undefined) {
         this.recordTrace(run.run_id, 'scribe_denied', result.scribe);
-        return this.failRun(run.run_id, `scribe:${result.scribe.reason}`);
+        return this.failRun(run.run_id, `scribe:${result.scribe.reason}`, {
+          fallbackStep: result.fallback_step,
+          routingLogs: result.routing_logs,
+        });
       }
-      return this.failRun(run.run_id, `llm_observe:${result.reason}`);
+      return this.failRun(run.run_id, `llm_observe:${result.reason}`, {
+        fallbackStep: result.fallback_step,
+        routingLogs: result.routing_logs,
+      });
     }
 
     const usageDecision = this.journalOutbox.recordLoopUsage({
@@ -912,6 +932,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       model: result.response.model,
       fallback_step: result.fallback_step,
       delivery_text_source: result.fallback_step === 'template' ? 'fallback' : 'llm',
+      routing_logs: result.routing_logs,
     });
     if (usageDecision.verdict === 'deny') {
       this.recordGovernorDenied(run.run_id, usageDecision);
@@ -1180,7 +1201,11 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     return next;
   }
 
-  private failRun(runId: string, reason: string): RuntimeRunRecord {
+  private failRun(
+    runId: string,
+    reason: string,
+    llmFailure?: LlmFailureTrace,
+  ): RuntimeRunRecord {
     const failureReason = runtimeRunFailureReasonSchema.parse(reason);
     let next: RuntimeRunRecord | null = null;
     this.ctx.storage.transactionSync(() => {
@@ -1212,6 +1237,13 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       next = this.requireRuntimeRun(runId);
     });
     if (next === null) throw new Error(`failRun failed for ${runId}`);
+    if (llmFailure !== undefined && llmFailure.routingLogs.length > 0) {
+      this.recordTrace(runId, 'failed', {
+        reason: failureReason,
+        fallback_step: llmFailure.fallbackStep,
+        routing_logs: [...llmFailure.routingLogs],
+      });
+    }
     return next;
   }
 
@@ -1419,11 +1451,16 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   private async readSpendBeforeProvider(): Promise<ProviderSpendPreflight> {
     if (this.adapters.providerMode !== 'gateway') {
-      return { ok: true, spend: this.adapters.spend };
+      const configuredSpend = this.adapters.spend;
+      if (configuredSpend === undefined) return { ok: true, spend: undefined };
+      const spend = normaliseRouteSpendState(configuredSpend);
+      return spend === null ? { ok: false } : { ok: true, spend };
     }
     try {
       const result = await this.adapters.spendReader?.read();
-      return result?.ok ? { ok: true, spend: result.data } : { ok: false };
+      if (ownDataProperty(result, 'ok') !== true) return { ok: false };
+      const spend = normaliseRouteSpendState(ownDataProperty(result, 'data'));
+      return spend === null ? { ok: false } : { ok: true, spend };
     } catch {
       return { ok: false };
     }
@@ -1442,6 +1479,38 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       detail.reasons = denied.map((result) => result.reason);
     }
     this.recordTrace(runId, 'tool_dispatched', detail);
+  }
+}
+
+const MISSING_OWN_DATA_PROPERTY = Symbol('missing-own-data-property');
+
+function ownDataProperty(value: unknown, key: string): unknown | typeof MISSING_OWN_DATA_PROPERTY {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return MISSING_OWN_DATA_PROPERTY;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor === undefined || !('value' in descriptor)
+    ? MISSING_OWN_DATA_PROPERTY
+    : descriptor.value;
+}
+
+function normaliseRouteSpendState(value: unknown): RouteSpendState | null {
+  try {
+    const spent = ownDataProperty(value, 'spent_cents_today');
+    const cap = ownDataProperty(value, 'cap_cents');
+    if (spent === MISSING_OWN_DATA_PROPERTY || cap === MISSING_OWN_DATA_PROPERTY) return null;
+    if (
+      typeof spent !== 'number' ||
+      !Number.isSafeInteger(spent) ||
+      spent < 0 ||
+      (cap !== null &&
+        (typeof cap !== 'number' || !Number.isSafeInteger(cap) || cap <= 0))
+    ) {
+      return null;
+    }
+    return Object.freeze({ spent_cents_today: spent, cap_cents: cap });
+  } catch {
+    return null;
   }
 }
 

@@ -2,8 +2,12 @@ import {
   ESCALATION_RULES,
   FALLBACK_LADDER,
   GATEWAY_CONSTANT_HEADERS,
+  PROVIDER_OF,
+  ROSTER,
   ROUTING_TABLE,
   SKILL_PROMPT_SERIALIZER_REVISION,
+  isStructuralP6Route,
+  p6ClampAction,
   sanitiseFailureReasonSchema,
   sanitiseInputSchema,
   sanitiseResultSchema,
@@ -43,13 +47,17 @@ import {
 
 export type LLMContextMode = 'full_context' | 'reduced_context';
 export type RuntimeFallbackStep = (typeof FALLBACK_LADDER)[number] | 'defer';
+type GatewayAttemptFallbackStep = Extract<
+  RuntimeFallbackStep,
+  'spend_cap_clamp' | 'configured_model' | 'gateway_chain'
+>;
 
 export type LLMGatewayRequest = {
   request: LLMRequest;
   route: ModelRoute;
   step: GatewayStep;
   context: LLMContextMode;
-  fallback_step: Extract<RuntimeFallbackStep, 'configured_model' | 'gateway_chain'>;
+  fallback_step: GatewayAttemptFallbackStep;
   headers: GatewayConstantHeaders;
 };
 
@@ -72,7 +80,7 @@ export type RuntimeLLMRenderInput = {
   route: ModelRoute;
   step: GatewayStep;
   context: LLMContextMode;
-  fallback_step: Extract<RuntimeFallbackStep, 'configured_model' | 'gateway_chain'>;
+  fallback_step: GatewayAttemptFallbackStep;
   attempt: number;
   skillBudget: ResolvedSkillBudget;
 };
@@ -81,6 +89,7 @@ export type RuntimeLLMRequest = {
   trigger: unknown;
   policy?: RoutingPolicy;
   spend?: RouteSpendState;
+  p6ConsecutiveDeferrals?: number;
   renderRequest(
     input: RuntimeLLMRenderInput,
   ): Omit<LLMRequest, 'model'> | Promise<Omit<LLMRequest, 'model'>>;
@@ -98,7 +107,7 @@ export type LLMAttempt =
       model: ModelName;
       provider: Provider;
       context: LLMContextMode;
-      fallback_step: Extract<RuntimeFallbackStep, 'configured_model' | 'gateway_chain'>;
+      fallback_step: GatewayAttemptFallbackStep;
       usage: LLMUsage;
     }
   | {
@@ -106,7 +115,7 @@ export type LLMAttempt =
       model: ModelName;
       provider: Provider;
       context: LLMContextMode;
-      fallback_step: Extract<RuntimeFallbackStep, 'configured_model' | 'gateway_chain'>;
+      fallback_step: GatewayAttemptFallbackStep;
       code: ErrorCode;
     }
   | {
@@ -114,7 +123,7 @@ export type LLMAttempt =
       model: ModelName;
       provider: Provider;
       context: LLMContextMode;
-      fallback_step: Extract<RuntimeFallbackStep, 'configured_model' | 'gateway_chain'>;
+      fallback_step: GatewayAttemptFallbackStep;
       reason: 'circuit_open';
     };
 
@@ -126,7 +135,7 @@ export type RuntimeLLMSuccess = {
   degraded: boolean;
   usage: LLMUsage;
   attempts: LLMAttempt[];
-  routing_log: RoutingLogEvent | null;
+  routing_logs: readonly RoutingLogEvent[];
 };
 
 export type RuntimeLLMFailure = {
@@ -136,7 +145,7 @@ export type RuntimeLLMFailure = {
   reason: 'hook_halt' | 'gateway_exhausted' | 'invalid_response' | 'template_unavailable';
   fallback_step: RuntimeFallbackStep;
   attempts: LLMAttempt[];
-  routing_log: RoutingLogEvent | null;
+  routing_logs: readonly RoutingLogEvent[];
   scribe?: {
     destination: SanitiseDestination;
     reason: SanitiseFailureReason;
@@ -240,12 +249,15 @@ export type RuntimeLLMProviderOptions = {
 export function selectModelRoute(input: SelectModelRouteInput): ModelRoute {
   const trigger = triggerTypeSchema.parse(input.trigger);
   const policy = routingPolicySchema.parse(input.policy ?? DEFAULT_ROUTING_POLICY);
-  const route = policy.routes.find((candidate) => candidate.trigger === trigger);
-  if (route === undefined) {
+  const candidates = policy.routes.filter((candidate) => candidate.trigger === trigger);
+  if (candidates.length === 0) {
     throw new Error(`routing policy missing trigger: ${trigger}`);
   }
+  if (candidates.length > 1) {
+    throw new Error(`routing policy ambiguous trigger: ${trigger}`);
+  }
 
-  return modelRouteSchema.parse(route);
+  return modelRouteSchema.parse(candidates[0]);
 }
 
 export class RuntimeLLMProvider {
@@ -267,16 +279,16 @@ export class RuntimeLLMProvider {
 
   async complete(input: RuntimeLLMRequest, ctx: HookRuntimeContext): Promise<RuntimeLLMResult> {
     const route = selectModelRoute(input);
-    const routingLog: RoutingLogEvent | null = spendCapExceeded(input.spend)
-      ? 'spend_cap_degrade'
-      : null;
+    const spendCapped = spendCapExceeded(input.spend);
+    const p6Action = spendCapped ? structuralP6SpendCapAction(route, input.p6ConsecutiveDeferrals) : null;
+    const routingLogs = routingLogsFor(spendCapped, p6Action?.log ?? null);
+    if (p6Action?.action === 'defer') {
+      return templateUnavailableFailure(route, [], routingLogs);
+    }
+    const effectiveRoute = spendCapped ? spendClampedRoute(route) : route;
     const attempts: LLMAttempt[] = [];
 
-    if (routingLog === 'spend_cap_degrade') {
-      return this.templateOrFailure(input, route, attempts, routingLog, ctx);
-    }
-
-    for (const plan of attemptPlan(route)) {
+    for (const plan of attemptPlan(effectiveRoute, spendCapped)) {
       if (this.circuitBreaker.isOpen(plan.step.provider)) {
         attempts.push({
           outcome: 'skipped',
@@ -291,7 +303,7 @@ export class RuntimeLLMProvider {
 
       const skillBudget = this.resolveSkillBudget(plan.step.model);
       const rendered = await input.renderRequest({
-        route,
+        route: effectiveRoute,
         step: plan.step,
         context: plan.context,
         fallback_step: plan.fallback_step,
@@ -301,7 +313,7 @@ export class RuntimeLLMProvider {
       const request = llmRequestSchema.parse({ ...rendered, model: plan.step.model });
       const customPreHook = await this.runCustomPreLlmHooks(request, ctx);
       if (!customPreHook.ok) {
-        return failFromHook(customPreHook.error, plan.fallback_step, attempts, routingLog);
+        return failFromHook(customPreHook.error, plan.fallback_step, attempts, routingLogs);
       }
 
       const sanitisedRequest = await sanitiseRequest(customPreHook.request, ctx);
@@ -310,21 +322,21 @@ export class RuntimeLLMProvider {
           sanitisedRequest.error,
           plan.fallback_step,
           attempts,
-          routingLog,
+          routingLogs,
           sanitisedRequest.scribeDestination,
         );
       }
 
       const preHook = await this.runCorePreLlmHooks(sanitisedRequest.request, ctx);
       if (preHook !== null) {
-        return failFromHook(preHook, plan.fallback_step, attempts, routingLog);
+        return failFromHook(preHook, plan.fallback_step, attempts, routingLogs);
       }
 
       let gatewayResult: AdapterResult<LLMResponse>;
       try {
         gatewayResult = await this.gateway.complete({
           request: sanitisedRequest.request,
-          route,
+          route: effectiveRoute,
           step: plan.step,
           context: plan.context,
           fallback_step: plan.fallback_step,
@@ -354,7 +366,7 @@ export class RuntimeLLMProvider {
           code: gatewayResult.code,
         });
         if (gatewayResult.code === 'invalid_args') {
-          return invalidResponseFailure(plan.fallback_step, attempts, routingLog);
+          return invalidResponseFailure(plan.fallback_step, attempts, routingLogs);
         }
         continue;
       }
@@ -370,7 +382,7 @@ export class RuntimeLLMProvider {
           fallback_step: plan.fallback_step,
           code: 'invalid_args',
         });
-        return invalidResponseFailure(plan.fallback_step, attempts, routingLog);
+        return invalidResponseFailure(plan.fallback_step, attempts, routingLogs);
       }
 
       const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
@@ -379,7 +391,7 @@ export class RuntimeLLMProvider {
           postHook.error,
           plan.fallback_step,
           attempts,
-          routingLog,
+          routingLogs,
           'send_message',
         );
       }
@@ -402,16 +414,16 @@ export class RuntimeLLMProvider {
         tool_call_source: { text: response.text },
         fallback_step: plan.fallback_step,
         degraded:
-          routingLog !== null ||
+          routingLogs.length > 0 ||
           plan.fallback_step !== 'configured_model' ||
           plan.context !== 'full_context',
         usage,
         attempts,
-        routing_log: routingLog,
+        routing_logs: routingLogs,
       };
     }
 
-    return this.templateOrFailure(input, route, attempts, routingLog, ctx);
+    return this.templateOrFailure(input, effectiveRoute, attempts, routingLogs, ctx);
   }
 
   private async runCustomPreLlmHooks(
@@ -527,11 +539,11 @@ export class RuntimeLLMProvider {
     input: RuntimeLLMRequest,
     route: ModelRoute,
     attempts: LLMAttempt[],
-    routingLog: RoutingLogEvent | null,
+    routingLogs: readonly RoutingLogEvent[],
     ctx: HookRuntimeContext,
   ): Promise<RuntimeLLMResult> {
     if (route.floor !== 'template' || input.renderTemplate === undefined) {
-      return templateUnavailableFailure(route, attempts, routingLog);
+      return templateUnavailableFailure(route, attempts, routingLogs);
     }
 
     let parsedResponse: ReturnType<typeof llmResponseSchema.safeParse>;
@@ -545,15 +557,15 @@ export class RuntimeLLMProvider {
         latency_ms: 0,
       });
     } catch {
-      return templateUnavailableFailure(route, attempts, routingLog);
+      return templateUnavailableFailure(route, attempts, routingLogs);
     }
     if (!parsedResponse.success) {
-      return templateUnavailableFailure(route, attempts, routingLog);
+      return templateUnavailableFailure(route, attempts, routingLogs);
     }
 
     const postHook = await this.runPostLlmHook(parsedResponse.data, ctx);
     if (!postHook.ok) {
-      return failFromHook(postHook.error, 'template', attempts, routingLog, 'send_message');
+      return failFromHook(postHook.error, 'template', attempts, routingLogs, 'send_message');
     }
     const response = postHook.response;
     return {
@@ -564,7 +576,7 @@ export class RuntimeLLMProvider {
       degraded: true,
       usage: usageFromResponse(response),
       attempts,
-      routing_log: routingLog,
+      routing_logs: routingLogs,
     };
   }
 }
@@ -631,7 +643,7 @@ function isCountFailureCode(value: unknown): value is Extract<CountResult, { ok:
 function invalidResponseFailure(
   fallbackStep: RuntimeFallbackStep,
   attempts: LLMAttempt[],
-  routingLog: RoutingLogEvent | null,
+  routingLogs: readonly RoutingLogEvent[],
 ): RuntimeLLMFailure {
   return {
     ok: false,
@@ -640,15 +652,58 @@ function invalidResponseFailure(
     reason: 'invalid_response',
     fallback_step: fallbackStep,
     attempts,
-    routing_log: routingLog,
+    routing_logs: routingLogs,
   };
 }
 
-function attemptPlan(route: ModelRoute): readonly {
+function spendClampedRoute(route: ModelRoute): ModelRoute {
+  return {
+    ...route,
+    primary: {
+      provider: PROVIDER_OF[ROSTER.primary],
+      model: ROSTER.primary,
+      cache: 'none',
+    },
+    fallback: [],
+  };
+}
+
+function structuralP6SpendCapAction(
+  route: ModelRoute,
+  consecutiveDeferrals: unknown,
+): ReturnType<typeof p6ClampAction> | null {
+  if (!isStructuralP6Route(route)) return null;
+  if (
+    typeof consecutiveDeferrals !== 'number' ||
+    !Number.isSafeInteger(consecutiveDeferrals) ||
+    consecutiveDeferrals < 0
+  ) {
+    return { action: 'defer', log: null };
+  }
+  return p6ClampAction(consecutiveDeferrals);
+}
+
+function routingLogsFor(
+  spendCapped: boolean,
+  p6Log: Extract<RoutingLogEvent, 'p6_degraded'> | null,
+): readonly RoutingLogEvent[] {
+  const logs: RoutingLogEvent[] = [];
+  if (spendCapped) logs.push('spend_cap_degrade');
+  if (p6Log !== null) logs.push(p6Log);
+  return logs;
+}
+
+function attemptPlan(route: ModelRoute, spendCapped = false): readonly {
   step: GatewayStep;
   context: LLMContextMode;
-  fallback_step: Extract<RuntimeFallbackStep, 'configured_model' | 'gateway_chain'>;
+  fallback_step: GatewayAttemptFallbackStep;
 }[] {
+  if (spendCapped) {
+    return [
+      { step: route.primary, context: 'full_context', fallback_step: 'spend_cap_clamp' },
+      { step: route.primary, context: 'reduced_context', fallback_step: 'spend_cap_clamp' },
+    ];
+  }
   return [
     { step: route.primary, context: 'full_context', fallback_step: 'configured_model' },
     { step: route.primary, context: 'reduced_context', fallback_step: 'configured_model' },
@@ -663,7 +718,7 @@ function attemptPlan(route: ModelRoute): readonly {
 function templateUnavailableFailure(
   route: ModelRoute,
   attempts: LLMAttempt[],
-  routingLog: RoutingLogEvent | null,
+  routingLogs: readonly RoutingLogEvent[],
 ): RuntimeLLMResult {
   return {
     ok: false,
@@ -672,7 +727,7 @@ function templateUnavailableFailure(
     reason: route.floor === 'template' ? 'template_unavailable' : 'gateway_exhausted',
     fallback_step: route.floor,
     attempts,
-    routing_log: routingLog,
+    routing_logs: routingLogs,
   };
 }
 
@@ -680,7 +735,7 @@ function failFromHook(
   error: HookHaltError,
   fallbackStep: RuntimeFallbackStep,
   attempts: LLMAttempt[],
-  routingLog: RoutingLogEvent | null,
+  routingLogs: readonly RoutingLogEvent[],
   scribeDestination?: SanitiseDestination,
 ): RuntimeLLMFailure {
   const scribeReason =
@@ -694,7 +749,7 @@ function failFromHook(
     reason: 'hook_halt',
     fallback_step: fallbackStep,
     attempts,
-    routing_log: routingLog,
+    routing_logs: routingLogs,
   };
   if (scribeDestination !== undefined && scribeReason?.success === true) {
     failure.scribe = { destination: scribeDestination, reason: scribeReason.data };
