@@ -1,6 +1,7 @@
 import {
+  CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS,
   GATEWAY_CONSTANT_HEADERS,
-  PROVIDER_OF,
+  GATEWAY_STEP_HEADER,
   llmResponseSchema,
   type AdapterResult,
   type ErrorCode,
@@ -76,7 +77,6 @@ export class CloudflareAIGatewayAdapter implements LLMGatewayAdapter {
     const normalized = normalizeChatCompletionsResponse(
       body,
       request.request.model,
-      cloudflareModelName(request.request.model),
       Math.max(0, this.now() - startedAt),
     );
     return normalized === null
@@ -118,6 +118,7 @@ export class CloudflareAIGatewayAdapter implements LLMGatewayAdapter {
       'cf-aig-collect-log-payload',
       GATEWAY_CONSTANT_HEADERS['cf-aig-collect-log-payload'],
     );
+    headers.set(GATEWAY_STEP_HEADER, request.fallback_step);
     headers.set('cf-aig-skip-cache', request.step.cache === 'none' ? 'true' : 'false');
     return headers;
   }
@@ -144,7 +145,6 @@ function toChatMessage(message: LLMMessage): { role: string; content: string } {
 function normalizeChatCompletionsResponse(
   body: unknown,
   requestedModel: ModelName,
-  gatewayModel: string,
   latencyMs: number,
 ): LLMResponse | null {
   if (body === null || typeof body !== 'object') return null;
@@ -152,7 +152,7 @@ function normalizeChatCompletionsResponse(
   const returnedModel = record.model;
   if (
     typeof returnedModel !== 'string' ||
-    (returnedModel !== requestedModel && returnedModel !== gatewayModel)
+    !isExpectedCloudflareModelName(returnedModel, requestedModel)
   ) {
     return null;
   }
@@ -187,7 +187,12 @@ function normalizeChatCompletionsResponse(
 }
 
 function cloudflareModelName(model: ModelName): string {
-  return PROVIDER_OF[model] === 'anthropic' ? `anthropic/${model}` : model;
+  return CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[model].request;
+}
+
+function isExpectedCloudflareModelName(returnedModel: string, requestedModel: ModelName): boolean {
+  const identity = CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[requestedModel];
+  return returnedModel === identity.request || identity.response.includes(returnedModel);
 }
 
 function errorCodeForStatus(status: number): ErrorCode {

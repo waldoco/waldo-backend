@@ -29,6 +29,7 @@ import {
   gatewayRouteIdSchema,
   gatewayStepSchema,
   intentCounterPredicateInputSchema,
+  isStructuralP6Route,
   modelRouteSchema,
   P6_MAX_CONSECUTIVE_DEFERRALS,
   p6ClampAction,
@@ -195,6 +196,13 @@ describe('ROUTING_TABLE — the §2 pins', () => {
       ROSTER.primary,
     ]);
     expect(DREAMING_P6_ROUTE.floor).toBe('defer');
+    expect(isStructuralP6Route(DREAMING_P6_ROUTE)).toBe(true);
+    expect(
+      isStructuralP6Route({
+        ...DREAMING_P6_ROUTE,
+        primary: { ...DREAMING_P6_ROUTE.primary, cache: 'none' },
+      }),
+    ).toBe(false);
   });
 });
 

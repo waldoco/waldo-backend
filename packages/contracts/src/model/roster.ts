@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-// The only model ids Waldo routes to, addressed exactly as the CF AI Gateway seam needs them
-// (ADR-0069 §1). Workers-AI models carry the @cf/<vendor>/ prefix the binding requires;
-// Anthropic models are addressed bare. The phantom `gemma-4-9b` and the superseded `gemma-4-27b`
-// are intentionally absent — the PreLLMCall hook rejects any id outside this set.
+// The only internal model IDs Waldo routes to. Workers AI keeps the documented @cf/<vendor>
+// prefix; Anthropic values are stable internal aliases. The phantom `gemma-4-9b` and
+// superseded `gemma-4-27b` are intentionally absent — the PreLLMCall hook rejects any ID
+// outside this set.
 export const modelNameSchema = z.enum([
   '@cf/google/gemma-4-26b-a4b-it',
   'claude-sonnet-4-6',
@@ -18,6 +18,33 @@ export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   '@cf/google/gemma-4-26b-a4b-it': 'workers_ai',
   'claude-sonnet-4-6': 'anthropic',
   'claude-haiku-4-5': 'anthropic',
+};
+
+// The documented request ID and exact response identities accepted at the Cloudflare
+// chat-completions seam. This stays roster-owned so a provider wire-ID change is a pinned model
+// decision, not a string transformation hidden in an adapter (ADR-0069 §1). Response identities
+// remain an allowlist: the Haiku date-stamped alias is sourced from Cloudflare's raw model-page
+// response and is compatibility evidence, not a family/version prefix rule.
+export type CloudflareChatCompletionsModelIdentity = Readonly<{
+  request: string;
+  response: readonly string[];
+}>;
+
+export const CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS: Readonly<
+  Record<ModelName, CloudflareChatCompletionsModelIdentity>
+> = {
+  '@cf/google/gemma-4-26b-a4b-it': {
+    request: '@cf/google/gemma-4-26b-a4b-it',
+    response: ['@cf/google/gemma-4-26b-a4b-it'],
+  },
+  'claude-sonnet-4-6': {
+    request: 'anthropic/claude-sonnet-4.6',
+    response: ['claude-sonnet-4-6'],
+  },
+  'claude-haiku-4-5': {
+    request: 'anthropic/claude-haiku-4.5',
+    response: ['claude-haiku-4-5', 'claude-haiku-4-5-20251001'],
+  },
 };
 
 export const rosterRoleSchema = z.enum([

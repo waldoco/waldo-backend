@@ -57,6 +57,10 @@ type CrashableRunLoopInstance = {
   __runLoopSetTestOverrides(input: {
     gateway?: LLMGatewayAdapter;
     providerMode?: 'fake' | 'gateway';
+    spend?: { spent_cents_today: number; cap_cents: number | null } | null;
+    spendReader?: {
+      read(): Promise<unknown>;
+    };
   }): void;
   __runLoopIngestExternalToolResultForTest(runId: string): Promise<{
     ok: boolean;
@@ -133,6 +137,190 @@ it('stops before provider egress when gateway-mode spend state is unavailable', 
     failure_reason: 'llm:spend_state_unavailable',
   });
   expect(gateway.requests).toEqual([]);
+});
+
+it('stops before provider egress when a gateway-mode spend reader returns malformed state', async () => {
+  const stub = freshStub();
+  const dueAt = soon();
+  const gateway = new ScriptedRunLoopGateway((request) =>
+    response(request.request.model, getCrsToolCallText('call-malformed-spend', 1)),
+  );
+  const runId = await stub.scheduleFakeRun({
+    scheduleId: 'brief:malformed-spend-preflight',
+    userId: USER + '-malformed-spend-preflight',
+    dueAt,
+    occurrenceAt: dueAt,
+  });
+  await runInDurableObject(stub, (instance) => {
+    (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({
+      gateway,
+      providerMode: 'gateway',
+      spendReader: {
+        read: async () => ({
+          ok: true,
+          data: { spent_cents_today: Number.NaN, cap_cents: 70 },
+        }),
+      },
+    });
+  });
+
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect((await stub.readRunProof(runId)).current).toEqual({
+    state: 'FAILED',
+    failure_reason: 'llm:spend_state_unavailable',
+  });
+  expect(gateway.requests).toEqual([]);
+});
+
+it('stops before provider egress when a gateway-mode spend reader returns a malformed envelope', async () => {
+  const stub = freshStub();
+  const dueAt = soon();
+  const gateway = new ScriptedRunLoopGateway((request) =>
+    response(request.request.model, getCrsToolCallText('call-malformed-envelope', 1)),
+  );
+  const runId = await stub.scheduleFakeRun({
+    scheduleId: 'brief:malformed-spend-envelope',
+    userId: USER + '-malformed-spend-envelope',
+    dueAt,
+    occurrenceAt: dueAt,
+  });
+  await runInDurableObject(stub, (instance) => {
+    (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({
+      gateway,
+      providerMode: 'gateway',
+      spendReader: {
+        read: async () => ({
+          ok: 'yes',
+          data: { spent_cents_today: 0, cap_cents: 70 },
+        }),
+      },
+    });
+  });
+
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect((await stub.readRunProof(runId)).current).toEqual({
+    state: 'FAILED',
+    failure_reason: 'llm:spend_state_unavailable',
+  });
+  expect(gateway.requests).toEqual([]);
+});
+
+it('rejects accessor-backed gateway spend state before a second read can bypass the clamp', async () => {
+  const stub = freshStub();
+  const dueAt = soon();
+  const gateway = new ScriptedRunLoopGateway((request) =>
+    response(request.request.model, getCrsToolCallText('call-accessor-spend', 1)),
+  );
+  let spendReads = 0;
+  const accessorBackedSpend = Object.defineProperties(
+    {},
+    {
+      spent_cents_today: {
+        enumerable: true,
+        get: () => {
+          spendReads += 1;
+          return spendReads === 1 ? 70 : 0;
+        },
+      },
+      cap_cents: { enumerable: true, get: () => 70 },
+    },
+  );
+  const runId = await stub.scheduleFakeRun({
+    scheduleId: 'brief:accessor-spend-preflight',
+    userId: USER + '-accessor-spend-preflight',
+    dueAt,
+    occurrenceAt: dueAt,
+  });
+  await runInDurableObject(stub, (instance) => {
+    (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({
+      gateway,
+      providerMode: 'gateway',
+      spendReader: {
+        read: async () => ({ ok: true, data: accessorBackedSpend }),
+      },
+    });
+  });
+
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  expect((await stub.readRunProof(runId)).current).toEqual({
+    state: 'FAILED',
+    failure_reason: 'llm:spend_state_unavailable',
+  });
+  expect(gateway.requests).toEqual([]);
+  expect(spendReads).toBe(0);
+});
+
+it('records a capped primary-only route as metadata-only durable LLM evidence', async () => {
+  const stub = freshStub();
+  const dueAt = soon();
+  const gateway = new ScriptedRunLoopGateway((request) =>
+    (request.request.system ?? '').startsWith('run-loop:observe')
+      ? response(request.request.model, 'Capped primary delivery.')
+      : response(request.request.model, getCrsToolCallText('call-spend-cap', 1)),
+  );
+  const runId = await stub.scheduleFakeRun({
+    scheduleId: 'brief:spend-cap-evidence',
+    userId: USER + '-spend-cap-evidence',
+    dueAt,
+    occurrenceAt: dueAt,
+  });
+  await runInDurableObject(stub, (instance) => {
+    (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({
+      gateway,
+      spend: { spent_cents_today: 70, cap_cents: 70 },
+    });
+  });
+
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  const proof = await stub.readRunProof(runId);
+  expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+  expect(proof.trace.find((event) => event.event === 'llm_called')?.detail).toEqual({
+    model: ROSTER.primary,
+    fallback_step: 'spend_cap_clamp',
+    tool_call_count: 1,
+    routing_logs: ['spend_cap_degrade'],
+  });
+  expect(proof.trace.find((event) => event.event === 'llm_observed')?.detail).toEqual({
+    model: ROSTER.primary,
+    fallback_step: 'spend_cap_clamp',
+    delivery_text_source: 'llm',
+    routing_logs: ['spend_cap_degrade'],
+  });
+});
+
+it('persists capped-route metadata when the provider fails before a successful LLM trace', async () => {
+  const stub = freshStub();
+  const dueAt = soon();
+  let gatewayCalls = 0;
+  const gateway: LLMGatewayAdapter = {
+    async complete() {
+      gatewayCalls += 1;
+      return { ok: false, error: 'invalid fake response', code: 'invalid_args' };
+    },
+  };
+  const runId = await stub.scheduleFakeRun({
+    scheduleId: 'brief:spend-cap-failure-evidence',
+    userId: USER + '-spend-cap-failure-evidence',
+    dueAt,
+    occurrenceAt: dueAt,
+  });
+  await runInDurableObject(stub, (instance) => {
+    (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({
+      gateway,
+      spend: { spent_cents_today: 70, cap_cents: 70 },
+    });
+  });
+
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+  const proof = await stub.readRunProof(runId);
+  expect(proof.current).toEqual({ state: 'FAILED', failure_reason: 'llm:invalid_response' });
+  expect(gatewayCalls).toBe(1);
+  expect(proof.trace.find((event) => event.event === 'llm_called')).toBeUndefined();
+  expect(proof.trace.find((event) => event.event === 'failed')?.detail).toEqual({
+    reason: 'llm:invalid_response',
+    fallback_step: 'spend_cap_clamp',
+    routing_logs: ['spend_cap_degrade'],
+  });
 });
 
 function runtimePassSystems(gateway: ScriptedRunLoopGateway): string[] {
@@ -1622,6 +1810,7 @@ describe('RunLoopDO full contract FSM', () => {
       model: ROSTER.primary,
       fallback_step: 'configured_model',
       delivery_text_source: 'llm',
+      routing_logs: [],
     });
     expect(proof.trace.find((event) => event.event === 'gated')?.detail).toEqual({
       verdict: 'send',

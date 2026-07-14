@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { modelNameSchema, PROVIDER_OF, ROSTER } from './roster';
+import {
+  CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS,
+  modelNameSchema,
+  PROVIDER_OF,
+  ROSTER,
+} from './roster';
 
 describe('modelName', () => {
   it('accepts the three canonical roster ids', () => {
@@ -29,5 +34,19 @@ describe('roster', () => {
     expect(PROVIDER_OF['@cf/google/gemma-4-26b-a4b-it']).toBe('workers_ai');
     expect(PROVIDER_OF['claude-sonnet-4-6']).toBe('anthropic');
     expect(PROVIDER_OF['claude-haiku-4-5']).toBe('anthropic');
+  });
+
+  it('owns exact Cloudflare request and response identities for every internal model', () => {
+    expect(Object.keys(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS).sort()).toEqual(
+      [...modelNameSchema.options].sort(),
+    );
+    expect(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.reasoning]).toEqual({
+      request: 'anthropic/claude-sonnet-4.6',
+      response: ['claude-sonnet-4-6'],
+    });
+    expect(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.fallback]).toEqual({
+      request: 'anthropic/claude-haiku-4.5',
+      response: ['claude-haiku-4-5', 'claude-haiku-4-5-20251001'],
+    });
   });
 });
