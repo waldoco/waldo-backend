@@ -238,7 +238,9 @@ export class RunJournalOutbox {
 
   async tickRun(runId: string): Promise<void> {
     const run = this.journal.read(runId);
-    if (run === null || run.state === 'DONE' || run.state === 'FAILED') return;
+    if (run === null) return;
+    this.assertDurableGateEvidence(run);
+    if (run.state === 'DONE' || run.state === 'FAILED') return;
 
     if (run.state === 'RUN_OPENED') {
       this.admitRun(run.run_id);
@@ -260,7 +262,10 @@ export class RunJournalOutbox {
   async gateRun(runId: string): Promise<JournalRow> {
     const run = this.journal.read(runId);
     if (run === null) throw new Error(`gateRun: no journal row for ${runId}`);
-    if (run.state === 'GATED' || run.state === 'FAILED') return run;
+    if (run.state === 'GATED' || run.state === 'FAILED') {
+      this.assertDurableGateEvidence(run);
+      return run;
+    }
     if (run.state !== 'GOVERNOR_ADMITTED') {
       throw new Error(`gateRun requires GOVERNOR_ADMITTED, got ${run.state}`);
     }
@@ -379,6 +384,7 @@ export class RunJournalOutbox {
 
   private commitGate(input: GateCommitInput): OutboxRow | null {
     let row: OutboxRow | null = null;
+    let duplicate: JournalRow | null = null;
     this.storage.transactionSync(() => {
       if (input.kind !== input.candidate.push_class) {
         throw new Error(
@@ -398,6 +404,7 @@ export class RunJournalOutbox {
             run.state === 'DONE' ||
             run.state === 'FAILED')
         ) {
+          duplicate = run;
           return;
         }
         throw new Error(`enqueueOutbox requires GOVERNOR_ADMITTED, got ${run.state}`);
@@ -425,6 +432,10 @@ export class RunJournalOutbox {
       this.journal.advance(run.run_id, 'GATED');
       row = this.outbox.readRow(input.outbox.run_id, input.outbox.kind);
     });
+    if (duplicate !== null) {
+      this.assertDurableGateEvidence(duplicate);
+      return null;
+    }
     return row;
   }
 
@@ -453,7 +464,7 @@ export class RunJournalOutbox {
   // kind is a single literal in SLICE-3b; the parameter keeps the call site ready for the deferred
   // multi-kind outbox without widening this slice.
   flushOutbox(runId: string, kind: PushClass = KIND): void {
-    this.readPreparedCandidate(runId);
+    const candidate = this.readPreparedCandidate(runId);
     const run = this.journal.read(runId);
     if (run === null) throw new Error(`flushOutbox: no journal row for ${runId}`);
     if (run.state !== 'GATED' && run.state !== 'SINK_SENT') {
@@ -462,16 +473,10 @@ export class RunJournalOutbox {
     if (run.verdict !== 'send' && run.verdict !== 'degrade') {
       throw new Error('flushOutbox requires a send or degrade verdict');
     }
+    const row = this.assertDeliveryEvidence(run, candidate, kind);
 
-    const row = this.outbox.readRow(runId, kind);
-    if (row === null) throw new Error(`flushOutbox: no outbox row for ${runId}`);
-    if (run.state === 'SINK_SENT' && row.status === 'pending') {
-      throw new Error('journal/outbox delivery state mismatch');
-    }
-    if (run.state === 'GATED' && row.status === 'sent_unacked') {
-      throw new Error('journal/outbox delivery state mismatch');
-    }
-
+    // An ack is stronger durable evidence than a stale in-doubt journal label. Never re-send it;
+    // repair the journal forward through its legal SINK_SENT -> ACK_RECORDED transition instead.
     if (row.status === 'acked') {
       this.storage.transactionSync(() => this.journal.advance(runId, 'ACK_RECORDED'));
       return;
@@ -510,6 +515,88 @@ export class RunJournalOutbox {
       this.outbox.markAcked(runId, kind, parsedAck.idempotency_key, this.deps.now());
       this.journal.advance(runId, 'ACK_RECORDED');
     });
+  }
+
+  // A resume can only trust a journal state after the matching durable outbox evidence agrees.
+  // This stays local to the current single-intent runtime; widening it belongs to the deferred
+  // multi-kind outbox contract rather than this DeliveryGate hardening slice.
+  private assertDurableGateEvidence(run: JournalRow): void {
+    if (
+      run.state === 'GATED' ||
+      run.state === 'SINK_SENT' ||
+      run.state === 'ACK_RECORDED' ||
+      run.state === 'DONE'
+    ) {
+      this.assertDeliveryEvidence(run, this.readPreparedCandidate(run.run_id));
+      return;
+    }
+    if (run.state === 'FAILED') this.assertFailedEvidence(run);
+  }
+
+  private assertDeliveryEvidence(
+    run: JournalRow,
+    candidate: DeliveryCandidate,
+    kind: PushClass = candidate.push_class,
+  ): OutboxRow {
+    if (
+      run.state !== 'GATED' &&
+      run.state !== 'SINK_SENT' &&
+      run.state !== 'ACK_RECORDED' &&
+      run.state !== 'DONE'
+    ) {
+      throwDurableDeliveryMismatch();
+    }
+    if (candidate.push_class !== kind || (run.verdict !== 'send' && run.verdict !== 'degrade')) {
+      throwDurableDeliveryMismatch();
+    }
+    const rows = this.outbox.readRows(run.run_id);
+    const row = rows[0];
+    if (rows.length === 0) throw new Error(`flushOutbox: no outbox row for ${run.run_id}`);
+    if (rows.length !== 1 || row === undefined || row.kind !== kind) {
+      throwDurableDeliveryMismatch();
+    }
+    if (run.state === 'SINK_SENT' && row.status === 'acked') return row;
+    const expectedStatus =
+      run.state === 'GATED'
+        ? 'pending'
+        : run.state === 'SINK_SENT'
+          ? 'sent_unacked'
+          : 'acked';
+    if (row.status !== expectedStatus) throwDurableDeliveryMismatch();
+    return row;
+  }
+
+  private assertFailedEvidence(run: JournalRow): void {
+    const rows = this.outbox.readRows(run.run_id);
+    if (run.verdict === 'send' || run.verdict === 'degrade') {
+      if (rows.length !== 1) throwDurableDeliveryMismatch();
+      const row = rows[0]!;
+      if (row.status === 'acked') throwDurableDeliveryMismatch();
+      // A poisoned candidate is scrubbed before its run is made terminal, so its one remaining
+      // non-acked outbox row is the only recoverable evidence. Whenever the candidate survived,
+      // however, it must still name the durable delivery kind rather than merely any valid row.
+      if (
+        this.store.readCandidateJson(run.run_id) !== null &&
+        row.kind !== this.readPreparedCandidate(run.run_id).push_class
+      ) {
+        throwDurableDeliveryMismatch();
+      }
+      return;
+    }
+    if (rows.length !== 0) throwDurableDeliveryMismatch();
+    if (run.verdict === 'hold') {
+      const candidate = this.readPreparedCandidate(run.run_id);
+      const held = this.store.readHeld(run.user_id, candidate.event_id);
+      if (
+        held === null ||
+        held.push_class !== candidate.push_class ||
+        held.candidate.event_id !== candidate.event_id
+      ) {
+        throwDurableDeliveryMismatch();
+      }
+      return;
+    }
+    if (run.verdict === 'drop') this.readPreparedCandidate(run.run_id);
   }
 
   private async runGate(run: JournalRow): Promise<void> {
@@ -574,6 +661,12 @@ export class RunJournalOutbox {
   }
 
   private finalize(runId: string): void {
+    const run = this.journal.read(runId);
+    if (run === null) throw new Error(`finalize: no journal row for ${runId}`);
+    this.assertDurableGateEvidence(run);
+    if (run.state !== 'ACK_RECORDED') {
+      throw new Error(`finalize requires ACK_RECORDED, got ${run.state}`);
+    }
     this.crash('post_ack_pre_return');
     this.journal.advance(runId, 'DONE');
   }
@@ -587,6 +680,10 @@ export class RunJournalOutbox {
 
 function admitToState(verdict: 'admit' | 'deny'): 'GOVERNOR_ADMITTED' | 'FAILED' {
   return verdict === 'admit' ? 'GOVERNOR_ADMITTED' : 'FAILED';
+}
+
+function throwDurableDeliveryMismatch(): never {
+  throw new Error('journal/outbox delivery state mismatch');
 }
 
 function parseStartRunInput(input: StartRunInput): StartRunInput {

@@ -286,6 +286,87 @@ async function readGateState(
   });
 }
 
+type DurableDeliveryFixture = {
+  journalState: 'GATED' | 'SINK_SENT' | 'ACK_RECORDED' | 'DONE' | 'FAILED';
+  outboxStatus: 'pending' | 'sent_unacked' | 'acked' | null;
+  verdict?: 'send' | 'degrade';
+  deleteCandidate?: boolean;
+};
+
+async function createCompletedDeliveryFixture(stub: RuntimeStub, suffix: string): Promise<string> {
+  const occurrenceAt = futureOccurrence();
+  const runId = await stub.startRun({
+    userId: `${USER}-${suffix}`,
+    trigger: FETCH_ALERT,
+    occurrenceAt,
+    candidate: {
+      push_class: FETCH_ALERT,
+      trigger: FETCH_ALERT,
+      event_id: `durable-evidence-${suffix}`,
+      expires_at: null,
+    },
+  });
+  await tick(stub, runId);
+  return runId;
+}
+
+async function stageDurableDeliveryFixture(
+  stub: RuntimeStub,
+  runId: string,
+  fixture: DurableDeliveryFixture,
+): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    const verdict = fixture.verdict ?? 'send';
+    state.storage.sql.exec(
+      `UPDATE journal
+          SET state = ?, verdict = ?, gate_reason = ?
+        WHERE run_id = ?`,
+      fixture.journalState,
+      verdict,
+      verdict === 'degrade' ? 'budget_cap_exhausted' : null,
+      runId,
+    );
+    if (fixture.outboxStatus === null) {
+      state.storage.sql.exec('DELETE FROM outbox WHERE run_id = ?', runId);
+    } else {
+      const attempts = fixture.outboxStatus === 'pending' ? 0 : 1;
+      const nextRetryAt = fixture.outboxStatus === 'sent_unacked' ? futureOccurrence() : null;
+      const ackedAt = fixture.outboxStatus === 'acked' ? futureOccurrence() : null;
+      state.storage.sql.exec(
+        `UPDATE outbox
+            SET status = ?, attempts = ?, next_retry_at = ?, acked_at = ?, last_error = NULL
+          WHERE run_id = ?`,
+        fixture.outboxStatus,
+        attempts,
+        nextRetryAt,
+        ackedAt,
+        runId,
+      );
+    }
+    if (fixture.deleteCandidate === true) {
+      state.storage.sql.exec('DELETE FROM run_candidates WHERE run_id = ?', runId);
+    }
+  });
+}
+
+async function readDurableDeliveryFixture(
+  stub: RuntimeStub,
+  runId: string,
+): Promise<{ state: string; verdict: string | null; outboxStatus: string | null }> {
+  return runInDurableObject(stub, (_instance, state) => {
+    const journal = state.storage.sql
+      .exec<{ state: string; verdict: string | null }>(
+        'SELECT state, verdict FROM journal WHERE run_id = ?',
+        runId,
+      )
+      .one();
+    const outbox = state.storage.sql
+      .exec<{ status: string }>('SELECT status FROM outbox WHERE run_id = ?', runId)
+      .toArray()[0];
+    return { ...journal, outboxStatus: outbox?.status ?? null };
+  });
+}
+
 describe('DeliveryGate runtime policy state', () => {
   it('rejects a forbidden user identity before opening durable run state', async () => {
     const runtime = freshRuntimeStub();
@@ -1537,6 +1618,177 @@ describe('DeliveryGate runtime policy state', () => {
     });
     expect(sink.observedSendAttempts()).toBe(1);
     expect(sink.observedDeliveries()).toBe(1);
+  });
+
+  it('re-drives every valid durable delivery state once and leaves its duplicate tick inert', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const fixtures = [
+      { name: 'gated', journalState: 'GATED', outboxStatus: 'pending' },
+      { name: 'sink-sent', journalState: 'SINK_SENT', outboxStatus: 'sent_unacked' },
+      { name: 'sink-sent-acked', journalState: 'SINK_SENT', outboxStatus: 'acked' },
+      { name: 'ack-recorded', journalState: 'ACK_RECORDED', outboxStatus: 'acked' },
+      { name: 'done', journalState: 'DONE', outboxStatus: 'acked' },
+      {
+        name: 'failed-post-gate-intact',
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+      },
+      {
+        name: 'failed-post-gate-intact-degrade',
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+        verdict: 'degrade',
+      },
+      {
+        name: 'failed-post-gate-scrubbed',
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+        deleteCandidate: true,
+      },
+    ] as const satisfies readonly (DurableDeliveryFixture & { name: string })[];
+    const runIds = new Map<string, string>();
+
+    for (const fixture of fixtures) {
+      const runId = await createCompletedDeliveryFixture(runtime, fixture.name);
+      await stageDurableDeliveryFixture(runtime, runId, fixture);
+      runIds.set(fixture.name, runId);
+    }
+    sink.reset();
+
+    for (const fixture of fixtures) {
+      const runId = runIds.get(fixture.name);
+      if (runId === undefined) throw new Error(`missing fixture ${fixture.name}`);
+      await tick(runtime, runId);
+      await tick(runtime, runId);
+    }
+
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('gated')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('sink-sent')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('sink-sent-acked')!),
+    ).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('ack-recorded')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('done')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('failed-post-gate-intact')!),
+    ).resolves.toEqual({ state: 'FAILED', verdict: 'send', outboxStatus: 'pending' });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('failed-post-gate-intact-degrade')!),
+    ).resolves.toEqual({ state: 'FAILED', verdict: 'degrade', outboxStatus: 'pending' });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('failed-post-gate-scrubbed')!),
+    ).resolves.toEqual({ state: 'FAILED', verdict: 'send', outboxStatus: 'pending' });
+    expect(sink.observedSendAttempts()).toBe(2);
+    expect(sink.observedDeliveries()).toBe(2);
+  });
+
+  it('rejects inconsistent journal/outbox evidence before a duplicate tick can advance it', async () => {
+    const cases = [
+      { name: 'gated-acked', journalState: 'GATED', outboxStatus: 'acked' },
+      { name: 'gated-sent-unacked', journalState: 'GATED', outboxStatus: 'sent_unacked' },
+      { name: 'sink-sent-pending', journalState: 'SINK_SENT', outboxStatus: 'pending' },
+      { name: 'ack-recorded-pending', journalState: 'ACK_RECORDED', outboxStatus: 'pending' },
+      { name: 'done-sent', journalState: 'DONE', outboxStatus: 'sent_unacked' },
+      {
+        name: 'failed-send-acked',
+        journalState: 'FAILED',
+        outboxStatus: 'acked',
+        deleteCandidate: true,
+      },
+      {
+        name: 'failed-send-without-outbox',
+        journalState: 'FAILED',
+        outboxStatus: null,
+        deleteCandidate: true,
+      },
+    ] as const satisfies readonly (DurableDeliveryFixture & { name: string })[];
+
+    for (const fixture of cases) {
+      const runtime = freshRuntimeStub();
+      const runId = await createCompletedDeliveryFixture(runtime, fixture.name);
+      await stageDurableDeliveryFixture(runtime, runId, fixture);
+      await expect(tick(runtime, runId)).rejects.toThrow('journal/outbox delivery state mismatch');
+    }
+  });
+
+  it.each(['send', 'degrade'] as const)(
+    'rejects a failed %s whose outbox kind contradicts its intact candidate',
+    async (verdict) => {
+      const runtime = freshRuntimeStub();
+      const runId = await createCompletedDeliveryFixture(runtime, `failed-${verdict}-wrong-kind`);
+      await stageDurableDeliveryFixture(runtime, runId, {
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+        verdict,
+      });
+      await runInDurableObject(runtime, (_instance, state) => {
+        state.storage.sql.exec('UPDATE outbox SET kind = ? WHERE run_id = ?', BRIEF, runId);
+      });
+
+      await expect(tick(runtime, runId)).rejects.toThrow('journal/outbox delivery state mismatch');
+    },
+  );
+
+  it('rejects active delivery evidence with a wrong kind or an additional kind', async () => {
+    const corruptions = [
+      {
+        name: 'wrong-kind',
+        apply(runId: string, state: DurableObjectState): void {
+          state.storage.sql.exec('UPDATE outbox SET kind = ? WHERE run_id = ?', BRIEF, runId);
+        },
+      },
+      {
+        name: 'additional-kind',
+        apply(runId: string, state: DurableObjectState): void {
+          state.storage.sql.exec(
+            `INSERT INTO outbox
+               (outbox_id, run_id, kind, idempotency_key, payload,
+                status, attempts, next_retry_at, acked_at, last_error, created_at)
+             VALUES (?, ?, ?, ?, 'synthetic-token-01', 'pending', 0, NULL, NULL, NULL, ?)`,
+            `forged-${runId}`,
+            runId,
+            BRIEF,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            futureOccurrence(),
+          );
+        },
+      },
+    ] as const;
+
+    for (const corruption of corruptions) {
+      const runtime = freshRuntimeStub();
+      const runId = await createCompletedDeliveryFixture(runtime, `gated-${corruption.name}`);
+      await stageDurableDeliveryFixture(runtime, runId, {
+        journalState: 'GATED',
+        outboxStatus: 'pending',
+      });
+      await runInDurableObject(runtime, (_instance, state) => {
+        corruption.apply(runId, state);
+      });
+
+      await expect(tick(runtime, runId)).rejects.toThrow('journal/outbox delivery state mismatch');
+    }
   });
 
   it('scopes counted budget by UTC local date fallback', async () => {

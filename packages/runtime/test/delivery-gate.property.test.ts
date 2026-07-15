@@ -463,6 +463,33 @@ describe('DeliveryGate fast-check properties', () => {
     expect(admissions[2]).toMatchObject({ verdict: 'hold', reason: 'class_cap_exhausted' });
   });
 
+  it('preserves the candidate expiration in lifetime-drop and daily-cap-hold stamps', () => {
+    const expiresAt = BASE_DAY + 24 * 60 * MS_PER_MINUTE;
+    const onceEver = admit(
+      { ...candidateFor('constellation_first', 0), expires_at: expiresAt },
+      'pro',
+      0,
+      1,
+    );
+    const dailyCap = admit(
+      { ...candidateFor('pre_activity_spot', 0), expires_at: expiresAt },
+      'pro_max',
+      0,
+      2,
+    );
+
+    expect(onceEver).toMatchObject({
+      verdict: 'drop',
+      reason: 'once_ever_already_sent',
+      stamped: { expires_at: expiresAt },
+    });
+    expect(dailyCap).toMatchObject({
+      verdict: 'hold',
+      reason: 'class_cap_exhausted',
+      stamped: { expires_at: expiresAt },
+    });
+  });
+
   it(`does not charge counted budget for exempt runtime interleavings (seed ${SEEDS.exemptInterleaving})`, async () => {
     await fc.assert(
       fc.asyncProperty(

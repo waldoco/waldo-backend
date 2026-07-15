@@ -67,6 +67,16 @@ export class Outbox {
     return row ? toRow(row) : null;
   }
 
+  // The current journal owns one durable delivery intent per run. Reading every row lets the
+  // resume path prove that a terminal journal state is backed by exactly that intent rather than
+  // trusting a state label alone.
+  readRows(runId: string): OutboxRow[] {
+    return this.sql
+      .exec<OutboxSqlRow>('SELECT * FROM outbox WHERE run_id = ?', runId)
+      .toArray()
+      .map(toRow);
+  }
+
   // TOTAL rows, including an already-acked one — the exactly-once assertion counts durable rows,
   // not active rows, so a masked double-processing bug cannot pass.
   countRows(runId: string, kind: PushClass): number {

@@ -43,7 +43,7 @@ export class DeliveryGateStore {
     const pushClass = candidate.push_class;
     const localDate = utcLocalDate(now);
     const row =
-      pushClass === 'constellation_first'
+      DELIVERY_POLICY[pushClass].cap_scope === 'lifetime'
         ? this.sql
             .exec<{ count: number }>(
               `SELECT COALESCE(sum(count), 0) AS count

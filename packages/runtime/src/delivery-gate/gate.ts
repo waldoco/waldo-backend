@@ -60,7 +60,7 @@ export function computeAdmission(input: GateDecisionInput): Admission {
     counter.last_sent_at === null ||
     input.now - counter.last_sent_at >= cooldownMin * MS_PER_MINUTE;
 
-  if (!underClassCap && candidate.push_class === 'constellation_first') {
+  if (!underClassCap && policy.cap_scope === 'lifetime') {
     return dropAdmission(
       candidate.push_class,
       policy,
