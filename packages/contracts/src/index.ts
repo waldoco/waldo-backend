@@ -32,6 +32,7 @@ export * from './tools/schemas/writes';
 export * from './tools/schemas/threading';
 export * from './runtime/delivery-policy';
 export * from './runtime/run';
+export * from './runtime/invocation';
 export * from './runtime/session';
 export * from './runtime/working-memory';
 export * from './runtime/goal';
