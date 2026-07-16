@@ -2,6 +2,8 @@ import { env } from 'cloudflare:workers';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import type { PushClass, TriggerType } from '@waldo/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { RunJournalOutbox } from '../src/run-journal/outbox-runtime';
+import type { Deps } from '../src/seams/deps';
 import { FakeSink } from '../src/tracer/sink';
 import type { TracerDO } from '../src/tracer/tracer-do';
 
@@ -57,6 +59,21 @@ type GateState = {
   countedSends: number;
   heldRows: number;
 };
+
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve(value: T): void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  return {
+    promise: new Promise<T>((next) => {
+      resolve = next;
+    }),
+    resolve,
+  };
+}
 
 beforeEach(() => {
   new FakeSink().reset();
@@ -266,6 +283,87 @@ async function readGateState(
       countedSends: counted.sends_total,
       heldRows,
     };
+  });
+}
+
+type DurableDeliveryFixture = {
+  journalState: 'GATED' | 'SINK_SENT' | 'ACK_RECORDED' | 'DONE' | 'FAILED';
+  outboxStatus: 'pending' | 'sent_unacked' | 'acked' | null;
+  verdict?: 'send' | 'degrade';
+  deleteCandidate?: boolean;
+};
+
+async function createCompletedDeliveryFixture(stub: RuntimeStub, suffix: string): Promise<string> {
+  const occurrenceAt = futureOccurrence();
+  const runId = await stub.startRun({
+    userId: `${USER}-${suffix}`,
+    trigger: FETCH_ALERT,
+    occurrenceAt,
+    candidate: {
+      push_class: FETCH_ALERT,
+      trigger: FETCH_ALERT,
+      event_id: `durable-evidence-${suffix}`,
+      expires_at: null,
+    },
+  });
+  await tick(stub, runId);
+  return runId;
+}
+
+async function stageDurableDeliveryFixture(
+  stub: RuntimeStub,
+  runId: string,
+  fixture: DurableDeliveryFixture,
+): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    const verdict = fixture.verdict ?? 'send';
+    state.storage.sql.exec(
+      `UPDATE journal
+          SET state = ?, verdict = ?, gate_reason = ?
+        WHERE run_id = ?`,
+      fixture.journalState,
+      verdict,
+      verdict === 'degrade' ? 'budget_cap_exhausted' : null,
+      runId,
+    );
+    if (fixture.outboxStatus === null) {
+      state.storage.sql.exec('DELETE FROM outbox WHERE run_id = ?', runId);
+    } else {
+      const attempts = fixture.outboxStatus === 'pending' ? 0 : 1;
+      const nextRetryAt = fixture.outboxStatus === 'sent_unacked' ? futureOccurrence() : null;
+      const ackedAt = fixture.outboxStatus === 'acked' ? futureOccurrence() : null;
+      state.storage.sql.exec(
+        `UPDATE outbox
+            SET status = ?, attempts = ?, next_retry_at = ?, acked_at = ?, last_error = NULL
+          WHERE run_id = ?`,
+        fixture.outboxStatus,
+        attempts,
+        nextRetryAt,
+        ackedAt,
+        runId,
+      );
+    }
+    if (fixture.deleteCandidate === true) {
+      state.storage.sql.exec('DELETE FROM run_candidates WHERE run_id = ?', runId);
+    }
+  });
+}
+
+async function readDurableDeliveryFixture(
+  stub: RuntimeStub,
+  runId: string,
+): Promise<{ state: string; verdict: string | null; outboxStatus: string | null }> {
+  return runInDurableObject(stub, (_instance, state) => {
+    const journal = state.storage.sql
+      .exec<{ state: string; verdict: string | null }>(
+        'SELECT state, verdict FROM journal WHERE run_id = ?',
+        runId,
+      )
+      .one();
+    const outbox = state.storage.sql
+      .exec<{ status: string }>('SELECT status FROM outbox WHERE run_id = ?', runId)
+      .toArray()[0];
+    return { ...journal, outboxStatus: outbox?.status ?? null };
   });
 }
 
@@ -1196,6 +1294,48 @@ describe('DeliveryGate runtime policy state', () => {
     expect(sink.observedDeliveries()).toBe(1);
   });
 
+  it('does not resurrect constellation_first on a new UTC local date', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+
+    const firstRun = await runtime.startRun({
+      userId: USER,
+      trigger: 'dreaming_mode',
+      occurrenceAt: utcOccurrence('2026-01-01'),
+      candidate: {
+        push_class: CONSTELLATION_FIRST,
+        trigger: 'dreaming_mode',
+        event_id: 'constellation-first-2026-01-01',
+        expires_at: null,
+      },
+    });
+    await tick(runtime, firstRun);
+
+    const nextDayRun = await runtime.startRun({
+      userId: USER,
+      trigger: 'dreaming_mode',
+      occurrenceAt: utcOccurrence('2026-01-02'),
+      candidate: {
+        push_class: CONSTELLATION_FIRST,
+        trigger: 'dreaming_mode',
+        event_id: 'constellation-first-2026-01-02',
+        expires_at: null,
+      },
+    });
+    await tick(runtime, nextDayRun);
+
+    expect(await readGateState(runtime, nextDayRun, CONSTELLATION_FIRST)).toMatchObject({
+      journalState: 'FAILED',
+      verdict: 'drop',
+      gateReason: 'once_ever_already_sent',
+      outboxRows: 0,
+    });
+    expect(await classCountForDate(runtime, CONSTELLATION_FIRST, '2026-01-01')).toBe(1);
+    expect(await classCountForDate(runtime, CONSTELLATION_FIRST, '2026-01-02')).toBe(0);
+    expect(sink.observedSendAttempts()).toBe(1);
+    expect(sink.observedDeliveries()).toBe(1);
+  });
+
   it('applies adjustment proposed sub-cap without capping executed adjustments', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
@@ -1305,6 +1445,350 @@ describe('DeliveryGate runtime policy state', () => {
     });
     expect(sink.observedSendAttempts()).toBe(1);
     expect(sink.observedDeliveries()).toBe(1);
+  });
+
+  it('serializes two final-slot candidates across async hashing', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const admissionAt = utcOccurrence('2026-01-01');
+    const hashes = [deferred<string>(), deferred<string>()] as const;
+    let hashCalls = 0;
+    let runSequence = 0;
+    let outboxSequence = 0;
+
+    const result = await runInDurableObject(runtime, async (_instance, state) => {
+      state.storage.sql.exec(
+        'INSERT INTO daily_push_budget (user_id, local_date, sends_total) VALUES (?, ?, 2)',
+        USER,
+        utcLocalDate(admissionAt),
+      );
+      const deps: Deps = {
+        now: () => admissionAt,
+        newRunId: () => `delivery-race-run-${++runSequence}`,
+        newOutboxId: () => `delivery-race-outbox-${++outboxSequence}`,
+        sha256Hex: () => {
+          const hash = hashCalls === 0 ? hashes[0] : hashCalls === 1 ? hashes[1] : undefined;
+          hashCalls += 1;
+          if (hash === undefined) throw new Error('unexpected additional hash');
+          return hash.promise;
+        },
+      };
+      const journalOutbox = new RunJournalOutbox(state.storage, deps, sink);
+      const firstRunId = journalOutbox.startRun({
+        userId: USER,
+        trigger: PRE_ACTIVITY_SPOT,
+        occurrenceAt: admissionAt,
+        candidate: {
+          push_class: PRE_ACTIVITY_SPOT,
+          trigger: PRE_ACTIVITY_SPOT,
+          event_id: 'final-slot-a',
+          expires_at: null,
+        },
+      });
+      const secondRunId = journalOutbox.startRun({
+        userId: USER,
+        trigger: PRE_ACTIVITY_SPOT,
+        occurrenceAt: admissionAt,
+        candidate: {
+          push_class: PRE_ACTIVITY_SPOT,
+          trigger: PRE_ACTIVITY_SPOT,
+          event_id: 'final-slot-b',
+          expires_at: null,
+        },
+      });
+
+      const first = journalOutbox.tickRun(firstRunId);
+      const second = journalOutbox.tickRun(secondRunId);
+      expect(hashCalls).toBe(2);
+      hashes[0].resolve('a'.repeat(64));
+      hashes[1].resolve('b'.repeat(64));
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+      return {
+        budget: state.storage.sql
+          .exec<{ sends_total: number }>(
+            'SELECT sends_total FROM daily_push_budget WHERE user_id = ? AND local_date = ?',
+            USER,
+            utcLocalDate(admissionAt),
+          )
+          .one().sends_total,
+        journal: state.storage.sql
+          .exec<{ state: string; verdict: string | null; gate_reason: string | null }>(
+            `SELECT state, verdict, gate_reason
+               FROM journal
+              WHERE run_id IN (?, ?)
+              ORDER BY verdict`,
+            firstRunId,
+            secondRunId,
+          )
+          .toArray(),
+        outboxRows: state.storage.sql
+          .exec<{ n: number }>('SELECT count(*) AS n FROM outbox')
+          .one().n,
+      };
+    });
+
+    expect(result).toEqual({
+      budget: 3,
+      journal: [
+        { state: 'DONE', verdict: 'degrade', gate_reason: 'budget_cap_exhausted' },
+        { state: 'DONE', verdict: 'send', gate_reason: null },
+      ],
+      outboxRows: 2,
+    });
+    expect(sink.observedSendAttempts()).toBe(2);
+    expect(sink.observedDeliveries()).toBe(2);
+  });
+
+  it('treats a duplicate tick that overlaps hashing as a durable no-op', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const admissionAt = utcOccurrence('2026-01-01');
+    const hashes = [deferred<string>(), deferred<string>()] as const;
+    let hashCalls = 0;
+    let outboxSequence = 0;
+
+    const result = await runInDurableObject(runtime, async (_instance, state) => {
+      const deps: Deps = {
+        now: () => admissionAt,
+        newRunId: () => 'delivery-duplicate-tick-run',
+        newOutboxId: () => `delivery-duplicate-tick-outbox-${++outboxSequence}`,
+        sha256Hex: () => {
+          const hash = hashCalls === 0 ? hashes[0] : hashCalls === 1 ? hashes[1] : undefined;
+          hashCalls += 1;
+          if (hash === undefined) throw new Error('unexpected additional hash');
+          return hash.promise;
+        },
+      };
+      const journalOutbox = new RunJournalOutbox(state.storage, deps, sink);
+      const runId = journalOutbox.startRun({
+        userId: USER,
+        trigger: PRE_ACTIVITY_SPOT,
+        occurrenceAt: admissionAt,
+        candidate: {
+          push_class: PRE_ACTIVITY_SPOT,
+          trigger: PRE_ACTIVITY_SPOT,
+          event_id: 'duplicate-tick-event',
+          expires_at: null,
+        },
+      });
+
+      const first = journalOutbox.tickRun(runId);
+      const second = journalOutbox.tickRun(runId);
+      expect(hashCalls).toBe(2);
+      hashes[0].resolve('c'.repeat(64));
+      hashes[1].resolve('c'.repeat(64));
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+
+      return {
+        budget: state.storage.sql
+          .exec<{ sends_total: number }>(
+            'SELECT sends_total FROM daily_push_budget WHERE user_id = ? AND local_date = ?',
+            USER,
+            utcLocalDate(admissionAt),
+          )
+          .one().sends_total,
+        classCount: state.storage.sql
+          .exec<{ count: number }>(
+            `SELECT count
+               FROM class_state
+              WHERE user_id = ? AND local_date = ? AND push_class = ?`,
+            USER,
+            utcLocalDate(admissionAt),
+            PRE_ACTIVITY_SPOT,
+          )
+          .one().count,
+        journal: state.storage.sql
+          .exec<{ state: string; verdict: string | null }>(
+            'SELECT state, verdict FROM journal WHERE run_id = ?',
+            runId,
+          )
+          .one(),
+        outboxRows: state.storage.sql
+          .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', runId)
+          .one().n,
+      };
+    });
+
+    expect(result).toEqual({
+      budget: 1,
+      classCount: 1,
+      journal: { state: 'DONE', verdict: 'send' },
+      outboxRows: 1,
+    });
+    expect(sink.observedSendAttempts()).toBe(1);
+    expect(sink.observedDeliveries()).toBe(1);
+  });
+
+  it('re-drives every valid durable delivery state once and leaves its duplicate tick inert', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const fixtures = [
+      { name: 'gated', journalState: 'GATED', outboxStatus: 'pending' },
+      { name: 'sink-sent', journalState: 'SINK_SENT', outboxStatus: 'sent_unacked' },
+      { name: 'sink-sent-acked', journalState: 'SINK_SENT', outboxStatus: 'acked' },
+      { name: 'ack-recorded', journalState: 'ACK_RECORDED', outboxStatus: 'acked' },
+      { name: 'done', journalState: 'DONE', outboxStatus: 'acked' },
+      {
+        name: 'failed-post-gate-intact',
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+      },
+      {
+        name: 'failed-post-gate-intact-degrade',
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+        verdict: 'degrade',
+      },
+      {
+        name: 'failed-post-gate-scrubbed',
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+        deleteCandidate: true,
+      },
+    ] as const satisfies readonly (DurableDeliveryFixture & { name: string })[];
+    const runIds = new Map<string, string>();
+
+    for (const fixture of fixtures) {
+      const runId = await createCompletedDeliveryFixture(runtime, fixture.name);
+      await stageDurableDeliveryFixture(runtime, runId, fixture);
+      runIds.set(fixture.name, runId);
+    }
+    sink.reset();
+
+    for (const fixture of fixtures) {
+      const runId = runIds.get(fixture.name);
+      if (runId === undefined) throw new Error(`missing fixture ${fixture.name}`);
+      await tick(runtime, runId);
+      await tick(runtime, runId);
+    }
+
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('gated')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('sink-sent')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('sink-sent-acked')!),
+    ).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('ack-recorded')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(readDurableDeliveryFixture(runtime, runIds.get('done')!)).resolves.toEqual({
+      state: 'DONE',
+      verdict: 'send',
+      outboxStatus: 'acked',
+    });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('failed-post-gate-intact')!),
+    ).resolves.toEqual({ state: 'FAILED', verdict: 'send', outboxStatus: 'pending' });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('failed-post-gate-intact-degrade')!),
+    ).resolves.toEqual({ state: 'FAILED', verdict: 'degrade', outboxStatus: 'pending' });
+    await expect(
+      readDurableDeliveryFixture(runtime, runIds.get('failed-post-gate-scrubbed')!),
+    ).resolves.toEqual({ state: 'FAILED', verdict: 'send', outboxStatus: 'pending' });
+    expect(sink.observedSendAttempts()).toBe(2);
+    expect(sink.observedDeliveries()).toBe(2);
+  });
+
+  it('rejects inconsistent journal/outbox evidence before a duplicate tick can advance it', async () => {
+    const cases = [
+      { name: 'gated-acked', journalState: 'GATED', outboxStatus: 'acked' },
+      { name: 'gated-sent-unacked', journalState: 'GATED', outboxStatus: 'sent_unacked' },
+      { name: 'sink-sent-pending', journalState: 'SINK_SENT', outboxStatus: 'pending' },
+      { name: 'ack-recorded-pending', journalState: 'ACK_RECORDED', outboxStatus: 'pending' },
+      { name: 'done-sent', journalState: 'DONE', outboxStatus: 'sent_unacked' },
+      {
+        name: 'failed-send-acked',
+        journalState: 'FAILED',
+        outboxStatus: 'acked',
+        deleteCandidate: true,
+      },
+      {
+        name: 'failed-send-without-outbox',
+        journalState: 'FAILED',
+        outboxStatus: null,
+        deleteCandidate: true,
+      },
+    ] as const satisfies readonly (DurableDeliveryFixture & { name: string })[];
+
+    for (const fixture of cases) {
+      const runtime = freshRuntimeStub();
+      const runId = await createCompletedDeliveryFixture(runtime, fixture.name);
+      await stageDurableDeliveryFixture(runtime, runId, fixture);
+      await expect(tick(runtime, runId)).rejects.toThrow('journal/outbox delivery state mismatch');
+    }
+  });
+
+  it.each(['send', 'degrade'] as const)(
+    'rejects a failed %s whose outbox kind contradicts its intact candidate',
+    async (verdict) => {
+      const runtime = freshRuntimeStub();
+      const runId = await createCompletedDeliveryFixture(runtime, `failed-${verdict}-wrong-kind`);
+      await stageDurableDeliveryFixture(runtime, runId, {
+        journalState: 'FAILED',
+        outboxStatus: 'pending',
+        verdict,
+      });
+      await runInDurableObject(runtime, (_instance, state) => {
+        state.storage.sql.exec('UPDATE outbox SET kind = ? WHERE run_id = ?', BRIEF, runId);
+      });
+
+      await expect(tick(runtime, runId)).rejects.toThrow('journal/outbox delivery state mismatch');
+    },
+  );
+
+  it('rejects active delivery evidence with a wrong kind or an additional kind', async () => {
+    const corruptions = [
+      {
+        name: 'wrong-kind',
+        apply(runId: string, state: DurableObjectState): void {
+          state.storage.sql.exec('UPDATE outbox SET kind = ? WHERE run_id = ?', BRIEF, runId);
+        },
+      },
+      {
+        name: 'additional-kind',
+        apply(runId: string, state: DurableObjectState): void {
+          state.storage.sql.exec(
+            `INSERT INTO outbox
+               (outbox_id, run_id, kind, idempotency_key, payload,
+                status, attempts, next_retry_at, acked_at, last_error, created_at)
+             VALUES (?, ?, ?, ?, 'synthetic-token-01', 'pending', 0, NULL, NULL, NULL, ?)`,
+            `forged-${runId}`,
+            runId,
+            BRIEF,
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            futureOccurrence(),
+          );
+        },
+      },
+    ] as const;
+
+    for (const corruption of corruptions) {
+      const runtime = freshRuntimeStub();
+      const runId = await createCompletedDeliveryFixture(runtime, `gated-${corruption.name}`);
+      await stageDurableDeliveryFixture(runtime, runId, {
+        journalState: 'GATED',
+        outboxStatus: 'pending',
+      });
+      await runInDurableObject(runtime, (_instance, state) => {
+        corruption.apply(runId, state);
+      });
+
+      await expect(tick(runtime, runId)).rejects.toThrow('journal/outbox delivery state mismatch');
+    }
   });
 
   it('scopes counted budget by UTC local date fallback', async () => {

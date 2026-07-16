@@ -65,6 +65,28 @@ describe('deliveryPolicyRow shape', () => {
     );
   });
 
+  it('makes cap scope explicit instead of inferring lifetime behavior from a class name', () => {
+    expect(
+      deliveryPolicyRowSchema.safeParse({ ...fetch, cap_scope: 'utc_day' }).success,
+    ).toBe(true);
+    expect(
+      deliveryPolicyRowSchema.safeParse({ ...fetch, cap_scope: 'lifetime' }).success,
+    ).toBe(true);
+    expect(
+      deliveryPolicyRowSchema.safeParse({ ...fetch, cap_scope: 'lifetime', daily_cap: null })
+        .success,
+    ).toBe(false);
+    expect(
+      deliveryPolicyRowSchema.safeParse({ ...fetch, cap_scope: 'calendar_week' }).success,
+    ).toBe(false);
+  });
+
+  it('defaults a legacy row without cap scope to the daily authority', () => {
+    const { cap_scope: _capScope, ...legacyFetch } = fetch;
+
+    expect(deliveryPolicyRowSchema.parse(legacyFetch).cap_scope).toBe('utc_day');
+  });
+
   it('pins budget, quiet-hours, priority, and cooldown vocabularies', () => {
     expect(deliveryPolicyRowSchema.safeParse({ ...fetch, budget: 'free' }).success).toBe(false);
     expect(deliveryPolicyRowSchema.safeParse({ ...fetch, quiet_hours: 'allow' }).success).toBe(
@@ -110,6 +132,7 @@ describe('DELIVERY_POLICY', () => {
       quiet_hours: 'bypass_high_confidence',
       priority: 1,
       daily_cap: 3,
+      cap_scope: 'utc_day',
       cooldown_min: 120,
       cooldown_scope: 'class',
       agent_invocable: true,
@@ -138,6 +161,12 @@ describe('DELIVERY_POLICY', () => {
     expect(DELIVERY_POLICY.system_consent.daily_cap).toBeNull();
     expect(DELIVERY_POLICY.system_consent.agent_invocable).toBe(false);
     expect(agentReachableExemptHasCap(DELIVERY_POLICY.system_consent)).toBe(true);
+  });
+
+  it('declares constellation_first as the single lifetime-capped class', () => {
+    for (const [pushClass, policy] of Object.entries(DELIVERY_POLICY)) {
+      expect(policy.cap_scope).toBe(pushClass === 'constellation_first' ? 'lifetime' : 'utc_day');
+    }
   });
 
   it('carries sync_error escalation as row data', () => {

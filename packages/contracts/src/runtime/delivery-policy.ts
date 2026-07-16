@@ -34,6 +34,11 @@ export type BudgetClass = z.infer<typeof budgetClassSchema>;
 export const cooldownScopeSchema = z.enum(['class', 'event']);
 export type CooldownScope = z.infer<typeof cooldownScopeSchema>;
 
+// A bounded cap can reset at the UTC-day boundary or span the lifetime of the user/class pair.
+// Gate admission and durable counter reads consume this field rather than special-casing a class.
+export const deliveryCapScopeSchema = z.enum(['utc_day', 'lifetime']);
+export type DeliveryCapScope = z.infer<typeof deliveryCapScopeSchema>;
+
 export const adjustmentSubKindSchema = z.enum(['proposed', 'executed']);
 export type AdjustmentSubKind = z.infer<typeof adjustmentSubKindSchema>;
 
@@ -54,6 +59,7 @@ export const deliveryPolicyRowSchema = z
     quiet_hours: quietHoursRuleSchema,
     priority: z.int().min(1).max(7).nullable(),
     daily_cap: z.int().positive().nullable(),
+    cap_scope: deliveryCapScopeSchema.default('utc_day'),
     cooldown_min: z.int().positive().nullable(),
     cooldown_scope: cooldownScopeSchema,
     agent_invocable: z.boolean(),
@@ -62,6 +68,10 @@ export const deliveryPolicyRowSchema = z
   .refine((row) => row.sub_caps === null || row.sub_caps.proposed.daily_cap !== null, {
     error: "a sub-capped class must cap its 'proposed' sub-kind",
     path: ['sub_caps', 'proposed', 'daily_cap'],
+  })
+  .refine((row) => row.cap_scope !== 'lifetime' || row.daily_cap !== null, {
+    error: 'a lifetime-capped class must name a finite cap',
+    path: ['daily_cap'],
   });
 export type DeliveryPolicyRow = z.infer<typeof deliveryPolicyRowSchema>;
 
@@ -76,6 +86,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'drop',
     priority: null,
     daily_cap: 3,
+    cap_scope: 'utc_day',
     cooldown_min: null,
     cooldown_scope: 'class',
     agent_invocable: true,
@@ -91,6 +102,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'bypass_high_confidence',
     priority: 1,
     daily_cap: 3,
+    cap_scope: 'utc_day',
     cooldown_min: 120,
     cooldown_scope: 'class',
     agent_invocable: true,
@@ -106,6 +118,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'hold',
     priority: 2,
     daily_cap: null,
+    cap_scope: 'utc_day',
     cooldown_min: null,
     cooldown_scope: 'class',
     agent_invocable: true,
@@ -124,6 +137,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'hold',
     priority: 3,
     daily_cap: 2,
+    cap_scope: 'utc_day',
     cooldown_min: 60,
     cooldown_scope: 'event',
     agent_invocable: true,
@@ -139,6 +153,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'hold',
     priority: null,
     daily_cap: 1,
+    cap_scope: 'lifetime',
     cooldown_min: null,
     cooldown_scope: 'class',
     agent_invocable: false,
@@ -154,6 +169,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'hold',
     priority: 5,
     daily_cap: 1,
+    cap_scope: 'utc_day',
     cooldown_min: null,
     cooldown_scope: 'class',
     agent_invocable: false,
@@ -169,6 +185,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'drop',
     priority: 6,
     daily_cap: 1,
+    cap_scope: 'utc_day',
     cooldown_min: null,
     cooldown_scope: 'class',
     agent_invocable: false,
@@ -184,6 +201,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'hold_while_pending',
     priority: null,
     daily_cap: 2,
+    cap_scope: 'utc_day',
     cooldown_min: null,
     cooldown_scope: 'class',
     agent_invocable: false,
@@ -199,6 +217,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'hold',
     priority: 7,
     daily_cap: null,
+    cap_scope: 'utc_day',
     cooldown_min: 1_440,
     cooldown_scope: 'event',
     agent_invocable: false,
@@ -214,6 +233,7 @@ export const DELIVERY_POLICY: Readonly<Record<PushClass, DeliveryPolicyRow>> = {
     quiet_hours: 'hold',
     priority: null,
     daily_cap: null,
+    cap_scope: 'utc_day',
     cooldown_min: null,
     cooldown_scope: 'class',
     agent_invocable: false,
