@@ -1,4 +1,6 @@
 import { createRuntimeTemporalRecallGateway, RecallSecurityHalt } from '../recall/gateway';
+import { InFlightSnapshotRegistry } from './lifecycle';
+import { ContextSourceRejectedError } from './faults';
 import type {
   ContextSnapshotAttestation,
   ContextRecallGateway,
@@ -8,7 +10,7 @@ import type {
   LocalOwnerBindingResolver,
   SystemSkillRepository,
   SystemSkillSnapshot,
-} from './index';
+} from './types';
 
 const MAX_BINDINGS = 64;
 // One extra row is an overflow sentinel. Silently dropping a 25th eligible system skill before
@@ -22,7 +24,6 @@ const MAX_SQLITE_METADATA_CHARS = 256;
 const MAX_SQLITE_TIMESTAMP_CHARS = 64;
 const MAX_SQLITE_MEMORY_ID_CHARS = 256;
 const MAX_SQLITE_MEMORY_CONTENT_CHARS = 2_000;
-const MAX_FROZEN_SQLITE_SNAPSHOTS = 64;
 const MAX_UTF8_BYTES_PER_CHAR = 4;
 const REVISION_REF = /^rev_[a-f0-9]{32}$/;
 
@@ -66,21 +67,10 @@ export type HeadlessLocalOwnerBinding = Readonly<{
   local_user_ref: string;
 }>;
 
-// Current rows carry no source_taint. This proof type is accepted only by the explicitly named
-// headless-test factory below; the normal runtime factory always excludes unproven legacy rows.
-export type HeadlessLegacyMemoryTaintProof = Readonly<{
-  taintForMemoryRow(row: Readonly<{
-    principal_ref: string;
-    tenant_ref: string;
-    local_user_ref: string;
-    id: string;
-    source_trust: string;
-  }>): LocalSourceTaint;
-}>;
-
-// The current DO schema has only legacy `user_id` rows. This intentionally bounded resolver is
-// a local/headless test adapter, not a production identity directory: it proves the exact
-// principal+tenant mapping before SQLite ever receives a local user id.
+// The current DO schema has only legacy `user_id` rows. This intentionally bounded local/headless
+// resolver proves the exact principal+tenant mapping before SQLite ever receives a local user id;
+// it is not a production identity directory and does not attest any memory-row taint. Production
+// recall still excludes unproven legacy rows through SqliteTemporalRecallGateway.create().
 export class HeadlessLocalOwnerBindingResolver implements LocalOwnerBindingResolver {
   readonly #bindings = new Map<string, HeadlessLocalOwnerBinding>();
   readonly #localUserRefs = new Set<string>();
@@ -119,7 +109,7 @@ export class HeadlessLocalOwnerBindingResolver implements LocalOwnerBindingResol
     snapshot_at: number;
   }>): Promise<LocalOwnerBinding> {
     const binding = this.#bindings.get(bindingKey(request.principal_ref, request.tenant_ref));
-    if (binding === undefined) throw new Error('headless owner binding unavailable');
+    if (binding === undefined) throw new ContextSourceRejectedError('owner_binding_mismatch');
     return Object.freeze({
       principal_ref: binding.principal_ref,
       tenant_ref: binding.tenant_ref,
@@ -139,9 +129,7 @@ export class HeadlessLocalOwnerBindingResolver implements LocalOwnerBindingResol
 // This repository touches only active, identity-locked system rows. It never reads, counts, or
 // reports other provenance from the global legacy table: ownership cannot be proved there.
 export class SqliteSystemSkillRepository implements SystemSkillRepository {
-  // Cache the in-flight capture so two concurrent compositions cannot observe two live reads
-  // for one frozen snapshot. Capacity exhaustion fails safe rather than evicting a snapshot.
-  readonly #snapshots = new Map<string, Promise<SystemSkillSnapshot>>();
+  readonly #snapshots = new InFlightSnapshotRegistry<SystemSkillSnapshot>();
 
   constructor(
     private readonly sql: SqlStorage,
@@ -151,17 +139,7 @@ export class SqliteSystemSkillRepository implements SystemSkillRepository {
   }
 
   async list(request: Readonly<{ snapshot_ref: string; snapshot_at: number }>): Promise<SystemSkillSnapshot> {
-    const cacheKey = snapshotKey(request);
-    const cached = this.#snapshots.get(cacheKey);
-    if (cached !== undefined) return cached;
-    if (this.#snapshots.size >= MAX_FROZEN_SQLITE_SNAPSHOTS) {
-      throw new Error('SQLite frozen snapshot capacity exhausted');
-    }
-    const captured = this.capture(request);
-    this.#snapshots.set(cacheKey, captured);
-    // A rejected capture is also frozen. Retrying a repaired live row under the same snapshot
-    // ref would otherwise turn one claimed snapshot from fail-closed into successful output.
-    return captured;
+    return this.#snapshots.capture(snapshotKey(request), () => this.capture(request));
   }
 
   private async capture(
@@ -178,7 +156,7 @@ export class SqliteSystemSkillRepository implements SystemSkillRepository {
       )
       .toArray();
     if (invalidSystemOwnership.length > 0) {
-      throw new Error('invalid SQLite system skill ownership');
+      throw new ContextSourceRejectedError('skill_snapshot_invalid');
     }
     const oversized = this.sql
       .exec<{ unsafe: number }>(
@@ -201,7 +179,7 @@ export class SqliteSystemSkillRepository implements SystemSkillRepository {
           LIMIT 1`,
       )
       .toArray();
-    if (oversized.length > 0) throw new Error('oversized SQLite system skill row');
+    if (oversized.length > 0) throw new ContextSourceRejectedError('skill_snapshot_invalid');
     const systemRows = this.sql
       .exec<StoredSkillRow>(
         `SELECT name, version, provenance, identity_locked, provisional, trigger_types_json,
@@ -236,47 +214,27 @@ export class SqliteSystemSkillRepository implements SystemSkillRepository {
 
 // Current SQLite has no FTS/BM25/RRF, episode FTS, evolution, union-read, or retained row taint.
 // It delegates key/config/query/hint/Scribe admission to an explicit temporal partial gateway.
-// Legacy rows are conservatively stamped external; elevated-trust rows consequently stay out of
-// the prompt until a retained source-taint proof lands, rather than being laundered.
+// Legacy rows are excluded from prompt material until a retained source-taint proof exists,
+// rather than being reinterpreted as trusted local data.
 export class SqliteTemporalRecallGateway implements ContextRecallGateway {
-  readonly #snapshots = new Map<string, Promise<ContextRecallSnapshot>>();
+  readonly #snapshots = new InFlightSnapshotRegistry<ContextRecallSnapshot>();
 
   static create(
     sql: SqlStorage,
     revisionSeedRef: string,
   ): ContextRecallGateway {
-    return new SqliteTemporalRecallGateway(sql, revisionSeedRef, undefined);
-  }
-
-  // Deliberately not a production constructor: this lets the hermetic DO test prove the
-  // composition path only after an explicit local source-taint assertion. Production callers
-  // must use create() until a real retained-taint source exists.
-  static forHeadlessTest(
-    sql: SqlStorage,
-    revisionSeedRef: string,
-    taintProof: HeadlessLegacyMemoryTaintProof,
-  ): ContextRecallGateway {
-    return new SqliteTemporalRecallGateway(sql, revisionSeedRef, taintProof);
+    return new SqliteTemporalRecallGateway(sql, revisionSeedRef);
   }
 
   private constructor(
     private readonly sql: SqlStorage,
     private readonly revisionSeedRef: string,
-    private readonly taintProof?: HeadlessLegacyMemoryTaintProof,
   ) {
     if (!REVISION_REF.test(revisionSeedRef)) throw new Error('invalid SQLite recall revision seed');
   }
 
   async recall(request: ContextRecallRequest): Promise<ContextRecallSnapshot> {
-    const cacheKey = stableSnapshotKey(request);
-    const cached = this.#snapshots.get(cacheKey);
-    if (cached !== undefined) return cached;
-    if (this.#snapshots.size >= MAX_FROZEN_SQLITE_SNAPSHOTS) {
-      throw new Error('SQLite frozen snapshot capacity exhausted');
-    }
-    const captured = this.capture(request);
-    this.#snapshots.set(cacheKey, captured);
-    return captured;
+    return this.#snapshots.capture(stableSnapshotKey(request), () => this.capture(request));
   }
 
   private async capture(request: ContextRecallRequest): Promise<ContextRecallSnapshot> {
@@ -395,36 +353,10 @@ export class SqliteTemporalRecallGateway implements ContextRecallGateway {
         limit,
       )
       .toArray();
-    const envelopes: unknown[] = [];
-    for (const row of rows) {
-      let taint: LocalSourceTaint;
-      try {
-        const proved = this.taintProof?.taintForMemoryRow({
-          principal_ref: request.owner.principal_ref,
-          tenant_ref: request.owner.tenant_ref,
-          local_user_ref: request.owner.local_user_ref,
-          id: row.id,
-          source_trust: row.source_trust,
-        });
-        taint = proved === undefined ? 'external' : proved;
-      } catch {
-        throw new RecallSecurityHalt('memory');
-      }
-      if (taint !== null && taint !== 'external') throw new RecallSecurityHalt('memory');
-      // No retained legacy taint proof means this row is not an eligible temporal-recall
-      // source at all. Do not turn an already-excluded row into aggregate prompt provenance.
-      if (taint === 'external') continue;
-      envelopes.push(Object.freeze({
-        hit: Object.freeze({
-          hall_type: row.hall_type,
-          content: row.content,
-          confidence: row.confidence,
-          valid_from: row.valid_from,
-          source_trust: row.source_trust,
-        }),
-        source_taint: taint,
-      }));
-    }
+    // Current legacy DO rows do not retain source taint. Production must not reinterpret a
+    // local row as trusted merely because it is local; leave every row out until a retained-taint
+    // source adapter proves their origin.
+    const envelopes: readonly unknown[] = Object.freeze([]);
     return Object.freeze({
       rows: Object.freeze(envelopes),
       source_taint: null,

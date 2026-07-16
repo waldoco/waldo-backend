@@ -13,7 +13,6 @@ import {
   type RuntimeOwnedContextInputs,
 } from '../src/context-composer';
 import {
-  type HeadlessLegacyMemoryTaintProof,
   HeadlessLocalOwnerBindingResolver,
   SqliteSystemSkillRepository,
   SqliteTemporalRecallGateway,
@@ -21,10 +20,12 @@ import {
 import { provisionDoSchema } from '../src/do-schema';
 import type { RuntimeProbeDO } from '../src/index';
 import type { ResolvedSkillBudget } from '../src/skills/budget';
+import { createTestOnlyTrustedLocalRecallGateway } from './support/test-only-trusted-local-recall';
 
 const SNAPSHOT_AT = Date.parse('2026-07-15T12:00:00.000Z');
 const PRINCIPAL_A = 'prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const PRINCIPAL_B = 'prn_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const PRINCIPAL_UNMAPPED = 'prn_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const TENANT = 'ten_cccccccccccccccccccccccccccccccc';
 const TENANT_B = 'ten_dddddddddddddddddddddddddddddddd';
 const OWNER_A = "owner-a' OR 1=1 --";
@@ -189,13 +190,9 @@ function seedEpisode(
   );
 }
 
-const TEST_ONLY_LOCAL_MEMORY_TAINT_PROOF: HeadlessLegacyMemoryTaintProof = {
-  taintForMemoryRow: () => null,
-};
-
 function dependencies(
   sql: SqlStorage,
-  taintProof: HeadlessLegacyMemoryTaintProof | null = TEST_ONLY_LOCAL_MEMORY_TAINT_PROOF,
+  useProductionRecall = false,
 ): ContextComposerDependencies {
   return {
     staged_inputs: {
@@ -262,15 +259,17 @@ function dependencies(
       },
     },
     skill_budget: exactTestSkillBudget,
-    // Explicit test-only proof: production legacy rows do not retain source taint and default
-    // to external/empty recall until a real source-provenance adapter exists.
-    recall: taintProof === null
+    recall: useProductionRecall
       ? SqliteTemporalRecallGateway.create(sql, REVISION.recall)
-      : SqliteTemporalRecallGateway.forHeadlessTest(sql, REVISION.recall, taintProof),
+      : createTestOnlyTrustedLocalRecallGateway(sql, REVISION.recall),
   };
 }
 
 describe('ContextComposer current-DO SQLite adapters', () => {
+  it('does not expose a production factory that can promote unproven legacy memory taint', () => {
+    expect('forHeadlessTest' in SqliteTemporalRecallGateway).toBe(false);
+  });
+
   it('rejects one legacy local user id bound to multiple trusted authorities', () => {
     expect(
       () =>
@@ -287,6 +286,30 @@ describe('ContextComposer current-DO SQLite adapters', () => {
           { principal_ref: PRINCIPAL_B, tenant_ref: TENANT_B, local_user_ref: 'shared-owner' },
         ], REVISION.owner),
     ).toThrow('non-unique headless owner binding');
+  });
+
+  it('fails closed at the public seam when a trusted authority has no bounded local owner mapping', async () => {
+    const runtime = runtimeStub();
+    const result = await runInDurableObject(runtime, (_instance, state) => {
+      provisionDoSchema(state.storage);
+      let recallCalls = 0;
+      return createContextComposer({
+        ...dependencies(state.storage.sql),
+        recall: {
+          async recall() {
+            recallCalls += 1;
+            throw new Error('recall must not run without an owner binding');
+          },
+        },
+      }).compose(envelope(PRINCIPAL_UNMAPPED), RUNTIME_INPUTS).then((composition) => ({
+        composition,
+        recallCalls,
+      }));
+    });
+
+    expect(result.composition).toEqual({ ok: false, failure: { code: 'owner_binding_mismatch' } });
+    expect(result.recallCalls).toBe(0);
+    expect('prompt' in result.composition).toBe(false);
   });
 
   it('reads active system skills and point-in-time owner-bound memory without cross-owner leakage or fabricated episode ranks', async () => {
@@ -415,7 +438,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         'x'.repeat(2_401),
         'sqlite-afternoon-plan',
       );
-      return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
     expect(oversizedBody).toEqual({ ok: false, failure: { code: 'skill_snapshot_invalid' } });
 
@@ -429,7 +452,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         JSON.stringify(Array.from({ length: 512 }, () => 'get_tasks')),
         'sqlite-afternoon-plan',
       );
-      return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
     expect(oversizedJson).toEqual({ ok: false, failure: { code: 'skill_snapshot_invalid' } });
   });
@@ -466,7 +489,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         `x\0${'m'.repeat(2_001)}`,
         'nul-prefixed-memory',
       );
-      return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
     expect(unsafeMemory).toEqual({ ok: false, failure: { code: 'recall_integrity' } });
     expect('prompt' in unsafeMemory).toBe(false);
@@ -488,7 +511,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         `9999-12-31T00:00:00.000Z\0${'v'.repeat(100)}`,
         'nul-bearing-valid-to',
       );
-      return createContextComposer(dependencies(sql)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
     expect(unsafeValidTo).toEqual({ ok: false, failure: { code: 'recall_integrity' } });
     expect('prompt' in unsafeValidTo).toBe(false);
@@ -527,7 +550,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
     expect('prompt' in result).toBe(false);
   });
 
-  it('keeps a rejected SQLite source capture fail-closed after the live row is repaired', async () => {
+  it('releases a completed failed SQLite capture so a later run can safely recapture', async () => {
     const runtime = runtimeStub();
     const result = await runInDurableObject(runtime, async (_instance, state) => {
       provisionDoSchema(state.storage);
@@ -550,10 +573,10 @@ describe('ContextComposer current-DO SQLite adapters', () => {
     });
 
     expect(result.rejected).toEqual({ ok: false, failure: { code: 'skill_snapshot_invalid' } });
-    expect(result.retried).toEqual(result.rejected);
+    expect(result.retried.ok, result.retried.ok ? undefined : result.retried.failure.code).toBe(true);
   });
 
-  it('holds one headless SQLite source capture across a database mutation for the same snapshot refs', async () => {
+  it('rejects replay drift after a completed local capture instead of retaining a permanent cache', async () => {
     const runtime = runtimeStub();
     const result = await runInDurableObject(runtime, async (_instance, state) => {
       provisionDoSchema(state.storage);
@@ -583,7 +606,10 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         'Mutated memory text must not enter an already-captured snapshot.',
         'frozen-memory',
       );
-      const replay = await createContextComposer(deps).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      const replay = await createContextComposer(deps).compose(
+        envelope(PRINCIPAL_A),
+        { ...RUNTIME_INPUTS, replay_context_ref: first.checkpoint.context_ref },
+      );
       const mutatedFreshReplay = await createContextComposer(dependencies(sql)).compose(
         envelope(PRINCIPAL_A),
         { ...RUNTIME_INPUTS, replay_context_ref: first.checkpoint.context_ref },
@@ -596,20 +622,39 @@ describe('ContextComposer current-DO SQLite adapters', () => {
       result.independentlyReplayed.ok,
       result.independentlyReplayed.ok ? undefined : result.independentlyReplayed.failure.code,
     ).toBe(true);
-    expect(result.replay.ok, result.replay.ok ? undefined : result.replay.failure.code).toBe(true);
-    if (!result.first.ok || !result.independentlyReplayed.ok || !result.replay.ok) return;
+    if (!result.first.ok || !result.independentlyReplayed.ok) return;
     expect(result.independentlyReplayed.prompt).toBe(result.first.prompt);
     expect(result.independentlyReplayed.checkpoint).toEqual(result.first.checkpoint);
-    expect(result.replay.prompt).toBe(result.first.prompt);
-    expect(result.replay.checkpoint).toEqual(result.first.checkpoint);
-    expect(result.replay.prompt).toContain('Original frozen owner memory.');
-    expect(JSON.stringify(result.replay)).not.toContain('Mutated memory text');
-    expect(JSON.stringify(result.replay)).not.toContain('Mutated skill text');
+    expect(result.replay).toEqual({ ok: false, failure: { code: 'provenance_invalid' } });
+    expect('prompt' in result.replay).toBe(false);
     expect(result.mutatedFreshReplay).toEqual({ ok: false, failure: { code: 'provenance_invalid' } });
     expect('prompt' in result.mutatedFreshReplay).toBe(false);
   });
 
-  it('keeps unproven legacy local memory out of the prompt instead of claiming a live trusted source', async () => {
+  it('releases completed snapshot state so the 65th sequential public composition succeeds', async () => {
+    const runtime = runtimeStub();
+    const results = await runInDurableObject(runtime, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      const sql = state.storage.sql;
+      seedSkill(sql, systemSkill());
+      const composer = createContextComposer(dependencies(sql, true));
+      const composed = [];
+      for (let index = 1; index <= 65; index += 1) {
+        composed.push(await composer.compose(envelope(PRINCIPAL_A), {
+          ...RUNTIME_INPUTS,
+          snapshot_ref: `snp_${index.toString(16).padStart(32, '0')}`,
+        }));
+      }
+      return composed;
+    });
+
+    expect(results).toHaveLength(65);
+    for (const result of results) {
+      expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
+    }
+  });
+
+  it('keeps unproven legacy local memory out of the prompt through the production adapter', async () => {
     const runtime = runtimeStub();
     const result = await runInDurableObject(runtime, (_instance, state) => {
       provisionDoSchema(state.storage);
@@ -621,7 +666,7 @@ describe('ContextComposer current-DO SQLite adapters', () => {
         content: 'Unproven legacy memory must not be admitted.',
         valid_from: '2026-07-14T09:00:00.000Z',
       });
-      return createContextComposer(dependencies(sql, null)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
+      return createContextComposer(dependencies(sql, true)).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
     });
 
     expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
@@ -662,26 +707,4 @@ describe('ContextComposer current-DO SQLite adapters', () => {
     expect(JSON.stringify(result)).not.toContain('Same principal in tenant A must remain absent.');
   });
 
-  it('fails closed when the explicit headless local-taint proof cannot prove a memory row', async () => {
-    const runtime = runtimeStub();
-    const result = await runInDurableObject(runtime, (_instance, state) => {
-      provisionDoSchema(state.storage);
-      const sql = state.storage.sql;
-      seedSkill(sql, systemSkill());
-      seedMemory(sql, {
-        id: 'memory-proof-error',
-        user_id: OWNER_A,
-        content: 'A taint-proof error must not become fail-open recall.',
-        valid_from: '2026-07-14T09:00:00.000Z',
-      });
-      return createContextComposer(dependencies(sql, {
-        taintForMemoryRow: () => {
-          throw new Error('proof source unavailable');
-        },
-      })).compose(envelope(PRINCIPAL_A), RUNTIME_INPUTS);
-    });
-
-    expect(result).toEqual({ ok: false, failure: { code: 'recall_integrity' } });
-    expect('prompt' in result).toBe(false);
-  });
 });
