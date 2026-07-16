@@ -3,6 +3,7 @@ import { armAlarm } from './scheduler/alarm-slot';
 import type { GatewaySecretBinding } from './llm/gateway';
 
 export * from './hooks/registry';
+export * from './context-composer';
 export * from './llm/provider';
 export * from './do-schema';
 export * from './run-loop/do';

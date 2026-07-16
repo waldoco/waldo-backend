@@ -7,7 +7,10 @@ import {
 } from '@waldo/contracts';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createRuntimeTemporalRecallGateway,
   createRuntimeRecallGateway,
+  RecallSecurityHalt,
+  type OwnerBoundTemporalMemoryReads,
   type OwnerBoundRecallReads,
   type RuntimeRecallContext,
 } from '../src/recall/gateway';
@@ -45,6 +48,20 @@ function memoryHit(content: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+function temporalMemoryHit(content: string, overrides: Record<string, unknown> = {}) {
+  return {
+    hit: {
+      hall_type: 'facts',
+      content,
+      confidence: 0.8,
+      valid_from: '2026-07-12T00:00:00.000Z',
+      source_trust: 'memory_committed',
+    },
+    source_taint: null,
+    ...overrides,
+  };
+}
+
 function episodeHit(summary: string, overrides: Record<string, unknown> = {}) {
   return {
     hit: { date: '2026-07-12T00:00:00.000Z', summary, fts_rank: -1 },
@@ -60,6 +77,12 @@ function reads(
   return {
     retrieve: vi.fn(async () => memory),
     searchEpisodes: vi.fn(async () => episodes),
+  };
+}
+
+function temporalReads(memory: readonly unknown[] = []): OwnerBoundTemporalMemoryReads {
+  return {
+    retrieveTemporal: vi.fn(async () => memory),
   };
 }
 
@@ -1179,5 +1202,104 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
     expect(result.memory_hits).toEqual([]);
     await Promise.resolve();
     expect(record).toHaveBeenCalledOnce();
+  });
+});
+
+describe('RuntimeTemporalRecallGateway — owner-bound local temporal fallback', () => {
+  it('returns an admitted unranked temporal memory result as explicit partial recall', async () => {
+    const source = temporalReads([temporalMemoryHit('Keep the afternoon plan concrete.')]);
+    const hint = 'the user asks for a practical plan';
+    const outcome = await createRuntimeTemporalRecallGateway({
+      reads: source,
+      now: () => FIXED_NOW,
+    })(context('user_message'), hint);
+    const query = buildRecallQuery('user_message', 'steady', hint);
+
+    expect(source.retrieveTemporal).toHaveBeenCalledWith({
+      query,
+      halls: RECALL_CONFIG.user_message.halls,
+      limit: 5,
+      as_of: new Date(FIXED_NOW).toISOString(),
+    });
+    expect(outcome).toEqual({
+      status: 'partial',
+      result: {
+        memory_hits: [
+          {
+            hall_type: 'facts',
+            content: 'Keep the afternoon plan concrete.',
+            confidence: 0.8,
+            valid_from: '2026-07-12T00:00:00.000Z',
+            source_trust: 'memory_committed',
+          },
+        ],
+        episode_hits: [],
+        evolution_hits: [],
+        query_used: query,
+        duration_ms: 0,
+      },
+    });
+    expect(outcome.result.memory_hits[0]).not.toHaveProperty('bm25_rank');
+    expect(outcome.result.memory_hits[0]).not.toHaveProperty('rrf_score');
+    expect(recallResultSchema.safeParse(outcome.result).success).toBe(true);
+  });
+
+  it('uses canonical skip behavior without calling the temporal source', async () => {
+    const source = temporalReads();
+    const hint = 'approved execution action';
+    const outcome = await createRuntimeTemporalRecallGateway({
+      reads: source,
+      now: () => FIXED_NOW,
+    })(context('handoff_act'), hint);
+
+    expect(outcome).toEqual({
+      status: 'skipped',
+      result: {
+        memory_hits: [],
+        episode_hits: [],
+        evolution_hits: [],
+        query_used: buildRecallQuery('handoff_act', 'steady', hint),
+        duration_ms: 0,
+      },
+    });
+    expect(source.retrieveTemporal).not.toHaveBeenCalled();
+  });
+
+  it('fails open with an explicit empty temporal outcome when the source throws', async () => {
+    const source: OwnerBoundTemporalMemoryReads = {
+      retrieveTemporal: vi.fn(async () => {
+        throw new Error('local SQLite read failed');
+      }),
+    };
+    const outcome = await createRuntimeTemporalRecallGateway({
+      reads: source,
+      now: () => FIXED_NOW,
+    })(context('user_message'));
+
+    expect(outcome).toEqual({
+      status: 'failed',
+      result: {
+        memory_hits: [],
+        episode_hits: [],
+        evolution_hits: [],
+        query_used: buildRecallQuery('user_message', 'steady'),
+        duration_ms: 0,
+      },
+    });
+    expect(JSON.stringify(outcome)).not.toContain('local SQLite read failed');
+    expect(source.retrieveTemporal).toHaveBeenCalledOnce();
+  });
+
+  it('propagates a hint canary security halt before the temporal source runs', async () => {
+    const source = temporalReads();
+    const recall = createRuntimeTemporalRecallGateway({
+      reads: source,
+      now: () => FIXED_NOW,
+    });
+
+    await expect(recall(context('user_message'), CANARIES[0]!)).rejects.toBeInstanceOf(
+      RecallSecurityHalt,
+    );
+    expect(source.retrieveTemporal).not.toHaveBeenCalled();
   });
 });
