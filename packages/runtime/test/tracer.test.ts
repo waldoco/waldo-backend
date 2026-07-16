@@ -402,17 +402,17 @@ describe('TracerDO edge lanes', () => {
     expectExactlyOnce(await readDurable(stub), sink);
   });
 
-  it('serialized re-entry: the DO input gate collapses a racing second alarm to a no-op after DONE', async () => {
+  it('terminal re-entry: a later alarm invocation is a no-op after DONE', async () => {
     const sink = new FakeSink();
     const stub = freshStub();
 
-    // The DO input gate serializes every call, so a "concurrent" second alarm cannot interleave with
-    // the first. One schedule arms one alarm; one wake drives that single open run through the path.
+    // This test deliberately invokes the second alarm after the first has completed. Non-storage
+    // awaits may interleave DO events; concurrent admission is covered by the DeliveryGate race test.
     await schedule(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
-    // A second alarm invocation racing the first observes the terminal run and no-ops (findOpenRun
-    // returns null once DONE), so counters and the sink hold at exactly one — no double-processing.
+    // A later alarm invocation observes the terminal run and no-ops (findOpenRun returns null once
+    // DONE), so counters and the sink hold at exactly one — no double-processing.
     await runInDurableObject(stub, async (instance) => {
       await instance.alarm();
     });

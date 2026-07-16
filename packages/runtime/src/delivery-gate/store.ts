@@ -42,17 +42,27 @@ export class DeliveryGateStore {
   readClassState(userId: string, candidate: DeliveryCandidate, now: number): ClassState {
     const pushClass = candidate.push_class;
     const localDate = utcLocalDate(now);
-    const rows = this.sql
-      .exec<{ count: number; last_sent_at: number | null }>(
-        `SELECT count, last_sent_at
-           FROM class_state
-          WHERE user_id = ? AND local_date = ? AND push_class = ?`,
-        userId,
-        localDate,
-        pushClass,
-      )
-      .toArray();
-    const row = rows[0];
+    const row =
+      DELIVERY_POLICY[pushClass].cap_scope === 'lifetime'
+        ? this.sql
+            .exec<{ count: number }>(
+              `SELECT COALESCE(sum(count), 0) AS count
+                 FROM class_state
+                WHERE user_id = ? AND push_class = ?`,
+              userId,
+              pushClass,
+            )
+            .one()
+        : this.sql
+            .exec<{ count: number }>(
+              `SELECT count
+                 FROM class_state
+                WHERE user_id = ? AND local_date = ? AND push_class = ?`,
+              userId,
+              localDate,
+              pushClass,
+            )
+            .toArray()[0];
     const lastSentAt =
       DELIVERY_POLICY[pushClass].cooldown_scope === 'event'
         ? this.readEventCooldown(userId, pushClass, candidate.event_id)
