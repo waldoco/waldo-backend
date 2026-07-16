@@ -8,7 +8,8 @@
     "test": "vitest run",
     "test:property": "vitest run --config vitest.scribe.config.ts",
     "test:mutation": "stryker run stryker.config.mjs",
-    "test:mutation:delivery-gate": "stryker run stryker.delivery-gate.config.mjs"
+    "test:mutation:delivery-gate": "stryker run stryker.delivery-gate.config.mjs",
+    "test:mutation:context-composer": "stryker run stryker.context-composer.config.mjs"
   },
   "dependencies": {
     "@waldo/contracts": "workspace:*"

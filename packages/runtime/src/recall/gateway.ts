@@ -81,7 +81,7 @@ export class RecallSecurityHalt extends Error {
 
 export type RuntimeRecallContext = Readonly<{
   recallKey: RecallKey | undefined;
-  zone: NarrativeContext['zone'];
+  zone: NarrativeContext['zone'] | undefined;
   canaryTokens: CanaryTokens;
 }>;
 
@@ -96,53 +96,50 @@ export type RuntimeRecallGatewayDeps = Readonly<{
   telemetry?: RecallTelemetry;
 }>;
 
+// The current DO schema can prove an owner-bound, temporal memory read but not FTS/BM25/RRF
+// ranks or episode FTS. This deliberately partial gateway reuses canonical key/config/query/
+// hint and Scribe admission without fabricating those unavailable rank facts.
+export type OwnerBoundTemporalMemoryReads = Readonly<{
+  retrieveTemporal(args: Readonly<{
+    query: string;
+    halls: RetrieveArgs['halls'];
+    limit: number;
+    as_of: string;
+  }>): Promise<readonly unknown[]>;
+}>;
+
+export type TemporalRecallOutcome = Readonly<{
+  status: 'partial' | 'failed' | 'skipped';
+  result: ReturnType<typeof recallResultSchema.parse>;
+}>;
+
+export type RuntimeTemporalRecallGatewayDeps = Readonly<{
+  reads: OwnerBoundTemporalMemoryReads;
+  now: () => number;
+}>;
+
 export function createRuntimeRecallGateway(
   deps: RuntimeRecallGatewayDeps,
 ): RecallGateway<RuntimeRecallContext> {
   return async (ctx, hint) => {
-    const key = recallKeySchema.safeParse(ctx.recallKey);
-    if (!key.success) return empty(UNMAPPED_QUERY, 0);
-
-    const zone = formZoneSchema.safeParse(ctx.zone);
-    let admittedHint: string | undefined;
+    let plan: RecallPlan;
     try {
-      admittedHint = admitRecallHint(hint, ctx.canaryTokens);
+      plan = prepareRecallPlan(ctx, hint, deps.now);
     } catch (error) {
       rethrowWithSecurityTelemetry(deps, error);
     }
-    const query = buildRecallQuery(
-      key.data,
-      zone.success ? zone.data : '',
-      admittedHint,
-    );
-    const config = RECALL_CONFIG[key.data];
-    if (config.skip) return empty(query, 0);
-
-    const startedAt = now(deps);
-    const retrieveArgs = retrieveArgsSchema.parse({
-      query,
-      halls: config.halls,
-      limit: MEMORY_LIMIT,
-    });
-    const episodeArgs = episodeSearchArgsSchema.parse({
-      query,
-      limit: EPISODE_LIMIT,
-      time_range: {
-        from: new Date(startedAt - config.episodes_days * DAY_MS).toISOString(),
-        to: new Date(startedAt).toISOString(),
-      },
-    });
+    if (plan.kind !== 'active') return empty(plan.query, 0);
     let memoryRows: readonly unknown[];
     let episodeRows: readonly unknown[];
     try {
       [memoryRows, episodeRows] = await Promise.all([
-        readSource('memory', MEMORY_LIMIT, () => deps.reads.retrieve(retrieveArgs)),
-        readSource('episode', EPISODE_LIMIT, () => deps.reads.searchEpisodes(episodeArgs)),
+        readSource('memory', MEMORY_LIMIT, () => deps.reads.retrieve(plan.retrieveArgs)),
+        readSource('episode', EPISODE_LIMIT, () => deps.reads.searchEpisodes(plan.episodeArgs)),
       ]);
     } catch (error) {
       if (isRecallSourceUnavailable(error)) {
         // The private error retains its cause; only this closed classification crosses telemetry's interface.
-        const result = empty(query, duration(deps, startedAt));
+        const result = empty(plan.query, duration(deps, plan.startedAt));
         emit(deps, {
           recall_status: 'failed',
           source_class: error.sourceClass,
@@ -178,14 +175,103 @@ export function createRuntimeRecallGateway(
         memory_hits: memory.rows,
         episode_hits: episodes.rows,
         evolution_hits: [],
-        query_used: query,
-        duration_ms: duration(deps, startedAt),
+        query_used: plan.query,
+        duration_ms: duration(deps, plan.startedAt),
       });
       for (const event of telemetryEvents) emit(deps, event);
       return result;
     } catch (error) {
       rethrowWithSecurityTelemetry(deps, error);
     }
+  };
+}
+
+export function createRuntimeTemporalRecallGateway(
+  deps: RuntimeTemporalRecallGatewayDeps,
+): (ctx: RuntimeRecallContext, hint?: string) => Promise<TemporalRecallOutcome> {
+  return async (ctx, hint) => {
+    const plan = prepareRecallPlan(ctx, hint, deps.now);
+    if (plan.kind !== 'active') {
+      return Object.freeze({ status: 'skipped', result: empty(plan.query, 0) });
+    }
+    let rows: readonly unknown[];
+    try {
+      rows = await readSource('memory', MEMORY_LIMIT, () =>
+        deps.reads.retrieveTemporal({
+          query: plan.query,
+          halls: plan.retrieveArgs.halls,
+          limit: MEMORY_LIMIT,
+          as_of: new Date(plan.startedAt).toISOString(),
+        }),
+      );
+    } catch (error) {
+      if (isRecallSourceUnavailable(error)) {
+        return Object.freeze({
+          status: 'failed',
+          result: empty(plan.query, duration(deps, plan.startedAt)),
+        });
+      }
+      throw error;
+    }
+    const memory = admitTemporalMemoryRows(rows, ctx.canaryTokens);
+    return Object.freeze({
+      // Even an empty successful read remains partial: no FTS-ranked episode, evolution, or
+      // conflict-union leg can be proved from the current local schema.
+      status: 'partial',
+      result: recallResultSchema.parse({
+        memory_hits: memory.rows,
+        episode_hits: [],
+        evolution_hits: [],
+        query_used: plan.query,
+        duration_ms: duration(deps, plan.startedAt),
+      }),
+    });
+  };
+}
+
+type RecallPlan =
+  | Readonly<{ kind: 'unmapped' | 'skipped'; query: string }>
+  | Readonly<{
+      kind: 'active';
+      query: string;
+      startedAt: number;
+      retrieveArgs: RetrieveArgs;
+      episodeArgs: EpisodeSearchArgs;
+    }>;
+
+function prepareRecallPlan(
+  ctx: RuntimeRecallContext,
+  hint: string | undefined,
+  clock: (() => number) | undefined,
+): RecallPlan {
+  const key = recallKeySchema.safeParse(ctx.recallKey);
+  if (!key.success) return { kind: 'unmapped', query: UNMAPPED_QUERY };
+  const zone = formZoneSchema.safeParse(ctx.zone);
+  const query = buildRecallQuery(
+    key.data,
+    zone.success ? zone.data : '',
+    admitRecallHint(hint, ctx.canaryTokens),
+  );
+  const config = RECALL_CONFIG[key.data];
+  if (config.skip) return { kind: 'skipped', query };
+  const startedAt = now({ now: clock });
+  return {
+    kind: 'active',
+    query,
+    startedAt,
+    retrieveArgs: retrieveArgsSchema.parse({
+      query,
+      halls: config.halls,
+      limit: MEMORY_LIMIT,
+    }),
+    episodeArgs: episodeSearchArgsSchema.parse({
+      query,
+      limit: EPISODE_LIMIT,
+      time_range: {
+        from: new Date(startedAt - config.episodes_days * DAY_MS).toISOString(),
+        to: new Date(startedAt).toISOString(),
+      },
+    }),
   };
 }
 
@@ -233,6 +319,7 @@ async function readSource(
   try {
     response = await source();
   } catch (error) {
+    if (isRecallSecurityHalt(error)) throw error;
     throw new RecallSourceUnavailable(sourceClass, error);
   }
 
@@ -287,6 +374,53 @@ function admitMemoryRows(
     }
   }
   return { rows: admitted, rejected };
+}
+
+function admitTemporalMemoryRows(
+  rows: readonly unknown[],
+  canaries: CanaryTokens,
+): RowAdmission<RecallMemoryHit> {
+  const admitted: RecallMemoryHit[] = [];
+  let rejected = 0;
+  for (const row of rows) {
+    const memory = admitTemporalMemoryRow(row, canaries);
+    if (memory === null) rejected += 1;
+    else admitted.push(memory);
+  }
+  return { rows: admitted, rejected };
+}
+
+function admitTemporalMemoryRow(value: unknown, canaries: CanaryTokens): RecallMemoryHit | null {
+  try {
+    const envelope = memoryEnvelope(value);
+    if (envelope === null) return null;
+    const hit = recallMemoryHitSchema.safeParse(envelope.hit);
+    if (!hit.success || hit.data.source_trust === 'memory_provisional') return null;
+    if (
+      !taintStampSchema.safeParse({
+        source_trust: hit.data.source_trust,
+        source_taint: envelope.source_taint,
+      }).success
+    ) {
+      return null;
+    }
+    const prepared = prepareWithScribe(
+      hit.data.content,
+      recallMemoryHitSchema.shape.content,
+      'system_prompt',
+      envelope.source_taint,
+      canaries,
+    );
+    if (!prepared.ok) {
+      if (prepared.reason === 'canary_leak') throw new RecallSecurityHalt('memory');
+      return null;
+    }
+    const result = recallMemoryHitSchema.safeParse({ ...hit.data, content: prepared.value });
+    return result.success ? result.data : null;
+  } catch (error) {
+    if (isRecallSecurityHalt(error)) throw error;
+    return null;
+  }
 }
 
 function admitMemoryRow(value: unknown, canaries: CanaryTokens): RecallMemoryHit | null {
@@ -437,7 +571,7 @@ function empty(query: string, duration_ms: number) {
   });
 }
 
-function now(deps: RuntimeRecallGatewayDeps): number {
+function now(deps: Pick<RuntimeRecallGatewayDeps, 'now'>): number {
   const value = (deps.now ?? Date.now)();
   if (
     !Number.isSafeInteger(value) ||
@@ -449,6 +583,6 @@ function now(deps: RuntimeRecallGatewayDeps): number {
   return value;
 }
 
-function duration(deps: RuntimeRecallGatewayDeps, startedAt: number): number {
+function duration(deps: Pick<RuntimeRecallGatewayDeps, 'now'>, startedAt: number): number {
   return Math.max(0, now(deps) - startedAt);
 }
