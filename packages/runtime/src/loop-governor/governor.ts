@@ -180,13 +180,38 @@ export class LoopGovernor {
     const row = this.readRun(input.runId);
     const killed = this.killDecision(row);
     if (killed !== null) return killed;
-    const tokensUsed = nextCounterTotal(input.tokensUsed, row.tokens_used, 'tokensUsed');
-    const iterations = nextCounterTotal(input.iterations, row.iterations, 'iterations');
-    const subagentSpawns = nextCounterTotal(
-      input.subagentSpawns,
-      row.subagent_spawns,
-      'subagentSpawns',
+    return this.recordUsageAfterEffectBoundary(input, row);
+  }
+
+  // A provider receipt proves the external call has already happened. Its bounded accounting
+  // must commit even if a kill arrived while the adapter was in flight; otherwise the durable
+  // receipt and Governor counters diverge and a restart can no longer audit the real effect.
+  recordSettledProviderUsage(input: LoopUsageInput): GovernorDecision {
+    const row = this.readRun(input.runId);
+    const totals = this.usageTotals(input, row);
+    // This is a post-effect fact, unlike ordinary preflight usage. Commit it before consulting a
+    // kill flag or policy so a receipt can never be durably visible without its bounded charge.
+    this.writeUsageTotals(input.runId, totals);
+    const settledRow = this.readRun(input.runId);
+    const killed = this.killDecision(settledRow);
+    if (killed !== null) return killed;
+    return this.recordDecision(
+      settledRow,
+      this.usageDecision(
+        settledRow.loop_type,
+        lookupLoopPolicy(settledRow.loop_type),
+        totals.tokensUsed,
+        totals.iterations,
+        totals.subagentSpawns,
+      ),
     );
+  }
+
+  private recordUsageAfterEffectBoundary(
+    input: LoopUsageInput,
+    row: GovernorRunRow,
+  ): GovernorDecision {
+    const totals = this.usageTotals(input, row);
     const policy = lookupLoopPolicy(row.loop_type);
     if (policy === null) {
       return this.recordDecision(row, {
@@ -196,51 +221,122 @@ export class LoopGovernor {
         loopType: row.loop_type,
       });
     }
+    this.writeUsageTotals(input.runId, totals);
+    return this.recordDecision(
+      this.readRun(input.runId),
+      this.usageDecision(
+        row.loop_type,
+        policy,
+        totals.tokensUsed,
+        totals.iterations,
+        totals.subagentSpawns,
+      ),
+    );
+  }
 
+  private usageTotals(
+    input: LoopUsageInput,
+    row: GovernorRunRow,
+  ): Readonly<{ tokensUsed: number; iterations: number; subagentSpawns: number }> {
+    const tokensUsed = nextCounterTotal(input.tokensUsed, row.tokens_used, 'tokensUsed');
+    const iterations = nextCounterTotal(input.iterations, row.iterations, 'iterations');
+    const subagentSpawns = nextCounterTotal(
+      input.subagentSpawns,
+      row.subagent_spawns,
+      'subagentSpawns',
+    );
+    return { tokensUsed, iterations, subagentSpawns };
+  }
+
+  private writeUsageTotals(
+    runId: string,
+    totals: Readonly<{ tokensUsed: number; iterations: number; subagentSpawns: number }>,
+  ): void {
     this.sql.exec(
       `UPDATE loop_governor_runs
           SET tokens_used = ?, iterations = ?, subagent_spawns = ?, updated_at = ?
         WHERE run_id = ?`,
-      tokensUsed,
-      iterations,
-      subagentSpawns,
+      totals.tokensUsed,
+      totals.iterations,
+      totals.subagentSpawns,
       this.deps.now(),
-      input.runId,
+      runId,
     );
+  }
 
+  // This projected gate deliberately does not consume usage. RunLoopDO invokes it immediately
+  // before an external provider effect so a call that would exceed an iteration/token/subagent
+  // bound is never issued and the receipt settlement can remain the sole counter mutation.
+  checkUsageBudget(input: LoopUsageInput): GovernorDecision {
+    const row = this.readRun(input.runId);
+    if (this.hasActiveKill(row.loop_type)) {
+      return this.recordDecision(row, {
+        verdict: 'deny',
+        reason: 'kill_flag_active',
+        disposition: 'killed',
+        loopType: row.loop_type,
+      });
+    }
+    const policy = lookupLoopPolicy(row.loop_type);
+    const tokensUsed = nextCounterTotal(input.tokensUsed, row.tokens_used, 'tokensUsed');
+    const iterations = nextCounterTotal(input.iterations, row.iterations, 'iterations');
+    const subagentSpawns = nextCounterTotal(
+      input.subagentSpawns,
+      row.subagent_spawns,
+      'subagentSpawns',
+    );
+    const decision = this.usageDecision(row.loop_type, policy, tokensUsed, iterations, subagentSpawns);
+    return decision.verdict === 'deny' ? this.recordDecision(row, decision) : decision;
+  }
+
+  private usageDecision(
+    loopType: LoopType,
+    policy: ReturnType<typeof lookupLoopPolicy>,
+    tokensUsed: number,
+    iterations: number,
+    subagentSpawns: number,
+  ): GovernorDecision {
+    if (policy === null) {
+      return {
+        verdict: 'deny',
+        reason: 'policy_missing',
+        disposition: null,
+        loopType,
+      };
+    }
     if (tokensUsed > policy.max_tokens_per_run) {
-      return this.recordDecision(this.readRun(input.runId), {
+      return {
         verdict: 'deny',
         reason: 'token_budget_exhausted',
         disposition: 'killed',
-        loopType: row.loop_type,
-      });
+        loopType,
+      };
     }
 
     if (iterations > policy.max_iterations_per_run) {
-      return this.recordDecision(this.readRun(input.runId), {
+      return {
         verdict: 'deny',
         reason: 'iteration_budget_exhausted',
         disposition: 'couldnt_converge',
-        loopType: row.loop_type,
-      });
+        loopType,
+      };
     }
 
     if (subagentSpawns > policy.max_subagent_spawns_per_run) {
-      return this.recordDecision(this.readRun(input.runId), {
+      return {
         verdict: 'deny',
         reason: 'subagent_budget_exhausted',
         disposition: 'killed',
-        loopType: row.loop_type,
-      });
+        loopType,
+      };
     }
 
-    return this.recordDecision(this.readRun(input.runId), {
+    return {
       verdict: 'admit',
       reason: 'policy_admitted',
       disposition: null,
-      loopType: row.loop_type,
-    });
+      loopType,
+    };
   }
 
   recordObservation(input: LoopObservationInput): GovernorDecision {
@@ -250,9 +346,36 @@ export class LoopGovernor {
       result_hash: input.resultHash,
     });
     const row = this.readRun(input.runId);
-    const at = this.deps.now();
     const killed = this.killDecision(row);
     if (killed !== null) return killed;
+    const duplicate = this.persistObservationFacts(input, row, observation);
+    if (duplicate !== null) return duplicate;
+    return this.observationDecision(row);
+  }
+
+  // A completed tool receipt is factual even when a kill arrives while the tool adapter is in
+  // flight. Persist its bounded observation/progress first, then let the kill become the final
+  // Governor decision. Ordinary observations retain their pre-effect kill check above.
+  recordSettledToolObservation(input: LoopObservationInput): GovernorDecision {
+    const observation = loopToolObservationSchema.parse({
+      tool_name: input.toolName,
+      canonical_params_hash: input.canonicalParamsHash,
+      result_hash: input.resultHash,
+    });
+    const row = this.readRun(input.runId);
+    const duplicate = this.persistObservationFacts(input, row, observation);
+    if (duplicate !== null) return duplicate;
+    const killed = this.killDecision(this.readRun(input.runId));
+    if (killed !== null) return killed;
+    return this.observationDecision(row);
+  }
+
+  private persistObservationFacts(
+    input: LoopObservationInput,
+    row: GovernorRunRow,
+    observation: ReturnType<typeof loopToolObservationSchema.parse>,
+  ): GovernorDecision | null {
+    const at = this.deps.now();
     this.readProgressIfPresent(row.user_id, row.loop_type, row.occurrence_id);
     if (this.hasObservation(input.runId, observation)) {
       return this.recordDecision(row, {
@@ -316,7 +439,10 @@ export class LoopGovernor {
       row.loop_type,
       row.occurrence_id,
     );
+    return null;
+  }
 
+  private observationDecision(row: GovernorRunRow): GovernorDecision {
     if (
       isNoProgress(
         this.readProgress(row.user_id, row.loop_type, row.occurrence_id),
@@ -374,6 +500,12 @@ export class LoopGovernor {
 
   readDecision(runId: string): GovernorDecision | null {
     return decisionFromRow(this.readRun(runId));
+  }
+
+  // RunJournalOutbox uses this only to bind a trusted V2 journal row to the same derived
+  // tenant-plus-principal owner scope as its Governor progress state.
+  readRunOwnerScope(runId: string): string {
+    return this.readRun(runId).user_id;
   }
 
   private readRun(runId: string): GovernorRunRow {

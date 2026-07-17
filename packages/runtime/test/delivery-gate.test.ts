@@ -1,6 +1,14 @@
 import { env } from 'cloudflare:workers';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
-import type { PushClass, TriggerType } from '@waldo/contracts';
+import {
+  DAILY_PUSH_BUDGET,
+  deliveryCandidateSchema,
+  outboxIntentSchema,
+  type DeliveryCandidate,
+  type OutboxIntent,
+  type PushClass,
+  type TriggerType,
+} from '@waldo/contracts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { RunJournalOutbox } from '../src/run-journal/outbox-runtime';
 import type { Deps } from '../src/seams/deps';
@@ -292,6 +300,62 @@ type DurableDeliveryFixture = {
   verdict?: 'send' | 'degrade';
   deleteCandidate?: boolean;
 };
+
+// `commitGate` is deliberately private: only the runtime's own concurrent hash completion may
+// take its no-op branch. This narrow harness verifies that branch without widening the TracerDO
+// RPC surface merely for a test.
+type InternalGateCommitHarness = {
+  commitGate(input: {
+    runId: string;
+    kind: PushClass;
+    candidate: DeliveryCandidate;
+    admissionAt: number;
+    outbox: OutboxIntent;
+    expectedVerdict?: 'send' | 'degrade';
+  }): unknown;
+};
+
+async function commitLateConcurrentGate(
+  stub: RuntimeStub,
+  runId: string,
+): Promise<unknown> {
+  return runInDurableObject(stub, (_instance, state) => {
+    const prepared = state.storage.sql
+      .exec<{ candidate_json: string; occurrence_at: number }>(
+        `SELECT c.candidate_json, j.occurrence_at
+           FROM run_candidates c
+           JOIN journal j ON j.run_id = c.run_id
+          WHERE c.run_id = ?`,
+        runId,
+      )
+      .one();
+    const candidate = deliveryCandidateSchema.parse(JSON.parse(prepared.candidate_json));
+    const journalOutbox = new RunJournalOutbox(
+      state.storage,
+      {
+        now: () => prepared.occurrence_at,
+        newRunId: () => 'not-used-by-late-gate-commit',
+        newOutboxId: () => 'not-used-by-late-gate-commit',
+        sha256Hex: async () => 'e'.repeat(64),
+      },
+      new FakeSink(),
+    );
+    const outbox = outboxIntentSchema.parse({
+      run_id: runId,
+      kind: candidate.push_class,
+      idempotency_key: 'e'.repeat(64),
+      payload: 'synthetic-token-01',
+      created_at: prepared.occurrence_at,
+    });
+    return (journalOutbox as unknown as InternalGateCommitHarness).commitGate({
+      runId,
+      kind: candidate.push_class,
+      candidate,
+      admissionAt: prepared.occurrence_at,
+      outbox,
+    });
+  });
+}
 
 async function createCompletedDeliveryFixture(stub: RuntimeStub, suffix: string): Promise<string> {
   const occurrenceAt = futureOccurrence();
@@ -1162,6 +1226,127 @@ describe('DeliveryGate runtime policy state', () => {
     expect(sink.observedDeliveries()).toBe(2);
   });
 
+  it('does not let one trusted owner scope hold or exhaust another tenant', async () => {
+    const sink = new FakeSink();
+    const runtime = freshRuntimeStub();
+    const occurrenceAt = futureOccurrence();
+    const firstOwnerScope = 'own_71b9f4c6d2e8a5037b1e96c4f0a82d5b';
+    const secondOwnerScope = 'own_c48e1a6d59b203f7e4c9180a6d2b5f73';
+    const sharedEventId = 'shared-tenant-event';
+    const distinctEventId = 'second-tenant-budget-event';
+    const localDate = utcLocalDate(occurrenceAt);
+
+    // The first tenant begins at the counted APNs cap. Its degraded send still records the
+    // shared event cooldown. A principal-only scope would make the second tenant hold for the
+    // shared event and degrade for the distinct event; both must remain independently sendable.
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'INSERT INTO daily_push_budget (user_id, local_date, sends_total) VALUES (?, ?, ?)',
+        firstOwnerScope,
+        localDate,
+        DAILY_PUSH_BUDGET.pro,
+      );
+    });
+
+    const firstRun = await runtime.startRun({
+      userId: firstOwnerScope,
+      trigger: PRE_ACTIVITY_SPOT,
+      occurrenceAt,
+      candidate: {
+        push_class: PRE_ACTIVITY_SPOT,
+        trigger: PRE_ACTIVITY_SPOT,
+        event_id: sharedEventId,
+        expires_at: occurrenceAt + 30 * 60_000,
+      },
+    });
+    await tick(runtime, firstRun);
+
+    const secondRun = await runtime.startRun({
+      userId: secondOwnerScope,
+      trigger: PRE_ACTIVITY_SPOT,
+      occurrenceAt,
+      candidate: {
+        push_class: PRE_ACTIVITY_SPOT,
+        trigger: PRE_ACTIVITY_SPOT,
+        event_id: sharedEventId,
+        expires_at: occurrenceAt + 30 * 60_000,
+      },
+    });
+    await tick(runtime, secondRun);
+
+    const thirdRun = await runtime.startRun({
+      userId: secondOwnerScope,
+      trigger: PRE_ACTIVITY_SPOT,
+      occurrenceAt,
+      candidate: {
+        push_class: PRE_ACTIVITY_SPOT,
+        trigger: PRE_ACTIVITY_SPOT,
+        event_id: distinctEventId,
+        expires_at: occurrenceAt + 30 * 60_000,
+      },
+    });
+    await tick(runtime, thirdRun);
+
+    const durable = await runInDurableObject(runtime, (_instance, state) => ({
+      journal: state.storage.sql
+        .exec<{ run_id: string; user_id: string; state: string; verdict: string | null }>(
+          `SELECT run_id, user_id, state, verdict
+             FROM journal
+            WHERE run_id IN (?, ?, ?)`,
+          firstRun,
+          secondRun,
+          thirdRun,
+        )
+        .toArray(),
+      cooldowns: state.storage.sql
+        .exec<{ user_id: string; event_id: string }>(
+          `SELECT user_id, event_id
+             FROM event_cooldowns
+            WHERE push_class = ? AND event_id IN (?, ?)`,
+          PRE_ACTIVITY_SPOT,
+          sharedEventId,
+          distinctEventId,
+        )
+        .toArray(),
+      budgets: state.storage.sql
+        .exec<{ user_id: string; sends_total: number }>(
+          `SELECT user_id, sends_total
+             FROM daily_push_budget
+            WHERE user_id IN (?, ?) AND local_date = ?`,
+          firstOwnerScope,
+          secondOwnerScope,
+          localDate,
+        )
+        .toArray(),
+    }));
+
+    expect(durable.journal).toHaveLength(3);
+    expect(durable.journal).toEqual(
+      expect.arrayContaining([
+        { run_id: firstRun, user_id: firstOwnerScope, state: 'DONE', verdict: 'degrade' },
+        { run_id: secondRun, user_id: secondOwnerScope, state: 'DONE', verdict: 'send' },
+        { run_id: thirdRun, user_id: secondOwnerScope, state: 'DONE', verdict: 'send' },
+      ]),
+    );
+    expect(durable.cooldowns).toHaveLength(3);
+    expect(durable.cooldowns).toEqual(
+      expect.arrayContaining([
+        { user_id: firstOwnerScope, event_id: sharedEventId },
+        { user_id: secondOwnerScope, event_id: sharedEventId },
+        { user_id: secondOwnerScope, event_id: distinctEventId },
+      ]),
+    );
+    expect(durable.budgets).toHaveLength(2);
+    expect(durable.budgets).toEqual(
+      expect.arrayContaining([
+        { user_id: firstOwnerScope, sends_total: DAILY_PUSH_BUDGET.pro },
+        { user_id: secondOwnerScope, sends_total: 2 },
+      ]),
+    );
+    expect(sink.observedSendAttempts()).toBe(3);
+    expect(sink.observedDeliveries()).toBe(3);
+  });
+
   it('sends brief without charging APNs budget or exempt telemetry', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
@@ -1447,6 +1632,65 @@ describe('DeliveryGate runtime policy state', () => {
     expect(sink.observedDeliveries()).toBe(1);
   });
 
+  it('rejects a public outbox assertion when recomputed admission is degrade', async () => {
+    const runtime = freshRuntimeStub();
+    const admissionAt = futureOccurrence();
+    await runInDurableObject(runtime, (_instance, state) => {
+      state.storage.sql.exec(
+        'INSERT INTO daily_push_budget (user_id, local_date, sends_total) VALUES (?, ?, 3)',
+        USER,
+        utcLocalDate(admissionAt),
+      );
+    });
+    const runId = await runtime.startRun({
+      userId: USER,
+      trigger: PRE_ACTIVITY_SPOT,
+      occurrenceAt: admissionAt,
+      candidate: {
+        push_class: PRE_ACTIVITY_SPOT,
+        trigger: PRE_ACTIVITY_SPOT,
+        event_id: 'public-assertion-degrade',
+        expires_at: null,
+      },
+    });
+    await runInDurableObject(runtime, async (instance) => {
+      await (instance as TracerDO).admitRun(runId);
+    });
+
+    await expect(
+      runInDurableObject(runtime, async (instance) =>
+        (instance as TracerDO).enqueueOutbox({
+          run_id: runId,
+          kind: PRE_ACTIVITY_SPOT,
+          created_at: admissionAt,
+          verdict: 'send',
+        }),
+      ),
+    ).rejects.toThrow('enqueueOutbox verdict send does not match admission degrade');
+
+    await runInDurableObject(runtime, (_instance, state) => {
+      expect(
+        state.storage.sql
+          .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+          .one().state,
+      ).toBe('GOVERNOR_ADMITTED');
+      expect(
+        state.storage.sql
+          .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', runId)
+          .one().n,
+      ).toBe(0);
+      expect(
+        state.storage.sql
+          .exec<{ sends_total: number }>(
+            'SELECT sends_total FROM daily_push_budget WHERE user_id = ? AND local_date = ?',
+            USER,
+            utcLocalDate(admissionAt),
+          )
+          .one().sends_total,
+      ).toBe(3);
+    });
+  });
+
   it('serializes two final-slot candidates across async hashing', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
@@ -1540,6 +1784,107 @@ describe('DeliveryGate runtime policy state', () => {
     expect(sink.observedDeliveries()).toBe(2);
   });
 
+  it('recomputes hold and drop policy after a delayed gate hash observes a sibling commit', async () => {
+    const fixtures = [
+      {
+        name: 'cooldown-hold',
+        pushClass: FETCH_ALERT,
+        trigger: FETCH_ALERT,
+        verdict: 'hold',
+        reason: 'cooldown_active',
+        heldRows: 1,
+      },
+      {
+        name: 'lifetime-drop',
+        pushClass: CONSTELLATION_FIRST,
+        trigger: 'dreaming_mode',
+        verdict: 'drop',
+        reason: 'once_ever_already_sent',
+        heldRows: 0,
+      },
+    ] as const;
+
+    for (const fixture of fixtures) {
+      const runtime = freshRuntimeStub();
+      const admissionAt = utcOccurrence('2026-01-01');
+      const delayedHash = deferred<string>();
+      let hashCalls = 0;
+      let runSequence = 0;
+      let outboxSequence = 0;
+
+      const result = await runInDurableObject(runtime, async (_instance, state) => {
+        const journalOutbox = new RunJournalOutbox(
+          state.storage,
+          {
+            now: () => admissionAt,
+            newRunId: () => `post-hash-${fixture.name}-${++runSequence}`,
+            newOutboxId: () => `post-hash-outbox-${fixture.name}-${++outboxSequence}`,
+            sha256Hex: () => {
+              hashCalls += 1;
+              return hashCalls === 1 ? delayedHash.promise : Promise.resolve('f'.repeat(64));
+            },
+          },
+          new FakeSink(),
+        );
+        const delayedRunId = journalOutbox.startRun({
+          userId: `${USER}-${fixture.name}`,
+          trigger: fixture.trigger,
+          occurrenceAt: admissionAt,
+          candidate: {
+            push_class: fixture.pushClass,
+            trigger: fixture.trigger,
+            event_id: `${fixture.name}-delayed`,
+            expires_at: null,
+          },
+        });
+        journalOutbox.admitRun(delayedRunId);
+        const delayedGate = journalOutbox.gateRun(delayedRunId);
+        expect(hashCalls).toBe(1);
+
+        const siblingRunId = journalOutbox.startRun({
+          userId: `${USER}-${fixture.name}`,
+          trigger: fixture.trigger,
+          occurrenceAt: admissionAt,
+          candidate: {
+            push_class: fixture.pushClass,
+            trigger: fixture.trigger,
+            event_id: `${fixture.name}-sibling`,
+            expires_at: null,
+          },
+        });
+        await journalOutbox.tickRun(siblingRunId);
+        delayedHash.resolve('e'.repeat(64));
+        await delayedGate;
+
+        const delayed = state.storage.sql
+          .exec<{ state: string; verdict: string | null; gate_reason: string | null }>(
+            'SELECT state, verdict, gate_reason FROM journal WHERE run_id = ?',
+            delayedRunId,
+          )
+          .one();
+        const outboxRows = state.storage.sql
+          .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', delayedRunId)
+          .one().n;
+        const heldRows = state.storage.sql
+          .exec<{ n: number }>(
+            'SELECT count(*) AS n FROM held_candidates WHERE event_id = ?',
+            `${fixture.name}-delayed`,
+          )
+          .one().n;
+        return { ...delayed, outboxRows, heldRows, hashCalls };
+      });
+
+      expect(result).toEqual({
+        state: 'FAILED',
+        verdict: fixture.verdict,
+        gate_reason: fixture.reason,
+        outboxRows: 0,
+        heldRows: fixture.heldRows,
+        hashCalls: 2,
+      });
+    }
+  });
+
   it('treats a duplicate tick that overlaps hashing as a durable no-op', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
@@ -1618,6 +1963,41 @@ describe('DeliveryGate runtime policy state', () => {
     });
     expect(sink.observedSendAttempts()).toBe(1);
     expect(sink.observedDeliveries()).toBe(1);
+  });
+
+  it('accepts only a validated committed delivery state when a late concurrent gate hash returns', async () => {
+    const fixtures = [
+      { name: 'gated', journalState: 'GATED', outboxStatus: 'pending' },
+      { name: 'sink-sent', journalState: 'SINK_SENT', outboxStatus: 'sent_unacked' },
+      { name: 'ack-recorded', journalState: 'ACK_RECORDED', outboxStatus: 'acked' },
+      { name: 'done', journalState: 'DONE', outboxStatus: 'acked' },
+      { name: 'failed', journalState: 'FAILED', outboxStatus: 'pending' },
+    ] as const satisfies readonly (DurableDeliveryFixture & { name: string })[];
+
+    for (const fixture of fixtures) {
+      const runtime = freshRuntimeStub();
+      const runId = await createCompletedDeliveryFixture(runtime, `late-hash-${fixture.name}`);
+      await stageDurableDeliveryFixture(runtime, runId, fixture);
+      await expect(commitLateConcurrentGate(runtime, runId)).resolves.toBeNull();
+    }
+
+    const unexpectedRuntime = freshRuntimeStub();
+    const unexpectedRunId = await createCompletedDeliveryFixture(
+      unexpectedRuntime,
+      'late-hash-uncommitted',
+    );
+    await runInDurableObject(unexpectedRuntime, (_instance, state) => {
+      state.storage.sql.exec(
+        `UPDATE journal
+            SET state = 'RUN_OPENED', verdict = NULL, gate_reason = NULL, completion_mode = NULL
+          WHERE run_id = ?`,
+        unexpectedRunId,
+      );
+    });
+
+    await expect(commitLateConcurrentGate(unexpectedRuntime, unexpectedRunId)).rejects.toThrow(
+      'enqueueOutbox requires GOVERNOR_ADMITTED, got RUN_OPENED',
+    );
   });
 
   it('re-drives every valid durable delivery state once and leaves its duplicate tick inert', async () => {

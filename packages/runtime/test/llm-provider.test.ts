@@ -23,10 +23,11 @@ import {
   type LLMGatewayAdapter,
   type LLMGatewayRequest,
   type RuntimeLLMRequest,
+  type TrustedProviderEffect,
 } from '../src/llm/provider';
 import { createUnavailableSkillBudget } from '../src/skills/budget';
 import type { CountResult, ResolvedSkillBudget, SkillBudgetFactory } from '../src/skills/budget';
-import type { HookRuntimeContext } from '../src/hooks/registry';
+import type { HookRegistry, HookRuntimeContext } from '../src/hooks/registry';
 import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
 import { sanitise } from '../src/scribe/sanitiser';
 
@@ -81,6 +82,21 @@ function response(model: ModelName, text = '{"tool_calls":[]}'): LLMResponse {
   };
 }
 
+function trustedEffectForTest(
+  request: LLMGatewayRequest,
+  input: Readonly<{ effect_ref: string; idempotency_key: string; request_digest: string }>,
+): TrustedProviderEffect {
+  return {
+    ...input,
+    execution: {
+      step: request.step,
+      context: request.context,
+      fallback_step: request.fallback_step,
+    },
+    operation: 'issue',
+  };
+}
+
 class ScriptedGateway implements LLMGatewayAdapter {
   readonly requests: LLMGatewayRequest[] = [];
 
@@ -93,6 +109,176 @@ class ScriptedGateway implements LLMGatewayAdapter {
 }
 
 describe('RuntimeLLMProvider', () => {
+  it('fails closed before provider I/O when a trusted effect adapter cannot reconcile by key', async () => {
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.completeTrusted(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+        async prepareEffect() {
+          throw new Error('an unavailable reconciler must not prepare an effect');
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result).toMatchObject({ ok: false, reason: 'effect_receipt_unavailable' });
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('preserves an unexpected trusted reconciler cause instead of fabricating a provider receipt', async () => {
+    const cause = new Error('trusted reconciler storage sentinel');
+    const operations: Array<'issue' | 'reconcile'> = [];
+    const gateway: LLMGatewayAdapter = {
+      async complete() {
+        throw new Error('trusted runs must not fall back to the legacy gateway method');
+      },
+      async executeOrReconcile(input) {
+        operations.push(input.effect.operation);
+        throw cause;
+      },
+    };
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    await expect(
+      provider.completeTrusted(
+        {
+          trigger: 'brief',
+          renderRequest() {
+            return {
+              messages: [{ role: 'user', content: 'brief' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+          async prepareEffect(request) {
+            return trustedEffectForTest(request, {
+              effect_ref: 'eff_11111111111111111111111111111111',
+              idempotency_key: '1'.repeat(64),
+              request_digest: '2'.repeat(64),
+            });
+          },
+        },
+        runtimeCtx(),
+      ),
+    ).rejects.toBe(cause);
+    expect(operations).toEqual(['issue']);
+  });
+
+  it('preserves a non-hook post-provider failure after the trusted effect boundary', async () => {
+    const cause = new Error('trusted post-provider registry sentinel');
+    let registryIterations = 0;
+    const hooks = new Proxy([] as HookRegistry<HookRuntimeContext>, {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator) {
+          registryIterations += 1;
+          if (registryIterations === 2) throw cause;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const operations: Array<'issue' | 'reconcile'> = [];
+    const gateway: LLMGatewayAdapter = {
+      async complete() {
+        throw new Error('trusted runs must not fall back to the legacy gateway method');
+      },
+      async executeOrReconcile(input) {
+        operations.push(input.effect.operation);
+        if (input.operation !== 'issue') throw new Error('unexpected provider recovery');
+        return { ok: true as const, data: response(input.request.request.model) };
+      },
+    };
+    const provider = new RuntimeLLMProvider({ gateway, hooks });
+
+    await expect(
+      provider.completeTrusted(
+        {
+          trigger: 'brief',
+          renderRequest() {
+            return {
+              messages: [{ role: 'user', content: 'brief' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+          async prepareEffect(request) {
+            return trustedEffectForTest(request, {
+              effect_ref: 'eff_22222222222222222222222222222222',
+              idempotency_key: '3'.repeat(64),
+              request_digest: '4'.repeat(64),
+            });
+          },
+        },
+        runtimeCtx(),
+      ),
+    ).rejects.toBe(cause);
+    expect(operations).toEqual(['issue']);
+  });
+
+  it('uses one prepared reconciled attempt for a trusted provider effect', async () => {
+    const requests: TrustedProviderEffect[] = [];
+    const gateway: LLMGatewayAdapter = {
+      async complete() {
+        throw new Error('trusted runs must not fall back to the legacy gateway method');
+      },
+      async executeOrReconcile(input) {
+        requests.push(input.effect);
+        if (input.operation !== 'issue') throw new Error('unexpected provider recovery');
+        return { ok: true as const, data: response(input.request.request.model) };
+      },
+    };
+    const provider = new RuntimeLLMProvider({ gateway });
+
+    const result = await provider.completeTrusted(
+      {
+        trigger: 'brief',
+        renderRequest() {
+          return {
+            messages: [{ role: 'user', content: 'brief' }],
+            max_tokens: 512,
+            temperature: 0.3,
+          };
+        },
+        async prepareEffect(request) {
+          expect(request.step).toEqual(ROUTING_TABLE.brief.primary);
+          expect(request.fallback_step).toBe('configured_model');
+          return trustedEffectForTest(request, {
+            effect_ref: 'eff_11111111111111111111111111111111',
+            idempotency_key: '1'.repeat(64),
+            request_digest: '2'.repeat(64),
+          });
+        },
+      },
+      runtimeCtx(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(requests).toEqual([
+      {
+        effect_ref: 'eff_11111111111111111111111111111111',
+        idempotency_key: '1'.repeat(64),
+        request_digest: '2'.repeat(64),
+        execution: {
+          step: ROUTING_TABLE.brief.primary,
+          context: 'full_context',
+          fallback_step: 'configured_model',
+        },
+        operation: 'issue',
+      },
+    ]);
+  });
+
   it('selectModelRoute returns a contract route for every trigger and rejects unknown triggers', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(selectModelRoute({ trigger })).toEqual(ROUTING_TABLE[trigger]);

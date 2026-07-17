@@ -203,19 +203,24 @@ describe('scheduler alarm multiplexer', () => {
   it('dispatches due run resume, outbox retry, and scheduled proactive wake from one alarm', async () => {
     const sink = new FakeSink();
     const stub = freshStub();
-    const dueAt = soon();
+    // This test first inspects all three armed rows, then manually fires the alarm. Keep the
+    // actual wake safely in the future so workerd cannot legitimately auto-fire it while the
+    // setup performs the retry crash/recovery work; forceSchedulesDue below is the controlled
+    // transition into the scheduler's real due path.
+    const occurrenceAt = Date.now();
+    const dueAt = occurrenceAt + 60_000;
 
     const resumeRunId = await stub.startRun({
       userId: 'user-scheduler-resume',
       trigger: FETCH,
-      occurrenceAt: dueAt,
+      occurrenceAt,
     });
     await stub.scheduleRun({ runId: resumeRunId, dueAt });
 
     const retryRunId = await stub.startRun({
       userId: 'user-scheduler-retry',
       trigger: FETCH,
-      occurrenceAt: dueAt,
+      occurrenceAt,
     });
     await runInDurableObject(stub, (instance: TracerDO) => {
       instance.__crashAfter = 'post_sink_pre_ack';
@@ -232,7 +237,7 @@ describe('scheduler alarm multiplexer', () => {
       kind: 'brief',
       userId: 'user-scheduler-brief',
       dueAt,
-      occurrenceAt: dueAt,
+      occurrenceAt,
     });
 
     const scheduled = await readScheduleRows(stub);
@@ -247,6 +252,7 @@ describe('scheduler alarm multiplexer', () => {
       ]),
     );
 
+    await forceSchedulesDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const state = await readState(stub);

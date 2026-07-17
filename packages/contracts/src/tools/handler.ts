@@ -25,6 +25,35 @@ export type ToolResult<T> =
   | { ok: true; data: T; source_taint: SourceTaint; card?: WaldoCard }
   | { ok: false; error: string; code: ErrorCode; source_taint?: SourceTaint };
 
+// The trusted RunLoop V2 path provides this content-free capability only after it has committed
+// a durable effect intent. A handler that cannot reconcile a retry on this key must not be used
+// for a trusted effect; ordinary dispatcher callers remain on handle().
+export type TrustedToolEffect = Readonly<{
+  idempotency_key: string;
+  request_digest: string;
+  // Runtime-owned execution mode: a resumed durable intent may only reconcile the prior effect.
+  // A missing receipt in `reconcile` mode is a fail-closed adapter outcome, never permission to
+  // issue a second external tool call.
+  operation: 'issue' | 'reconcile';
+}>;
+
+// A reconciliation adapter may know that it cannot recover a prior effect receipt after a
+// restart. This is deliberately distinct from an ordinary tool failure: the RunLoop must retain
+// its durable intent and fail closed rather than recording a fabricated settled witness.
+export const trustedToolEffectReceiptUnavailableSchema = z.strictObject({
+  ok: z.literal(false),
+  error: z.string().min(1).max(512),
+  code: z.literal('transient'),
+  receipt_status: z.literal('unavailable'),
+});
+export type TrustedToolEffectReceiptUnavailable = z.infer<
+  typeof trustedToolEffectReceiptUnavailableSchema
+>;
+
+export type TrustedToolExecutionResult<Result> =
+  | ToolResult<Result>
+  | TrustedToolEffectReceiptUnavailable;
+
 // ADR-0049 accepted amendment: source_taint is a REQUIRED field on external-origin tool
 // results (web, document, MCP, connector, calendar/email body text), carried 'external'
 // end-to-end. The refine pins the stamp: an absent OR null stamp on an external-origin
@@ -136,4 +165,16 @@ export interface ToolHandler<Args, Result, Ctx> {
   trigger_allowlist: readonly TriggerType[];
   autonomy_gated: boolean;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;
+  idempotentOnKey?: true;
+  executeOrReconcile?(
+    args: Args,
+    ctx: Ctx,
+    effect: TrustedToolEffect,
+  ): Promise<TrustedToolExecutionResult<Result>>;
+  // Key-only recovery is intentionally separate from issue execution: it receives no original
+  // arguments or invocation context and must return the adapter-held receipt or a typed
+  // unavailable outcome.
+  reconcileTrustedEffect?(
+    effect: TrustedToolEffect,
+  ): Promise<TrustedToolExecutionResult<Result>>;
 }

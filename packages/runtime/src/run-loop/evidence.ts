@@ -2,16 +2,19 @@ import {
   RUNTIME_EVIDENCE_SCHEMA_VERSION,
   parseRuntimeTraceDetail,
   runtimeReplayFixtureSchema,
+  runtimeTerminalEvidenceMatchesDisposition,
   runtimeTraceDetailEnvelopeSchema,
   runtimeTraceEvalSchema,
   runtimeTraceEventSchema,
   runtimeTraceEventNameSchema,
   traceDetailKeysArePublic,
   type DeliveryVerdict,
+  type JournalCompletionMode,
   type OutboxStatus,
   type PushClass,
   type RunState,
   type RuntimeReplayFixture,
+  type RuntimeEvidenceFlavor,
   type RuntimeTraceDetail,
   type RuntimeTraceDetailEnvelope,
   type RuntimeTraceEval,
@@ -34,10 +37,17 @@ export type RuntimeTraceSqlRow = {
 
 export type RuntimeEvidenceInput = {
   runId: string;
+  // This is derived by RunLoopDO from its immutable invocation marker. It deliberately does
+  // not depend on whether an individual V2 trace row survived a storage incident.
+  evidenceFlavor: RuntimeEvidenceFlavor;
   traceRows: RuntimeTraceSqlRow[];
   fsm: RuntimeRunState[];
   outbox: { kind: PushClass; status: OutboxStatus; attempts: number }[];
-  deliveryJournal: { state: RunState; verdict: DeliveryVerdict | null };
+  deliveryJournal: {
+    state: RunState;
+    verdict: DeliveryVerdict | null;
+    completion_mode: JournalCompletionMode | null;
+  };
   current: { state: RuntimeRunState; failure_reason: RuntimeRunFailureReason | null };
 };
 
@@ -71,8 +81,10 @@ export function buildRuntimeReplayFixture(input: RuntimeEvidenceInput): RuntimeR
   const trace = buildRuntimeTrace(input);
   const evalResult = scoreRuntimeTrace({
     runId: input.runId,
+    evidenceFlavor: input.evidenceFlavor,
     trace,
     outbox: input.outbox,
+    deliveryJournal: input.deliveryJournal,
     current: input.current,
   });
   return runtimeReplayFixtureSchema.parse({
@@ -81,6 +93,7 @@ export function buildRuntimeReplayFixture(input: RuntimeEvidenceInput): RuntimeR
     source_trace_id: input.runId,
     hermetic: true,
     live_provider: false,
+    evidence_flavor: input.evidenceFlavor,
     trace,
     fsm: input.fsm,
     outbox: input.outbox,
@@ -93,8 +106,10 @@ export function buildRuntimeReplayFixture(input: RuntimeEvidenceInput): RuntimeR
 export function scoreRuntimeFixture(fixture: RuntimeReplayFixture): RuntimeTraceEval {
   return scoreRuntimeTrace({
     runId: fixture.source_trace_id,
+    evidenceFlavor: fixture.evidence_flavor,
     trace: fixture.trace,
     outbox: fixture.outbox,
+    deliveryJournal: fixture.delivery_journal,
     current: fixture.current,
   });
 }
@@ -154,8 +169,14 @@ function buildRuntimeTrace(input: RuntimeEvidenceInput): RuntimeTraceEvent[] {
 
 function scoreRuntimeTrace(input: {
   runId: string;
+  evidenceFlavor: RuntimeEvidenceFlavor;
   trace: RuntimeTraceEvent[];
   outbox: { status: string }[];
+  deliveryJournal: {
+    state: RunState;
+    verdict: DeliveryVerdict | null;
+    completion_mode: JournalCompletionMode | null;
+  };
   current: { state: RuntimeRunState; failure_reason: RuntimeRunFailureReason | null };
 }): RuntimeTraceEval {
   const traceOrderOk = input.trace.every((event, index) => {
@@ -177,9 +198,14 @@ function scoreRuntimeTrace(input: {
       ));
   const privacyOk = input.trace.every((event) => traceDetailKeysArePublic(event.detail));
   const outboxOk =
-    input.current.state === 'DONE'
-      ? input.outbox.some((row) => row.status === 'acked') &&
-        input.trace.some((event) => event.family === 'delivery' && event.status === 'acked')
+    input.current.state === 'DONE' || input.current.state === 'FAILED'
+      ? runtimeTerminalEvidenceMatchesDisposition(
+          input.trace,
+          input.outbox,
+          input.deliveryJournal,
+          input.current.state,
+          input.evidenceFlavor,
+        )
       : true;
 
   const rules = [
@@ -208,8 +234,8 @@ function scoreRuntimeTrace(input: {
       id: 'outbox_consistency',
       status: outboxOk ? 'pass' : 'fail',
       evidence: outboxOk
-        ? 'terminal delivery evidence is consistent with outbox state'
-        : 'done run lacks acked outbox or delivery evidence',
+        ? 'terminal completion evidence is consistent with output disposition'
+        : 'done run has inconsistent output disposition evidence',
     },
     {
       id: 'failure_visible',
@@ -243,6 +269,7 @@ function traceFamilyFor(event: RuntimeTraceEventName): RuntimeTraceFamily {
       return 'wake';
     case 'governor_admitted':
     case 'governor_denied':
+    case 'egress_checked':
       return 'governor';
     case 'session_reset':
       return 'session';
@@ -250,6 +277,7 @@ function traceFamilyFor(event: RuntimeTraceEventName): RuntimeTraceFamily {
       return 'context';
     case 'llm_called':
     case 'llm_observed':
+    case 'provider_effect_rejected':
       return 'llm';
     case 'tool_parse_failed':
     case 'tool_dispatched':
@@ -275,6 +303,7 @@ function traceStatusFor(envelope: RuntimeTraceDetailEnvelope): RuntimeTraceStatu
     case 'scribe_denied':
       return 'denied';
     case 'tool_parse_failed':
+    case 'provider_effect_rejected':
     case 'failed':
       return 'failed';
     case 'gated':
@@ -285,6 +314,8 @@ function traceStatusFor(envelope: RuntimeTraceDetailEnvelope): RuntimeTraceStatu
       return 'done';
     case 'tool_dispatched':
       return envelope.detail.denied.length > 0 ? 'denied' : 'ok';
+    case 'egress_checked':
+      return envelope.detail.verdict === 'deny' ? 'denied' : 'ok';
     case 'session_reset':
     case 'context_built':
     case 'llm_called':
@@ -299,6 +330,7 @@ function tracePrivacyFor(event: RuntimeTraceEventName): RuntimeTracePrivacy {
       return 'operational_ref';
     case 'governor_admitted':
     case 'governor_denied':
+    case 'egress_checked':
     case 'gated':
     case 'scribe_denied':
       return 'policy_metadata';
@@ -307,6 +339,7 @@ function tracePrivacyFor(event: RuntimeTraceEventName): RuntimeTracePrivacy {
     case 'session_reset':
     case 'llm_called':
     case 'llm_observed':
+    case 'provider_effect_rejected':
     case 'tool_parse_failed':
     case 'tool_dispatched':
     case 'delivered':

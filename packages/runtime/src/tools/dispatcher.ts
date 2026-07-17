@@ -7,6 +7,7 @@ import {
   handlerAllowlistMatchesAcl,
   sessionToolAllowed,
   sourceTaintSchema,
+  trustedToolEffectReceiptUnavailableSchema,
   toolNameSchema,
   triggerTypeSchema,
   waldoCardSchema,
@@ -17,6 +18,7 @@ import {
   type SourceTaint,
   type ToolHandler,
   type ToolName,
+  type TrustedToolEffect,
   type TriggerType,
   type WaldoCard,
 } from '@waldo/contracts';
@@ -50,7 +52,7 @@ export type ToolDispatcherContext = HookRuntimeContext & {
   session: SessionState;
 };
 
-export type DispatchToolResult =
+export type DispatchToolResult = (
   | {
       ok: true;
       call_id: string;
@@ -67,11 +69,17 @@ export type DispatchToolResult =
       code: ErrorCode;
       reason: ToolDispatchErrorReason;
       source_taint?: 'external';
-    };
+    }) & {
+  // Present only after a trusted handler resolved an adapter result. This remains ephemeral until
+  // RunLoopDO atomically writes its bounded checkpoint/receipt; a thrown adapter call leaves the
+  // durable intent pending for reconciliation instead.
+  trusted_effect?: TrustedToolEffect;
+};
 
 export type ToolDispatchErrorReason =
   | 'unknown_tool'
   | 'handler_unavailable'
+  | 'effect_receipt_unavailable'
   | 'handler_acl_drift'
   | 'acl_denied'
   | 'invalid_args'
@@ -102,6 +110,9 @@ export type DispatchToolOptions<Ctx extends ToolDispatcherContext> = {
   handlers: readonly RuntimeToolHandler<Ctx>[];
   extraHooks?: HookRegistry<Ctx>;
   maxResultJsonChars?: number;
+  trustedEffect?: Readonly<{
+    prepare(input: Readonly<{ tool: ToolName; args: unknown }>): Promise<TrustedToolEffect>;
+  }>;
 };
 
 const DEFAULT_MAX_RESULT_JSON_CHARS = 16_384;
@@ -208,6 +219,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   }
 
   let handlerResult: unknown;
+  let settledTrustedEffect: TrustedToolEffect | undefined;
   const startedAt = Date.now();
   let args: unknown;
   try {
@@ -222,21 +234,68 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     );
   }
 
+  let trustedEffect: TrustedToolEffect | undefined;
+  if (options.trustedEffect !== undefined) {
+    const executeOrReconcile = handler.executeOrReconcile;
+    if (
+      handler.idempotentOnKey !== true ||
+      executeOrReconcile === undefined ||
+      handler.reconcileTrustedEffect === undefined
+    ) {
+      return failDispatch(
+        call.id,
+        tool.data,
+        'tool effect receipt unavailable',
+        'transient',
+        'effect_receipt_unavailable',
+      );
+    }
+    // Preparation happens after every pre-tool hook and argument schema validation but before
+    // handler I/O. The digest therefore names the exact arguments that cross the adapter
+    // boundary, while the durable intent is still committed first by RunLoopDO. Do not catch
+    // this callback: a storage/programming fault must retain its original cause.
+    trustedEffect = await options.trustedEffect.prepare({ tool: tool.data, args });
+  }
+
   try {
-    handlerResult = await handler.handle(args, ctx);
-  } catch {
+    if (trustedEffect !== undefined) {
+      const executeOrReconcile = handler.executeOrReconcile;
+      if (executeOrReconcile === undefined) throw new Error('trusted tool reconciler disappeared');
+      handlerResult = await executeOrReconcile(args, ctx, trustedEffect);
+    } else {
+      handlerResult = await handler.handle(args, ctx);
+    }
+  } catch (error) {
+    // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.
+    // Preserve that original cause and leave the durable intent for reconciliation; collapsing it
+    // into a normal tool failure would falsely make the effect look settled.
+    if (trustedEffect !== undefined) throw error;
     return failDispatch(call.id, tool.data, 'tool handler failed', 'transient', 'handler_failed');
   }
 
+  if (
+    trustedEffect !== undefined &&
+    trustedToolEffectReceiptUnavailableSchema.safeParse(handlerResult).success
+  ) {
+    return failDispatch(
+      call.id,
+      tool.data,
+      'tool effect receipt unavailable',
+      'transient',
+      'effect_receipt_unavailable',
+    );
+  }
+  if (trustedEffect !== undefined) settledTrustedEffect = trustedEffect;
+
   const parsedHandlerResult = parseToolResult(handlerResult, tool.data);
   if (parsedHandlerResult === null) {
-    return failDispatch(
+    return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
       'tool handler returned invalid result',
       'transient',
       'invalid_handler_result',
-    );
+    ), settledTrustedEffect);
   }
 
   let postToolPayload: PostToolUsePayload = {
@@ -253,88 +312,276 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       options.extraHooks,
     );
     if (nextPayload.event !== 'PostToolUse' || nextPayload.tool !== tool.data) {
-      return failDispatch(
+      return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
         'tool result failed validation',
         'transient',
         'invalid_tool_result',
-      );
+      ), settledTrustedEffect);
     }
     postToolPayload = nextPayload;
   } catch (error) {
-    return hookFailure(call.id, tool.data, error);
+    // HookHaltError is the declared governed post-effect rejection vocabulary. Any other
+    // exception may be a storage/programming fault after the adapter I/O boundary: leave the
+    // intent unreceipted so RunLoopDO can reconcile it rather than invent a terminal receipt.
+    if (settledTrustedEffect !== undefined && !(error instanceof HookHaltError)) throw error;
+    return withTrustedEffect(hookFailure(call.id, tool.data, error), settledTrustedEffect);
   }
 
   const finalResult = parseToolResult(postToolPayload.result, tool.data);
   if (finalResult === null) {
-    return failDispatch(
+    return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
       'tool result failed validation',
       'transient',
       'invalid_tool_result',
-    );
+    ), settledTrustedEffect);
   }
 
   if (!finalResult.ok) {
     if (finalResult.error.length > DEFAULT_MAX_ERROR_CHARS) {
-      return failDispatch(
+      return withTrustedEffect(failDispatch(
         call.id,
         tool.data,
         'tool returned oversized error',
         finalResult.code,
         'tool_result_error',
-      );
+      ), settledTrustedEffect);
     }
 
-    return failDispatch(
+    return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
       finalResult.error,
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
-    );
+    ), settledTrustedEffect);
   }
 
-  const resultSize = jsonCharLength(finalResult);
+  const resultSize = jsonCharLength(finalResult, settledTrustedEffect !== undefined);
   if (resultSize === null) {
-    return failDispatch(
+    return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
       'tool result failed validation',
       'transient',
       'invalid_tool_result',
-    );
+    ), settledTrustedEffect);
   }
 
   if (resultSize > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
-    return failDispatch(
+    return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
       'tool result exceeded bound',
       'oversize',
       'result_oversize',
+    ), settledTrustedEffect);
+  }
+
+  return withTrustedEffect(
+    finalResult.card === undefined
+      ? {
+          ok: true,
+          call_id: call.id,
+          tool: tool.data,
+          data: finalResult.data,
+          source_taint: finalResult.source_taint,
+        }
+      : {
+          ok: true,
+          call_id: call.id,
+          tool: tool.data,
+          data: finalResult.data,
+          source_taint: finalResult.source_taint,
+          card: finalResult.card,
+        },
+    settledTrustedEffect,
+  );
+}
+
+// Recover one already-issued trusted tool effect without replaying its plan arguments, running
+// pre-tool hooks, or touching a ContextComposer/replay artifact. The adapter contract is
+// intentionally key-only here: it must return its own prior receipt or an explicit unavailable
+// result, never issue a fresh side effect.
+export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherContext>(
+  input: Readonly<{
+    callRef: string;
+    tool: ToolName;
+    ctx: Ctx;
+    effect: TrustedToolEffect;
+    handlers: readonly RuntimeToolHandler<Ctx>[];
+    extraHooks?: HookRegistry<Ctx>;
+    maxResultJsonChars?: number;
+  }>,
+): Promise<DispatchToolResult> {
+  const tool = toolNameSchema.safeParse(input.tool);
+  if (!tool.success) {
+    return failDispatch(input.callRef, null, 'unknown tool', 'invalid_args', 'unknown_tool');
+  }
+  if (
+    typeof input.ctx.authenticatedUserId !== 'string' ||
+    input.ctx.authenticatedUserId.trim().length === 0
+  ) {
+    return failDispatch(input.callRef, tool.data, 'tool authentication failed', 'auth_failed', 'hook_halt');
+  }
+  if (!sessionToolAllowed(input.ctx.session, tool.data)) {
+    return failDispatch(input.callRef, tool.data, 'tool outside trigger ACL', 'forbidden', 'acl_denied');
+  }
+  const handler = input.handlers.find((candidate) => candidate.name === tool.data);
+  if (handler === undefined) {
+    return failDispatch(
+      input.callRef,
+      tool.data,
+      'tool handler unavailable',
+      'not_found',
+      'handler_unavailable',
+    );
+  }
+  if (!handlerAllowlistMatchesAcl(handler.name, handler.trigger_allowlist)) {
+    return failDispatch(
+      input.callRef,
+      tool.data,
+      'tool handler ACL drift',
+      'transient',
+      'handler_acl_drift',
+    );
+  }
+  if (
+    input.effect.operation !== 'reconcile' ||
+    handler.idempotentOnKey !== true ||
+    handler.reconcileTrustedEffect === undefined
+  ) {
+    return failDispatch(
+      input.callRef,
+      tool.data,
+      'tool effect receipt unavailable',
+      'transient',
+      'effect_receipt_unavailable',
     );
   }
 
-  return finalResult.card === undefined
-    ? {
-        ok: true,
-        call_id: call.id,
-        tool: tool.data,
-        data: finalResult.data,
-        source_taint: finalResult.source_taint,
-      }
-    : {
-        ok: true,
-        call_id: call.id,
-        tool: tool.data,
-        data: finalResult.data,
-        source_taint: finalResult.source_taint,
-        card: finalResult.card,
-      };
+  // Do not catch: an unexpected adapter/storage/programming throw may occur after the original
+  // external effect. RunLoopDO must retain its intent and preserve the cause for a later keyed
+  // recovery rather than inventing a receipt.
+  const handlerResult = await handler.reconcileTrustedEffect(input.effect);
+  if (trustedToolEffectReceiptUnavailableSchema.safeParse(handlerResult).success) {
+    return failDispatch(
+      input.callRef,
+      tool.data,
+      'tool effect receipt unavailable',
+      'transient',
+      'effect_receipt_unavailable',
+    );
+  }
+  const parsed = parseToolResult(handlerResult, tool.data);
+  if (parsed === null) {
+    return withTrustedEffect(failDispatch(
+      input.callRef,
+      tool.data,
+      'tool handler returned invalid result',
+      'transient',
+      'invalid_handler_result',
+    ), input.effect);
+  }
+  let postToolPayload: PostToolUsePayload = {
+    event: 'PostToolUse',
+    tool: tool.data,
+    result: parsed,
+    // The adapter-owned receipt is already complete; no fresh I/O latency is reconstructed.
+    latency_ms: 0,
+  };
+  try {
+    const nextPayload = await runTerminalHooks(
+      'PostToolUse',
+      postToolPayload,
+      input.ctx,
+      input.extraHooks,
+    );
+    if (nextPayload.event !== 'PostToolUse' || nextPayload.tool !== tool.data) {
+      return withTrustedEffect(failDispatch(
+        input.callRef,
+        tool.data,
+        'tool result failed validation',
+        'transient',
+        'invalid_tool_result',
+      ), input.effect);
+    }
+    postToolPayload = nextPayload;
+  } catch (error) {
+    if (!(error instanceof HookHaltError)) throw error;
+    return withTrustedEffect(hookFailure(input.callRef, tool.data, error), input.effect);
+  }
+  const finalResult = parseToolResult(postToolPayload.result, tool.data);
+  if (finalResult === null) {
+    return withTrustedEffect(failDispatch(
+      input.callRef,
+      tool.data,
+      'tool result failed validation',
+      'transient',
+      'invalid_tool_result',
+    ), input.effect);
+  }
+  if (!finalResult.ok) {
+    if (finalResult.error.length > DEFAULT_MAX_ERROR_CHARS) {
+      return withTrustedEffect(failDispatch(
+        input.callRef,
+        tool.data,
+        'tool returned oversized error',
+        finalResult.code,
+        'tool_result_error',
+      ), input.effect);
+    }
+    return withTrustedEffect(failDispatch(
+      input.callRef,
+      tool.data,
+      finalResult.error,
+      finalResult.code,
+      'tool_result_error',
+      finalResult.source_taint,
+    ), input.effect);
+  }
+  const size = jsonCharLength(finalResult, true);
+  if (size === null) {
+    return withTrustedEffect(failDispatch(
+      input.callRef,
+      tool.data,
+      'tool result failed validation',
+      'transient',
+      'invalid_tool_result',
+    ), input.effect);
+  }
+  if (size > (input.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
+    return withTrustedEffect(failDispatch(
+      input.callRef,
+      tool.data,
+      'tool result exceeded bound',
+      'oversize',
+      'result_oversize',
+    ), input.effect);
+  }
+  return withTrustedEffect(
+    finalResult.card === undefined
+      ? {
+          ok: true,
+          call_id: input.callRef,
+          tool: tool.data,
+          data: finalResult.data,
+          source_taint: finalResult.source_taint,
+        }
+      : {
+          ok: true,
+          call_id: input.callRef,
+          tool: tool.data,
+          data: finalResult.data,
+          source_taint: finalResult.source_taint,
+          card: finalResult.card,
+        },
+    input.effect,
+  );
 }
 
 export function getAllowedTools(trigger: TriggerType): readonly ToolName[] {
@@ -557,15 +804,23 @@ function failDispatch(
     : { ok: false, call_id: callId, tool, error, code, reason };
 }
 
+function withTrustedEffect(
+  result: DispatchToolResult,
+  effect: TrustedToolEffect | undefined,
+): DispatchToolResult {
+  return effect === undefined ? result : { ...result, trusted_effect: effect };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function jsonCharLength(value: unknown): number | null {
+function jsonCharLength(value: unknown, preserveUnexpectedCause = false): number | null {
   try {
     const serialized = JSON.stringify(value);
     return typeof serialized === 'string' ? serialized.length : 0;
-  } catch {
+  } catch (error) {
+    if (preserveUnexpectedCause) throw error;
     return null;
   }
 }

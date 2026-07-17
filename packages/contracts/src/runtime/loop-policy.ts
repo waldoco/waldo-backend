@@ -108,12 +108,10 @@ export type LoopPolicy = z.infer<typeof loopPolicySchema>;
 // the two routine loops carry the tightest token budgets because they are the token-explosion risk
 // the Governor exists to bound (§What breaks at 10k users); egress_gated is true for every loop
 // that can reach an external send and false for dreaming, which only writes memory via the Scribe;
-// socket_residency is 'none' for all six proactive loops (chat is the only 'active-chat-only' loop,
-// and chat is not registered here — see below); every V1 loop is autonomy L0.
-//
-// 'chat' is deliberately absent: its arbiter tier is not pinned by ADR-0074 (an interactive loop is
-// not window-contended), so it stays an open decision. A lookup for it therefore returns null and
-// admit() denies fail-closed — the correct posture until chat's policy is decided and registered.
+// socket_residency is 'none' for every proactive loop. The trusted user-message lane is the one
+// active-chat-only policy: it uses the existing low-priority routine tier because interactive work
+// is not window-contended, but remains explicitly bounded by its own token/iteration caps. Every
+// current policy is autonomy L0.
 export const LOOP_POLICIES: Readonly<Partial<Record<LoopType, LoopPolicy>>> = {
   fetch: {
     name: 'fetch',
@@ -193,10 +191,22 @@ export const LOOP_POLICIES: Readonly<Partial<Record<LoopType, LoopPolicy>>> = {
     autonomy_level: 'L0',
     cooldown_min: 0,
   },
+  chat: {
+    name: 'chat',
+    loop_type: 'chat',
+    priority_tier: 'routine',
+    max_tokens_per_run: 12_000,
+    max_subagent_spawns_per_run: 0,
+    max_iterations_per_run: 3,
+    kill_flag_scope: 'loop',
+    socket_residency: 'active-chat-only',
+    egress_gated: true,
+    autonomy_level: 'L0',
+    cooldown_min: 0,
+  },
 };
 
-// Fail-closed lookup: a loop with no registered policy — an unknown name, or a known loop whose
-// policy is still an open decision (chat) — returns null.
+// Fail-closed lookup: a loop with no registered policy returns null.
 export function lookupLoopPolicy(loopType: LoopType): LoopPolicy | null {
   return LOOP_POLICIES[loopType] ?? null;
 }

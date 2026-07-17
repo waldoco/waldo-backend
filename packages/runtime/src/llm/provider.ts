@@ -19,6 +19,7 @@ import {
   triggerTypeSchema,
   type AdapterResult,
   type ErrorCode,
+  errorCodeSchema,
   type GatewayConstantHeaders,
   type GatewayStep,
   type LLMRequest,
@@ -30,6 +31,7 @@ import {
   type RoutingPolicy,
   type SanitiseDestination,
   type SanitiseFailureReason,
+  type TrustedRunV2ProviderExecutionWitness,
 } from '@waldo/contracts';
 import {
   HookHaltError,
@@ -61,8 +63,63 @@ export type LLMGatewayRequest = {
   headers: GatewayConstantHeaders;
 };
 
+// V2 runtime effects are prepared and durably keyed by RunLoopDO before an adapter may issue
+// I/O. The adapter owns reconciliation for that key: a retry returns the prior response rather
+// than creating a second provider effect. This is deliberately separate from the legacy complete
+// method because a normal routing fallback chain cannot share one physical-effect receipt.
+export type TrustedProviderEffect = Readonly<{
+  effect_ref: string;
+  idempotency_key: string;
+  request_digest: string;
+  execution: TrustedRunV2ProviderExecutionWitness;
+  // RunLoopDO derives this from whether the durable intent was written by this drive. A
+  // reconciliation adapter must not turn a missing prior receipt into a fresh effect after a
+  // reset; `reconcile` is therefore fail-closed when the adapter cannot recover the key.
+  operation: 'issue' | 'reconcile';
+}>;
+
+export type TrustedProviderEffectReceipt = Readonly<{
+  // The V2 state persists only the aggregate bounded meter, never provider text. An
+  // unmetered/invalid provider envelope is charged at the cap so it cannot evade the Governor.
+  metered_tokens: number;
+  outcome: 'post_hook_rejected' | 'invalid_response';
+}>;
+
+export const TRUSTED_PROVIDER_EFFECT_METERING_CAP = 100_000;
+export const TRUSTED_PROVIDER_RESPONSE_TEXT_MAX_UTF8_BYTES = 32_768;
+
+// An adapter uses this only when a resumed effect key has no recoverable receipt. It is not an
+// ordinary provider error: the caller must retain the durable intent and must not fabricate a
+// settled provider receipt.
+export type TrustedProviderReceiptUnavailable = Readonly<{
+  ok: false;
+  code: 'transient';
+  error: string;
+  receipt_status: 'unavailable';
+}>;
+
+export type TrustedGatewayAdapterResult =
+  | AdapterResult<LLMResponse>
+  | TrustedProviderReceiptUnavailable;
+
+// Recovery receives no prompt, request, spend state, or route selection input. The persisted
+// execution witness is sufficient to validate an adapter-held receipt without recreating the
+// original provider request.
+export type TrustedGatewayExecution =
+  | Readonly<{
+      operation: 'issue';
+      request: LLMGatewayRequest;
+      effect: TrustedProviderEffect;
+    }>
+  | Readonly<{
+      operation: 'reconcile';
+      effect: TrustedProviderEffect;
+      execution_witness: TrustedRunV2ProviderExecutionWitness;
+    }>;
+
 export interface LLMGatewayAdapter {
   complete(request: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>>;
+  executeOrReconcile?(input: TrustedGatewayExecution): Promise<TrustedGatewayAdapterResult>;
 }
 
 export type RouteSpendState = {
@@ -94,6 +151,10 @@ export type RuntimeLLMRequest = {
     input: RuntimeLLMRenderInput,
   ): Omit<LLMRequest, 'model'> | Promise<Omit<LLMRequest, 'model'>>;
   renderTemplate?(input: { route: ModelRoute; trigger: ModelRoute['trigger'] }): string;
+};
+
+export type TrustedRuntimeLLMRequest = RuntimeLLMRequest & {
+  prepareEffect(request: LLMGatewayRequest): Promise<TrustedProviderEffect>;
 };
 
 export type LLMUsage = Pick<
@@ -142,7 +203,12 @@ export type RuntimeLLMFailure = {
   ok: false;
   error: string;
   code: ErrorCode;
-  reason: 'hook_halt' | 'gateway_exhausted' | 'invalid_response' | 'template_unavailable';
+  reason:
+    | 'hook_halt'
+    | 'gateway_exhausted'
+    | 'invalid_response'
+    | 'template_unavailable'
+    | 'effect_receipt_unavailable';
   fallback_step: RuntimeFallbackStep;
   attempts: LLMAttempt[];
   routing_logs: readonly RoutingLogEvent[];
@@ -150,11 +216,12 @@ export type RuntimeLLMFailure = {
     destination: SanitiseDestination;
     reason: SanitiseFailureReason;
   };
+  effect_receipt?: TrustedProviderEffectReceipt;
 };
 
 export type RuntimeLLMResult = RuntimeLLMSuccess | RuntimeLLMFailure;
 
-type CircuitBreaker = {
+export type CircuitBreaker = {
   isOpen(provider: Provider): boolean;
   recordSuccess(provider: Provider): void;
   recordFailure(provider: Provider): void;
@@ -426,6 +493,260 @@ export class RuntimeLLMProvider {
     return this.templateOrFailure(input, effectiveRoute, attempts, routingLogs, ctx);
   }
 
+  // Unlike complete(), this path has exactly one physical provider attempt. A V2 effect intent
+  // cannot honestly cover a fallback chain, and a missing reconciliation adapter is therefore a
+  // fail-closed condition before any provider request is sent.
+  async completeTrusted(
+    input: TrustedRuntimeLLMRequest,
+    ctx: HookRuntimeContext,
+  ): Promise<RuntimeLLMResult> {
+    const route = selectModelRoute(input);
+    const spendCapped = spendCapExceeded(input.spend);
+    const p6Action = spendCapped ? structuralP6SpendCapAction(route, input.p6ConsecutiveDeferrals) : null;
+    const routingLogs = routingLogsFor(spendCapped, p6Action?.log ?? null);
+    if (p6Action?.action === 'defer') {
+      return templateUnavailableFailure(route, [], routingLogs);
+    }
+    const effectiveRoute = spendCapped ? spendClampedRoute(route) : route;
+    const plan = attemptPlan(effectiveRoute, spendCapped)[0];
+    if (plan === undefined) return templateUnavailableFailure(effectiveRoute, [], routingLogs);
+    const reconcile = this.gateway.executeOrReconcile;
+    if (reconcile === undefined) {
+      return effectReceiptUnavailableFailure(plan.fallback_step, routingLogs);
+    }
+    if (this.circuitBreaker.isOpen(plan.step.provider)) {
+      return templateUnavailableFailure(effectiveRoute, [
+        {
+          outcome: 'skipped',
+          model: plan.step.model,
+          provider: plan.step.provider,
+          context: plan.context,
+          fallback_step: plan.fallback_step,
+          reason: 'circuit_open',
+        },
+      ], routingLogs);
+    }
+
+    const skillBudget = this.resolveSkillBudget(plan.step.model);
+    const rendered = await input.renderRequest({
+      route: effectiveRoute,
+      step: plan.step,
+      context: plan.context,
+      fallback_step: plan.fallback_step,
+      attempt: 0,
+      skillBudget,
+    });
+    const request = llmRequestSchema.parse({ ...rendered, model: plan.step.model });
+    const customPreHook = await this.runCustomPreLlmHooks(request, ctx);
+    if (!customPreHook.ok) {
+      return failFromHook(customPreHook.error, plan.fallback_step, [], routingLogs);
+    }
+    const sanitisedRequest = await sanitiseRequest(customPreHook.request, ctx);
+    if (!sanitisedRequest.ok) {
+      return failFromHook(
+        sanitisedRequest.error,
+        plan.fallback_step,
+        [],
+        routingLogs,
+        sanitisedRequest.scribeDestination,
+      );
+    }
+    const preHook = await this.runCorePreLlmHooks(sanitisedRequest.request, ctx);
+    if (preHook !== null) {
+      return failFromHook(preHook, plan.fallback_step, [], routingLogs);
+    }
+
+    const gatewayRequest: LLMGatewayRequest = {
+      request: sanitisedRequest.request,
+      route: effectiveRoute,
+      step: plan.step,
+      context: plan.context,
+      fallback_step: plan.fallback_step,
+      headers: GATEWAY_CONSTANT_HEADERS,
+    };
+    // Do not catch preparation failures. A DO storage/programming failure must preserve its
+    // cause rather than being misreported as a provider failure.
+    const effect = await input.prepareEffect(gatewayRequest);
+    if (effect.operation !== 'issue') {
+      throw new Error('trusted provider issue must not reuse a pending effect');
+    }
+    if (!trustedExecutionMatchesRequest(effect.execution, gatewayRequest)) {
+      throw new Error('trusted provider effect execution witness does not match issued request');
+    }
+    return this.completeTrustedGatewayResult({
+      received: await this.executeTrustedGateway({
+        operation: 'issue',
+        request: gatewayRequest,
+        effect,
+      }),
+      execution: effect.execution,
+      ctx,
+      routingLogs,
+    });
+  }
+
+  // This is intentionally not a variant of completeTrusted(). A pending provider effect has
+  // already crossed the external boundary, so recovery must not rebuild a prompt, select a
+  // route, read spend, run pre-hooks, sanitize, or consult circuit state. It asks the adapter
+  // only for the prior result associated with the durable key and then applies response safety.
+  async reconcileTrusted(
+    effect: TrustedProviderEffect,
+    ctx: HookRuntimeContext,
+  ): Promise<RuntimeLLMResult> {
+    if (effect.operation !== 'reconcile') {
+      throw new Error('trusted provider recovery requires a reconcile effect');
+    }
+    const reconcile = this.gateway.executeOrReconcile;
+    if (reconcile === undefined) {
+      return effectReceiptUnavailableFailure(effect.execution.fallback_step, []);
+    }
+    let received: TrustedGatewayAdapterResult;
+    try {
+      received = await reconcile.call(this.gateway, {
+        operation: 'reconcile',
+        effect,
+        execution_witness: effect.execution,
+      });
+    } catch (error) {
+      this.circuitBreaker.recordFailure(effect.execution.step.provider);
+      throw error;
+    }
+    return this.completeTrustedGatewayResult({
+      received,
+      execution: effect.execution,
+      ctx,
+      routingLogs: [],
+    });
+  }
+
+  private async executeTrustedGateway(
+    input: Extract<TrustedGatewayExecution, { operation: 'issue' }>,
+  ): Promise<TrustedGatewayAdapterResult> {
+    const reconcile = this.gateway.executeOrReconcile;
+    if (reconcile === undefined) {
+      return {
+        ok: false,
+        code: 'transient',
+        error: 'trusted provider effect receipt unavailable',
+        receipt_status: 'unavailable',
+      };
+    }
+    try {
+      return await reconcile.call(this.gateway, input);
+    } catch (error) {
+      this.circuitBreaker.recordFailure(input.effect.execution.step.provider);
+      throw error;
+    }
+  }
+
+  private async completeTrustedGatewayResult(input: Readonly<{
+    received: TrustedGatewayAdapterResult;
+    execution: TrustedRunV2ProviderExecutionWitness;
+    ctx: HookRuntimeContext;
+    routingLogs: readonly RoutingLogEvent[];
+  }>): Promise<RuntimeLLMResult> {
+    const { execution, received, ctx, routingLogs } = input;
+    const normalised = normaliseGatewayAdapterResult(received);
+    if (normalised === null) {
+      this.circuitBreaker.recordFailure(execution.step.provider);
+      return invalidResponseFailure(
+        execution.fallback_step,
+        [
+          {
+            outcome: 'failure',
+            model: execution.step.model,
+            provider: execution.step.provider,
+            context: execution.context,
+            fallback_step: execution.fallback_step,
+            code: 'invalid_args',
+          },
+        ],
+        routingLogs,
+        unmeteredTrustedProviderReceipt(),
+      );
+    }
+    const gatewayResult = normalised;
+    if (!gatewayResult.ok) {
+      this.circuitBreaker.recordFailure(execution.step.provider);
+      if ('receipt_status' in gatewayResult && gatewayResult.receipt_status === 'unavailable') {
+        return effectReceiptUnavailableFailure(execution.fallback_step, routingLogs);
+      }
+      return gatewayExhaustedFailure(execution, routingLogs, gatewayResult.code);
+    }
+    const parsedResponse = gatewayResult.data;
+    if (parsedResponse.model !== execution.step.model) {
+      this.circuitBreaker.recordFailure(execution.step.provider);
+      return invalidResponseFailure(
+        execution.fallback_step,
+        [
+          {
+            outcome: 'failure',
+            model: execution.step.model,
+            provider: execution.step.provider,
+            context: execution.context,
+            fallback_step: execution.fallback_step,
+            code: 'invalid_args',
+          },
+        ],
+        routingLogs,
+        unmeteredTrustedProviderReceipt(),
+      );
+    }
+    const meteredTokens = trustedProviderMeteredTokens(parsedResponse);
+    if (meteredTokens === null) {
+      this.circuitBreaker.recordFailure(execution.step.provider);
+      return invalidResponseFailure(
+        execution.fallback_step,
+        [
+          {
+            outcome: 'failure',
+            model: execution.step.model,
+            provider: execution.step.provider,
+            context: execution.context,
+            fallback_step: execution.fallback_step,
+            code: 'invalid_args',
+          },
+        ],
+        routingLogs,
+        unmeteredTrustedProviderReceipt(),
+      );
+    }
+    const postHook = await this.runPostLlmHook(parsedResponse, ctx, {
+      preserveUnexpectedCause: true,
+    });
+    if (!postHook.ok) {
+      return failFromHook(postHook.error, execution.fallback_step, [], routingLogs, 'send_message', {
+        metered_tokens: meteredTokens,
+        outcome: 'post_hook_rejected',
+      });
+    }
+    this.circuitBreaker.recordSuccess(execution.step.provider);
+    const response = postHook.response;
+    const usage = usageFromResponse(parsedResponse);
+    return {
+      ok: true,
+      response,
+      tool_call_source: { text: response.text },
+      fallback_step: execution.fallback_step,
+      degraded:
+        routingLogs.length > 0 ||
+        execution.fallback_step !== 'configured_model' ||
+        execution.context !== 'full_context',
+      usage,
+      attempts: [
+        {
+          outcome: 'success',
+          model: execution.step.model,
+          provider: execution.step.provider,
+          context: execution.context,
+          fallback_step: execution.fallback_step,
+          usage,
+        },
+      ],
+      routing_logs: routingLogs,
+    };
+  }
+
   private async runCustomPreLlmHooks(
     request: LLMRequest,
     ctx: HookRuntimeContext,
@@ -497,6 +818,7 @@ export class RuntimeLLMProvider {
   private async runPostLlmHook(
     response: LLMResponse,
     ctx: HookRuntimeContext,
+    options: Readonly<{ preserveUnexpectedCause?: boolean }> = {},
   ): Promise<PostLlmHookResult> {
     try {
       const customPayload = await runHooks(
@@ -525,6 +847,9 @@ export class RuntimeLLMProvider {
       }
       return { ok: true, response: parsed.data };
     } catch (error) {
+      if (options.preserveUnexpectedCause === true && !(error instanceof HookHaltError)) {
+        throw error;
+      }
       return {
         ok: false,
         error:
@@ -644,6 +969,7 @@ function invalidResponseFailure(
   fallbackStep: RuntimeFallbackStep,
   attempts: LLMAttempt[],
   routingLogs: readonly RoutingLogEvent[],
+  effectReceipt?: TrustedProviderEffectReceipt,
 ): RuntimeLLMFailure {
   return {
     ok: false,
@@ -653,7 +979,66 @@ function invalidResponseFailure(
     fallback_step: fallbackStep,
     attempts,
     routing_logs: routingLogs,
+    ...(effectReceipt === undefined ? {} : { effect_receipt: effectReceipt }),
   };
+}
+
+function effectReceiptUnavailableFailure(
+  fallbackStep: RuntimeFallbackStep,
+  routingLogs: readonly RoutingLogEvent[],
+): RuntimeLLMFailure {
+  return {
+    ok: false,
+    error: 'trusted provider effect receipt unavailable',
+    code: 'transient',
+    reason: 'effect_receipt_unavailable',
+    fallback_step: fallbackStep,
+    attempts: [],
+    routing_logs: routingLogs,
+  };
+}
+
+function gatewayExhaustedFailure(
+  plan: Readonly<{
+    step: GatewayStep;
+    context: LLMContextMode;
+    fallback_step: GatewayAttemptFallbackStep;
+  }>,
+  routingLogs: readonly RoutingLogEvent[],
+  code: ErrorCode,
+): RuntimeLLMFailure {
+  return {
+    ok: false,
+    error: 'trusted provider effect did not reconcile',
+    code,
+    reason: 'gateway_exhausted',
+    fallback_step: plan.fallback_step,
+    attempts: [
+      {
+        outcome: 'failure',
+        model: plan.step.model,
+        provider: plan.step.provider,
+        context: plan.context,
+        fallback_step: plan.fallback_step,
+        code,
+      },
+    ],
+    routing_logs: routingLogs,
+  };
+}
+
+function trustedExecutionMatchesRequest(
+  execution: TrustedRunV2ProviderExecutionWitness,
+  request: LLMGatewayRequest,
+): boolean {
+  return (
+    execution.context === request.context &&
+    execution.fallback_step === request.fallback_step &&
+    execution.step.provider === request.step.provider &&
+    execution.step.model === request.step.model &&
+    execution.step.cache === request.step.cache &&
+    execution.step.max_tokens === request.step.max_tokens
+  );
 }
 
 function spendClampedRoute(route: ModelRoute): ModelRoute {
@@ -737,6 +1122,7 @@ function failFromHook(
   attempts: LLMAttempt[],
   routingLogs: readonly RoutingLogEvent[],
   scribeDestination?: SanitiseDestination,
+  effectReceipt?: TrustedProviderEffectReceipt,
 ): RuntimeLLMFailure {
   const scribeReason =
     error.hook === 'scribe_sanitise' && error.reason.startsWith('scribe:')
@@ -750,6 +1136,7 @@ function failFromHook(
     fallback_step: fallbackStep,
     attempts,
     routing_logs: routingLogs,
+    ...(effectReceipt === undefined ? {} : { effect_receipt: effectReceipt }),
   };
   if (scribeDestination !== undefined && scribeReason?.success === true) {
     failure.scribe = { destination: scribeDestination, reason: scribeReason.data };
@@ -764,6 +1151,133 @@ function usageFromResponse(response: LLMResponse): LLMUsage {
     output_tokens: response.output_tokens,
     cache_read_input_tokens: response.cache_read_input_tokens,
     latency_ms: response.latency_ms,
+  };
+}
+
+const MISSING_GATEWAY_DATA_PROPERTY = Symbol('missing-gateway-data-property');
+
+function normaliseGatewayAdapterResult(value: unknown): TrustedGatewayAdapterResult | null {
+  const ok = ownGatewayDataProperty(value, 'ok');
+  if (ok === true) {
+    const data = ownGatewayDataProperty(value, 'data');
+    if (data === MISSING_GATEWAY_DATA_PROPERTY) return null;
+    const response = normaliseTrustedGatewayResponse(data);
+    return response === null ? null : { ok: true, data: response };
+  }
+  if (ok === false) {
+    const code = errorCodeSchema.safeParse(ownGatewayDataProperty(value, 'code'));
+    const error = ownGatewayDataProperty(value, 'error');
+    if (!code.success || typeof error !== 'string') return null;
+    const receiptStatus = ownGatewayDataProperty(value, 'receipt_status');
+    if (receiptStatus === 'unavailable') {
+      return code.data === 'transient'
+        ? {
+            ok: false,
+            code: 'transient',
+            error,
+            receipt_status: 'unavailable',
+          }
+        : null;
+    }
+    if (receiptStatus !== MISSING_GATEWAY_DATA_PROPERTY) return null;
+    return { ok: false, code: code.data, error };
+  }
+  return null;
+}
+
+function normaliseTrustedGatewayResponse(value: unknown): LLMResponse | null {
+  const expectedKeys = [
+    'cache_read_input_tokens',
+    'input_tokens',
+    'latency_ms',
+    'model',
+    'output_tokens',
+    'text',
+  ] as const;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  try {
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length !== expectedKeys.length ||
+      keys.some(
+        (key) =>
+          typeof key !== 'string' ||
+          !expectedKeys.includes(key as (typeof expectedKeys)[number]),
+      )
+    ) {
+      return null;
+    }
+    const copy: Record<string, unknown> = {};
+    for (const key of expectedKeys) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor)) return null;
+      copy[key] = descriptor.value;
+    }
+    if (
+      typeof copy.text !== 'string' ||
+      utf8ByteLengthWithinLimit(copy.text, TRUSTED_PROVIDER_RESPONSE_TEXT_MAX_UTF8_BYTES) === null
+    ) {
+      return null;
+    }
+    const parsed = llmResponseSchema.safeParse(copy);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function ownGatewayDataProperty(
+  value: unknown,
+  key: string,
+): unknown | typeof MISSING_GATEWAY_DATA_PROPERTY {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return MISSING_GATEWAY_DATA_PROPERTY;
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor === undefined || !('value' in descriptor)
+      ? MISSING_GATEWAY_DATA_PROPERTY
+      : descriptor.value;
+  } catch {
+    return MISSING_GATEWAY_DATA_PROPERTY;
+  }
+}
+
+function utf8ByteLengthWithinLimit(value: string, limit: number): number | null {
+  let bytes = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x7f) {
+      bytes += 1;
+    } else if (code <= 0x7ff) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < value.length) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+    if (bytes > limit) return null;
+  }
+  return bytes;
+}
+
+function trustedProviderMeteredTokens(response: LLMResponse): number | null {
+  const total = response.input_tokens + response.output_tokens;
+  return Number.isSafeInteger(total) && total >= 0 && total <= TRUSTED_PROVIDER_EFFECT_METERING_CAP
+    ? total
+    : null;
+}
+
+function unmeteredTrustedProviderReceipt(): TrustedProviderEffectReceipt {
+  return {
+    metered_tokens: TRUSTED_PROVIDER_EFFECT_METERING_CAP,
+    outcome: 'invalid_response',
   };
 }
 

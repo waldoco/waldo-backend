@@ -1056,11 +1056,11 @@ describe('RunLoopDO full contract FSM', () => {
     expect(openedRuns).toBe(0);
   });
 
-  it('schedules and inspects a fake run through authenticated local ingress', async () => {
+  it('keeps the legacy fake run surface visibly separate from trusted local ingress', async () => {
     const stub = freshStub();
     const dueAt = soon();
 
-    const scheduleResponse = await stub.fetch('https://run-loop.local/local/runs', {
+    const scheduleResponse = await stub.fetch('https://run-loop.local/local/fake-runs', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -1081,7 +1081,7 @@ describe('RunLoopDO full contract FSM', () => {
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const inspectResponse = await stub.fetch(
-      `https://run-loop.local/local/runs/${scheduled.run_id}`,
+      `https://run-loop.local/local/fake-runs/${scheduled.run_id}`,
       {
         headers: { 'x-waldo-local-run-token': LOCAL_RUN_TOKEN },
       },
@@ -2022,7 +2022,7 @@ describe('RunLoopDO full contract FSM', () => {
     expect(proof.sink).toEqual({ deliveries: 0, attempts: 0 });
   });
 
-  it('terminates deterministically when the governed iteration budget is exhausted', async () => {
+  it('blocks the over-cap provider effect before I/O when the iteration budget is exhausted', async () => {
     const stub = freshStub();
     const dueAt = soon();
     let llmCalls = 0;
@@ -2044,7 +2044,9 @@ describe('RunLoopDO full contract FSM', () => {
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
-    expect(gateway.requests).toHaveLength(11);
+    // The projected Governor check rejects iteration 11 before the gateway boundary, so ten
+    // governed provider effects are the complete physical side-effect budget.
+    expect(gateway.requests).toHaveLength(10);
     expect(proof.current).toEqual({
       state: 'FAILED',
       failure_reason: 'governor:iteration_budget_exhausted',
@@ -2387,6 +2389,35 @@ describe('RunLoopDO full contract FSM', () => {
       );
     },
   );
+
+  it('keeps the legacy direct DONE writer private and resumes through proactive delivery', async () => {
+    const stub = freshStub();
+    const dueAt = soon();
+    const runId = await stub.scheduleFakeRun({
+      scheduleId: 'brief:legacy-direct-done-rejected',
+      userId: `${USER}-legacy-direct-done-rejected`,
+      dueAt,
+      occurrenceAt: dueAt,
+    });
+    await runInDurableObject(stub, (instance) => {
+      (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'TOOLS_DONE';
+    });
+    await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+
+    await runInDurableObject(stub, async (instance) => {
+      // A TypeScript-private writer used to be reachable on this prototype. The runtime now keeps
+      // it ECMAScript-private, so neither an RPC caller nor a test can manufacture DONE outside
+      // the existing DeliveryGate/outbox path.
+      expect(Reflect.has(Object.getPrototypeOf(instance), 'advanceRun')).toBe(false);
+      await (instance as unknown as CrashableRunLoopInstance).alarm();
+    });
+
+    const proof = await stub.readRunProof(runId);
+    expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
+    expect(proof.fsm.slice(-3)).toEqual(['GATED', 'DELIVERED', 'DONE']);
+    expect(proof.outbox).toEqual([{ kind: 'brief', status: 'acked', attempts: 1 }]);
+    expect(proof.sink).toEqual({ deliveries: 1, attempts: 1 });
+  });
 
   it.each([
     {

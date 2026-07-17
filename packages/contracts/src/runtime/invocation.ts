@@ -136,6 +136,15 @@ export const runtimeInvocationBindingSchema = z.strictObject({
 });
 export type RuntimeInvocationBinding = z.infer<typeof runtimeInvocationBindingSchema>;
 
+export const invocationOutputDispositionKindSchema = z.enum([
+  'solicited_reply',
+  'proactive_delivery',
+  'internal_no_output',
+]);
+export type InvocationOutputDispositionKind = z.infer<
+  typeof invocationOutputDispositionKindSchema
+>;
+
 export const invocationOutputDispositionSchema = z.discriminatedUnion('disposition', [
   z.strictObject({
     disposition: z.literal('solicited_reply'),
@@ -262,6 +271,7 @@ const BLOCKED_TOOL_FAILURE_REASONS_BY_STAGE = {
   egress: ['egress_denied'],
   handler: [
     'handler_unavailable',
+    'effect_receipt_unavailable',
     'handler_acl_drift',
     'handler_failed',
     'invalid_handler_result',
@@ -269,6 +279,18 @@ const BLOCKED_TOOL_FAILURE_REASONS_BY_STAGE = {
   result: ['tool_result_error', 'invalid_tool_result'],
   size: ['result_oversize'],
 } as const;
+
+// A receipt is only legal after an adapter has crossed the tool boundary. These are the exact
+// bounded failure results that the trusted dispatcher can produce after that point; availability,
+// ACL, and pre-tool validation failures must remain receipt-free because no physical effect is
+// proven.
+const TRUSTED_REJECTED_EFFECT_FAILURE_REASONS = [
+  'hook_halt',
+  'invalid_handler_result',
+  'tool_result_error',
+  'invalid_tool_result',
+  'result_oversize',
+] as const;
 
 export const runtimeToolCheckpointSchema = z
   .discriminatedUnion('status', [
@@ -302,6 +324,16 @@ export const runtimeToolCheckpointSchema = z
         'size',
       ]),
       reason: runtimeToolDispatchFailureReasonSchema,
+      // Present only when a trusted V2 adapter did run and returned a bounded rejected receipt.
+      // It carries hashes only; pre-effect blocks intentionally have no effect receipt.
+      effect_receipt: z
+        .strictObject({
+          outcome: z.literal('rejected'),
+          args_hash: z.string().regex(/^[a-f0-9]{64}$/),
+          result_hash: z.string().regex(/^[a-f0-9]{64}$/),
+          argument_taint: sourceTaintSchema,
+        })
+        .optional(),
       audit_ref: opaqueRef('aud'),
     }),
   ])
@@ -312,6 +344,20 @@ export const runtimeToolCheckpointSchema = z
           code: 'custom',
           path: ['tool'],
           message: 'only parse-stage failures may omit a tool identity',
+        });
+      }
+
+      if (
+        checkpoint.effect_receipt !== undefined &&
+        (checkpoint.tool === null ||
+          !TRUSTED_REJECTED_EFFECT_FAILURE_REASONS.includes(
+            checkpoint.reason as (typeof TRUSTED_REJECTED_EFFECT_FAILURE_REASONS)[number],
+          ))
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['effect_receipt'],
+          message: 'rejected trusted tool receipts require a post-effect failure reason',
         });
       }
 
@@ -590,6 +636,21 @@ export function canonicalInvocationIdempotencySerialization(
   ]);
 }
 
+// Policy state is tenant-owned even when one authenticated principal legitimately belongs to
+// multiple tenants. Runtime derives and hashes this compact canonical material before writing
+// its journal/Governor/DeliveryGate policy-owner reference. The existing runtime run owner field
+// may still retain the opaque principal reference for run ownership; this helper scopes policy
+// isolation rather than prohibiting that durable runtime identity.
+export function canonicalTrustedOperationalScopeSerialization(
+  authority: VerifiedInvocationAuthority,
+): string {
+  const parsed = verifiedInvocationAuthoritySchema.parse(authority);
+  return JSON.stringify([
+    ['tenant_ref', parsed.tenant_ref],
+    ['principal_ref', parsed.principal_ref],
+  ]);
+}
+
 // The existing runtime record remains the V1 reader until a later run-loop lane writes V2 records.
 // It is intentionally not widened: fake-derived/get_crs rows remain readable without being claimed
 // as V2 provenance.
@@ -666,14 +727,18 @@ export const runtimeInvocationV2RecordSchema = z
     }
 
     for (const [index, checkpoint] of record.tool_checkpoints.entries()) {
+      const settledTool =
+        checkpoint.status === 'completed' ||
+        (checkpoint.status === 'blocked' && checkpoint.effect_receipt !== undefined);
       if (
-        checkpoint.status === 'completed' &&
+        settledTool &&
+        checkpoint.tool !== null &&
         !TOOL_PERMISSIONS[record.invocation.runtime_binding.trigger].includes(checkpoint.tool)
       ) {
         context.addIssue({
           code: 'custom',
           path: ['tool_checkpoints', index, 'tool'],
-          message: 'completed tool checkpoint must be allowed by the trusted trigger ACL',
+          message: 'settled tool checkpoint must be allowed by the trusted trigger ACL',
         });
       }
     }

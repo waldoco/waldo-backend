@@ -10,6 +10,7 @@ import type {
   PushClass,
   RunState,
   TriggerType,
+  TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import {
   assertIdempotentSink,
@@ -20,6 +21,7 @@ import {
   runtimeOperationalRefSchema,
   sinkAckSchema,
   sinkRequestSchema,
+  trustedInvocationEnvelopeSchema,
   triggerTypeSchema,
 } from '@waldo/contracts';
 import { computeAdmission } from '../delivery-gate/gate';
@@ -73,6 +75,12 @@ export type RunJournalOutboxCrashPoint =
   | 'post_sink_pre_ack'
   | 'post_ack_pre_return';
 
+export class TrustedRunOwnerScopeMismatchError extends Error {
+  constructor() {
+    super('trusted invocation owner scope mismatch');
+  }
+}
+
 export type StartRunInput = {
   userId: string;
   trigger: TriggerType;
@@ -80,6 +88,24 @@ export type StartRunInput = {
   loopType?: LoopType;
   occurrenceId?: string;
   candidate?: DeliveryCandidate;
+};
+
+// This deliberately stays module-private. TracerDO exposes StartRunInput only, which always
+// opens the established proactive path. RunLoopDO is the sole caller of this derived invocation
+// helper after it has accepted and persisted a TrustedInvocationEnvelope.
+type TrustedInvocationRunInput = Readonly<{
+  runId: string;
+  invocation: TrustedInvocationEnvelope;
+  // RunLoopDO derives this opaque tenant-plus-principal policy owner after trusted admission.
+  // It is intentionally not part of any public TracerDO/startRun vocabulary.
+  ownerScope: string;
+}>;
+
+type PreparedRunInput = StartRunInput & {
+  outputDisposition: TrustedInvocationEnvelope['output']['disposition'];
+  // Present only after RunLoopDO has derived the proactive event id from its own run id.
+  // Ordinary StartRun callers cannot use this persistence exemption.
+  trustedGeneratedEventId?: string;
 };
 
 export type EnqueueOutboxInput = Pick<OutboxIntent, 'run_id' | 'kind' | 'created_at'> & {
@@ -128,35 +154,52 @@ export class RunJournalOutbox {
   startRun(input: StartRunInput): string {
     const parsed = parseStartRunInput(input);
     const runId = this.deps.newRunId();
-    const candidate =
-      parsed.candidate === undefined
-        ? prepareCandidateForPersistence(defaultCandidateFor(parsed.trigger, runId), runId)
-        : prepareCandidateForPersistence(parsed.candidate);
     this.storage.transactionSync(() => {
-      this.journal.openRun({
-        runId,
-        userId: parsed.userId,
-        trigger: parsed.trigger,
-        occurrenceAt: parsed.occurrenceAt,
-      });
-      this.governor.startRun({
-        runId,
-        userId: parsed.userId,
-        trigger: parsed.trigger,
-        occurrenceAt: parsed.occurrenceAt,
-        loopType: parsed.loopType,
-        occurrenceId: parsed.occurrenceId,
-      });
-      this.store.writeCandidate(runId, candidate);
+      this.openPreparedRun({ ...parsed, outputDisposition: 'proactive_delivery' }, runId);
     });
     return runId;
+  }
+
+  // Narrow transaction helper for RunLoopDO's trusted admission. The output route comes from a
+  // validated envelope, never a TracerDO/StartRun caller, so it cannot be used to bypass a
+  // proactive DeliveryGate by selecting a different disposition.
+  openTrustedInvocationInCurrentTransaction(input: TrustedInvocationRunInput): void {
+    const parsed = parseTrustedInvocationRunInput(input);
+    if (this.journal.read(parsed.runId) !== null) {
+      throw new Error(
+        `openTrustedInvocationInCurrentTransaction: journal row already exists for ${parsed.runId}`,
+      );
+    }
+    this.openPreparedRun(parsed, parsed.runId);
   }
 
   // Read and validate the committed journal row after eviction. Progress is driven by tickRun so
   // a caller can inspect durable state without accidentally sending.
   resumeRun(runId: string): JournalRow | null {
     const run = this.journal.read(runId);
-    if (run !== null) this.readPreparedCandidate(runId);
+    if (run !== null && run.completion_mode === null) this.readPreparedCandidate(runId);
+    return run;
+  }
+
+  // The trusted loop has no caller-supplied delivery route, so it can validate the reduced
+  // journal independently of candidate loading. This is also required for an already-terminal
+  // V2 run: a corrupted completion discriminator must fail closed on every resume.
+  validateTrustedRun(runId: string, expectedOwnerScope?: string): JournalRow {
+    const run = this.journal.read(runId);
+    if (run === null) throw new Error(`validateTrustedRun: no journal row for ${runId}`);
+    if (expectedOwnerScope !== undefined) {
+      const ownerScope = prepareOperationalIdentity(
+        expectedOwnerScope,
+        'trusted invocation owner scope',
+      );
+      if (
+        run.user_id !== ownerScope ||
+        this.governor.readRunOwnerScope(runId) !== ownerScope
+      ) {
+        throw new TrustedRunOwnerScopeMismatchError();
+      }
+    }
+    this.assertDurableGateEvidence(run);
     return run;
   }
 
@@ -165,7 +208,34 @@ export class RunJournalOutbox {
   }
 
   admitRun(runId: string): GovernorDecision {
-    this.readPreparedCandidate(runId);
+    return this.admitPreparedRun(runId, 'proactive_delivery');
+  }
+
+  admitTrustedInvocation(runId: string, invocation: TrustedInvocationEnvelope): GovernorDecision {
+    const outputDisposition = trustedInvocationOutputDisposition(invocation);
+    const committed = this.journal.read(runId);
+    if (committed === null) throw new Error(`admitTrustedInvocation: no journal row for ${runId}`);
+    if (committed.state === 'GOVERNOR_ADMITTED' || committed.state === 'FAILED') {
+      const decision = this.governor.readDecision(runId);
+      if (decision === null) {
+        throw new Error(`admitTrustedInvocation: committed admission lacks governor decision for ${runId}`);
+      }
+      if (
+        (committed.state === 'GOVERNOR_ADMITTED' && decision.verdict !== 'admit') ||
+        (committed.state === 'FAILED' && decision.verdict !== 'deny')
+      ) {
+        throw new Error(`admitTrustedInvocation: journal/governor admission mismatch for ${runId}`);
+      }
+      return decision;
+    }
+    return this.admitPreparedRun(runId, outputDisposition);
+  }
+
+  private admitPreparedRun(
+    runId: string,
+    outputDisposition: TrustedInvocationEnvelope['output']['disposition'],
+  ): GovernorDecision {
+    if (outputDisposition === 'proactive_delivery') this.readPreparedCandidate(runId);
     let decision: GovernorDecision | null = null;
     this.storage.transactionSync(() => {
       const run = this.journal.read(runId);
@@ -190,9 +260,64 @@ export class RunJournalOutbox {
     );
   }
 
+  // A projected V2 preflight checks the next provider-effect budget without mutating counters.
+  // The receipt transaction remains the only usage write, so a crash cannot leave a phantom
+  // consumed iteration while still ensuring an over-cap provider call is never issued.
+  checkLoopUsageBudget(input: LoopUsageInput): GovernorDecision {
+    const state = this.journal.readState(input.runId);
+    if (state === null) throw new Error(`checkLoopUsageBudget: no journal row for ${input.runId}`);
+    if (state === 'DONE' || state === 'FAILED') {
+      const decision = this.governor.readDecision(input.runId);
+      if (decision === null) {
+        throw new Error(`checkLoopUsageBudget: terminal run has no governor decision for ${input.runId}`);
+      }
+      return decision;
+    }
+    if (state !== 'GOVERNOR_ADMITTED') {
+      throw new Error(`checkLoopUsageBudget requires GOVERNOR_ADMITTED, got ${state}`);
+    }
+    return this.governor.checkUsageBudget(input);
+  }
+
+  // Only a V2 receipt settlement may use this path. Unlike generic post-admission operations it
+  // never treats a terminal journal row as an idempotent no-op: an unresolved external effect
+  // must either settle while admitted or fail loudly as a receipt-bypass invariant violation.
+  recordTrustedProviderReceiptUsageInCurrentTransaction(
+    input: LoopUsageInput,
+  ): GovernorDecision {
+    return this.recordTrustedReceiptDecisionInCurrentTransaction(
+      input.runId,
+      'recordTrustedProviderReceiptUsage',
+      () => this.governor.recordSettledProviderUsage(input),
+    );
+  }
+
   recordLoopObservation(input: LoopObservationInput): GovernorDecision {
-    return this.recordPostAdmissionDecision(input.runId, 'recordLoopObservation', () =>
-      this.governor.recordObservation(input),
+    let decision: GovernorDecision | null = null;
+    this.storage.transactionSync(() => {
+      decision = this.recordLoopObservationInCurrentTransaction(input);
+    });
+    if (decision === null) throw new Error('recordLoopObservation: no governor decision');
+    return decision;
+  }
+
+  // RunLoopDO uses this narrow form to commit a completed V2 tool checkpoint in the same SQLite
+  // transaction as its Governor observation. It is not an alternate tool/runtime path.
+  recordLoopObservationInCurrentTransaction(input: LoopObservationInput): GovernorDecision {
+    return this.recordPostAdmissionDecisionInCurrentTransaction(
+      input.runId,
+      'recordLoopObservation',
+      () => this.governor.recordObservation(input),
+    );
+  }
+
+  recordTrustedToolReceiptObservationInCurrentTransaction(
+    input: LoopObservationInput,
+  ): GovernorDecision {
+    return this.recordTrustedReceiptDecisionInCurrentTransaction(
+      input.runId,
+      'recordTrustedToolReceiptObservation',
+      () => this.governor.recordSettledToolObservation(input),
     );
   }
 
@@ -213,25 +338,51 @@ export class RunJournalOutbox {
   ): GovernorDecision {
     let decision: GovernorDecision | null = null;
     this.storage.transactionSync(() => {
-      const state = this.journal.readState(runId);
-      if (state === null) throw new Error(`${operation}: no journal row for ${runId}`);
-      if (state === 'DONE' || state === 'FAILED') {
-        decision = this.governor.readDecision(runId);
-        if (decision === null) {
-          throw new Error(`${operation}: terminal run has no governor decision for ${runId}`);
-        }
-        return;
-      }
-      if (state !== 'GOVERNOR_ADMITTED') {
-        throw new Error(`${operation} requires GOVERNOR_ADMITTED, got ${state}`);
-      }
-      decision = record();
-      if (decision.verdict === 'deny') {
-        this.journal.advance(runId, 'FAILED');
-      }
+      decision = this.recordPostAdmissionDecisionInCurrentTransaction(runId, operation, record);
     });
     if (decision === null) {
       throw new Error(`${operation}: no governor decision for ${runId}`);
+    }
+    return decision;
+  }
+
+  private recordPostAdmissionDecisionInCurrentTransaction(
+    runId: string,
+    operation: string,
+    record: () => GovernorDecision,
+  ): GovernorDecision {
+    const state = this.journal.readState(runId);
+    if (state === null) throw new Error(`${operation}: no journal row for ${runId}`);
+    if (state === 'DONE' || state === 'FAILED') {
+      const decision = this.governor.readDecision(runId);
+      if (decision === null) {
+        throw new Error(`${operation}: terminal run has no governor decision for ${runId}`);
+      }
+      return decision;
+    }
+    if (state !== 'GOVERNOR_ADMITTED') {
+      throw new Error(`${operation} requires GOVERNOR_ADMITTED, got ${state}`);
+    }
+    const decision = record();
+    if (decision.verdict === 'deny') {
+      this.journal.advance(runId, 'FAILED');
+    }
+    return decision;
+  }
+
+  private recordTrustedReceiptDecisionInCurrentTransaction(
+    runId: string,
+    operation: string,
+    record: () => GovernorDecision,
+  ): GovernorDecision {
+    const state = this.journal.readState(runId);
+    if (state === null) throw new Error(`${operation}: no journal row for ${runId}`);
+    if (state !== 'GOVERNOR_ADMITTED') {
+      throw new Error(`${operation} requires GOVERNOR_ADMITTED, got ${state}`);
+    }
+    const decision = record();
+    if (decision.verdict === 'deny') {
+      this.journal.advance(runId, 'FAILED');
     }
     return decision;
   }
@@ -273,6 +424,65 @@ export class RunJournalOutbox {
     const gated = this.journal.read(runId);
     if (gated === null) throw new Error(`gateRun: no journal row after gate for ${runId}`);
     return gated;
+  }
+
+  // Non-proactive trusted invocations still leave one durable journal terminal transition, but
+  // never spend a proactive DeliveryGate budget or invent an outbox/sink effect.
+  completeTrustedInvocationWithoutProactiveDeliveryInCurrentTransaction(
+    runId: string,
+    invocation: TrustedInvocationEnvelope,
+  ): void {
+    const trusted = trustedInvocationEnvelopeSchema.parse(invocation);
+    if (trustedInvocationOutputDisposition(trusted) !== 'internal_no_output') {
+      throw new Error('only trusted internal_no_output may complete without DeliveryGate');
+    }
+    const run = this.journal.read(runId);
+    if (run === null) throw new Error(`completeWithoutProactiveDelivery: no journal row for ${runId}`);
+    if (run.state === 'DONE') {
+      if (
+        run.completion_mode !== 'trusted_internal_no_output' ||
+        run.verdict !== null ||
+        this.store.readCandidateJson(runId) !== null ||
+        this.outbox.readRows(runId).length !== 0
+      ) {
+        throwDurableDeliveryMismatch();
+      }
+      return;
+    }
+    if (run.state !== 'GOVERNOR_ADMITTED') {
+      throw new Error(
+        `completeWithoutProactiveDelivery requires GOVERNOR_ADMITTED, got ${run.state}`,
+      );
+    }
+    if (
+      run.verdict !== null ||
+      run.completion_mode !== null ||
+      this.store.readCandidateJson(runId) !== null ||
+      this.outbox.readRows(runId).length !== 0
+    ) {
+      throwDurableDeliveryMismatch();
+    }
+    this.journal.completeTrustedNonProactive(runId);
+  }
+
+  // RunLoopDO invokes this only after its immutable invocation_contract_v2 runtime marker has
+  // selected the trusted branch. It carries no disposition choice and cannot create an outbox.
+  failTrustedRunInCurrentTransaction(runId: string): void {
+    const run = this.journal.read(runId);
+    if (run === null) throw new Error(`failTrustedInvocation: no journal row for ${runId}`);
+    if (run.state === 'DONE' || run.state === 'FAILED') return;
+    if (run.state === 'ACK_RECORDED') {
+      // A sink acknowledgement is irreversible evidence. A later V2 provenance failure must not
+      // rewrite that fact into FAILED (which would make an acked outbox invalid); finish the
+      // reduced delivery journal forward while RunLoopDO records its separate typed runtime fail.
+      this.assertDurableGateEvidence(run);
+      this.journal.advance(runId, 'DONE');
+      return;
+    }
+    // A V2 sidecar can be found corrupt after a durable gate or in-doubt send. Failing closed must
+    // still terminalize the existing journal instead of throwing and leaving a schedulable run.
+    // The reduced journal FSM explicitly permits FAILED from every non-terminal state.
+    this.journal.advance(runId, 'FAILED');
   }
 
   async tickNextOpenRun(): Promise<void> {
@@ -521,6 +731,16 @@ export class RunJournalOutbox {
   // This stays local to the current single-intent runtime; widening it belongs to the deferred
   // multi-kind outbox contract rather than this DeliveryGate hardening slice.
   private assertDurableGateEvidence(run: JournalRow): void {
+    if (run.state === 'DONE' && run.verdict === null) {
+      if (
+        run.completion_mode !== 'trusted_internal_no_output' ||
+        this.store.readCandidateJson(run.run_id) !== null ||
+        this.outbox.readRows(run.run_id).length !== 0
+      ) {
+        throwDurableDeliveryMismatch();
+      }
+      return;
+    }
     if (
       run.state === 'GATED' ||
       run.state === 'SINK_SENT' ||
@@ -676,6 +896,29 @@ export class RunJournalOutbox {
       throw new Error(`crash-injection:${point}`);
     }
   }
+
+  private openPreparedRun(input: PreparedRunInput, runId: string): void {
+    this.journal.openRun({
+      runId,
+      userId: input.userId,
+      trigger: input.trigger,
+      occurrenceAt: input.occurrenceAt,
+    });
+    this.governor.startRun({
+      runId,
+      userId: input.userId,
+      trigger: input.trigger,
+      occurrenceAt: input.occurrenceAt,
+      loopType: input.loopType,
+      occurrenceId: input.occurrenceId,
+    });
+    if (input.outputDisposition !== 'proactive_delivery') return;
+    const candidate =
+      input.candidate === undefined
+        ? prepareCandidateForPersistence(defaultCandidateFor(input.trigger, runId), runId)
+        : prepareCandidateForPersistence(input.candidate, input.trustedGeneratedEventId);
+    this.store.writeCandidate(runId, candidate);
+  }
 }
 
 function admitToState(verdict: 'admit' | 'deny'): 'GOVERNOR_ADMITTED' | 'FAILED' {
@@ -711,6 +954,37 @@ function parseStartRunInput(input: StartRunInput): StartRunInput {
   return { ...input, userId, occurrenceId, trigger, candidate };
 }
 
+function parseTrustedInvocationRunInput(input: TrustedInvocationRunInput): PreparedRunInput & {
+  runId: string;
+} {
+  if (typeof input !== 'object' || input === null) {
+    throw new Error('trusted invocation run requires an input object');
+  }
+  const runId = runtimeOperationalRefSchema.parse(input.runId);
+  const invocation = trustedInvocationEnvelopeSchema.parse(input.invocation);
+  const ownerScope = prepareOperationalIdentity(input.ownerScope, 'trusted invocation owner scope');
+  const outputDisposition = trustedInvocationOutputDisposition(invocation);
+  return {
+    runId,
+    userId: ownerScope,
+    trigger: invocation.runtime_binding.trigger,
+    occurrenceAt: invocation.occurrence.occurred_at,
+    occurrenceId: invocation.occurrence.occurrence_ref,
+    candidate:
+      outputDisposition === 'proactive_delivery'
+        ? defaultCandidateForTrustedInvocation(invocation, runId)
+        : undefined,
+    outputDisposition,
+    trustedGeneratedEventId: outputDisposition === 'proactive_delivery' ? runId : undefined,
+  };
+}
+
+function trustedInvocationOutputDisposition(
+  invocation: TrustedInvocationEnvelope,
+): TrustedInvocationEnvelope['output']['disposition'] {
+  return trustedInvocationEnvelopeSchema.parse(invocation).output.disposition;
+}
+
 function defaultCandidateFor(trigger: TriggerType, runId: string): DeliveryCandidate {
   if (trigger !== KIND) {
     throw new Error(`startRun requires a candidate for trigger ${trigger}`);
@@ -718,6 +992,21 @@ function defaultCandidateFor(trigger: TriggerType, runId: string): DeliveryCandi
   return deliveryCandidateSchema.parse({
     push_class: KIND,
     trigger,
+    event_id: runId,
+    expires_at: null,
+  });
+}
+
+function defaultCandidateForTrustedInvocation(
+  invocation: TrustedInvocationEnvelope,
+  runId: string,
+): DeliveryCandidate {
+  if (invocation.runtime_binding.trigger !== 'brief') {
+    throw new Error('trusted proactive invocation requires a supported proactive trigger');
+  }
+  return deliveryCandidateSchema.parse({
+    push_class: 'brief',
+    trigger: invocation.runtime_binding.trigger,
     event_id: runId,
     expires_at: null,
   });

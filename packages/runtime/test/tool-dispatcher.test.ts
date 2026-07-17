@@ -28,6 +28,7 @@ import {
   type ToolDispatcherContext,
   type RuntimeToolCall,
 } from '../src/tools/dispatcher';
+import type { HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
@@ -55,6 +56,193 @@ function dispatcherContext(trigger: TriggerType): ToolDispatcherContext {
 }
 
 describe('ToolDispatcher', () => {
+  it('fails closed before handler I/O when a trusted effect has no reconciliation contract', async () => {
+    let handled = 0;
+    let issued = 0;
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived summary.',
+      schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      idempotentOnKey: true,
+      async handle() {
+        handled += 1;
+        return { ok: true, data: { summary: 'steady' }, source_taint: null };
+      },
+      async executeOrReconcile() {
+        issued += 1;
+        return { ok: true, data: { summary: 'must-not-issue' }, source_taint: null };
+      },
+    };
+
+    await expect(
+      dispatchTool(
+        { id: 'call-trusted-effect-contract', name: 'get_crs', args: { range_days: 1 } },
+        dispatcherContext('brief'),
+        {
+          handlers: [handler],
+          trustedEffect: {
+            async prepare() {
+              return {
+                idempotency_key: 'idk_11111111111111111111111111111111',
+                request_digest: '1'.repeat(64),
+                operation: 'issue',
+              };
+            },
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ ok: false, reason: 'effect_receipt_unavailable' });
+    expect(handled).toBe(0);
+    expect(issued).toBe(0);
+  });
+
+  it('uses the handler reconciliation operation for a trusted effect', async () => {
+    let legacyHandled = 0;
+    let reconciled = 0;
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived summary.',
+      schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      idempotentOnKey: true,
+      async handle() {
+        legacyHandled += 1;
+        return { ok: true, data: { summary: 'legacy' }, source_taint: null };
+      },
+      async executeOrReconcile(args, _ctx, effect) {
+        reconciled += 1;
+        expect(args).toEqual({ range_days: 1 });
+        expect(effect.idempotency_key).toBe('idk_22222222222222222222222222222222');
+        return { ok: true, data: { summary: 'reconciled' }, source_taint: null };
+      },
+      async reconcileTrustedEffect(effect) {
+        expect(effect.operation).toBe('reconcile');
+        return { ok: true, data: { summary: 'recovered' }, source_taint: null };
+      },
+    };
+
+    await expect(
+      dispatchTool(
+        { id: 'call-trusted-effect-reconcile', name: 'get_crs', args: { range_days: 1 } },
+        dispatcherContext('brief'),
+        {
+          handlers: [handler],
+          trustedEffect: {
+            async prepare() {
+              return {
+                idempotency_key: 'idk_22222222222222222222222222222222',
+                request_digest: '2'.repeat(64),
+                operation: 'issue',
+              };
+            },
+          },
+        },
+      ),
+    ).resolves.toMatchObject({ ok: true, data: { summary: 'reconciled' } });
+    expect(reconciled).toBe(1);
+    expect(legacyHandled).toBe(0);
+  });
+
+  it('preserves an unexpected trusted tool reconciler cause instead of fabricating a receipt', async () => {
+    const cause = new Error('trusted tool reconciler storage sentinel');
+    const operations: Array<'issue' | 'reconcile'> = [];
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived summary.',
+      schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      idempotentOnKey: true,
+      async handle() {
+        throw new Error('trusted dispatch must use executeOrReconcile');
+      },
+      async executeOrReconcile(_args, _ctx, effect) {
+        operations.push(effect.operation);
+        throw cause;
+      },
+      async reconcileTrustedEffect() {
+        return { ok: true, data: { summary: 'unused' }, source_taint: null };
+      },
+    };
+
+    await expect(
+      dispatchTool(
+        { id: 'call-trusted-effect-throw', name: 'get_crs', args: { range_days: 1 } },
+        dispatcherContext('brief'),
+        {
+          handlers: [handler],
+          trustedEffect: {
+            async prepare() {
+              return {
+                idempotency_key: 'idk_33333333333333333333333333333333',
+                request_digest: '3'.repeat(64),
+                operation: 'issue',
+              };
+            },
+          },
+        },
+      ),
+    ).rejects.toBe(cause);
+    expect(operations).toEqual(['issue']);
+  });
+
+  it('preserves a non-hook post-tool failure after the trusted effect boundary', async () => {
+    const cause = new Error('trusted post-tool registry sentinel');
+    let registryIterations = 0;
+    const extraHooks = new Proxy([] as HookRegistry<ToolDispatcherContext>, {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator) {
+          registryIterations += 1;
+          if (registryIterations === 2) throw cause;
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const operations: Array<'issue' | 'reconcile'> = [];
+    const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {
+      name: 'get_crs',
+      description: 'Return a derived summary.',
+      schema: getCrsArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('get_crs'),
+      autonomy_gated: false,
+      idempotentOnKey: true,
+      async handle() {
+        throw new Error('trusted dispatch must use executeOrReconcile');
+      },
+      async executeOrReconcile(_args, _ctx, effect) {
+        operations.push(effect.operation);
+        return { ok: true, data: { summary: 'steady' }, source_taint: null };
+      },
+      async reconcileTrustedEffect() {
+        return { ok: true, data: { summary: 'unused' }, source_taint: null };
+      },
+    };
+
+    await expect(
+      dispatchTool(
+        { id: 'call-trusted-effect-post-hook', name: 'get_crs', args: { range_days: 1 } },
+        dispatcherContext('brief'),
+        {
+          handlers: [handler],
+          extraHooks,
+          trustedEffect: {
+            async prepare() {
+              return {
+                idempotency_key: 'idk_55555555555555555555555555555555',
+                request_digest: '5'.repeat(64),
+                operation: 'issue',
+              };
+            },
+          },
+        },
+      ),
+    ).rejects.toBe(cause);
+    expect(operations).toEqual(['issue']);
+  });
+
   it('denies a missing, null, empty, or blank authenticated subject before handler execution', async () => {
     let handled = 0;
     const handler: ToolHandler<GetCrsArgs, { summary: string }, ToolDispatcherContext> = {

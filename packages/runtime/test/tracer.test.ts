@@ -179,8 +179,20 @@ function expectExactlyOnce(d: Durable, sink: FakeSink) {
   expect(sink.observedDeliveries()).toBe(1);
 }
 
-async function schedule(stub: DurableObjectStub<TracerDO>) {
-  return stub.schedule({ userId: USER, trigger: KIND, occurrenceAt: futureOccurrence() });
+async function schedule(stub: DurableObjectStub<TracerDO>, occurrenceAt = futureOccurrence()) {
+  return stub.schedule({ userId: USER, trigger: KIND, occurrenceAt });
+}
+
+async function forceScheduleDue(stub: DurableObjectStub<TracerDO>): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    const now = Date.now();
+    state.storage.sql.exec(
+      'UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ?',
+      now,
+      now,
+      now,
+    );
+  });
 }
 
 // The resume wake, driven on the reconstructed post-eviction instance. A crashing alarm consumes the
@@ -406,9 +418,11 @@ describe('TracerDO edge lanes', () => {
     const sink = new FakeSink();
     const stub = freshStub();
 
-    // This test deliberately invokes the second alarm after the first has completed. Non-storage
-    // awaits may interleave DO events; concurrent admission is covered by the DeliveryGate race test.
-    await schedule(stub);
+    // Hold the real alarm well beyond test setup, then make the persisted row due immediately
+    // before the controlled manual alarm. This prevents workerd from auto-firing the first wake
+    // while the test is establishing the terminal re-entry scenario.
+    await schedule(stub, Date.now() + 60_000);
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     // A later alarm invocation observes the terminal run and no-ops (findOpenRun returns null once
