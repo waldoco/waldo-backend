@@ -137,6 +137,25 @@ describe('journalRow', () => {
     );
   });
 
+  it('accepts a null-verdict DONE row only with the durable trusted no-output discriminator', () => {
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        state: 'DONE',
+        verdict: null,
+        completion_mode: 'trusted_internal_no_output',
+      }).success,
+    ).toBe(true);
+    expect(
+      journalRowSchema.safeParse({
+        ...baseRow,
+        state: 'FAILED',
+        verdict: null,
+        completion_mode: 'trusted_internal_no_output',
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts any known runtime trigger, not only fetch_alert', () => {
     expect(
       journalRowSchema.safeParse({

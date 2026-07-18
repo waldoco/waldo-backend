@@ -532,6 +532,24 @@ describe('promoted run journal/outbox runtime interface', () => {
     });
     await expect(
       runInDurableObject(runtime, async (instance) =>
+        (instance as TracerDO).enqueueOutbox({ ...intent, verdict: 'degrade' }),
+      ),
+    ).rejects.toThrow('enqueueOutbox verdict degrade does not match admission send');
+    const afterMismatchedVerdict = await runInDurableObject(runtime, (_instance, state) => {
+      const journalState = state.storage.sql
+        .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
+        .one().state;
+      const outboxRows = state.storage.sql
+        .exec<{ n: number }>('SELECT count(*) AS n FROM outbox WHERE run_id = ?', runId)
+        .one().n;
+      return { journalState, outboxRows };
+    });
+    expect(afterMismatchedVerdict).toEqual({
+      journalState: 'GOVERNOR_ADMITTED',
+      outboxRows: 0,
+    });
+    await expect(
+      runInDurableObject(runtime, async (instance) =>
         (instance as TracerDO).enqueueOutbox({
           ...intent,
           idempotency_key: CALLER_SUPPLIED_KEY,

@@ -192,7 +192,7 @@ describe('Loop Governor runtime gate', () => {
     ]);
   });
 
-  it('denies an unregistered loop before DeliveryGate or outbox side effects', async () => {
+  it('admits the bounded chat policy without prematurely creating DeliveryGate or outbox effects', async () => {
     const sink = new FakeSink();
     const runtime = freshRuntimeStub();
     const runId = await runtime.startRun({
@@ -203,23 +203,25 @@ describe('Loop Governor runtime gate', () => {
       candidate: {
         push_class: 'brief',
         trigger: 'brief',
-        event_id: 'chat-loop-open-decision',
+        event_id: 'chat-loop-policy-admission',
         expires_at: null,
       },
     });
-
-    await tick(runtime, runId);
-
+    expect(await admit(runtime, runId)).toMatchObject({
+      verdict: 'admit',
+      reason: 'policy_admitted',
+      loopType: 'chat',
+    });
     expect(await readState(runtime, runId)).toEqual({
-      state: 'FAILED',
+      state: 'GOVERNOR_ADMITTED',
       verdict: null,
       gate_reason: null,
       outboxRows: 0,
       classRows: 0,
       budgetRows: 0,
       governor: {
-        verdict: 'deny',
-        reason: 'policy_missing',
+        verdict: 'admit',
+        reason: 'policy_admitted',
         disposition: null,
         tokens_used: 0,
       },

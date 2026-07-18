@@ -177,16 +177,29 @@ describe('LOOP_POLICIES registry', () => {
     expect(LOOP_POLICIES.dreaming?.priority_tier).toBe('routine');
   });
 
-  it('registers the six proactive loops but leaves chat an open decision', () => {
+  it('registers the six proactive loops and the bounded active-chat lane', () => {
     expect(Object.keys(LOOP_POLICIES).sort()).toEqual([
       'brief',
+      'chat',
       'dreaming',
       'fetch',
       'intervention',
       'patrol',
       'pre_activity_spot',
     ]);
-    expect('chat' in LOOP_POLICIES).toBe(false);
+    expect(LOOP_POLICIES.chat).toEqual({
+      name: 'chat',
+      loop_type: 'chat',
+      priority_tier: 'routine',
+      max_tokens_per_run: 12_000,
+      max_subagent_spawns_per_run: 0,
+      max_iterations_per_run: 3,
+      kill_flag_scope: 'loop',
+      socket_residency: 'active-chat-only',
+      egress_gated: true,
+      autonomy_level: 'L0',
+      cooldown_min: 0,
+    });
   });
 });
 
@@ -201,9 +214,8 @@ describe('fail-closed admission', () => {
     expect(admit(lookupLoopPolicy('fetch'))).toBe('admit');
   });
 
-  it('denies an unregistered / open-decision loop (chat) fail-closed', () => {
-    expect(lookupLoopPolicy('chat')).toBeNull();
-    expect(admit(lookupLoopPolicy('chat'))).toBe('deny');
+  it('admits the bounded chat policy through the same Governor contract', () => {
+    expect(admit(lookupLoopPolicy('chat'))).toBe('admit');
   });
 });
 

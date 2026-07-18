@@ -6,6 +6,7 @@ import type {
   RecallKey,
   RecallResult,
   RuntimeContextCheckpoint,
+  RuntimeContextFailureReason,
   RuntimeContextSource,
   SkillExclusion,
   SourceTaint,
@@ -231,22 +232,9 @@ export type ContextCompositionEvidence = Readonly<{
   }>;
 }>;
 
-export type ContextCompositionFailureCode =
-  | 'invalid_trusted_invocation'
-  | 'invalid_runtime_inputs'
-  | 'input_integrity'
-  | 'materials_unavailable'
-  | 'identity_mismatch'
-  | 'owner_binding_mismatch'
-  | 'skill_snapshot_invalid'
-  | 'skill_row_invalid'
-  | 'skill_content_oversize'
-  | 'mandatory_context_missing'
-  | 'health_context_invalid'
-  | 'recall_integrity'
-  | 'sanitisation_failed'
-  | 'provenance_invalid'
-  | 'assembly_failed';
+// The content-free failure vocabulary is contract-owned so ContextComposer and RunLoopDO cannot
+// drift into two representations of the same replay-safe fact.
+export type ContextCompositionFailureCode = RuntimeContextFailureReason;
 
 export type ContextCompositionResult =
   | Readonly<{

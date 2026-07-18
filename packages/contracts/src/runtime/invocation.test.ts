@@ -9,6 +9,7 @@ import {
 import {
   acceptTrustedInvocation,
   canonicalInvocationIdempotencySerialization,
+  canonicalTrustedOperationalScopeSerialization,
   legacyRuntimeRunRecordSchema,
   OUTPUT_DISPOSITION_SEMANTICS,
   parsePersistedInvocationRecord,
@@ -228,6 +229,47 @@ describe('trusted invocation acceptance', () => {
     expect(canonicalInvocationIdempotencySerialization(anotherTenant)).not.toBe(
       canonicalInvocationIdempotencySerialization(initial),
     );
+  });
+
+  it('serializes the trusted operational scope from the accepted tenant and principal only', () => {
+    const initial = accept();
+    const renewedVerification = accept({
+      ...trustedAdmission,
+      verified_authority: {
+        ...trustedAdmission.verified_authority,
+        verification_ref: ref('ver', 'c'.repeat(32)),
+      },
+    });
+    const anotherTenant = accept({
+      ...trustedAdmission,
+      verified_authority: {
+        ...trustedAdmission.verified_authority,
+        tenant_ref: ref('ten', 'd'.repeat(32)),
+      },
+    });
+    const anotherPrincipal = accept({
+      ...trustedAdmission,
+      verified_authority: {
+        ...trustedAdmission.verified_authority,
+        principal_ref: ref('prn', 'e'.repeat(32)),
+      },
+    });
+
+    expect(canonicalTrustedOperationalScopeSerialization(initial.verified_authority)).toBe(
+      JSON.stringify([
+        ['tenant_ref', trustedAdmission.verified_authority.tenant_ref],
+        ['principal_ref', trustedAdmission.verified_authority.principal_ref],
+      ]),
+    );
+    expect(
+      canonicalTrustedOperationalScopeSerialization(renewedVerification.verified_authority),
+    ).toBe(canonicalTrustedOperationalScopeSerialization(initial.verified_authority));
+    expect(
+      canonicalTrustedOperationalScopeSerialization(anotherTenant.verified_authority),
+    ).not.toBe(canonicalTrustedOperationalScopeSerialization(initial.verified_authority));
+    expect(
+      canonicalTrustedOperationalScopeSerialization(anotherPrincipal.verified_authority),
+    ).not.toBe(canonicalTrustedOperationalScopeSerialization(initial.verified_authority));
   });
 
   it('serializes trusted idempotency material in a fixed, surface-free order', () => {
@@ -667,6 +709,7 @@ describe('generic runtime tool checkpoints', () => {
     invalid_args: 'validation',
     acl_denied: 'acl',
     handler_unavailable: 'handler',
+    effect_receipt_unavailable: 'handler',
     handler_acl_drift: 'handler',
     hook_halt: 'hook',
     approval_denied: 'approval',
@@ -814,6 +857,54 @@ describe('generic runtime tool checkpoints', () => {
     ).toBe(true);
   });
 
+  it('allows only bounded post-effect rejected receipts on blocked checkpoints', () => {
+    const receipt = {
+      outcome: 'rejected' as const,
+      args_hash: 'c'.repeat(64),
+      result_hash: 'd'.repeat(64),
+      argument_taint: null,
+    };
+    const postEffect = {
+      checkpoint_version: 2 as const,
+      status: 'blocked' as const,
+      call_ref: ref('call'),
+      tool: 'get_crs' as const,
+      stage: 'result' as const,
+      reason: 'tool_result_error' as const,
+      effect_receipt: receipt,
+      audit_ref: ref('aud'),
+    };
+
+    expect(runtimeToolCheckpointSchema.safeParse(postEffect).success).toBe(true);
+    expect(
+      runtimeToolCheckpointSchema.safeParse({
+        ...postEffect,
+        effect_receipt: { ...receipt, raw_result: 'private-result' },
+      }).success,
+    ).toBe(false);
+    for (const reason of [
+      'handler_unavailable',
+      'effect_receipt_unavailable',
+      'handler_acl_drift',
+      'handler_failed',
+    ] as const) {
+      expect(
+        runtimeToolCheckpointSchema.safeParse({
+          ...postEffect,
+          stage: 'handler',
+          reason,
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      runtimeToolCheckpointSchema.safeParse({
+        ...postEffect,
+        stage: 'acl',
+        reason: 'acl_denied',
+      }).success,
+    ).toBe(false);
+  });
+
   it('covers every dispatcher reason with its accurate durable checkpoint stage', () => {
     expect(Object.keys(blockedStageByReason).sort()).toEqual(
       [...runtimeToolDispatchFailureReasonSchema.options].sort(),
@@ -899,6 +990,28 @@ describe('generic runtime tool checkpoints', () => {
             ...completedCheckpoint,
             tool: 'get_crs' as const,
             audit_ref: ref('aud', 'd'.repeat(32)),
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      runtimeInvocationV2RecordSchema.safeParse({
+        ...v2Record,
+        tool_checkpoints: [
+          {
+            checkpoint_version: 2,
+            status: 'blocked',
+            call_ref: ref('call'),
+            tool: 'execute_code',
+            stage: 'result',
+            reason: 'tool_result_error',
+            effect_receipt: {
+              outcome: 'rejected',
+              args_hash: 'c'.repeat(64),
+              result_hash: 'd'.repeat(64),
+              argument_taint: null,
+            },
+            audit_ref: ref('aud'),
           },
         ],
       }).success,

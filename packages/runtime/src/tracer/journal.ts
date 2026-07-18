@@ -19,6 +19,7 @@ type JournalSqlRow = {
   state: string;
   verdict: string | null;
   gate_reason: string | null;
+  completion_mode: string | null;
   occurrence_at: number;
   created_at: number;
   updated_at: number;
@@ -32,6 +33,7 @@ function toRow(r: JournalSqlRow): JournalRow {
     state: r.state,
     verdict: r.verdict,
     gate_reason: r.gate_reason,
+    completion_mode: r.completion_mode,
     occurrence_at: r.occurrence_at,
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -104,6 +106,21 @@ export class Journal {
     this.sql.exec(
       'UPDATE journal SET state = ?, updated_at = ? WHERE run_id = ?',
       to,
+      this.deps.now(),
+      runId,
+    );
+  }
+
+  // This is deliberately not a generic FSM edge. RunJournalOutbox calls it only after it has
+  // verified a persisted non-proactive TrustedInvocationEnvelope and the absence of any candidate
+  // or outbox effect.
+  completeTrustedNonProactive(runId: string): void {
+    const from = this.readState(runId);
+    if (from !== 'GOVERNOR_ADMITTED') {
+      throw new Error(`completeTrustedNonProactive requires GOVERNOR_ADMITTED, got ${from}`);
+    }
+    this.sql.exec(
+      "UPDATE journal SET state = 'DONE', completion_mode = 'trusted_internal_no_output', updated_at = ? WHERE run_id = ?",
       this.deps.now(),
       runId,
     );

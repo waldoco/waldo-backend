@@ -67,6 +67,7 @@ export type RuntimeRunContext = z.infer<typeof runtimeRunContextSchema>;
 export const runtimeToolDispatchFailureReasonSchema = z.enum([
   'unknown_tool',
   'handler_unavailable',
+  'effect_receipt_unavailable',
   'handler_acl_drift',
   'acl_denied',
   'invalid_args',
@@ -101,14 +102,50 @@ export const runtimeProviderFailureReasonSchema = z.enum([
   'hook_halt',
   'gateway_exhausted',
   'invalid_response',
+  'request_oversize',
   'template_unavailable',
+  'effect_receipt_unavailable',
 ]);
 export type RuntimeProviderFailureReason = z.infer<typeof runtimeProviderFailureReasonSchema>;
+
+// ContextComposer keeps a content-free failure vocabulary at its public seam. The RunLoop carries
+// that vocabulary forward rather than serialising an adapter exception, source text, or prompt.
+export const runtimeContextFailureReasonSchema = z.enum([
+  'invalid_trusted_invocation',
+  'invalid_runtime_inputs',
+  'input_integrity',
+  'materials_unavailable',
+  'identity_mismatch',
+  'owner_binding_mismatch',
+  'skill_snapshot_invalid',
+  'skill_row_invalid',
+  'skill_content_oversize',
+  'mandatory_context_missing',
+  'health_context_invalid',
+  'recall_integrity',
+  'sanitisation_failed',
+  'provenance_invalid',
+  'assembly_failed',
+]);
+export type RuntimeContextFailureReason = z.infer<typeof runtimeContextFailureReasonSchema>;
+
+export const runtimeReplayFailureReasonSchema = z.enum([
+  'artifact_unavailable',
+  'artifact_invalid',
+  'artifact_mismatch',
+]);
+export type RuntimeReplayFailureReason = z.infer<typeof runtimeReplayFailureReasonSchema>;
+
+export const runtimeOutputFailureReasonSchema = z.enum(['transport_unconfigured']);
+export type RuntimeOutputFailureReason = z.infer<typeof runtimeOutputFailureReasonSchema>;
 
 export const runtimeRunFailureReasonSchema = z.union([
   z.templateLiteral(['governor:', runtimeGovernorDenyReasonSchema]),
   z.templateLiteral(['llm:', runtimeProviderFailureReasonSchema]),
   z.templateLiteral(['llm_observe:', runtimeProviderFailureReasonSchema]),
+  z.templateLiteral(['context:', runtimeContextFailureReasonSchema]),
+  z.templateLiteral(['replay:', runtimeReplayFailureReasonSchema]),
+  z.templateLiteral(['output:', runtimeOutputFailureReasonSchema]),
   z.literal('tool_parse:invalid_args'),
   z.templateLiteral(['tool_dispatch:', runtimeToolDispatchFailureReasonSchema]),
   z.templateLiteral(['delivery_gate:', deliveryGateReasonSchema]),

@@ -12,12 +12,14 @@ export function ensureSchema(storage: DurableObjectStorage): void {
       state         TEXT NOT NULL,
       verdict       TEXT,
       gate_reason   TEXT,
+      completion_mode TEXT,
       occurrence_at INTEGER NOT NULL,
       created_at    INTEGER NOT NULL,
       updated_at    INTEGER NOT NULL
     );
   `);
   ensureColumn(sql, 'journal', 'gate_reason', 'TEXT');
+  ensureColumn(sql, 'journal', 'completion_mode', 'TEXT');
 
   sql.exec(`
     CREATE TABLE IF NOT EXISTS run_candidates (
