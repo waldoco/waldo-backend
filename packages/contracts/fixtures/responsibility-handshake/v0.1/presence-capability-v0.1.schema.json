@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "offlineCommands": {
+      "type": "string",
+      "const": "none"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "offlineCommands"
+  ],
+  "additionalProperties": false,
+  "$id": "urn:waldo:protocol:responsibility-handshake:0.1:presence-capability",
+  "title": "Waldo PresenceCapabilityV01",
+  "description": "Structural interoperability schema. Canonical admission also requires the listed Waldo runtime invariants.",
+  "x-waldo-validation-level": "structural",
+  "x-waldo-runtime-validator-required": true,
+  "x-waldo-runtime-invariants": {
+    "offlineCommands": "none"
+  }
+}

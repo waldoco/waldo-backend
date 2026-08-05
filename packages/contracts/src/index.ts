@@ -45,7 +45,47 @@ export * from './runtime/loop-policy';
 export * from './runtime/sink';
 export * from './runtime/routing';
 export * from './runtime/evidence';
-export * from './protocol/responsibility-handshake-v0-1';
+export {
+  actorRefSchema,
+  agentSessionActivityObservationPayloadSchema,
+  agentSessionActivityObservedEventSchema,
+  aggregateRefSchema,
+  candidateEvidenceObservationPayloadSchema,
+  candidateEvidenceObservedEventSchema,
+  canonicalizeSurfaceCommandRequestForDigest,
+  domainEventSchema,
+  judgmentNeededObservationPayloadSchema,
+  judgmentNeededObservedEventSchema,
+  presenceCapabilityV01Schema,
+  projectionPageSchema,
+  protocolDigestSchema,
+  protocolIdSchema,
+  protocolNameSchema,
+  protocolRevisionSchema,
+  protocolVersionV01Schema,
+  responsibilityCapturePayloadSchema,
+  responsibilityCaptureRequestSchema,
+  responsibilityCaptureTrustedEnvelopeSchema,
+  surfaceAggregateRefSchema,
+  surfaceCommandRequestSchema,
+  trustedCommandEnvelopeSchema,
+} from './protocol/responsibility-handshake-v0-1';
+export type {
+  ActorRef,
+  AgentSessionActivityObservationPayload,
+  AggregateRef,
+  CandidateEvidenceObservationPayload,
+  DomainEvent,
+  JudgmentNeededObservationPayload,
+  PresenceCapabilityV01,
+  ProjectionPage,
+  ResponsibilityCapturePayload,
+  ResponsibilityCaptureRequest,
+  ResponsibilityCaptureTrustedEnvelope,
+  SurfaceAggregateRef,
+  SurfaceCommandRequest,
+  TrustedCommandEnvelope,
+} from './protocol/responsibility-handshake-v0-1';
 export * from './telemetry/engagement';
 export * from './public/dto';
 export * from './public/morning-brief';

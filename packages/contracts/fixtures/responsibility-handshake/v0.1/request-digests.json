@@ -63,6 +63,21 @@
       },
       "canonicalRequest": "{\"clientIssuedAt\":\"2026-08-05T12:00:00Z\",\"commandType\":\"responsibility.capture\",\"payload\":{\"userStatement\":\"  Keep the exact user wording.  \"},\"presenceRegistrationId\":\"presence_registration_01\",\"protocolVersion\":\"0.1\",\"requestId\":\"request_capture_whitespace_01\"}",
       "expectedRequestDigest": "sha256:2c520972230d48970c597800c59843807d7de994bd7649158d92ea69f00b8757"
+    },
+    {
+      "name": "unicode and JSON escaping",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_escaping_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Handle \"quoted\" paths like C:\\work.\nKeep 🐕 intact."
+        }
+      },
+      "canonicalRequest": "{\"clientIssuedAt\":\"2026-08-05T12:00:00Z\",\"commandType\":\"responsibility.capture\",\"payload\":{\"userStatement\":\"Handle \\\"quoted\\\" paths like C:\\\\work.\\nKeep 🐕 intact.\"},\"presenceRegistrationId\":\"presence_registration_01\",\"protocolVersion\":\"0.1\",\"requestId\":\"request_capture_escaping_01\"}",
+      "expectedRequestDigest": "sha256:965ed8dd0b846d02decdb323db87f2fa112e72f0853a2cd80db2d241dbaa1910"
     }
   ]
 }

@@ -7,6 +7,8 @@ import {
   judgmentNeededObservedEventSchema,
   presenceCapabilityV01Schema,
   projectionPageSchema,
+  protocolJsonObjectSchema,
+  protocolJsonValueSchema,
   responsibilityCaptureRequestSchema,
   surfaceCommandRequestSchema,
   trustedCommandEnvelopeSchema,
@@ -68,7 +70,86 @@ const projectionPage = {
   generatedAt: '2026-08-05T12:06:00Z',
 };
 
+function nestedArrays(depth: number): unknown {
+  let value: unknown = null;
+  for (let index = 0; index < depth; index += 1) value = [value];
+  return value;
+}
+
 describe('responsibility handshake v0.1', () => {
+  it('fails bounded JSON validation instead of throwing on hostile nesting', () => {
+    let result: { success: boolean } | undefined;
+
+    expect(() => {
+      result = protocolJsonObjectSchema.safeParse({ nested: nestedArrays(8_100) });
+    }).not.toThrow();
+    expect(result?.success).toBe(false);
+  });
+
+  it('enforces the iterative JSON node bound', () => {
+    expect(protocolJsonValueSchema.safeParse(Array(4_095).fill(null)).success).toBe(
+      true,
+    );
+    expect(protocolJsonValueSchema.safeParse(Array(4_096).fill(null)).success).toBe(
+      false,
+    );
+  });
+
+  it('rejects a wide object before reading properties beyond the node bound', () => {
+    const wideObject: Record<string, unknown> = {};
+    for (let index = 0; index < 4_095; index += 1) {
+      wideObject[`key_${index}`] = null;
+    }
+    Object.defineProperty(wideObject, 'key_beyond_limit', {
+      enumerable: true,
+      get: () => {
+        throw new Error('property beyond the node bound was read');
+      },
+    });
+    let result: { success: boolean } | undefined;
+
+    expect(() => {
+      result = protocolJsonObjectSchema.safeParse(wideObject);
+    }).not.toThrow();
+    expect(result?.success).toBe(false);
+  });
+
+  it('enforces the iterative JSON depth bound', () => {
+    expect(protocolJsonValueSchema.safeParse(nestedArrays(64)).success).toBe(true);
+    expect(protocolJsonValueSchema.safeParse(nestedArrays(65)).success).toBe(false);
+  });
+
+  it('rejects hostile command nesting without throwing from safeParse', () => {
+    const parse = () =>
+      surfaceCommandRequestSchema.safeParse({
+        ...surfaceRequest,
+        payload: { nested: nestedArrays(8_100) },
+      });
+
+    expect(parse).not.toThrow();
+    expect(parse().success).toBe(false);
+  });
+
+  it('rejects hostile projection nesting without throwing from safeParse', () => {
+    const parse = () =>
+      projectionPageSchema.safeParse({
+        ...projectionPage,
+        items: [nestedArrays(8_100)],
+      });
+
+    expect(parse).not.toThrow();
+    expect(parse().success).toBe(false);
+  });
+
+  it('enforces the JSON node bound across the whole projection page', () => {
+    expect(
+      projectionPageSchema.safeParse({
+        ...projectionPage,
+        items: [Array(3_000).fill(null), Array(3_000).fill(null)],
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts the minimal untrusted responsibility-capture request', () => {
     expect(
       responsibilityCaptureRequestSchema.safeParse(surfaceRequest).success,
@@ -116,6 +197,7 @@ describe('responsibility handshake v0.1', () => {
 
   it.each([
     { ...surfaceRequest, protocolVersion: '0.2' },
+    { ...surfaceRequest, commandType: 'outcome.create' },
     { ...surfaceRequest, clientIssuedAt: 'not-a-timestamp' },
     { ...surfaceRequest, unexpected: true },
     { ...surfaceRequest, payload: { userStatement: '   ' } },
@@ -135,14 +217,33 @@ describe('responsibility handshake v0.1', () => {
     expect(responsibilityCaptureRequestSchema.safeParse(request).success).toBe(false);
   });
 
-  it('keeps the generic surface schema untrusted and strict', () => {
+  it('keeps public surface admission untrusted and strict', () => {
     expect(surfaceCommandRequestSchema.safeParse(surfaceRequest).success).toBe(true);
     expect(surfaceCommandRequestSchema.safeParse(trustedEnvelope).success).toBe(false);
+  });
+
+  it('uses command-specific admission before accepting or digesting a request', () => {
+    const smuggledRequest = {
+      ...surfaceRequest,
+      payload: { ...surfaceRequest.payload, ownerId: 'owner_client_smuggled' },
+    };
+
+    expect(surfaceCommandRequestSchema.safeParse(smuggledRequest).success).toBe(false);
+    expect(() => canonicalizeSurfaceCommandRequestForDigest(smuggledRequest)).toThrow();
   });
 
   it('accepts only a fully server-enriched trusted envelope', () => {
     expect(trustedCommandEnvelopeSchema.safeParse(trustedEnvelope).success).toBe(true);
     expect(trustedCommandEnvelopeSchema.safeParse(surfaceRequest).success).toBe(false);
+  });
+
+  it('uses command-specific admission for trusted envelope payloads', () => {
+    expect(
+      trustedCommandEnvelopeSchema.safeParse({
+        ...trustedEnvelope,
+        payload: { ...trustedEnvelope.payload, authorityGrant: { id: 'client_claim' } },
+      }).success,
+    ).toBe(false);
   });
 
   it.each([
@@ -165,6 +266,7 @@ describe('responsibility handshake v0.1', () => {
 
   it.each([
     { ...trustedEnvelope, actor: { kind: 'admin', id: 'actor_01' } },
+    { ...trustedEnvelope, commandType: 'outcome.create' },
     { ...trustedEnvelope, requestDigest: `sha256:${'A'.repeat(64)}` },
     { ...trustedEnvelope, requestDigest: `sha256:${'a'.repeat(63)}` },
     { ...trustedEnvelope, requestDigest: `sha512:${'a'.repeat(64)}` },
@@ -209,6 +311,22 @@ describe('responsibility handshake v0.1', () => {
     expect(domainEventSchema.safeParse(event).success).toBe(true);
   });
 
+  it('uses event-specific admission for observation trust boundaries', () => {
+    const promotedObservation = {
+      ...domainEventBase,
+      payload: {
+        trust: 'untrusted',
+        sessionId: 'agent_session_01',
+        workUnitId: 'work_unit_01',
+        activity: 'provider_done',
+        observedAt: '2026-08-05T12:04:59Z',
+        verification: { state: 'passed' },
+      },
+    };
+
+    expect(domainEventSchema.safeParse(promotedObservation).success).toBe(false);
+  });
+
   it('accepts judgment-needed and candidate-evidence observations without promoting truth', () => {
     const judgmentNeeded = {
       ...domainEventBase,
@@ -244,6 +362,74 @@ describe('responsibility handshake v0.1', () => {
     expect(candidateEvidenceObservedEventSchema.safeParse(candidateEvidence).success).toBe(true);
   });
 
+  it('binds every agent-session observation to its payload session aggregate', () => {
+    const cases = [
+      {
+        schema: agentSessionActivityObservedEventSchema,
+        event: {
+          ...domainEventBase,
+          payload: {
+            trust: 'untrusted',
+            sessionId: 'agent_session_01',
+            workUnitId: 'work_unit_01',
+            activity: 'provider_done',
+            observedAt: '2026-08-05T12:04:59Z',
+          },
+        },
+      },
+      {
+        schema: judgmentNeededObservedEventSchema,
+        event: {
+          ...domainEventBase,
+          eventType: 'agent_session.judgment_needed_observed',
+          payload: {
+            trust: 'untrusted',
+            sessionId: 'agent_session_01',
+            workUnitId: 'work_unit_01',
+            reasonCode: 'choice_required',
+            optionRefs: ['option_a', 'option_b'],
+            observedAt: '2026-08-05T12:05:01Z',
+          },
+        },
+      },
+      {
+        schema: candidateEvidenceObservedEventSchema,
+        event: {
+          ...domainEventBase,
+          eventType: 'agent_session.candidate_evidence_observed',
+          payload: {
+            trust: 'untrusted',
+            sessionId: 'agent_session_01',
+            workUnitId: 'work_unit_01',
+            subjectRef: 'artifact_reviewed_01',
+            evidenceRef: 'candidate_evidence_01',
+            contentDigest: `sha256:${'b'.repeat(64)}`,
+            observedAt: '2026-08-05T12:05:02Z',
+          },
+        },
+      },
+    ];
+
+    for (const { schema, event } of cases) {
+      expect(
+        schema.safeParse({
+          ...event,
+          aggregate: { kind: 'outcome', id: 'outcome_01', revision: 2 },
+        }).success,
+      ).toBe(false);
+      expect(
+        schema.safeParse({
+          ...event,
+          aggregate: {
+            kind: 'agent_session',
+            id: 'agent_session_different',
+            revision: 2,
+          },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
   it.each([
     ['rawTranscript', 'provider transcript content'],
     ['credential', 'credential_value'],
@@ -270,6 +456,7 @@ describe('responsibility handshake v0.1', () => {
 
   it.each([
     { ...domainEventBase, ownerCursor: -1, payload: {} },
+    { ...domainEventBase, eventType: 'outcome.verified', payload: {} },
     { ...domainEventBase, ownerCursor: 1.5, payload: {} },
     { ...domainEventBase, schemaVersion: '', payload: {} },
     { ...domainEventBase, occurredAt: 'not-a-timestamp', payload: {} },

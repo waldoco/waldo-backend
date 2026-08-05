@@ -1,11 +1,16 @@
+import { z } from 'zod';
 import {
   agentSessionActivityObservedEventSchema,
   candidateEvidenceObservedEventSchema,
   canonicalizeSurfaceCommandRequestForDigest,
+  domainEventSchema,
   judgmentNeededObservedEventSchema,
   presenceCapabilityV01Schema,
+  projectionPageEnvelopeSchemaFor,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureTrustedEnvelopeSchema,
+  surfaceCommandRequestSchema,
+  trustedCommandEnvelopeSchema,
 } from './responsibility-handshake-v0-1';
 
 type JsonRecord = Record<string, unknown>;
@@ -17,6 +22,29 @@ function jsonFile(value: unknown): string {
 
 function digestFor(hashHex: HashHex, value: string): string {
   return `sha256:${hashHex(value)}`;
+}
+
+function schemaDocument(
+  schema: z.ZodType,
+  id: string,
+  title: string,
+  runtimeInvariants: JsonRecord,
+): JsonRecord {
+  const generated = z.toJSONSchema(schema, {
+    target: 'draft-2020-12',
+    io: 'input',
+    reused: 'ref',
+  }) as JsonRecord;
+  return {
+    ...generated,
+    $id: id,
+    title,
+    description:
+      'Structural interoperability schema. Canonical admission also requires the listed Waldo runtime invariants.',
+    'x-waldo-validation-level': 'structural',
+    'x-waldo-runtime-validator-required': true,
+    'x-waldo-runtime-invariants': runtimeInvariants,
+  };
 }
 
 export function buildResponsibilityHandshakeV01Bundle(
@@ -85,6 +113,13 @@ export function buildResponsibilityHandshakeV01Bundle(
     requestId: 'request_capture_whitespace_01',
     payload: { userStatement: '  Keep the exact user wording.  ' },
   };
+  const escapedUnicodeRequest = {
+    ...surfaceRequest,
+    requestId: 'request_capture_escaping_01',
+    payload: {
+      userStatement: 'Handle "quoted" paths like C:\\work.\nKeep 🐕 intact.',
+    },
+  };
   const rejectedClientFields: Array<[string, JsonRecord]> = [
     ['owner', { ownerId: 'client_claim' }],
     ['actor', { actor: { kind: 'owner', id: 'client_claim' } }],
@@ -129,6 +164,19 @@ export function buildResponsibilityHandshakeV01Bundle(
   ];
 
   const files: Record<string, string> = {
+    'domain-event.schema.json': jsonFile(
+      schemaDocument(
+        domainEventSchema,
+        'urn:waldo:protocol:responsibility-handshake:0.1:domain-event',
+        'Waldo DomainEvent protocol v0.1',
+        {
+          admission: 'eventType-discriminated concrete observation schemas',
+          observationTrust: 'untrusted',
+          aggregateKind: 'agent_session',
+          aggregateId: 'equals payload.sessionId',
+        },
+      ),
+    ),
     'observations.json': jsonFile({
       protocolVersion: '0.1',
       events: [
@@ -202,6 +250,14 @@ export function buildResponsibilityHandshakeV01Bundle(
         },
       ],
     }),
+    'presence-capability-v0.1.schema.json': jsonFile(
+      schemaDocument(
+        presenceCapabilityV01Schema,
+        'urn:waldo:protocol:responsibility-handshake:0.1:presence-capability',
+        'Waldo PresenceCapabilityV01',
+        { offlineCommands: 'none' },
+      ),
+    ),
     'projection-delivery.json': jsonFile({
       protocolVersion: '0.1',
       validPage: projectionPage,
@@ -259,6 +315,21 @@ export function buildResponsibilityHandshakeV01Bundle(
         },
       ],
     }),
+    'projection-page.schema.json': jsonFile(
+      schemaDocument(
+        projectionPageEnvelopeSchemaFor(z.json()),
+        'urn:waldo:protocol:responsibility-handshake:0.1:projection-page',
+        'Waldo ProjectionPage protocol v0.1',
+        {
+          maxJsonDepth: 64,
+          maxJsonNodes: 4_096,
+          maxPageUtf8Bytes: 262_144,
+          cursorOrder:
+            'snapshotBaseCursor <= fromExclusiveCursor <= nextCursor <= highWaterCursor',
+          hasMore: 'nextCursor < highWaterCursor',
+        },
+      ),
+    ),
     'request-digests.json': jsonFile({
       protocolVersion: '0.1',
       digestAlgorithm: 'sha256',
@@ -298,6 +369,16 @@ export function buildResponsibilityHandshakeV01Bundle(
             canonicalizeSurfaceCommandRequestForDigest(whitespaceRequest),
           ),
         },
+        {
+          name: 'unicode and JSON escaping',
+          request: escapedUnicodeRequest,
+          canonicalRequest:
+            canonicalizeSurfaceCommandRequestForDigest(escapedUnicodeRequest),
+          expectedRequestDigest: digestFor(
+            hashHex,
+            canonicalizeSurfaceCommandRequestForDigest(escapedUnicodeRequest),
+          ),
+        },
       ],
     }),
     'surface-command.rejections.json': jsonFile({
@@ -307,7 +388,29 @@ export function buildResponsibilityHandshakeV01Bundle(
         request: { ...surfaceRequest, ...extra },
       })),
     }),
+    'surface-command-request.schema.json': jsonFile(
+      schemaDocument(
+        surfaceCommandRequestSchema,
+        'urn:waldo:protocol:responsibility-handshake:0.1:surface-command-request',
+        'Waldo SurfaceCommandRequest protocol v0.1',
+        {
+          admission: 'commandType-discriminated concrete command schemas',
+          maxPayloadUtf8Bytes: 16_384,
+        },
+      ),
+    ),
     'surface-command.valid.json': jsonFile(surfaceRequest),
+    'trusted-command-envelope.schema.json': jsonFile(
+      schemaDocument(
+        trustedCommandEnvelopeSchema,
+        'urn:waldo:protocol:responsibility-handshake:0.1:trusted-command-envelope',
+        'Waldo TrustedCommandEnvelope protocol v0.1',
+        {
+          admission: 'commandType-discriminated concrete trusted envelope schemas',
+          maxPayloadUtf8Bytes: 16_384,
+        },
+      ),
+    ),
     'trusted-command.valid.json': jsonFile(trustedEnvelope),
   };
 

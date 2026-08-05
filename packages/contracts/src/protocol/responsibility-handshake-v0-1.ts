@@ -12,7 +12,56 @@ export const protocolRevisionSchema = z.int().nonnegative().max(Number.MAX_SAFE_
 export const protocolDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 
 const MAX_PROTOCOL_PAYLOAD_BYTES = 16_384;
-export const protocolJsonValueSchema = z.json();
+const MAX_PROTOCOL_JSON_DEPTH = 64;
+const MAX_PROTOCOL_JSON_NODES = 4_096;
+
+const protocolJsonStructureSchema = z.unknown().superRefine((value, context) => {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  let discoveredNodes = 1;
+
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current.depth > MAX_PROTOCOL_JSON_DEPTH) {
+      context.addIssue({
+        code: 'custom',
+        message: `protocol JSON must not exceed depth ${MAX_PROTOCOL_JSON_DEPTH}`,
+      });
+      return;
+    }
+    if (current.value === null || typeof current.value !== 'object') continue;
+
+    if (Array.isArray(current.value)) {
+      for (const child of current.value) {
+        discoveredNodes += 1;
+        if (discoveredNodes > MAX_PROTOCOL_JSON_NODES) {
+          context.addIssue({
+            code: 'custom',
+            message: `protocol JSON must not exceed ${MAX_PROTOCOL_JSON_NODES} nodes`,
+          });
+          return;
+        }
+        pending.push({ value: child, depth: current.depth + 1 });
+      }
+      continue;
+    }
+
+    const record = current.value as Record<string, unknown>;
+    for (const key in record) {
+      if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+      discoveredNodes += 1;
+      if (discoveredNodes > MAX_PROTOCOL_JSON_NODES) {
+        context.addIssue({
+          code: 'custom',
+          message: `protocol JSON must not exceed ${MAX_PROTOCOL_JSON_NODES} nodes`,
+        });
+        return;
+      }
+      pending.push({ value: record[key], depth: current.depth + 1 });
+    }
+  }
+});
+
+export const protocolJsonValueSchema = protocolJsonStructureSchema.pipe(z.json());
 export type ProtocolJsonValue = z.infer<typeof protocolJsonValueSchema>;
 
 function utf8ByteLength(value: string): number {
@@ -25,8 +74,8 @@ function utf8ByteLength(value: string): number {
   return bytes;
 }
 
-export const protocolJsonObjectSchema = z
-  .record(protocolNameSchema, protocolJsonValueSchema)
+export const protocolJsonObjectSchema = protocolJsonStructureSchema
+  .pipe(z.record(protocolNameSchema, z.json()))
   .refine(
     (value) => utf8ByteLength(JSON.stringify(value)) <= MAX_PROTOCOL_PAYLOAD_BYTES,
     { error: `protocol payload must not exceed ${MAX_PROTOCOL_PAYLOAD_BYTES} UTF-8 bytes` },
@@ -40,7 +89,7 @@ export const surfaceAggregateRefSchema = z.strictObject({
 });
 export type SurfaceAggregateRef = z.infer<typeof surfaceAggregateRefSchema>;
 
-export function surfaceCommandRequestSchemaFor<Payload extends z.ZodType>(
+export function surfaceCommandRequestEnvelopeSchemaFor<Payload extends z.ZodType>(
   payloadSchema: Payload,
 ) {
   return z.strictObject({
@@ -54,11 +103,6 @@ export function surfaceCommandRequestSchemaFor<Payload extends z.ZodType>(
     payload: payloadSchema,
   });
 }
-
-export const surfaceCommandRequestSchema = surfaceCommandRequestSchemaFor(
-  protocolJsonObjectSchema,
-);
-export type SurfaceCommandRequest = z.infer<typeof surfaceCommandRequestSchema>;
 
 function orderProtocolJson(value: ProtocolJsonValue): ProtocolJsonValue {
   if (Array.isArray(value)) return value.map(orderProtocolJson);
@@ -75,17 +119,13 @@ export function canonicalizeProtocolJson(value: unknown): string {
   return JSON.stringify(orderProtocolJson(protocolJsonValueSchema.parse(value)));
 }
 
-export function canonicalizeSurfaceCommandRequestForDigest(value: unknown): string {
-  return canonicalizeProtocolJson(surfaceCommandRequestSchema.parse(value));
-}
-
 export const responsibilityCapturePayloadSchema = z
   .strictObject({
     userStatement: z
       .string()
       .min(1)
       .max(8_192)
-      .refine((value) => value.trim().length > 0, {
+      .regex(/\S/, {
         error: 'userStatement must contain non-whitespace content',
       }),
   })
@@ -97,14 +137,22 @@ export type ResponsibilityCapturePayload = z.infer<
   typeof responsibilityCapturePayloadSchema
 >;
 
-export const responsibilityCaptureRequestSchema = surfaceCommandRequestSchemaFor(
-  responsibilityCapturePayloadSchema,
-).extend({
-  commandType: z.literal('responsibility.capture'),
-});
+export const responsibilityCaptureRequestSchema =
+  surfaceCommandRequestEnvelopeSchemaFor(responsibilityCapturePayloadSchema).extend({
+    commandType: z.literal('responsibility.capture'),
+  });
 export type ResponsibilityCaptureRequest = z.infer<
   typeof responsibilityCaptureRequestSchema
 >;
+
+export const surfaceCommandRequestSchema = z.discriminatedUnion('commandType', [
+  responsibilityCaptureRequestSchema,
+]);
+export type SurfaceCommandRequest = z.infer<typeof surfaceCommandRequestSchema>;
+
+export function canonicalizeSurfaceCommandRequestForDigest(value: unknown): string {
+  return canonicalizeProtocolJson(surfaceCommandRequestSchema.parse(value));
+}
 
 export const aggregateRefSchema = z.strictObject({
   kind: protocolNameSchema,
@@ -143,11 +191,6 @@ export function trustedCommandEnvelopeSchemaFor<Payload extends z.ZodType>(
   });
 }
 
-export const trustedCommandEnvelopeSchema = trustedCommandEnvelopeSchemaFor(
-  protocolJsonObjectSchema,
-);
-export type TrustedCommandEnvelope = z.infer<typeof trustedCommandEnvelopeSchema>;
-
 export const responsibilityCaptureTrustedEnvelopeSchema =
   trustedCommandEnvelopeSchemaFor(responsibilityCapturePayloadSchema).extend({
     commandType: z.literal('responsibility.capture'),
@@ -156,13 +199,20 @@ export type ResponsibilityCaptureTrustedEnvelope = z.infer<
   typeof responsibilityCaptureTrustedEnvelopeSchema
 >;
 
+export const trustedCommandEnvelopeSchema = z.discriminatedUnion('commandType', [
+  responsibilityCaptureTrustedEnvelopeSchema,
+]);
+export type TrustedCommandEnvelope = z.infer<typeof trustedCommandEnvelopeSchema>;
+
 export const presenceCapabilityV01Schema = z.strictObject({
   protocolVersion: protocolVersionV01Schema,
   offlineCommands: z.literal('none'),
 });
 export type PresenceCapabilityV01 = z.infer<typeof presenceCapabilityV01Schema>;
 
-export function domainEventSchemaFor<Payload extends z.ZodType>(payloadSchema: Payload) {
+export function domainEventEnvelopeSchemaFor<Payload extends z.ZodType>(
+  payloadSchema: Payload,
+) {
   return z.strictObject({
     schemaVersion: protocolNameSchema,
     eventId: protocolIdSchema,
@@ -176,9 +226,6 @@ export function domainEventSchemaFor<Payload extends z.ZodType>(payloadSchema: P
     payload: payloadSchema,
   });
 }
-
-export const domainEventSchema = domainEventSchemaFor(protocolJsonObjectSchema);
-export type DomainEvent = z.infer<typeof domainEventSchema>;
 
 export const agentSessionActivityObservationPayloadSchema = z.strictObject({
   trust: z.literal('untrusted'),
@@ -216,28 +263,57 @@ export type CandidateEvidenceObservationPayload = z.infer<
   typeof candidateEvidenceObservationPayloadSchema
 >;
 
-export const agentSessionActivityObservedEventSchema = domainEventSchemaFor(
+const agentSessionAggregateRefSchema = aggregateRefSchema.extend({
+  kind: z.literal('agent_session'),
+});
+
+function requireMatchingAgentSessionAggregate(
+  event: { aggregate: { id: string }; payload: { sessionId: string } },
+  context: z.RefinementCtx,
+): void {
+  if (event.aggregate.id !== event.payload.sessionId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['aggregate', 'id'],
+      message: 'agent-session observation aggregate must match payload.sessionId',
+    });
+  }
+}
+
+export const agentSessionActivityObservedEventSchema = domainEventEnvelopeSchemaFor(
   agentSessionActivityObservationPayloadSchema,
 ).extend({
   eventType: z.literal('agent_session.activity_observed'),
-});
+  aggregate: agentSessionAggregateRefSchema,
+}).superRefine(requireMatchingAgentSessionAggregate);
 
-export const judgmentNeededObservedEventSchema = domainEventSchemaFor(
+export const judgmentNeededObservedEventSchema = domainEventEnvelopeSchemaFor(
   judgmentNeededObservationPayloadSchema,
 ).extend({
   eventType: z.literal('agent_session.judgment_needed_observed'),
-});
+  aggregate: agentSessionAggregateRefSchema,
+}).superRefine(requireMatchingAgentSessionAggregate);
 
-export const candidateEvidenceObservedEventSchema = domainEventSchemaFor(
+export const candidateEvidenceObservedEventSchema = domainEventEnvelopeSchemaFor(
   candidateEvidenceObservationPayloadSchema,
 ).extend({
   eventType: z.literal('agent_session.candidate_evidence_observed'),
-});
+  aggregate: agentSessionAggregateRefSchema,
+}).superRefine(requireMatchingAgentSessionAggregate);
+
+export const domainEventSchema = z.discriminatedUnion('eventType', [
+  agentSessionActivityObservedEventSchema,
+  judgmentNeededObservedEventSchema,
+  candidateEvidenceObservedEventSchema,
+]);
+export type DomainEvent = z.infer<typeof domainEventSchema>;
 
 const MAX_PROJECTION_ITEMS = 256;
 const MAX_PROJECTION_PAGE_BYTES = 262_144;
 
-export function projectionPageSchemaFor<Item extends z.ZodType>(itemSchema: Item) {
+export function projectionPageEnvelopeSchemaFor<Item extends z.ZodType>(
+  itemSchema: Item,
+) {
   return z
     .strictObject({
       protocolVersion: protocolVersionV01Schema,
@@ -290,5 +366,7 @@ export function projectionPageSchemaFor<Item extends z.ZodType>(itemSchema: Item
     });
 }
 
-export const projectionPageSchema = projectionPageSchemaFor(protocolJsonValueSchema);
+export const projectionPageSchema = protocolJsonStructureSchema.pipe(
+  projectionPageEnvelopeSchemaFor(protocolJsonValueSchema),
+);
 export type ProjectionPage = z.infer<typeof projectionPageSchema>;

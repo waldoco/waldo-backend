@@ -1,0 +1,334 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "eventId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "eventType": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "ownerCursor": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "causationId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "occurredAt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema6"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "eventId",
+        "eventType",
+        "ownerId",
+        "aggregate",
+        "ownerCursor",
+        "correlationId",
+        "occurredAt",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "eventId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "eventType": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "ownerCursor": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "causationId": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "occurredAt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema9"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "eventId",
+        "eventType",
+        "ownerId",
+        "aggregate",
+        "ownerCursor",
+        "correlationId",
+        "occurredAt",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "eventId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "eventType": {
+          "$ref": "#/$defs/__schema10"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "ownerCursor": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "causationId": {
+          "$ref": "#/$defs/__schema11"
+        },
+        "correlationId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "occurredAt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema12"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "eventId",
+        "eventType",
+        "ownerId",
+        "aggregate",
+        "ownerCursor",
+        "correlationId",
+        "occurredAt",
+        "payload"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema1": {
+      "type": "string",
+      "const": "agent_session.activity_observed"
+    },
+    "__schema2": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "agent_session"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema3": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema4": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "__schema5": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema6": {
+      "type": "object",
+      "properties": {
+        "trust": {
+          "type": "string",
+          "const": "untrusted"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "workUnitId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "activity": {
+          "type": "string",
+          "enum": [
+            "started",
+            "progress",
+            "provider_done",
+            "failed"
+          ]
+        },
+        "observedAt": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "trust",
+        "sessionId",
+        "workUnitId",
+        "activity",
+        "observedAt"
+      ],
+      "additionalProperties": false
+    },
+    "__schema7": {
+      "type": "string",
+      "const": "agent_session.judgment_needed_observed"
+    },
+    "__schema8": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "__schema9": {
+      "type": "object",
+      "properties": {
+        "trust": {
+          "type": "string",
+          "const": "untrusted"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "workUnitId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "reasonCode": {
+          "type": "string",
+          "enum": [
+            "choice_required",
+            "blocked",
+            "risk_changed",
+            "authority_required"
+          ]
+        },
+        "optionRefs": {
+          "minItems": 2,
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "observedAt": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "trust",
+        "sessionId",
+        "workUnitId",
+        "reasonCode",
+        "optionRefs",
+        "observedAt"
+      ],
+      "additionalProperties": false
+    },
+    "__schema10": {
+      "type": "string",
+      "const": "agent_session.candidate_evidence_observed"
+    },
+    "__schema11": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "__schema12": {
+      "type": "object",
+      "properties": {
+        "trust": {
+          "type": "string",
+          "const": "untrusted"
+        },
+        "sessionId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "workUnitId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "subjectRef": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "evidenceRef": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "contentDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "trust",
+        "sessionId",
+        "workUnitId",
+        "subjectRef",
+        "evidenceRef",
+        "contentDigest",
+        "observedAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-handshake:0.1:domain-event",
+  "title": "Waldo DomainEvent protocol v0.1",
+  "description": "Structural interoperability schema. Canonical admission also requires the listed Waldo runtime invariants.",
+  "x-waldo-validation-level": "structural",
+  "x-waldo-runtime-validator-required": true,
+  "x-waldo-runtime-invariants": {
+    "admission": "eventType-discriminated concrete observation schemas",
+    "observationTrust": "untrusted",
+    "aggregateKind": "agent_session",
+    "aggregateId": "equals payload.sessionId"
+  }
+}
