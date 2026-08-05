@@ -1,245 +1,84 @@
-# Next Session Plan - Harness Foundation Waves
+# Next Session Plan — Whole-Product Waldo Build
 
-Status: Wave 0 reconciliation and the H14/H15/H16 context Modules are merged: PR #62 (HEY-14),
-PR #64 (HEY-15), PR #65 (HEY-16), and waldo-brain PR #18 (HEY-167) are Done. HEY-143 remains
-In Progress; its local provider-contract convergence slice is under review and is not real-path proof.
-Date: 2026-07-14 IST.
-Baseline: `845cbf4 feat(runtime): implement HEY-16 REASONS canvas builder (#65)`. Provider
-readiness remains fail-closed and has no real provider, source, sink, staging, or Alpha proof.
+**Status:** current repository entrypoint after the 2026-08-05 architecture lock
+**Scope:** backend, Kennel protocol/executor seams, other presences, connectors, governed execution, evidence, continuity, workspace, and distribution contracts
 
-## Start Here
+## Build authority
+
+This is one whole-product build across personal assistance, work orchestration, and their bridge. Work is organized through parallel, dependency-aware workstreams; there are no product phases or slices and no team-size scope cuts.
 
 Read in this order:
 
-1. `.claude/rules/INDEX.md`
-2. `README.md`
-3. `docs/foundation/CONTRIBUTOR-ONBOARDING.md`
-4. `docs/foundation/AGENT-OPERATING-WORKFLOW.md`
-5. `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
-6. `docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md`
-7. `docs/planning/WALDO_APP_BACKEND_INTEGRATION_PLAN.md`
-8. `docs/foundation/HARNESS-WAVE-COORDINATION.md`
-9. `docs/foundation/HEY-109-WAVE-0-PHASE-HANDOFF.md`
-10. `docs/foundation/HEY-143-PHASE-HANDOFF.md`
-11. Accepted ADR-0081 before health-derived computation or public health fields.
-12. Accepted ADR-0082 before persistent device-local sensitive cache or account/consent lifecycle
-    work.
-13. The accepted ADRs and Waldo Brain source pages for the seam being changed.
+1. [Architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) — build authority, owner placement, definitive writers, governance, workspace, workstreams, and proof gates.
+2. [Final Home + Work architecture](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) — pinned current state, target contracts/state machines, failure semantics, migration, and unknowns.
+3. [Product capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) — committed product envelope and honest delivery statuses.
+4. [Capability source notes](../planning/WALDO_PRODUCT_CAPABILITY_VALIDATION_SOURCE_NOTES_2026-08-04.md) — comparator evidence and interpretation limits.
+5. [Contributor onboarding](./CONTRIBUTOR-ONBOARDING.md), [agent workflow](./AGENT-OPERATING-WORKFLOW.md), and [local verification](./LOCAL-DEV-TESTING-PIPELINE.md).
+6. Fresh source/tests, the current issue/PR, and accepted ADRs for the exact seam being changed.
 
-Authority promotion note: [`waldo-brain` PR #17](https://github.com/Pin4sf/waldo-brain/pull/17)
-merged at `75591543053dbdda6cf7c7f0210f8d16f36c3db8`. Its ADR-0001/0071/0077 amendments and new
-accepted ADR-0081/0082 govern the named architecture and ownership decisions, not implementation
-proof.
+Do not treat a planning document as shipped truth. Pin the current `origin/main` SHA, inspect implementation and tests, preserve dirty checkouts, and distinguish `shipped`, `partial`, `stub`, `proposed`, `missing`, and `rejected`.
 
-Then run the baseline gate:
+## Stable kernel
+
+- One Waldo identity and one per-owner backend authority root.
+- `WaldoCoordinator` is logically above providers/executors and remains inside the owner Durable Object transaction boundary with `RunLoopEngine` until measured evidence earns another placement.
+- The trusted RunLoop remains the only physical execution/effect path while the Coordinator and product domain are added around it.
+- Kennel proposes and executes under a valid backend lease; the owner backend admits. Kennel owns local operation/process durability, never canonical identity, memory, Outcome truth, authority, Acceptance, or closure.
+- Providers, connectors, people, and execution environments return untrusted observations, receipts, and candidate evidence.
+- External effects persist frozen intent and digest before I/O, reconcile ambiguity before retry, and have exactly one retry owner.
+- Agent activity, Evidence, Verification, Acceptance, and Open Loop closure remain separate.
+- User statements and corrections outrank inference. Health is optional passive context inside a user-grounded purpose, never the product category or authority source.
+- Protocol 0.1 advertises `offlineCommands: "none"`. Disconnected presences can show only an explicitly stale read-only projection.
+
+## Session start
+
+1. Run `git status -sb`, inspect worktrees, fetch the relevant remote branch, and record the SHA being claimed.
+2. Read the current contract/module/test surfaces for the assigned workstream. Never infer implementation from a plan or ticket.
+3. Define one observable outcome, dependencies, data/privacy and authority impact, invalid/degraded cases, exact verification, and rollback.
+4. Use the definitive writer matrix. Do not add a second durable writer, alternate truth store, direct provider authority, or speculative microservice.
+5. Build against released contracts and shared fixtures. Fakes prove contracts only; real adapter/product claims require version-pinned conformance and cross-surface acceptance.
+6. Run the affected package tests plus the full integration gate before merge.
+
+## Current work organization
+
+The architecture lock defines these concurrent workstreams:
+
+- contract and conformance spine;
+- owner root and product domain;
+- trusted execution and effects;
+- Kennel and desktop harness;
+- workspace, artifacts, and knowledge;
+- connectors and real-world effects;
+- personal assistance and continuity;
+- work orchestration and distribution;
+- security, portability, deletion, and operations.
+
+Dependency edges determine what can integrate, not a smaller product release order. An issue is assignable only when its required contracts, scope, proof cases, and rollback are explicit.
+
+## Known reconciliation requirement
+
+The architecture lock's current offline decision is stricter than accepted ADR-0077 and ADR-0082, which preserve device-local chat drafts. Do not silently choose either behavior. Reconcile the accepted ADRs before merging implementation that removes or retains disconnected draft creation/queueing.
+
+## Historical documents
+
+`HARNESS-RUNTIME-BUILD-PLAN.md`, `HARNESS-WAVE-COORDINATION.md`, July phase handoffs, and the former health-first Alpha sequence are historical evidence. They can explain existing code and tests but do not define current product scope, work order, ownership, or public claims.
+
+## Verification
+
+Documentation-only changes:
 
 ```bash
+git diff --check
+npx -y pnpm@10.34.4 verify:guards
+```
+
+Runtime, contract, or integration changes:
+
+```bash
+npx -y pnpm@10.34.4 --filter @waldo/contracts test
+npx -y pnpm@10.34.4 --filter @waldo/runtime test
 npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-## Promoted Product And Repository Boundary
-
-- The canonical deployable app repository is
-  [`Pin4sf/waldo-app`](https://github.com/Pin4sf/waldo-app). The audited promotion snapshot is
-  `c8b3b4555de076339554391da4dbf5fbe2dac0ae`.
-- `Pin4sf/Waldo.git/waldo-app` is historical, nondeployable lineage. It is evidence only and must
-  not receive new app integration work.
-- `waldo-backend` owns agent execution, provider routing, tools, Governor, journal/outbox,
-  DeliveryGate, public schemas, and the committed OpenAPI contract. The app owns UI, protected
-  navigation, generated-client consumption, and device adapters.
-- Home composes separately owned projections for the current Brief, Spots, relevant threads, and
-  Patrol/audit. There is no persistent generic Feed entity, global Feed ordering, or Feed read-state
-  store in this plan.
-
-## Alpha Boundary
-
-Alpha requires all of the following on a real authenticated staging path:
-
-- an in-app morning Brief;
-- shadow Fetch candidate/label evaluation with every delivery path off;
-- real Spots generation, projection, evidence, and dismissal;
-- persistent text Chat;
-- the privacy, identity, journal/outbox, source, approval, Governor, and DeliveryGate spine;
-- real context, recall, provider, and one accepted source seam;
-- one asynchronous idempotent in-app delivery adapter.
-
-Alpha explicitly excludes:
-
-- Telegram, APNs, WhatsApp, or other external-channel breadth;
-- live Fetch delivery or completed Fetch cards;
-- Handoff and live actions;
-- voice;
-- message branching or soft delete/recovery;
-- live interventions;
-- the generative-card subset;
-- full Constellations;
-- direct Apple Watch/watchOS/WatchConnectivity work;
-- proposed production SLO, RPO, RTO, partitioning, or DR thresholds.
-
-The first read-only Brief projection below is an integration slice. It is not asynchronous
-delivery, HEY-110 completion, HEY-143 completion, or Alpha proof.
-
-## Current Implementation Truth
-
-Built and merged:
-
-- the local contract spine;
-- SQLite Durable Object test substrate;
-- run journal and fake-sink outbox crash/replay proof;
-- DeliveryGate, Loop Governor, alarm multiplexer, triage, hooks, ToolDispatcher, and trigger ACL;
-- fake-first LLM routing and Cloudflare gateway parsing/fail-closed configuration;
-- fake-first `RunLoopDO`, governed multi-iteration `plan -> act -> observe`, and local replay
-  evidence;
-- the HEY-10 ten-table context schema artifact.
-- HEY-13's destination-aware Scribe/taint runtime and its final property/mutation proof.
-- PR #50's static DO-only runtime guard; it is not a production custody/data-plane claim.
-- PR #52's V2 goals storage foundation; it does not add a durable writer, admission path, or prompt
-  hydration.
-- PR #51's deterministic injection scorer and PR #53's independently held-out corpus correction.
-- PR #54's parse-only declared-target egress policy; it adds no DNS, redirect, fetch, transport, or
-  ACL expansion.
-- PR #56's typed WorkspaceMount contract seam; it adds no R2 binding, runtime mount, writer,
-  deployment, or raw-key API.
-- HEY-167's ratified user-skill reader-admission and model-aware budget contract; it does not add
-  a runtime reader, R2 binding, writer/commit path, or prompt hydration.
-
-Not built or not proven:
-
-- a public authenticated product route; the default Worker still returns 404;
-- verified ES256 subject to owner-bound DO routing and two-user negative proof;
-- merged Supabase migrations, RLS, Vault, R2, consent middleware, or all-store deletion runtime;
-- wired context recall, skills, or prompt hydration; the merged goals table has no admitted writer,
-  authenticated routing, or prompt hydration;
-- a real provider RunLoop call, atomic provider-spend reservation, or staging smoke;
-- an asynchronous idempotent in-app adapter; the current runtime sink is synchronous/fake;
-- the morning Brief public projection/OpenAPI/generated client;
-- shadow Fetch, real Spots, or persistent text Chat end to end;
-- native-device, staging, dogfood, Alpha, or production evidence.
-
-Schema, contract, local test, ticket, or configuration evidence must not be described as a live
-product capability.
-
-## Current Harness Program
-
-HEY-13 is historical and Done. Its Scribe/taint interface is a consumed foundation, not the next
-execution slice.
-
-1. **Wave 0:** reconciliation merged in PR #49. PRs #50, #52, #51/#53, #54, #56, and #58 are
-   merged foundations; this is not a claim of live product capability.
-2. **Current gate:** HEY-163/166/167 and HEY-14/15/16 are Done. HEY-143 is the current bounded
-   fake-first provider-contract convergence slice; it does not authorize a live provider path.
-3. **Remaining context:** HEY-16 composes merged HEY-14/15 interfaces; full goal hydration still
-   awaits HEY-162's Scribe-backed admission boundary. HEY-100 remains
-   static-only, and HEY-160 separately owns any future production per-user JWT/`db.forUser()`
-   custody path.
-4. **Wave 3:** HEY-141 merged in PR #54. It remains a parse-only declared-target policy with no DNS,
-   redirect, fetch, transport, or ACL expansion.
-5. **Convergence:** A fresh clean `origin/main` must prove the merged HEY-14, HEY-15, HEY-16,
-   HEY-100, HEY-144, HEY-75, HEY-141, HEY-163, and HEY-166 foundations before HEY-143 closure
-   planning. This authorizes planning only.
-6. **Reliability parallel root:** HEY-165's draft repair establishes that a numeric-heavy generated
-   UUID v4 is falsely redacted on candidate re-read only when revalidation loses the matching
-   generated `runId` context. It restores the original `event_id` only when it exactly matches that
-   run's generated `runId`; caller-supplied, malformed, and nonmatching IDs remain fail-closed, and
-   Scribe's general detection is unchanged. Keep the deterministic regression and negative cases in
-   the verification wall. Three clean full `verify` runs remain required before merge; local
-   `verify:supabase` is currently blocked by unavailable Docker.
-
-Every wave remains fake-first and forbids live providers, credentials, app traffic, channel delivery,
-production data, and cloud side effects.
-
-## First Cross-Repo Seam
-
-The first public operation is:
-
-```http
-GET /public/v1/briefs/morning/current
-Authorization: Bearer <Woof ES256 access token>
-Accept: application/vnd.waldo.morning-brief.v1+json
-If-None-Match: "<optional subject-bound opaque ETag>"
-```
-
-Contract:
-
-- no request body;
-- no `userId`, tenant, account, DO, thread, run, model, provider, or other routing selector;
-- version parse, ES256 signature/claim/session validation, canonical subject derivation, and exactly
-  one owner-bound DO resolution happen before projection access;
-- GET reads an already committed projection and never starts/resumes a run, calls a model/tool,
-  mutates read state, writes journal/outbox, or sends;
-- the strict success union is `ready | pending | empty`;
-- `ready` owns stable opaque IDs, monotonic revision, morning variant, ordered static cards, UTC
-  generation/source/stale timestamps, server freshness, and safe opaque source references;
-- failures use strict content-free `WaldoProblemV1`;
-- the ETag is opaque and subject-bound; a user-A ETag cannot produce 304 or content for user B;
-- the committed OpenAPI document is the only app contract and generates HEY-132's runtime-validating
-  client;
-- a session/build uses one runtime path. There is no per-request legacy fallback, dual read, or dual
-  writer.
-
-Persistent app caching depends on accepted Brain ADR-0082 and HEY-159. Until both are proven,
-first-slice responses remain memory-only. Any health-derived field or computation depends on
-accepted Brain ADR-0081; the first public contract must not invent health authority.
-
-## Ownership And Integration DAG
-
-HEY-149 is the integration umbrella, not a serial prerequisite. The exact current live Linear
-relations are:
-
-| Node | Live Linear `blockedBy` |
-| --- | --- |
-| HEY-151 | HEY-150 |
-| HEY-152 | HEY-150 |
-| HEY-157 | None |
-| HEY-159 | None |
-| HEY-153 | HEY-114; HEY-125; HEY-134; HEY-152; HEY-157 |
-| HEY-154 | HEY-13; HEY-151; HEY-153 |
-| HEY-132 live client | HEY-151; HEY-153; HEY-154; HEY-157 |
-| HEY-35 | HEY-28; HEY-132; HEY-151; HEY-154 |
-| HEY-47 | HEY-28; HEY-132; HEY-151 |
-| HEY-156 | HEY-13; HEY-28; HEY-35; HEY-47; HEY-132; HEY-154; HEY-159 |
-| HEY-56 | HEY-28; HEY-29; HEY-35; HEY-36; HEY-47; HEY-132; HEY-156; HEY-159 |
-| HEY-155 | HEY-132; HEY-156 |
-
-HEY-149 and HEY-150 are In Progress; producing the matrix does not make HEY-150 Done before review
-acceptance. HEY-150 directly gates only HEY-151 and HEY-152. HEY-157 and HEY-159 run in parallel.
-HEY-151-159 otherwise remain Backlog in their documented lanes. HEY-13 is the completed Scribe/taint
-prerequisite for real HEY-154 content.
-HEY-110 async delivery and HEY-158 Spots are separate Alpha gates. HEY-126 is a parallel spike;
-HEY-127 remains off-path conditional/deferred. The adopted dogfood gate follows HEY-156 and
-precedes HEY-155 as an acceptance gate, not a Linear `blockedBy` relation.
-
-## Surface Decisions
-
-- **Home:** composition only. Do not create a `feed` table, global `OutboxKind`, cross-surface
-  ordering, or persistent read state. HEY-127 is conditional/deferred and is not an Alpha
-  prerequisite.
-- **Chat:** HEY-126 owns a bounded transport/replay spike under the accepted ADR-0077 amendment.
-  Compare authenticated command POST plus durable cursor replay with SSE and active-only WebSocket
-  behavior. Do not add a second authoritative transcript or freeze transport before evidence.
-- **Health:** accepted ADR-0081 owns derived-field destinations, computation authority,
-  version, freshness/missingness/provenance, and public eligibility.
-- **Device lifecycle:** accepted ADR-0082 and HEY-159 own account/consent epoch, SQLCipher
-  partition/key, signout, deletion/restore, key loss, and corruption behavior.
-- **Watch:** direct Apple Watch/watchOS work is deferred. Phone-side HealthKit may receive
-  Apple Watch-originated samples without a Waldo watch app.
-
-## Verification And Promotion Gates
-
-The Brief seam is not complete until:
-
-- valid/invalid strict schema and problem tests pass;
-- wrong signature, key, issuer, audience, expiry, revocation, and owner mismatch fail before DO
-  projection access;
-- synthetic users A and B cannot cross-read, share an ETag/cache entry, or infer internal IDs;
-- repeated GET/304/crash retry changes no run, journal, outbox, or read-state count;
-- freshness transitions are deterministic and invalid/future timestamps reject;
-- the HEY-13 privacy corpus proves no forbidden value in response, cache, trace, log, or outbox;
-- generated-client regeneration is byte-identical and the committed schema hash matches;
-- the app renders loading, pending, empty, fresh, stale, denied, offline, rate-limit, service, and
-  terminal error states without samples or fabricated effects;
-- HEY-156 proves one-path staging cutover and rollback with no legacy fallback.
-
-For documentation-only updates, run the docs/guard wall and inspect the complete diff. Do not infer
-ticket completion beyond the recorded PR merges.
+Record passed, failed, expired, skipped, unavailable, deferred, and not-run evidence distinctly. A green local test is not staging, production, adapter-conformance, or product-acceptance proof.

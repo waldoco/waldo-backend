@@ -1,9 +1,11 @@
 # Harness Runtime Build Plan
 
-Status: active source for the promoted Waldo backend and app-integration build.
+Status: superseded historical build snapshot; not current product, architecture, or sequencing authority.
 Date: 2026-07-12.
 Baseline: `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65` at the current merged mainline tip
 (PRs #49–#56 and #58).
+
+> **Do not use this document to plan new work.** It preserves the July health-first Brief/Fetch/Spots/Chat harness program and its then-current evidence. The current build authority is the [August architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), supported by the [source-pinned final architecture](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) and [product capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md). Old “Phase,” “Wave,” “Alpha,” “current,” and ticket-order language below is historical as of the stated baseline.
 
 ## Source Map
 

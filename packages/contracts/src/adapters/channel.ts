@@ -3,9 +3,8 @@ import type { AdapterResult } from '../core/error';
 import { idempotencyKeySchema } from '../runtime/outbox';
 import { waldoCardKindSchema, waldoCardSchema, type WaldoCardKind } from '../ui/card';
 
-// Single owner of channel literals (ADR-0012). 'discord', 'slack', and 'whatsapp' are
-// Phase-2 surfaces — the vocabulary is closed now so every downstream module types
-// against the full set, while adapter implementations and personas land per phase.
+// Single owner of channel literals (ADR-0012). The vocabulary includes surfaces whose adapters
+// or personas are not yet admitted; declaration must not be mistaken for implementation support.
 export const channelNameSchema = z.enum([
   'telegram',
   'apns',
@@ -70,7 +69,7 @@ export const IOS_PERSONA: ChannelPersona = {
   raw_value_policy: 'show_zones',
 };
 
-// Phase-2 forward-compatible spec (ADR-0035): no fetch_card — acute-health cards stay out
+// Declared work-channel policy (ADR-0035): no fetch_card — acute-health cards stay out
 // of work channels; show_descriptions_only strips numeric scores.
 export const SLACK_PERSONA: ChannelPersona = {
   channel: 'slack',
@@ -163,8 +162,8 @@ export const inboundDecisionSchema = z.discriminatedUnion('outcome', [
 ]);
 export type InboundDecision = z.infer<typeof inboundDecisionSchema>;
 
-// The ChannelAdapter seam (ADR-0012): provider-agnostic from day 1, so WhatsApp Phase 2 is
-// an adapter implementation, not a refactor. Methods resolve coded failures, never throw.
+// The ChannelAdapter seam (ADR-0012) is provider-agnostic. Admitting WhatsApp is an adapter
+// implementation and conformance decision, not a contract refactor. Methods resolve coded failures.
 export interface ChannelAdapter {
   channel: ChannelName;
   send(message: ChannelMessage): Promise<AdapterResult<ChannelSendReceipt>>;
@@ -254,7 +253,7 @@ export type LinkToken = z.infer<typeof linkTokenSchema>;
 export const LINK_TOKEN_TTL_MIN = 10;
 
 // Channel-namespaced addressing for the identity module: peer_id is the string form of
-// the wire sender id, so WhatsApp Phase 2 reuses the module with a new namespace
+// the wire sender id, so another channel reuses the module with a new namespace
 // (ADR-0067). handle is display-only and may be absent even while bound.
 export const channelPeerSchema = z.strictObject({
   peer_id: z.string().min(1),

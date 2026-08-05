@@ -1,6 +1,6 @@
 # Harness Wave Coordination Ledger
 
-Status: Wave 0 reconciliation merged in PR #49 (`a257a175`). The current verified
+Status: superseded historical coordination ledger; not current product, architecture, ownership, or sequencing authority. Wave 0 reconciliation merged in PR #49 (`a257a175`). The then-current verified
 `origin/main` tip is `aff9b5188feb8ee2ae61b3a3f6f7bb00d6355d65`: PR #50 (HEY-100),
 PR #52 (HEY-144), PR #51 and corrective PR #53 (HEY-75), PR #54 (HEY-141), PR #56
 (HEY-163), PR #55 (ledger refresh), and PR #58 (HEY-166) are merged. HEY-163 and
@@ -8,6 +8,8 @@ HEY-166 are Done; HEY-167 is the remaining canonical-decision gate for HEY-14.
 
 Updated: 2026-07-12 IST.
 Coordinator: Codex.
+
+> **Historical evidence only.** “Current,” ownership assignments, wave order, and live ticket state below describe the July 2026 coordination snapshot. New work starts from the [August architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) and fresh source/issue inspection. Do not infer active assignments or product sequencing from this ledger.
 
 ## Authority And Safety
 

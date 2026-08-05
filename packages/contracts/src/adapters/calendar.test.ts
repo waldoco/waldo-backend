@@ -1,9 +1,9 @@
-// Owning ADR: ADR-0040 (CalendarProvider moves to Phase 1).
-// Invariants under test: provider literals are exactly the two Phase-1 providers; the V1 seam
+// Owning ADR: ADR-0040.
+// Invariants under test: provider literals are exactly the two admitted providers; the current seam
 // is proposal-only (no direct-write method, proposal status literal-pinned, no event_id before
 // user confirm); event titles are a PII boundary — the prompt-destined context shape has no
 // title key; runtime boundaries resolve a coded AdapterResult instead of throwing.
-// Failure modes caught: Outlook/Graph smuggled into Phase 1, a commit-shaped proposal
+// Failure modes caught: Outlook/Graph silently admitted, a commit-shaped proposal
 // (auto-reschedule drift), a verbatim title reaching a prompt-destined shape, multi-calendar
 // selection creeping into V1 args, and an adapter throwing past the coded envelope.
 import { describe, expect, it } from 'vitest';
@@ -37,11 +37,11 @@ const baseProposal = {
 };
 
 describe('calendarProviderName', () => {
-  it('is exactly the two Phase-1 providers, in order', () => {
+  it('is exactly the two admitted providers, in order', () => {
     expect(calendarProviderNameSchema.options).toEqual(['google_calendar', 'apple_calendar']);
   });
 
-  it('rejects outlook_graph — deferred to Phase 2, deliberately absent', () => {
+  it('rejects outlook_graph because it is deliberately absent', () => {
     expect(calendarProviderNameSchema.safeParse('outlook_graph').success).toBe(false);
   });
 
@@ -51,7 +51,7 @@ describe('calendarProviderName', () => {
 });
 
 describe('calendarEvent', () => {
-  it('accepts an event for every Phase-1 provider', () => {
+  it('accepts an event for every admitted provider', () => {
     for (const provider of calendarProviderNameSchema.options) {
       expect(calendarEventSchema.safeParse({ ...baseEvent, provider }).success).toBe(true);
     }
@@ -215,7 +215,7 @@ describe('CalendarProvider seam — fake provider', () => {
   });
 
   it('the V1 seam has no direct-write method — a create_event implementation does not typecheck', () => {
-    // @ts-expect-error create_event is not part of the Phase-1 contract (proposal-only, ADR-0040)
+    // @ts-expect-error create_event is not part of the current proposal-only contract (ADR-0040)
     const drifted: CalendarProvider = { ...provider, create_event: async () => undefined };
     void drifted;
   });

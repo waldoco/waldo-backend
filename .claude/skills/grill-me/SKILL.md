@@ -16,18 +16,18 @@ accepted ADRs, or `packages/contracts`, explore instead of asking.
 ## Waldo-specific framing
 
 Before grilling, anchor on:
-- **Phase context** — which foundation slice or Phase D wave are we in? See `docs/foundation/FOUNDATION-HANDOVER.md` and `docs/foundation/NEXT-SESSION-PLAN.md`.
+- **Workstream context** — which locked capability, dependency, and proof gate owns this decision? See `docs/foundation/NEXT-SESSION-PLAN.md` and the August architecture lock.
 - **Vocabulary** — use the local rule language plus the relevant `packages/contracts` module and accepted ADR.
-- **Locked architecture** — don't re-litigate accepted ADRs or completed foundation phases. If a question conflicts with one, surface the conflict instead of asking.
-- **Identity is immutable** — soul files, safety rules, CRS algorithm never auto-evolve. Don't grill on changing them.
+- **Locked architecture** — don't re-litigate the architecture lock or accepted ADRs. If current direction conflicts with ratified history, surface the conflict instead of silently choosing one.
+- **Identity and authority are stable** — no provider, model, surface, package, or executor may redefine Waldo identity, mint authority, or own Acceptance/closure.
 
 ## What to grill on
 
-- Trigger type and tool permission scope (Morning Wag vs Fetch Alert vs user chat)
-- Which adapters (10 total) does this touch? Does the change leak provider-specific logic into core?
-- What memory tier (1-4) does new state belong in? Is this DO SQLite, Supabase, or R2?
-- What error class or contract failure does this produce? Check `packages/contracts/src/core/error.ts` and the touched runtime/foundation docs.
-- Quality gates: which of the 5 should this clear before delivery?
-- Cost: does this fit the $0.01-0.03/user/day envelope?
+- Which Outcome/WorkUnit or user-visible capability this serves, and which aggregate writer owns it
+- Which context, authority, credential, effect, evidence, acceptance, and deletion boundaries apply
+- Which exact adapter/version/capability is required, and what conformance makes it eligible
+- What invalid, hostile, concurrent, disconnected, cancellation, retry, restore, and rollback paths apply
+- Which delivery status is being claimed: architecture, contract, module, adapter conformance, cross-surface acceptance, or operational proof
+- Cost and latency per accepted Outcome, including verification and recovery—not only model-call price
 
-End grilling when you and the user share a design concept clear enough to write a PRD-style summary. Then offer: "Want me to write this up as a phase-handoff doc or jump straight to code?"
+End grilling when you and the user share a design concept clear enough to write a PRD-style summary. Then offer: "Want me to write a bounded workstream handoff or proceed with the agreed change?"

@@ -11,7 +11,7 @@ Design or add a new adapter contract/module for $ARGUMENTS.
 This backend branch is currently contract-spine first. Do not invent a runtime
 adapter tree if the repo only has `packages/contracts` coverage for that seam.
 
-## Current Shipped Adapter Contract Modules
+## Current Adapter Contract Modules
 
 - `packages/contracts/src/adapters/channel.ts`
 - `packages/contracts/src/adapters/llm.ts`
@@ -21,13 +21,11 @@ adapter tree if the repo only has `packages/contracts` coverage for that seam.
 - `packages/contracts/src/adapters/doc.ts`
 - `packages/contracts/src/adapters/sheet.ts`
 
-Planned product interfaces such as task, transcription, music, screen-time,
-weather, and location require a source-of-truth ADR or foundation doc before
-adding contracts.
+A contract module proves vocabulary and validation only. It does not prove that an adapter implementation, exact provider version, or user capability is supported.
 
 **Steps:**
 
-1. Read `.claude/rules/INDEX.md`, `docs/foundation/FOUNDATION-HANDOVER.md`, and the accepted ADR/foundation source for the adapter seam.
+1. Read `.claude/rules/INDEX.md`, `docs/foundation/NEXT-SESSION-PLAN.md`, the architecture lock, and the accepted ADR/foundation source for the adapter seam.
 2. Use `/waldo-isa-run-contract` for a non-trivial adapter addition: current state, ideal state, criteria, anti-criteria, test strategy.
 3. Name the Module, Interface, Contract, Seam, Adapter, and Impact Surface.
 4. Add or update the contract module under `packages/contracts/src/adapters/`.
@@ -46,4 +44,4 @@ git diff --check
 - Email stays metadata-only unless an accepted ADR says otherwise.
 - Health adapters must not move raw health values into DO SQLite, logs, prompts, traces, R2, or committed fixtures.
 - LLM adapters must preserve provider route, cost, latency, error-class, and privacy observability.
-- Runtime implementation belongs in a later runtime PR with fake providers and Workers tests; contract PRs should not smuggle live providers.
+- Runtime implementation proceeds as a coordinated parallel workstream behind the released contract and shared fixtures. A contract change must not smuggle live credentials/providers or claim adapter conformance.

@@ -11,10 +11,10 @@ of all relevant modules and callers, using vocabulary from `.claude/rules/langua
 `docs/foundation`, accepted ADRs, and `packages/contracts`.
 
 Include:
-- Which build phase the code belongs to (A-H, Phase 2/3)
-- Which adapter or core module it lives in (CRS engine, agent loop, ChannelAdapter, etc.)
-- Which memory tier it touches (working/semantic/episodic/procedural/archival)
-- Which Edge Function or DO method invokes it
-- Where data flows in (Wearable → HealthKit → op-sqlite → Supabase → DO) and out (DO → ChannelAdapter → user)
+- Which locked workstream, dependency, and proof gate owns the code
+- Which adapter, aggregate owner, or core module it belongs to
+- Which context, continuity, workspace, artifact, or product-truth store it touches
+- Which gateway, Durable Object, connector, or executor call path invokes it
+- Where commands, context, execution observations, effects, evidence, and projections enter and leave the owner Durable Object
 
 Don't propose changes. Just map.

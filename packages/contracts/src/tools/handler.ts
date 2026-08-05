@@ -109,7 +109,7 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // are exactly what a narrower reading would have leaked.
 // propose_action is absent — it IS the human-confirm route the gate falls back to.
 // execute_code is absent because ADR-0050 gives it zero ACLs (undispatchable). That exclusion
-// holds ONLY while it is unreachable: any Phase-3 change granting it an ACL MUST add it here in
+// holds ONLY while it is unreachable: any change granting it an ACL MUST add it here in
 // the same change (pinned by handler.test's zero-ACL coupling guard).
 export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   'update_memory',

@@ -671,8 +671,8 @@ export class RunJournalOutbox {
     });
   }
 
-  // kind is a single literal in SLICE-3b; the parameter keeps the call site ready for the deferred
-  // multi-kind outbox without widening this slice.
+  // The current runtime admits one kind. Keeping it explicit prevents a future multi-kind outbox
+  // from widening this call path implicitly.
   flushOutbox(runId: string, kind: PushClass = KIND): void {
     const candidate = this.readPreparedCandidate(runId);
     const run = this.journal.read(runId);
@@ -728,8 +728,8 @@ export class RunJournalOutbox {
   }
 
   // A resume can only trust a journal state after the matching durable outbox evidence agrees.
-  // This stays local to the current single-intent runtime; widening it belongs to the deferred
-  // multi-kind outbox contract rather than this DeliveryGate hardening slice.
+  // This stays local to the current single-intent runtime; widening it requires an explicit
+  // multi-kind outbox contract rather than an incidental DeliveryGate change.
   private assertDurableGateEvidence(run: JournalRow): void {
     if (run.state === 'DONE' && run.verdict === null) {
       if (

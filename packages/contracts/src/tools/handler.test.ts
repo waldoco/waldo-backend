@@ -160,9 +160,9 @@ describe('privileged-action set — ADR-0049', () => {
     expect(PRIVILEGED_ACTION_TOOLS).not.toContain('propose_action');
   });
 
-  it("excludes 'execute_code' — ADR-0050 zero-ACL makes it undispatchable; Phase-3 ACL re-entry MUST add it here", () => {
+  it("excludes 'execute_code' while zero-ACL makes it undispatchable; ACL eligibility MUST add it here", () => {
     // The exclusion is sound ONLY while execute_code is unreachable. Coupling the two facts in
-    // one test forces a conscious revisit: if any Phase-3 change grants execute_code an ACL,
+    // one test forces a conscious revisit: if any change grants execute_code an ACL,
     // this premise breaks and the same change must add it to PRIVILEGED_ACTION_TOOLS.
     const unreachable = triggerTypeSchema.options.every(
       (t) => !TOOL_PERMISSIONS[t].includes('execute_code'),

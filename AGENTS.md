@@ -13,14 +13,14 @@
 
 Mirrored from canonical source in `waldo-brain` per [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md). Do not edit locally.
 
-The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. For onboarding, read [`docs/foundation/CONTRIBUTOR-ONBOARDING.md`](docs/foundation/CONTRIBUTOR-ONBOARDING.md). For the full contributor loop, skill status, plugin boundaries, and verification wall, read [`docs/foundation/AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). For the current harness runtime build, start from [`docs/foundation/NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md) and [`docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`](docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md).
+The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. Start with [`docs/foundation/NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md), the [`architecture lock`](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), and [`CONTRIBUTOR-ONBOARDING.md`](docs/foundation/CONTRIBUTOR-ONBOARDING.md). For the contributor loop, skill status, plugin boundaries, and verification wall, read [`AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). July harness wave/build plans are historical evidence and are not current product or sequencing authority.
 
 ---
 
 ## Available Agents (invoke via Claude Code Agent tool)
 
 ### Planning
-- **`planner`** — Phase planning, risk identification, task breakdown. Use before starting any sprint.
+- **`planner`** — Workstream planning, risk identification, and task breakdown. Use before starting a bounded implementation change.
 - **`workflow-mapper`** — Maps ALL data flow paths + failure modes BEFORE building. Run before any new EF or DO feature.
 
 ### Review (run before merging any PR)
@@ -66,7 +66,7 @@ Canonical source: `.claude/skills/`. `.agents/skills/` is a compatibility mirror
 - `/zoom-out` — step back and evaluate if approach is right
 - `/break-feature` — adversarial feature break pass before marking a feature done
 - `/review-all` — broad multi-surface review before merge
-- `/phase-handoff` — write the next-session handoff after a phase/wave
+- `/phase-handoff` — write the next-session handoff at a bounded workstream boundary
 - `/new-adapter` — scaffold a new adapter implementation
 - `/check-contract` — verify implementation code matches `packages/contracts`
 - `/run-eval` — run the eval suite when present; otherwise record the eval-suite gap and run the verify wall

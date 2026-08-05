@@ -2,8 +2,8 @@ import { z } from 'zod';
 import type { AdapterResult } from '../core/error';
 import { iso8601Schema } from '../core/error';
 
-// Single owner of calendar-provider literals. Phase 1 ships Google Calendar + Apple Calendar
-// (EventKit); Outlook/Graph is deliberately absent until Phase 2 (ADR-0040).
+// Single owner of currently admitted calendar-provider literals. Google Calendar and Apple
+// Calendar (EventKit) are admitted; Outlook/Graph is deliberately absent (ADR-0040).
 export const calendarProviderNameSchema = z.enum(['google_calendar', 'apple_calendar']);
 export type CalendarProviderName = z.infer<typeof calendarProviderNameSchema>;
 
@@ -43,7 +43,7 @@ export const proposeEventArgsSchema = z.strictObject({
 });
 export type ProposeEventArgs = z.infer<typeof proposeEventArgsSchema>;
 
-// Proposal-only is the V1 write ceiling (ADR-0040: no auto-rescheduling without confirm).
+// Proposal-only is the current write ceiling (ADR-0040: no auto-rescheduling without confirm).
 // status is literal-pinned, and no event_id exists here — a provider event id only comes into
 // being after the user confirms the propose_schedule card (connector_write, ADR-0021).
 export const eventProposalSchema = z.strictObject({

@@ -129,7 +129,7 @@ export const writeSheetCellArgsSchema = z.strictObject({
 });
 export type WriteSheetCellArgs = z.infer<typeof writeSheetCellArgsSchema>;
 
-// Typed even though 'execute_code' sits in zero V1 ACLs (ADR-0050 defers it to Phase 3):
+// Typed even though 'execute_code' sits in zero current ACLs (ADR-0050):
 // re-enabling is an ACL change, not a breaking type change. The 30_000 ms hard cap and the
 // empty-by-default egress allowlist are ADR-0023 law.
 export const executeCodeArgsSchema = z.strictObject({
