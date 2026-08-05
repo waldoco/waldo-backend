@@ -855,16 +855,37 @@ interface EffectSemantics {
   evidence: { receipt: "attributable"|"best_effort"|"none"; fields: string[] };
 }
 
+type ManifestAttestation =
+  | {
+      mode: "deferred_first_party_internal";
+      publisherClass: "waldo_first_party";
+      distribution: "internal_registry";
+      trustBoundaryId: string;
+      manifestDigest: Digest;
+      verification: "deferred";
+    }
+  | {
+      mode: "signed";
+      publisherClass: "waldo_first_party" | "external";
+      distribution: "internal_registry" | "external";
+      trustBoundaryId: string;
+      issuer: string; keyId: string; algorithm: "ed25519";
+      signature: string; signedDigest: Digest; trustRootVersion: string;
+      verification: "verified" | "failed" | "untrusted";
+    };
+
 interface CapabilityManifest {
   schemaVersion: string;
   manifestId: string;
   kind: "model" | "provider" | "executor" | "connector" | "presence";
   vendor: string; product: string; version: string;
   sourceUri: string; sourceFingerprint: string; observedAt: string;
-  attestation: {
-    issuer: string; keyId: string; algorithm: "ed25519";
-    signature: string; signedDigest: Digest; trustRootVersion: string;
-    verification: "verified"|"failed"|"untrusted";
+  attestation: ManifestAttestation;
+  supplyChain: {
+    manifestDigest: Digest;
+    executableDigest?: Digest; sourceDigest?: Digest;
+    instructionDigest?: Digest; dependencyLockDigest?: Digest;
+    buildProvenanceRef?: string; sbomRef?: string;
   };
   lifecycle: "experimental" | "preview" | "beta" | "ga" | "deprecated";
   capabilities: Capability[];
@@ -894,14 +915,15 @@ type ConformanceStatus =
 
 ### 13.2 Discovery and admission
 
-1. Adapter owner publishes a source-pinned manifest signed with the declared issuer/key; Registry verifies signature and trust-root version. An untrusted/failed signature is ineligible.
-2. Registry validates the discriminated schema and rejects unknown/unsafe defaults.
-3. Conformance harness tests declared behavior with real version where policy permits.
-4. Results record `passed`, `failed`, `skipped`, `unavailable`, `deferred`, and `not_run` distinctly.
-5. Coordinator compiles WorkUnit requirements; Registry returns only compatible candidates and reasons.
-6. Policy applies privacy, authority, cost, reliability, locality, and user preference.
-7. RunLoop pins the selected manifest fingerprint in `ExecutionRequest`, session, effects, and evidence.
-8. Version drift expires eligibility until re-evaluation; no silent approximation.
+1. Adapter owner publishes a source-pinned manifest with a canonical manifest digest, every supply-chain digest/provenance field applicable to its kind, and one typed attestation mode. The attestation digest must equal `supplyChain.manifestDigest`.
+2. Registry admits `deferred_first_party_internal` only when publisher, distribution, and trust-boundary fields match the registry's declared first-party boundary. External publication/distribution, detached installation, an out-of-boundary mirror/cache, or any trust-boundary crossing requires `signed` mode and successful issuer/key/trust-root verification. Failed, untrusted, or falsely deferred attestation is ineligible.
+3. Registry validates the discriminated schema and rejects unknown/unsafe defaults. SBOM policy is evaluated independently from signature policy and is required before external distribution or production use for a policy-declared sensitive effect/data class.
+4. Conformance harness tests declared behavior with the real version where policy permits.
+5. Results record `passed`, `failed`, `skipped`, `unavailable`, `deferred`, and `not_run` distinctly.
+6. Coordinator compiles WorkUnit requirements; Registry returns only compatible candidates and reasons.
+7. Policy applies privacy, authority, cost, reliability, locality, and user preference.
+8. RunLoop pins the selected manifest fingerprint in `ExecutionRequest`, session, effects, and evidence.
+9. Version drift expires eligibility until re-evaluation; no silent approximation.
 
 ### 13.3 Required capability namespaces
 
@@ -1254,7 +1276,7 @@ flowchart LR
 2. **[Proposed decision — Adapt] Protocol translation plane.** Add `ProtocolAdapterPort` with revision, extension, authentication, capability, lossiness, and fail-closed downgrade declarations. Mapping rules are explicit: MCP Task/A2A Task → remote execution observation or AgentSession reference, never `WorkUnit`; A2A Artifact → candidate `Artifact`; MCP elicitation/A2A input-required → candidate `JudgmentRequest`; AG-UI state/tool events → ephemeral projection events, never domain events. An MCP server, A2A Agent Card, registry entry, signed descriptor, or remote task status describes a counterparty; it does not confer Waldo authority or prove executable trust.
 3. **[Proposed decision — Adopt] Execution principal and delegation.** Add `ExecutionPrincipal`, `WorkloadIdentity`, `DelegationGrant`, `CredentialHandle`, and `EgressDecision`. Every identity is owner-, WorkUnit-, executor-, audience-, purpose-, lease-, and expiry-bound and records its on-behalf-of chain and attestation references. Delegation intersects authority; it never widens it. Re-entry checks revocation generation and reissues short-lived credentials. Token passthrough and bearer-token chaining are forbidden.
 4. **[Proposed decision — Adapt] Cost, commerce, and source-value extension.** Add `BudgetReservation`, `UsageReceipt`, `Quote`, and `SourceUsageReceipt` now as non-payment ledger contracts. Reserve `PurchaseIntent`, `PaymentAuthorization`, `TermsAcceptanceRequest`, and `AccountReceipt` as future effect-family extensions. A wallet, autonomous purchase, paid MCP call, or account creation requires its own explicit product decision and conformance; none is implied by the current software lock.
-5. **[Proposed decision — Adopt] Trace/evaluation and capability supply chain.** Add stable internal correlation across command → Outcome → WorkUnit → AgentSession → EffectIntent/Receipt → Evidence/Verification/Acceptance/OpenLoop. `ExecutionTelemetryEnvelope` and `EvaluationEnvelope` pin the model, harness, tools, environment, budgets, manifests, graders, and evidence because an agent result is a property of the complete execution configuration, not the model alone. Export only redacted, policy-permitted fields. Capability bundles include canonical signing serialization, manifest signature, executable/package/source digest, build provenance, dependency/SBOM reference where available, instruction/skill digest, trust-root/key lifecycle, vulnerability/conformance evidence, expiry, revocation, and quarantine state. A signature or registry listing alone is insufficient. The executor cannot edit its promotion evaluator, trust root, or acceptance oracle.
+5. **[Proposed decision — Adopt] Trace/evaluation and capability supply chain.** Add stable internal correlation across command → Outcome → WorkUnit → AgentSession → EffectIntent/Receipt → Evidence/Verification/Acceptance/OpenLoop. `ExecutionTelemetryEnvelope` and `EvaluationEnvelope` pin the model, harness, tools, environment, budgets, manifests, graders, and evidence because an agent result is a property of the complete execution configuration, not the model alone. Export only redacted, policy-permitted fields. Capability bundles include a canonical manifest digest; every executable/package/source/instruction digest and build/dependency provenance field applicable to that capability kind; typed attestation status; manifest signatures and trust-root/key lifecycle when required by the declared trust boundary; dependency/SBOM reference under its separate policy; vulnerability/conformance evidence; expiry; revocation; and quarantine state. A digest, signature, or registry listing alone is insufficient. The executor cannot edit its promotion evaluator, trust root, or acceptance oracle.
 6. **[Proposed decision — Adapt] User-owned portability.** Add `WaldoExportBundle` and deterministic restore verification for Outcome/Mission/WorkUnit history, unresolved OpenLoops/ReEntryPoints, explicit statements/corrections, governed ContextClaims, Artifact metadata and permitted bytes, source provenance, policy/retention metadata, tombstones, and optional reviewed SkillBundles. Credentials, provider secrets, raw health, and provider-owned transcripts are excluded by default and represented only by reconnect/delete instructions. Export/import never merges owners implicitly.
 7. **[Proposed decision — Adapt] Behavior packaging and distribution.** Keep `RoutineDefinition`, `SkillBundle`, `IntegrationRecipe`, and `CapabilityPackage` distinct. A routine owns trigger/stale/pause/attention behavior; a skill owns a reviewable typed procedure and evals; a recipe owns onboarding, required connections, composition, and update policy; a capability package owns executable/tool/MCP manifests, digests, provenance, conformance, expiry, and revocation. A Waldo Pack may compose them but never embeds authority, credentials, Outcome truth, or silent privilege expansion.
 8. **[Decision — committed and evidence-gated] External and human delegation.** Add `ExternalDelegationRequest`, `ExternalDelegationDisposition`, `DelegationReply`, and `SharedContextGrant` for cross-person/agent work. Add `HumanExecutorAdapter` as an executor family with identity/organization, jurisdiction, job capabilities, SLA, cost/expense policy, data classes, cancellation/refund/dispute behavior, evidence types, and verification availability. Compute near the data owner, disclose status by default, require separate approval for typed data replies, treat returned payloads as untrusted, and never equate a person or remote agent saying “done” with Acceptance.

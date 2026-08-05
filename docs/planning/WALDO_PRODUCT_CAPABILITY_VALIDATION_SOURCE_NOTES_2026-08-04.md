@@ -263,13 +263,15 @@ The ExecutionEnvironment/Workspace boundary should require:
 
 ### 6.5 Add an experience capability ledger beside the infrastructure ledger
 
-The final plan's current-to-target ledger is backend-centric. Add the matrix in section 4 as the product-level ledger with four independent statuses:
+The final plan's current-to-target ledger is backend-centric. Add the matrix in section 4 as the product-level ledger with six independent statuses:
 
 ```text
-architecture expressible
-contract defined
-adapter/provider conformance passed
-cross-surface product acceptance passed
+architecture_specified
+contract_defined
+module_implemented
+adapter_conformance_passed
+cross_surface_acceptance_passed
+operational_proof_passed
 ```
 
 This prevents “the schema exists” from being presented as “Waldo can manage my inbox,” and prevents a live connector from being presented as “the Outcome is verified and accepted.”
