@@ -79,9 +79,9 @@ Dependency edges determine what can integrate, not a smaller product release ord
 
 The architecture lock's current offline decision is stricter than accepted ADR-0077 and ADR-0082, which preserve device-local chat drafts. Do not silently choose either behavior. Reconcile the accepted ADRs before merging implementation that removes or retains disconnected draft creation/queueing.
 
-## Historical documents
+## Retired documents
 
-`HARNESS-RUNTIME-BUILD-PLAN.md`, `HARNESS-WAVE-COORDINATION.md`, July phase handoffs, and the former health-first Alpha sequence are historical evidence. They can explain existing code and tests but do not define current product scope, work order, ownership, or public claims.
+Completed ticket handoffs, July wave plans, superseded app/health-first plans, and one-off verification logs are intentionally absent from the live documentation tree. Git history preserves them for archaeology. Do not restore or cite them as current product scope, work order, ownership, or shipped proof.
 
 ## Verification
 

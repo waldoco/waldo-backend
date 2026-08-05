@@ -13,7 +13,7 @@
 
 Mirrored from canonical source in `waldo-brain` per [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md). Do not edit locally.
 
-The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. Start with [`docs/foundation/NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md), the [`architecture lock`](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), and [`CONTRIBUTOR-ONBOARDING.md`](docs/foundation/CONTRIBUTOR-ONBOARDING.md). For the contributor loop, skill status, plugin boundaries, and verification wall, read [`AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). July harness wave/build plans are historical evidence and are not current product or sequencing authority.
+The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. Start with [`docs/foundation/NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md), the [`architecture lock`](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), and [`CONTRIBUTOR-ONBOARDING.md`](docs/foundation/CONTRIBUTOR-ONBOARDING.md). For the contributor loop, skill status, plugin boundaries, and verification wall, read [`AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). Retired wave and ticket plans remain in Git history and are not current product or sequencing authority.
 
 ---
 

@@ -1,8 +1,0 @@
-npm notice run npx
-npm notice run 'supabase' test db supabase/tests/schema_contract.sql
-Connecting to local database...
-psql:/home/dev_086/Projects/waldo-backend/supabase/tests/schema_contract.sql:3: NOTICE:  extension "pgtap" already exists, skipping
-/home/dev_086/Projects/waldo-backend/supabase/tests/schema_contract.sql .. ok
-All tests successful.
-Files=1, Tests=44,  1 wallclock secs ( 0.04 usr  0.01 sys +  0.01 cusr  0.00 csys =  0.06 CPU)
-Result: PASS

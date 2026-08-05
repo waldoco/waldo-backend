@@ -19,7 +19,7 @@ The repository contains a trusted fake-first Durable Object RunLoop and broad co
 6. [Agent operating workflow](./AGENT-OPERATING-WORKFLOW.md) and [local verification pipeline](./LOCAL-DEV-TESTING-PIPELINE.md).
 7. Fresh source, tests, issue/PR state, and accepted ADRs for the touched seam.
 
-Historical harness plans and phase handoffs are archaeology. They may explain an existing contract or compatibility test, but they cannot establish current work order, ownership, product scope, or shipped behavior.
+Retired plans and ticket handoffs remain in Git history for archaeology. They cannot establish current work order, ownership, product scope, or shipped behavior.
 
 ## Architecture boundaries
 
@@ -43,7 +43,7 @@ Historical harness plans and phase handoffs are archaeology. They may explain an
 | `packages/runtime` | Durable Object runtime, trusted RunLoop, execution/effect foundations, adapters, persistence |
 | `scripts/guards` | Static invariants for architecture, contracts, tooling, and agent instruction surfaces |
 | `docs/planning` | Current target architecture, capability envelope, source notes, implementation boundaries |
-| `docs/foundation` | Current contributor/verification procedures and historical implementation evidence |
+| `docs/foundation` | Current contributor, session-handoff, and verification procedures |
 | `supabase` | Migration/RLS/Vault surfaces; never mutate hosted environments without explicit authority |
 
 ## Working loop
