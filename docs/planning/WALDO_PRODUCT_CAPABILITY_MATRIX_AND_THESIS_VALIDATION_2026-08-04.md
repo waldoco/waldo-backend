@@ -2,6 +2,7 @@
 
 **Status:** architecture companion; source-backed whole-product envelope locked for build
 **Date:** 2026-08-04
+**Implementation-start refresh:** 2026-08-05
 **Companion architecture:** [`WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md`](./WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md)
 **Build-direction authority:** [`WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md)
 **Purpose:** test whether the planned Waldo architecture can join the personal-assistant envelope of Dimension, Folk, and Poke with the agent-orchestration envelope of Agent Orchestrator, Medley, and Hermes without becoming a feature collage or breaking Waldo's larger thesis
@@ -42,6 +43,35 @@ Dimension's daily clarity
    Open Loop closure, and exact re-entry
 = one Waldo across Home and Work
 ```
+
+### 1.1 Product promise, value test, and positioning authority
+
+> **[Decision — locked · Adopt]** Waldo is a user-controlled agent that accepts responsibility for outcomes across a person's work and life, coordinates the work required, asks for judgment when necessary, and does not claim completion until the result is verified.
+
+The user-level promise is simpler: **“Make sure this gets handled.”** Waldo should let the person stop carrying the entire responsibility in their head without taking control away from them.
+
+This document is the canonical product-positioning companion. Architecture documents explain how Waldo keeps that promise; they must not replace it with internal vocabulary. Every capability and implementation issue must contribute to at least one of these user benefits:
+
+| User benefit | Required product behavior | Falsifier |
+|---|---|---|
+| Continuity | Preserve permitted context, decisions, commitments, corrections, and unfinished responsibility across surfaces and time | The person repeatedly reconstructs the situation |
+| Follow-through | Keep unresolved consequences alive and return at the useful moment | Waldo becomes a task list or reminder generator |
+| Execution | Coordinate software, agents, services, and eventually people to change the world | Waldo only explains what the person could do |
+| Judgment at the right moments | Act inside exact authority and ask only for consequential choice, risk, expense, or ambiguity | The person must approve everything, or Waldo acts presumptuously |
+| Honest completion | Separate activity, evidence, verification, acceptance, and Open Loop closure | Provider “done” or a sent request is presented as the achieved outcome |
+
+**[Inference — Adapt]** Waldo creates value only when responsibilities completed, failures/time avoided, and continuity gained exceed setup, supervision, correction, approval, and trust costs. It fails the thesis if it becomes another chatbot, dashboard, integration collection, memory database, or agent-activity viewer.
+
+### 1.2 Current implementation reality and canonical Kennel baseline
+
+- **[Observed fact]** The post-merge backend baseline for implementation start is [`waldo-backend@77e770f`](https://github.com/Pin4sf/waldo-backend/commit/77e770f47aba2d8f380ad8329f93c4a4a979fb44). It retains the tested trusted runtime substrate, but the product-level `WaldoCoordinator`, Outcome/Mission/WorkUnit lifecycle, canonical Judgment/Acceptance/OpenLoop/ReEntry lifecycle, and shared protocol are not thereby shipped.
+- **[Observed fact]** [`Developerr86/Kennel@9184f83`](https://github.com/Developerr86/Kennel/commit/9184f8303ccc4feb339582327d5d26adcc190b73) is an ancestor baseline of the canonical product repository, [`Pin4sf/kennel`](https://github.com/Pin4sf/kennel). It is not a second Waldo product or an independent integration target.
+- **[Observed fact]** The current canonical Kennel already provides valuable desktop mechanics: persistent local daemon state, Outcome/Mission/WorkUnit projections, Codex sessions, worktrees, dependencies, budgets/retries, attention/approval surfaces, evidence-gated review, and MCP/plugin plumbing. Today those product objects are local, Codex-specific, and not synchronized through the canonical Waldo protocol.
+- **[Observed fact]** Kennel does not yet have a backend client or canonical backend-owned verification, Acceptance, OpenLoop, or ReEntry lifecycle. Its local effect ledger is not the trusted external-effect owner.
+- **[Proposed decision — Adapt]** Preserve Kennel's desktop, workspace, provider-session, and device-local recovery strengths. Treat its local Outcome/Mission/WorkUnit records as migration input and eventually a stale read-only cache; after cutover, the owner backend is canonical.
+- **[Proposed decision — Reject]** Do not reimplement Kennel inside the backend, make Kennel a second identity/authority root, or let a local provider/session report settle Outcome truth.
+
+This makes the integration contract operational: the backend carries the responsibility; Kennel is where the person sees, guides, executes, and resumes it.
 
 ## 2. Thesis checksum against Waldo's public materials
 
@@ -118,7 +148,7 @@ Status uses the architecture plan's pinned backend truth: **shipped**, **partial
 | Multi-agent/provider sessions | Agent Orchestrator, Medley, Hermes, and current coding harnesses | **[Decision — committed]** Codex, Claude, Hermes, Pi, future providers through capability-declared session adapters; one common start/resume/steer/pause/cancel/reconcile contract. | Partial runtime, missing product AgentSession | RunLoopEngine + KennelExecutorPort; depends on adapter conformance |
 | Mission/Kanban/dependencies/heartbeats | Medley + Hermes + Agent Orchestrator | **[Decision — committed]** Kennel board projects Outcome/Mission/WorkUnit truth and session observations; task dependencies and heartbeats inform supervision, but liveness never proves progress or acceptance. | Missing | OutcomeModule + projections + session monitor; depends on domain/session contracts |
 | Needs You / judgment | Poke confirmations; Folk Crew approval; Hermes steering | **[Decision — committed]** Consequential, ambiguous, expired-authority, or value choices return with recommendation, options, uncertainty, evidence, and cost of waiting. | Missing | JudgmentAuthorityModule + Attention; depends on trusted command envelope |
-| Agent governance and user control | Cross-market trust/control requirement; Waldo thesis | **[Decision — committed]** Apply the canonical [Agent Governance Layer](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#31-agent-governance-layer) between owner intent and every model, agent, tool, connector, human executor, and environment. Surface exact authority/context/capability/evidence state plus correct/revoke/export/delete controls. | Partial foundations; end-to-end cross-surface governance not shipped | Existing cross-cutting owners in the architecture lock; depends on shared protocol and negative conformance |
+| Agent governance and user control | Cross-market trust/control requirement; Waldo thesis | **[Decision — committed]** Apply the canonical [Agent Governance Layer](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#32-agent-governance-layer) between owner intent and every model, agent, tool, connector, human executor, and environment. Surface exact authority/context/capability/evidence state plus correct/revoke/export/delete controls. | Partial foundations; end-to-end cross-surface governance not shipped | Existing cross-cutting owners in the architecture lock; depends on shared protocol and negative conformance |
 | Human fallback | Poke Human | **[Decision — committed]** A person/service may be an executor with capability, scope, price, privacy, receipt, cancellation, and dispute contracts; they do not become trusted truth. | Missing | HumanExecutorAdapter + EffectEngine; depends on counterparty/effect contracts |
 | Evidence and independent verification | Waldo-specific differentiation | **[Decision — committed]** Separate attributable evidence, deterministic effect read-back, selective declared artifact checks, stale/indeterminate results, and repair from provider activity. | Partial technical evidence only | EvidenceVerifier; depends on effect/artifact evidence |
 | Acceptance, reopen, release | Waldo-specific differentiation | **[Decision — committed]** User accepts a particular revision/evidence set, may reject/repair/reopen, or consciously release remaining responsibility. | Missing | AcceptanceModule; depends on evidence/verification |
@@ -267,6 +297,11 @@ The limits are product features. A system that can do “anything” by copying 
 ## 10. Whole-product parallel delivery and acceptance
 
 There is no product-slice sequence. All committed capability families are built through the parallel workstreams in the architecture lock and integrated continuously through shared contracts. The scenarios below are simultaneous acceptance obligations, not smaller releases or catalogue gates:
+
+- **[Proposed decision — Adopt] Engineering proof:** “Publish this product update by Friday, but do not publish without my approval.” It forces provider work, a consequential judgment, one reversible effect, independent verification, acceptance/reopen, and next-day continuity.
+- **[Proposed decision — Adopt] Positioning proof:** “Prepare me for tomorrow's investor meeting and make sure every follow-up is handled.” It tests the same durable responsibility across personal context, work artifacts, people, calendar/messaging, restrained attention, and follow-through.
+
+Both scenarios test the same product contract. They are dependency-order and learning instruments, not permanent market narrowing or permission to defer the rest of the committed capability envelope.
 
 1. **Delegated Outcome closure:** Capture → Outcome → direct WorkUnits or optional Mission → multiple sessions → judgment → reversible effect → deterministic external read-back → declared artifact checks → accept/reopen → exact next-day re-entry.
 2. **A day carried forward:** Morning Brief, Catch Up, inbox/calendar preparation, commitments, nudges, meeting lifecycle, and Daily Close over the same Outcome/OpenLoop truth.

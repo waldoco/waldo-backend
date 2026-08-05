@@ -7,16 +7,36 @@
 
 This is one whole-product build across personal assistance, work orchestration, and their bridge. Work is organized through parallel, dependency-aware workstreams; there are no product phases or slices and no team-size scope cuts.
 
+The product promise is: **a person can tell Waldo, “Make sure this gets handled,” and trust it to carry the responsibility until the result is verified, accepted, reopened, or consciously released—without taking control away.**
+
 Read in this order:
 
-1. [Architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) — build authority, owner placement, definitive writers, governance, workspace, workstreams, and proof gates.
-2. [Final Home + Work architecture](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) — pinned current state, target contracts/state machines, failure semantics, migration, and unknowns.
-3. [Product capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) — committed product envelope and honest delivery statuses.
+1. [Product capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) — positioning, promised product envelope, user value/falsifiers, and honest delivery statuses.
+2. [Architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) — build authority, owner placement, definitive writers, governance, workspace, workstreams, and proof gates.
+3. [Final Home + Work architecture](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) — pinned current state, target contracts/state machines, failure semantics, migration, and unknowns.
 4. [Capability source notes](../planning/WALDO_PRODUCT_CAPABILITY_VALIDATION_SOURCE_NOTES_2026-08-04.md) — comparator evidence and interpretation limits.
 5. [Contributor onboarding](./CONTRIBUTOR-ONBOARDING.md), [agent workflow](./AGENT-OPERATING-WORKFLOW.md), and [local verification](./LOCAL-DEV-TESTING-PIPELINE.md).
 6. Fresh source/tests, the current issue/PR, and accepted ADRs for the exact seam being changed.
 
 Do not treat a planning document as shipped truth. Pin the current `origin/main` SHA, inspect implementation and tests, preserve dirty checkouts, and distinguish `shipped`, `partial`, `stub`, `proposed`, `missing`, and `rejected`.
+
+## Immediate implementation start
+
+Start the backend with the bounded, copy-ready [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md). It creates the responsibility-handshake subset of protocol v0.1 and its golden fixtures in `@waldo/contracts`; it does not yet add runtime ingress, persistence, reducers, connectors, or Kennel code.
+
+That contract work is the first dependency of one complete responsibility backbone:
+
+1. capture responsibility in Kennel;
+2. admit a canonical Outcome in the backend;
+3. delegate a bounded WorkUnit to Kennel;
+4. receive session observations and candidate evidence;
+5. pause for a durable Needs You judgment;
+6. perform one reversible effect through the trusted execution path;
+7. verify independently;
+8. accept, reopen, or release; and
+9. restore the exact surviving OpenLoop/ReEntryPoint the next day.
+
+Backend domain/reducer work and the Kennel protocol client begin in parallel as soon as their exact shared fixtures land. More providers, cloud workspaces, DeepWiki ingestion, capability marketplaces, and dashboard breadth must not substitute for this proof.
 
 ## Stable kernel
 
