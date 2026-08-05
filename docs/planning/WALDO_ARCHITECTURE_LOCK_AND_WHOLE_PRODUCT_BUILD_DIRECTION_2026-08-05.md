@@ -412,11 +412,12 @@ operational_proof_passed
 | One aggregate-writer matrix | **Adopt** | Makes the single-writer invariant testable |
 | Selective independent verification | **Adopt** | Deterministic effect read-back always; semantic artifact checks when declared/requested |
 | Event/storage, accepted-Outcome cost, checkpoint spikes | **Adopt as concurrent falsification** | Useful evidence; not product-scope or start gates |
-| Remove capability supply-chain governance | **Reject** | Admission, provenance, revocation, quarantine, and conformance are security requirements |
-| Collapse behavior-packaging contracts | **Reject** | They own materially different lifecycle and trust semantics |
+| Remove capability admission, conformance, version pinning, provenance, revocation, quarantine, or eligibility expiry | **Reject** | These are security requirements at any adapter count. A broken adapter version must be killable on day one |
+| Defer cryptographic attestation infrastructure — ed25519 signing, `trustRootVersion`, signature verification, SBOM, signed descriptors — until a party other than Waldo publishes a manifest | **Adopt with a named trigger** | Verifying your own signature, made with your own key, on a first-party adapter admitted by your own registry is a closed loop with real cost and near-zero security value. The fields stay in the manifest schema so no migration is needed; verification becomes mandatory at first third-party or externally-published manifest, and that trigger is a conformance gate |
+| Defer the four behavior-packaging contracts | **Reject** | Deferring them is a scope cut, and the build is whole-product. Note: no reviewer proposed *collapsing* them into one object; they own materially different lifecycle, review, update, revocation, and conformance semantics and remain distinct |
 | Remove Mission | **Reject** | Mission stays optional but committed; both direct and planned Outcome paths are required |
 | Replace safe Spot migration with an N=1 shortcut by assumption | **Reject as a rule** | Use measured inventory to choose the simplest safe migration; never assume data/user count or discard correction/deletion history |
-| Declare FSMs but implement/test only early-path transitions | **Reject** | Unsupported transitions must remain explicitly unsupported; supported states require complete proof |
+| Claim FSM support without complete proof of the declared transitions | **Reject** | Per §11, declaring the full enum/state vocabulary early is expected and does not require implementing every transition before anything ships. What is rejected is calling a state or transition *supported* before its reducer, invalid-transition cases, property/fault tests, projections, migration/rollback, and relevant cross-surface acceptance pass. Unimplemented transitions stay explicitly unsupported; this row does not require proving all transitions in every state machine before any capability is usable |
 | Add or reorder product slices | **Reject** | The build is whole-product and workstream-based |
 
 ## 13. Finite reopen conditions

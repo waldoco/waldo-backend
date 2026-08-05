@@ -239,7 +239,7 @@ Every product-capability row must eventually track these separately:
 
 | Status | Question answered |
 |---|---|
-| `architecture_expressible` | Is there a safe owner/module/state model for the capability? |
+| `architecture_specified` | Is there a safe owner/module/state model for the capability? |
 | `contract_defined` | Are versioned commands, events, policies, failures, and retention rules specified? |
 | `module_implemented` | Are the owning reducer/module, invalid paths, migrations, and rollback implemented? |
 | `adapter_conformance_passed` | Has the exact provider/connector/environment version passed real and fault-injected behavior tests? |
