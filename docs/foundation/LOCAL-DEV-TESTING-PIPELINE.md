@@ -556,45 +556,39 @@ The pipeline intentionally borrows from peer systems but adapts to Waldo's const
 
 Waldo differs from coding agents because its hard guarantees are stateful, privacy-sensitive, and user-health-adjacent. Therefore the first-class proof is durable runtime correctness, not only model task pass rate.
 
-## Near-Term Build Order
+## Current Integration And Verification Order
 
-Brain PR #17 merged at `75591543053dbdda6cf7c7f0210f8d16f36c3db8`; its ADR-0001/0071/0077
-amendments and new accepted ADR-0081/0082 govern architecture, not a proof-level promotion.
+The former health-first Alpha/Wave/HEY sequence is historical and no longer governs build order. The
+current authority is the [architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md)
+and [whole-product entrypoint](./NEXT-SESSION-PLAN.md).
 
-1. Complete Wave 0 reconciliation and stop for human approval of its PR. Then run Wave 1:
-   HEY-144 owns V2 goals schema, HEY-14 owns the SkillLoader, and HEY-15 leads recall while
-   remaining read-only at the schema seam until its rebase. HEY-13 is Done and consumed as the
-   Scribe/taint foundation.
-2. Run Wave 2 only after those interfaces merge: HEY-16 composes them, HEY-100 is static guard only,
-   and HEY-75 carries corpus, held-out, ReDoS, and provenance proof. HEY-141 follows in Wave 3 after
-   HEY-100 unless guard/config write sets are proved disjoint.
-3. Review HEY-150's matrix. Its acceptance directly gates only HEY-151 and HEY-152. Run HEY-157,
-   HEY-159, and HEY-134/114 in parallel; do not put HEY-157 or HEY-159 below HEY-150.
-4. Under HEY-151, commit the first strict public contract:
-   `GET /public/v1/briefs/morning/current`, `ready|pending|empty`, `WaldoProblemV1`, no tenant
-   selector, and generated-client freshness. HEY-152 owns the parallel whole-path cutover/rollback
-   contract.
-5. Prove HEY-153 only after HEY-125, HEY-134/114, HEY-152, and HEY-157. Require verified subject to
-   owner-bound DO and two-user RLS/cache/ETag rejection.
-6. HEY-154 consumes completed HEY-13 Scribe/taint proof plus HEY-151 and HEY-153; HEY-132 live
-   integration requires HEY-151/153/154/157. HEY-35 requires HEY-28/132/151/154; HEY-47 requires
-   HEY-28/132/151.
-7. Keep HEY-110 async delivery and HEY-158 Spots as separate Alpha gates. Run HEY-126's bounded
-   Chat transport/replay spike in parallel under accepted ADR-0077;
-   HEY-127 remains off-path conditional/deferred.
-8. Run HEY-156 only after HEY-132, HEY-154, HEY-28, HEY-35, HEY-47, HEY-13, and HEY-159. HEY-159
-   also blocks HEY-56. Keep native-device, Alpha, and production labels at their lower proof level
-   until their own gates pass.
-9. HEY-155's live blockers are HEY-132 and HEY-156. Pass the adopted dogfood acceptance gate after
-   HEY-156 before executing HEY-155 decommission and residue removal; dogfood is not a Linear
-   blocker relation.
+These are dependency edges and verification obligations, not smaller product phases:
 
-Home is tested as composition of Brief, Spots, relevant threads, and Patrol/audit. HEY-127 is
-conditional/deferred; do not add a generic Feed fixture/schema or make it an Alpha prerequisite.
-The Brief GET is a read path, not HEY-110 async delivery.
+1. **Responsibility-handshake protocol and fixtures:** strict untrusted request/trusted envelope,
+   presence capability, event/projection cursor semantics, content-free problems, and golden
+   cross-repo fixtures.
+2. **Owner root and domain reducers:** canonical Capture/Outcome, optional Mission, WorkUnit,
+   Judgment, Acceptance, OpenLoop, and ReEntry state with one writer per aggregate and deterministic
+   replay/invalid-transition proof.
+3. **Kennel continuous integration:** the canonical Kennel repository consumes released fixtures,
+   treats backend projections as truth, retains only device-local operation/workspace durability,
+   and passes fake-backend plus real-adapter conformance.
+4. **Trusted execution and one reversible effect:** preserve RunLoop regression guarantees,
+   intent-before-I/O, frozen digest, one retry owner, reconciliation-before-retry, cancellation,
+   lease/fence, and terminal ambiguity.
+5. **Evidence, independent verification, Acceptance, and continuity:** prove that session activity
+   and receipts cannot close responsibility; accept/reopen/release and next-day re-entry use the
+   same canonical revision and evidence digest.
+6. **Personal/work proof:** run both “publish by Friday, but do not publish without my approval” and
+   “prepare tomorrow's investor meeting and handle every follow-up” through the same responsibility
+   backbone.
 
-Persistent app-cache tests depend on accepted Brain ADR-0082 and HEY-159. Health-derived
-computation/public-field tests depend on accepted Brain ADR-0081.
+Backend domain work and Kennel consumer work proceed in parallel after their exact contract fixtures
+land. Fakes prove contracts, not user capability. Provider breadth, cloud workspaces, knowledge
+ingestion, MCP distribution, and dashboard breadth do not replace the complete responsibility proof.
+
+Any work touching the accepted offline-draft behavior must first reconcile ADR-0077/ADR-0082 with
+protocol v0.1's locked `offlineCommands: "none"`; tests must not silently encode one side.
 
 ## Definition Of Done
 

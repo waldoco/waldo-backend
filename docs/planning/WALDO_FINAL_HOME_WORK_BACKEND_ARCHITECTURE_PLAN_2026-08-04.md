@@ -2,6 +2,7 @@
 
 **Status:** founder-approved stable-kernel build direction; accepted ADRs remain canonical until reconciled, and no product implementation is claimed by this document
 **Date:** 2026-08-04
+**Implementation-start addendum:** 2026-08-05
 **Backend baseline:** `origin/main@8867d8f281dd2c8c574f53e553fd3d8497ddca1a` (fetched 2026-08-04)
 **Architecture baseline:** `waldo-brain@6e5cbd7a0711b883e75e606487ac1cdb0b7c6750` plus Appendix A hashes
 **Posture:** rethink Home + Work from first principles; retain current code only where evidence earns migration value
@@ -26,9 +27,15 @@ Every recommendation is marked **[Observed fact]**, **[Inference]**, **[Proposed
 
 > **[Decision — locked]** Build the complete committed software capability envelope through parallel, dependency-aware workstreams. There are no product phases or slices. Team size does not authorize architecture or scope cuts. The current product is online-authoritative; a future local LLM remains a provider/executor adapter and does not create an offline truth fork.
 
-> **[Proposed decision — Adopt]** The canonical reusable synthesis of Waldo's owner-side controls is the lock's [Agent Governance Layer](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#31-agent-governance-layer). It is cross-cutting composition of the existing gateway, context, authority, effects, capability, credential, budget/posture, evidence/acceptance, continuity, portability, and deletion owners—not a new module or writer.
+> **[Proposed decision — Adopt]** The canonical reusable synthesis of Waldo's owner-side controls is the lock's [Agent Governance Layer](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#32-agent-governance-layer). It is cross-cutting composition of the existing gateway, context, authority, effects, capability, credential, budget/posture, evidence/acceptance, continuity, portability, and deletion owners—not a new module or writer.
 
-### 1.1 Quality attributes in priority order
+### 1.1 Product responsibility contract
+
+> **[Decision — locked]** Waldo must let a person say, **“Make sure this gets handled,”** then carry the responsibility until the real-world result is verified, accepted, reopened, or consciously released—without taking control away from the person.
+
+The architecture succeeds only when it produces continuity, follow-through, execution, well-timed judgment, and honest completion with less net supervision and mental reassembly. A running agent, sent message, generated artifact, connector receipt, or provider `done` signal cannot satisfy this contract by itself.
+
+### 1.2 Quality attributes in priority order
 
 | Priority | Attribute | Architecture consequence | First-proof measure |
 |---:|---|---|---|
@@ -117,6 +124,15 @@ flowchart TB
 - **[Inference]** The effect spine is valuable, but its 5,627-line owner lacks locality. Extract seams under conformance tests; do not replace wholesale.
 
 Current `RuntimeRun`, `SessionState`, runtime `Evidence`, `GoalRecord`, `spots`, OpenAPI, and tool-name unions are false friends. None should be renamed into a target entity without new semantics and tests.
+
+### 3.4 Post-merge implementation-start addendum
+
+- **[Observed fact]** The implementation-start baseline is [`origin/main@77e770f47aba2d8f380ad8329f93c4a4a979fb44`](https://github.com/Pin4sf/waldo-backend/commit/77e770f47aba2d8f380ad8329f93c4a4a979fb44), fetched on 2026-08-05. The merge between the original audit pin and this baseline primarily establishes planning/build-direction material; it does not promote target product capabilities to shipped status.
+- **[Observed fact]** The canonical desktop integration target is [`Pin4sf/kennel@4a9aa3d10673021ed271ca2a209b3a9de23bb062`](https://github.com/Pin4sf/kennel/commit/4a9aa3d10673021ed271ca2a209b3a9de23bb062). [`Developerr86/Kennel@9184f83`](https://github.com/Developerr86/Kennel/commit/9184f8303ccc4feb339582327d5d26adcc190b73) is a confirmed ancestor baseline, not a second product repository.
+- **[Observed fact]** Current Kennel already supplies local desktop execution/supervision mechanics and local Outcome/Mission/WorkUnit representations. It does not yet consume the canonical Waldo protocol or defer canonical verification, Acceptance, OpenLoop, and ReEntry truth to the backend.
+- **[Proposed decision — Adapt]** Migrate Kennel aggregate by aggregate: preserve its desktop/provider/workspace mechanics, introduce the shared protocol and stale-cache semantics, reconcile local migration inputs, then remove canonical-write authority only after contract and rollback proof.
+
+This addendum refreshes the implementation handoff. Section 3.1 remains the source audit at its explicitly pinned historical SHA.
 
 ## 4. Target container architecture
 
@@ -938,6 +954,20 @@ type ConformanceStatus =
 **[Proposed decision — Reject]** Capability declarations are not self-certifying. Sensitive-effect eligibility requires current conformance evidence.
 
 ## 14. Whole-product end-to-end integration scenario
+
+### 14.0 Product and engineering proofs
+
+The integration sequence below is the first complete engineering proof of the product promise:
+
+> “Publish this product update by Friday, but do not publish without my approval.”
+
+It must traverse capture, canonical Outcome, bounded WorkUnits, a real Kennel/provider session, a durable judgment, one reversible effect, a persisted receipt, independent verification, user Acceptance or reopen, and exact next-day re-entry.
+
+The corresponding positioning proof is:
+
+> “Prepare me for tomorrow's investor meeting and make sure every follow-up is handled.”
+
+That scenario applies the same responsibility backbone to personal/work context, people, meeting preparation, artifacts, calendar/messaging, restrained attention, and follow-through. Neither scenario is a smaller product phase; together they prevent the architecture from becoming either coding-agent infrastructure or a passive personal-assistant dashboard.
 
 ### 14.1 Initial real-effect choice
 

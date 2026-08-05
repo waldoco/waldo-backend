@@ -19,6 +19,12 @@ Accepted ADRs remain the repository's ratified architecture authority until amen
 
 **[Accepted-ADR conflict — blocked from silent reconciliation]** Accepted ADR-0077 permits app-local drafts/offline queues that never become committed messages, and accepted ADR-0082 defines retained offline chat drafts. The current founder decision is stricter: protocol 0.1 permits no disconnected command creation or queue. Neither ADR is modified by this planning update; implementation that removes or retains those draft paths requires an explicit ADR reconciliation before merge.
 
+### 1.1 Product-level lock
+
+> **[Decision — locked]** A person can tell Waldo, **“Make sure this gets handled,”** and Waldo carries the responsibility until the real-world result is verified, accepted, reopened, or consciously released—without taking control away from the person.
+
+Architecture exists to preserve that relationship. A module, contract, provider, integration, workspace, or UI is valuable only when it improves continuity, follow-through, execution, well-timed judgment, or honest completion. Agent launches, messages sent, tool calls, generated artifacts, and provider `done` states are observations; none is the product result.
+
 ## 2. Whole-product thesis checksum
 
 The locked architecture must produce one Waldo that owns both personal assistance and work orchestration, including their bridge:
@@ -56,7 +62,15 @@ flowchart LR
 4. Providers, harnesses, connectors, people, and execution environments return untrusted observations, receipts, and candidate evidence. Their `done` state changes no Waldo product truth by implication.
 5. No transitive delegation exists. A downstream executor receives the intersection of the owner's current grant, WorkUnit ceiling, adapter capability, purpose, resource, audience, lease, expiry, and revocation generation.
 
-### 3.1 Agent Governance Layer
+### 3.1 Canonical Kennel implementation boundary
+
+- **[Observed fact]** [`Developerr86/Kennel@9184f83`](https://github.com/Developerr86/Kennel/commit/9184f8303ccc4feb339582327d5d26adcc190b73) is an ancestor baseline of the canonical [`Pin4sf/kennel`](https://github.com/Pin4sf/kennel) repository. New Waldo integration targets `Pin4sf/kennel`; the upstream repository remains source history, not a separate product authority.
+- **[Observed fact]** Current Kennel has substantial desktop execution and supervision behavior, while its Outcome/Mission/WorkUnit records and contract v3 are local and no canonical Waldo backend client exists.
+- **[Decision — locked · Adapt]** Kennel retains the desktop Island/Work/Needs You experience, persistent local daemon, provider supervision, worktrees/files/terminals, device-local operation ledger and recovery, provider-specific adapters, and an explicitly stale read-only projection cache.
+- **[Decision — locked · Adopt]** The backend owns Waldo identity, responsibility/Outcome truth, commitments, context policy, authority and judgments, effects, verification, Acceptance, OpenLoops, and ReEntryPoints. Kennel reports untrusted session observations and candidate evidence through the shared protocol.
+- **[Decision — locked · Reject]** Do not overwrite Kennel wholesale or keep its local product database as a second canonical writer. Cut over aggregate by aggregate behind compatibility adapters, reconciliation, and rollback.
+
+### 3.2 Agent Governance Layer
 
 **[Proposed decision — Adopt]** Waldo's Agent Governance Layer is the first-party, owner-side control system between a person's intent and every model, agent, tool, connector, human executor, or execution environment acting on their behalf.
 
@@ -376,6 +390,24 @@ The following are continuous acceptance scenarios, not releases or scope boundar
 6. routines, skills, integration recipes, and capability packages installed, updated, revoked, and quarantined independently with no hidden privilege expansion.
 7. a disconnected presence shows an explicitly stale last-synced projection while every command, approval, execution, and canonical-state mutation attempt fails closed until online backend authority is available.
 
+### 9.2 Responsibility-backbone implementation start
+
+**[Decision — locked · Adopt]** The first cross-repository build proves one durable responsibility, not an abstract transport layer in isolation:
+
+1. the user captures a responsibility in Kennel;
+2. the backend admits and persists the canonical Outcome and stable revision;
+3. the backend delegates one bounded WorkUnit to Kennel under a lease/fence;
+4. Kennel executes a provider session and reports activity plus candidate evidence;
+5. the backend creates a durable Needs You judgment and records the exact answer;
+6. the trusted execution path performs one reversible external effect after persisting frozen intent;
+7. an independent verifier determines what became true;
+8. the user accepts, reopens, or releases the responsibility; and
+9. the next-day experience restores the exact surviving OpenLoop and ReEntryPoint.
+
+The protocol/conformance spine is the first dependency because both repositories need one language. Its first fixtures must model this handshake and reject client-supplied owner identity, authority, verification, Acceptance, or closure. It must not become months of generic infrastructure before a real Outcome crosses Kennel and the backend.
+
+The first engineering scenario is “Publish this product update by Friday, but do not publish without my approval.” The first positioning scenario is “Prepare me for tomorrow's investor meeting and make sure every follow-up is handled.” These are complementary proofs of the same responsibility contract, not product phases or scope cuts.
+
 ## 10. Concurrent falsification and cost work
 
 These run alongside implementation and can force a placement or implementation change without shrinking the product:
@@ -435,4 +467,4 @@ Provider choice, connector choice, local/cloud placement, object-store vendor, f
 
 ## 14. Start decision
 
-**Start building now.** Publish protocol v0.1 and its fixtures as the common integration seam, then let backend and Kennel workstreams advance in parallel. A workstream may wait on a named contract or authority decision; the product is not divided into smaller promised versions, and no capability is removed because another workstream is still in progress.
+**Start building now.** Use the [next backend session prompt](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) to publish the responsibility-handshake subset of protocol v0.1 and its fixtures as the first common integration seam. Backend domain and Kennel consumer work then advance in parallel against those fixtures. A workstream may wait on a named contract or authority decision; the product is not divided into smaller promised versions, and no capability is removed because another workstream is still in progress.
