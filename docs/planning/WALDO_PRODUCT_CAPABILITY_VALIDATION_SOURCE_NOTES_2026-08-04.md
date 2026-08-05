@@ -1,9 +1,10 @@
 # Waldo Product Capability Validation — Source Notes
 
 > Date checked: 2026-08-04
-> Purpose: source notes for validating the final Waldo Home + Work architecture against the public Waldo thesis and the Dimension, Folk, Poke, and Hermes benchmark set.
+> Purpose: source notes for validating the final Waldo Home + Work architecture against the public Waldo thesis and the Dimension, Folk, Poke, Agent Orchestrator, Medley, and Hermes benchmark set.
 > Scope: product capabilities, jobs, trust/authority, continuity, surfaces, orchestration, limitations, and architecture fit. This is not implementation evidence.
 > Evidence labels: **Observed** means directly supported by the cited first-party source or pinned source tree; **Inference** is a bounded interpretation; **Unknown** is not established by the inspected public contract.
+> Build authority: [`WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md). Source-note dispositions compare benchmark fit; they do not define product phases, slices, or team-size scope cuts.
 
 ## 1. Source classification and authority
 
@@ -11,10 +12,12 @@
 | --- | --- | --- | --- |
 | [Waldo portfolio story](https://shivansh-portfolio-one.vercel.app/work/waldo) | First-party public company/product narrative | Current public thesis and promise | Target direction and selected internal evidence; it explicitly does not claim the end-to-end experience is shipped |
 | [Waldo product, technical and vision brief](https://waldo-technical-brief.pages.dev/) | First-party public technical narrative | Current target surfaces, authority model, platform thesis, and current-truth boundary | Target architecture, not independently inspectable production proof |
-| [Dimension docs index](https://docs.dimension.dev/llms.txt) and linked docs | Historical first-party product documentation, still reachable | Best public product contract for Dimension | Dimension has wound down; its current homepage is a sign-in shell, so this is a historical benchmark, not a live competitor claim |
+| [Dimension homepage](https://dimension.dev/), [docs index](https://docs.dimension.dev/llms.txt), and linked docs | First-party product material with an announced 2026-05-20 wind-down | Best public product contract for Dimension | Current service availability is unverified; treat the feature material as a benchmark, not a live-availability claim |
 | [Dimension clean-room dissection](/Users/shivanshfulper/Developer/Pin4sf/waldo-brain/03-References/research/dimension-product-engineering-clean-room-dissection-2026-07-30.md) | Local canonical, primary-source-pinned research | Consolidated Dimension lifecycle, capability, limitation, and source map | Do not infer acquisition terms or present historical capability as currently available |
 | [Folk homepage](https://www.folk.com/), [docs](https://www.folk.com/docs/memory), [Crew](https://www.folk.com/docs/crew), [privacy](https://www.folk.com/privacy) | Current first-party product and legal sources | Current Folk Personal AI contract | This is Nozomio's personal agent at `folk.com`, not the unrelated Folk CRM at `folk.app` |
 | [Poke docs](https://poke.com/docs), [Recipes](https://poke.com/docs/creating-recipes), [MCP](https://poke.com/docs/mcp-servers), [API](https://poke.com/docs/api), [release notes](https://poke.com/docs/release-notes) | Current first-party product documentation | Current Poke contract | Public behavior does not establish general effect reconciliation or verified outcome closure |
+| [Agent Orchestrator repository](https://github.com/Untrivial-ai/agent-orchestrator/tree/66240ab24ea78d1e6e2b1baa34c6796a1a7494dc) | Current first-party source/docs at a pinned commit | Coding-agent supervision and harness-adapter evidence | Coding sessions/worktrees/PRs are not Waldo's general human-work ontology or truth |
+| [Medley repository](https://github.com/Spine-AI/medley/tree/8a6221c88d9f4ca96f2c556b08f5882f4be11131) and [mission skill](https://github.com/Spine-AI/medley/blob/8a6221c88d9f4ca96f2c556b08f5882f4be11131/plugin/skills/mission/SKILL.md) | Current first-party plugin source/docs at a pinned commit | Mission interview/DAG/supervision product contract | The mission engine is a separately downloaded proprietary binary; engine semantics are first-party claims, not fully inspectable source evidence |
 | [Hermes Agent repository](https://github.com/NousResearch/hermes-agent/tree/f5be9236e00ddf2f2a412697f267078fc4ee068e) | Current first-party source and docs, pinned to `f5be9236e00ddf2f2a412697f267078fc4ee068e` | Current harness/runtime evidence | A capable executor/harness; it is not evidence that Hermes should own Waldo identity, personal truth, or acceptance |
 | [Final Waldo architecture plan](/Users/shivanshfulper/.codex/worktrees/waldo-final-architecture-plan/waldo-backend/docs/planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) | Local target design | Architecture being validated | Proposed capability cannot be described as shipped merely because the plan can express it |
 
@@ -59,13 +62,13 @@ Primary sources remain indexed at [Dimension's docs inventory](https://docs.dime
 | Folk | Source-backed observation | Limitation relevant to Waldo |
 | --- | --- | --- |
 | Primary job | “The friend in your texts that gets stuff done”: life administration, relationships, money awareness, email/calendar, research, travel, reminders, and background work | Breadth is marketed strongly; externally verified completion is not a general published contract |
-| Presence | iMessage, Telegram, WhatsApp, Discord, calls, dashboard; same agent and continuity across channels | Phone/channel-root migration and full portable identity are not clearly self-service |
+| Presence | iMessage, Telegram, WhatsApp, calls, and dashboard; same agent and continuity across the documented channels | Phone/channel-root migration and full portable identity are not clearly self-service; current docs do not establish Discord as a core supported channel |
 | Persistent memory | Visual Brain; long-term people/preferences/plans/facts; browse, search, delete, import | Provenance, time validity, conflict, correction history, purpose, and complete export are unresolved publicly |
 | Execution | Per-user private cloud computer/browser, connected applications, custom MCP, coding-agent handoff | Browser/MCP isolation, egress, secret-use policy, trace shape, and reconciliation are not fully public |
 | Proactivity | One-shot reminders, routines, watchers, follow-up conditions, morning check-ins, location-aware nudges, calls; `/stop` and snooze controls | A durable general Open Loop with consequence, evidence gap, disposition, and human closure is not public |
 | Reusable behavior | Folkways bundle instructions, schedule, and required connections and can be shared | Public contract is weaker than signed/versioned/tested behavior bundles with rollback and revocation |
 | Multi-person coordination | Crew computes with the target person's agent/tools after approval; requester receives status by default; target can approve a small typed reply; returned data is untrusted | Both parties must use Folk; signatures, expiry, replay defense, idempotency, portable audit, disputes, and verified “done” are unknown |
-| Authority | Approval/deny for actions; login/payment/captcha handoff; Crew per-request approval; device-reported write confirmation | Global `/yolo`-style bypass is incompatible with Waldo's fail-closed, consequence-scoped authority |
+| Authority | Approval/deny for actions; login/payment/captcha handoff; Crew per-request approval; device-reported write confirmation | Public docs do not establish Waldo-grade digest binding, use limits, revocation generations, reconciliation, or independent acceptance |
 | Privacy | Claims tenant-isolated cloud computer, encrypted stored data, no sale/training, independently revocable connections and deletion | “Only you” marketing is qualified by support/operations access; user-held E2E key protocol and complete export are not public |
 
 Sources: [Folk homepage](https://www.folk.com/), [memory](https://www.folk.com/docs/memory), [browser](https://www.folk.com/docs/browser), [reminders](https://www.folk.com/docs/reminders), [Folkways](https://www.folk.com/docs/folkways), [Crew](https://www.folk.com/docs/crew), [privacy](https://www.folk.com/privacy), [subprocessors](https://www.folk.com/subprocessors).
@@ -84,7 +87,35 @@ Sources: [Folk homepage](https://www.folk.com/), [memory](https://www.folk.com/d
 
 Sources: [welcome](https://poke.com/docs), [integrations](https://poke.com/docs/managing-integrations), [recipes](https://poke.com/docs/creating-recipes), [MCP](https://poke.com/docs/mcp-servers), [API](https://poke.com/docs/api), [release notes](https://poke.com/docs/release-notes), [usage](https://poke.com/docs/usage-and-resets).
 
-### 3.4 Hermes Agent — persistent, provider-neutral agent harness and work runtime
+### 3.4 Agent Orchestrator — dense supervision of parallel coding sessions
+
+Repository pin: [`66240ab24ea78d1e6e2b1baa34c6796a1a7494dc`](https://github.com/Untrivial-ai/agent-orchestrator/tree/66240ab24ea78d1e6e2b1baa34c6796a1a7494dc).
+
+| Agent Orchestrator | Source-backed observation | Limitation relevant to Waldo |
+| --- | --- | --- |
+| Primary job | Supervises parallel terminal-based coding agents through a desktop/CLI harness | A coding session, repository, branch, PR, or worktree is not a general human Outcome |
+| Isolation | Creates a separate git worktree for each session | Worktree isolation does not establish general filesystem, credential, egress, deletion, or personal-context policy |
+| Control surface | Live terminal access, working/waiting/finished/blocked state, PR state, browser preview, and follow-up instructions | Session status is execution observation, not evidence, Acceptance, or Open Loop closure |
+| Feedback routing | Routes CI failures, review comments, and merge conflicts back to the responsible session | Feedback-loop automation does not grant effect authority or prove the requested human outcome |
+| Harness breadth | Common supervisor for many coding-agent CLIs | Adapter breadth supports Kennel's provider-neutral direction but each exact version still needs Waldo conformance |
+
+Primary source: [Agent Orchestrator README at the pinned commit](https://github.com/Untrivial-ai/agent-orchestrator/blob/66240ab24ea78d1e6e2b1baa34c6796a1a7494dc/README.md).
+
+### 3.5 Medley — mission interview, frontier DAG, and supervised workers
+
+Repository pin: [`8a6221c88d9f4ca96f2c556b08f5882f4be11131`](https://github.com/Spine-AI/medley/tree/8a6221c88d9f4ca96f2c556b08f5882f4be11131).
+
+| Medley | Source-backed observation | Limitation relevant to Waldo |
+| --- | --- | --- |
+| Primary job | `/mission` interviews the user, proposes a task DAG with per-task runtime/model routing, then supervises parallel workers | Mission is useful for complex work but should remain optional beneath a general Outcome |
+| Review/control | User reviews the DAG, says go, watches a local dashboard, handles approvals, and steers in plain language | The host's approval UX and inherited permissions are not Waldo AuthorityGrants |
+| Context inheritance | Workers inherit skills, MCP servers, project memory, permission grants, and subscription auth from the host setup | Inherited context/permission is too broad to become Waldo authority or purpose-bound disclosure automatically |
+| Runtime evidence | Public repository contains the plugin, hooks, skills, and engine-resolution/install path | The mission engine is downloaded as a proprietary closed-source binary; most engine behavior is documented, not independently inspectable source |
+| Local operation | Mission state is described as local SQLite; engine runs a loopback daemon with consent-gated/content-free telemetry claims | Local operation still requires version pinning, supply-chain verification, revocation, and adapter conformance before Waldo admission |
+
+Primary sources: [Medley README](https://github.com/Spine-AI/medley/blob/8a6221c88d9f4ca96f2c556b08f5882f4be11131/README.md) and [mission skill](https://github.com/Spine-AI/medley/blob/8a6221c88d9f4ca96f2c556b08f5882f4be11131/plugin/skills/mission/SKILL.md).
+
+### 3.6 Hermes Agent — persistent, provider-neutral agent harness and work runtime
 
 Repository pin: [`f5be9236e00ddf2f2a412697f267078fc4ee068e`](https://github.com/NousResearch/hermes-agent/tree/f5be9236e00ddf2f2a412697f267078fc4ee068e).
 
@@ -109,7 +140,7 @@ Legend:
 - **Reference strength** describes what the benchmark demonstrates publicly.
 - **Waldo fit: native** means the final plan already has an owning contract/module.
 - **Waldo fit: clarify** means the architecture can support it but the product contract or named boundary should be made explicit.
-- **Waldo fit: defer** means the architecture should preserve the extension point but it is intentionally outside the first proof.
+- **Waldo fit: evidence-gated extension** means the capability remains committed where the build lock says so, but cannot be declared supported until its authority, privacy, conformance, and acceptance gates pass.
 
 | Product capability / user job | Dimension | Folk | Poke | Hermes | Waldo architecture fit | Required Waldo meaning |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -121,18 +152,18 @@ Legend:
 | Persistent, inspectable personal memory | Context Graph editable/delete | Brain, import, group/Crew memory | Not a prominent public product contract | MEMORY/USER/context/session search | **Native** — ContextClaim/Spot/Constellation/Memory policy | User statements outrank inference; provenance, correction, validity, purpose, deletion |
 | Cross-app search and DeepWiki | Indexed Search/Context Graph | Connected apps/browser/research | DeepWiki Recipe/MCP | Web/search/MCP/tools | **Native** — KnowledgeProjection/ContextProjection/SourceUsageReceipt | Search/index is rebuildable projection, not canonical memory truth |
 | Connected tool/MCP action | Read/Act/Search/Trigger + custom MCP | Composio/custom MCP/browser | Recipes/custom MCP | Tools/MCP | **Native** — CapabilityManifest + EffectIntent/Receipt | Discovery never grants authority; admission requires conformance and digest-bound intent |
-| Browser/computer execution | Not central in public contract | Per-user cloud browser + phone handoff | Connected integrations/human fallback | Multiple execution backends | **Clarify / staged** — ExecutionEnvironmentAdapter/WorkspacePort | Sensitive-step handoff, egress/credential isolation, checkpoints, postcondition verification |
+| Browser/computer execution | Not central in public contract | Per-user cloud browser + phone handoff | Connected integrations/human fallback | Multiple execution backends | **Native contract; evidence-gated adapters** — ExecutionEnvironmentAdapter/WorkspacePort | Sensitive-step handoff, egress/credential isolation, checkpoints, postcondition verification |
 | Artifact creation/library | Strong Library/export | Broad generated artifacts | Charts/PDF/sites | Files/tool output | **Native** — ArtifactRegistry + Workspace/Blob separation | Artifact version/evidence is not Outcome acceptance |
 | Durable Outcome and success criteria | Missing publicly | Partial domain trackers | Missing publicly | Persistent goal completion contract | **Native and differentiating** — Outcome/AcceptanceCheck | The person's intended state, constraints, evidence policy, acceptance, disposition |
 | Mission/planning/dependency graph | Complex-step plans | Background work | Agent-created work implicit | Goal + Kanban dependencies | **Native** — optional Mission + WorkUnit dependencies | General work graph, not software-only tasks |
 | Multi-provider agent sessions | Not provider-oriented | Cursor agent handoff/cloud computer | Integration-oriented | Strong provider/runtime neutrality | **Native** — RunLoop + AgentSession + manifests | Provider sessions are replaceable activity, not product truth |
-| Parallel workers/subagents | Not a defining public feature | Cloud work/coding handoff | Not prominent | Strong delegate/Kanban model | **Native architecture; later breadth** | Child authority is intersected and bounded; only canonical reducer changes Waldo truth |
+| Parallel workers/subagents | Not a defining public feature | Cloud work/coding handoff | Not prominent | Strong delegate/Kanban model | **Native architecture; adapter-by-adapter conformance** | Child authority is intersected and bounded; only canonical reducer changes Waldo truth |
 | Pause/resume/steer/cancel/recover | Background thread needs-input | `/stop`, background return, handoff | Conversation/API | Strong session controls and recovery | **Native** — Kennel executor protocol + leases/fencing/cancellation | Recover with same operation/session keys; reconcile before retry |
 | Consequential judgment | Accept/Reject/Edit/Respond | Approval/deny + sensitive handoff | Natural interaction; details limited | Command approvals/human Kanban input | **Native** — JudgmentRequest + AuthorityGrant | Exact alternatives, uncertainty, consequence, digest, expiry, revocation, use limit |
 | Evidence, independent verification, acceptance | Public gap | Public gap outside selected writes | Public gap | Goal judge/worker complete is not independent outcome proof | **Native and differentiating** | Evidence, Verification, Acceptance, and OpenLoop closure remain distinct |
 | Open Loop and exact re-entry | Daily recap/remaining items | Conditional follow-up approximates it | Reminders approximate it | Resume/goal/task persistence | **Native and differentiating** | Persist unresolved consequence, responsible party, evidence gap, next trigger, exact re-entry |
 | Reusable/distributable capability | Workflows, Skills, marketplace | Folkways | Recipes/Kitchen/MCP + API | Skills/Agent Skills/MCP | **Clarify** | `RoutineDefinition`, `SkillBundle`, and `Connector/MCP package` need separate, versioned contracts |
-| Agent-to-agent/person-to-person work | Not central | Crew is a strong reference | Human fallback, connected actions | A2A/multi-profile possible | **Defer + clarify extension** | Compute near owner, target approval, minimal status, typed reply, untrusted payload, private failure |
+| Agent-to-agent/person-to-person work | Not central | Crew is a strong reference | Human fallback, connected actions | A2A/multi-profile possible | **Committed, clarify and evidence-gate** | Compute near owner, target approval, minimal status, typed reply, untrusted payload, private failure |
 | Human executor | User approval/input | Human step/login/payment | Poke Human | Human Kanban comments | **Architecture-compatible; clarify Actor adapter** | Human WorkUnit assignment, SLA/cost, identity, data minimization, evidence, dispute/cancel/acceptance |
 | Attention restraint | Feature toggles/brief cadence | Nudge budget/off/snooze | Usage/degradation controls | Explicit commands/cron | **Native** — attention policy + OpenLoop priority | Interrupt on consequence/authority, not engagement or activity volume |
 | Health/body context | Not core | Optional Health/location | Not core | Not core | **Native bounded policy** | Passive caring context inside an existing user-grounded purpose; never independent authority |
@@ -147,6 +178,8 @@ Legend:
 - Dimension's daily connected-work assembly and artifacts;
 - Folk's persistent personal presence, memory, proactive help, private compute, and relationship coordination;
 - Poke's messaging-native delegation, Recipes/MCP distribution, programmatic triggers, and optional human execution;
+- Agent Orchestrator's dense parallel-session supervision, isolated workspaces, and feedback routing;
+- Medley's mission interview, reviewed frontier DAG, per-task routing, and supervised workers;
 - Hermes's provider-neutral sessions, persistent goals, Kanban-like planning, schedules, skills, remote execution, steering, and recovery.
 
 It can do this without turning Waldo into four separate agents because the plan centralizes identity, Outcome truth, authority, memory policy, acceptance, and Open Loop closure in the per-owner Coordinator/RunLoop authority boundary while making surfaces, providers, connectors, people, protocols, and execution environments replaceable.
@@ -183,7 +216,7 @@ This makes Dimension Workflows/Skills, Folkways, Poke Recipes, and Hermes Skills
 
 ### 6.2 Reserve a cross-person delegation contract
 
-Folk Crew demonstrates a useful future job that is not fully represented by ordinary executor delegation. Reserve, but defer from the first proof:
+Folk Crew demonstrates a committed job that is not fully represented by ordinary executor delegation. Build it behind the following evidence-gated contracts rather than weakening ordinary executor delegation:
 
 ```text
 ExternalDelegationRequest
@@ -288,10 +321,10 @@ Therefore Waldo can eventually serve work far beyond software—research, schedu
 
 ## 9. Bottom line for the architecture review
 
-**Observed:** the final plan already contains the hard architectural separation the benchmarks lack publicly: one durable owner authority, general Outcomes/WorkUnits, separate AgentSession/effect/evidence/verification/acceptance/OpenLoop states, purpose-bound context, manifest/conformance admission, and exact re-entry.
+**Design observation:** the final plan specifies one durable owner authority, general Outcomes/WorkUnits, separate AgentSession/effect/evidence/verification/acceptance/OpenLoop states, purpose-bound context, manifest/conformance admission, and exact re-entry. In the inspected public contracts, the benchmark products do not expose this complete separation; that is scoped evidence, not a universal market claim or implementation proof.
 
 **Inference:** building the plan faithfully can produce the intended synthesis of Dimension + Folk + Poke + Hermes while upholding the larger Waldo thesis. The advantage is not feature novelty by omission; it is making the expected parity capabilities cohere around one user-owned identity, bounded authority, verified reality, deliberate closure, and portability.
 
-**Proposed decision:** lock the stable architecture kernel, add the product capability ledger and four explicit extension contracts described above, then sequence implementation through one real cross-surface Outcome before broad connector/plugin parity.
+**Proposed decision:** use the founder-approved architecture lock, capability ledger, and explicit extension contracts as the common seam; build the committed capability families in parallel and evaluate them through the shared whole-product acceptance scenarios.
 
-**Unknown:** no source or architecture document proves customers will trust, retain, or pay for the combined product. The first vertical slice must test product burden reduction, not merely demonstrate that one agent can run a long workflow.
+**Unknown:** no source or architecture document proves customers will trust, retain, or pay for the combined product. Whole-product trials must test burden reduction, not merely demonstrate that agents can run long workflows.

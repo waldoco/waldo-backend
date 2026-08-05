@@ -1,10 +1,11 @@
 # Waldo Final Home + Work Backend Architecture Plan
 
-**Status:** stable-kernel lock candidate after the 2026-08-04 agentic-ecosystem refresh; ADR ratification remains the build gate and no product code is implemented
+**Status:** founder-approved stable-kernel build direction; accepted ADRs remain canonical until reconciled, and no product implementation is claimed by this document
 **Date:** 2026-08-04
 **Backend baseline:** `origin/main@8867d8f281dd2c8c574f53e553fd3d8497ddca1a` (fetched 2026-08-04)
 **Architecture baseline:** `waldo-brain@6e5cbd7a0711b883e75e606487ac1cdb0b7c6750` plus Appendix A hashes
 **Posture:** rethink Home + Work from first principles; retain current code only where evidence earns migration value
+**Build-direction authority:** [`WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) resolves the final authority, workspace, Cloudflare, governance, parallel-workstream, and build-start decisions. Where older phase/slice wording in this research plan conflicts with that lock, the lock document governs.
 **Product validation companion:** [`WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md`](./WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) maps the personal-assistant set (Dimension, Folk, Poke), work-orchestration set (Agent Orchestrator, Medley, Hermes), distribution surfaces, use cases, flexibility, and thesis falsifiers to this architecture.
 
 ## 0. Evidence and decision legend
@@ -13,28 +14,30 @@ Every recommendation is marked **[Observed fact]**, **[Inference]**, **[Proposed
 
 ## 1. Executive architecture decision
 
-> **[Proposed decision — Adapt]** Waldo is one private, user-owned agent with one per-user durable authority root. Kennel, mobile, web, messaging, and voice are presences. Providers, harnesses, connectors, people, and execution environments do bounded work; none owns Waldo identity, memory policy, Outcome truth, authority, acceptance, or Open Loop closure.
+> **[Decision — locked]** Waldo is one private, user-owned agent with one per-user durable authority root. Kennel, mobile, web, messaging, and voice are presences. Providers, harnesses, connectors, people, and execution environments do bounded work; none owns Waldo identity, memory policy, Outcome truth, authority, acceptance, or Open Loop closure.
 
-> **[Proposed decision — Adapt]** Put `WaldoCoordinator` in `waldo-backend/packages/coordinator` as a deep application module, physically hosted inside a target per-owner `RunLoopDO` and the same SQLite transaction boundary. Current source does not prove owner-derived DO routing; that is an explicit migration and isolation gate. “Above RunLoopDO” is logical ownership and dependency direction, not a second service or network hop.
+> **[Decision — locked]** Put `WaldoCoordinator` in `waldo-backend/packages/coordinator` as a deep application module, physically hosted inside a target per-owner `RunLoopDO` and the same SQLite transaction boundary. Current source does not prove owner-derived DO routing; that is an explicit migration and isolation gate. “Above RunLoopDO” is logical ownership and dependency direction, not a second service or network hop.
 
-> **[Proposed decision — Adapt]** Preserve the trusted run loop’s effect intent, keyed reconciliation, journal, governor, outbox, owner binding, and crash recovery. Extract them behind a narrow `ExecutionKernel` interface. Do not treat current Goal, Run, Session, Trace, or Spot vocabulary as the final product model.
+> **[Decision — locked]** Preserve the trusted run loop’s effect intent, keyed reconciliation, journal, governor, outbox, owner binding, and crash recovery. Extract them behind a narrow `ExecutionKernel` interface. Do not treat current Goal, Run, Session, Trace, or Spot vocabulary as the final product model.
 
 > **[Proposed decision — Reject]** Health is not Waldo’s category, agenda, trigger ontology, or autonomy controller. Health is optional, consented, passive rich context that can make help more caring. Raw health stays in its source store; execution receives none by default and only a purpose-bound, derived, expiring projection when allowed.
 
 > **[Proposed decision — Adapt]** Treat ChatGPT’s July 2026 Voice/Work direction as market validation for voice-guided cross-project coordination, progress checks, desktop context, and connected tools. Waldo’s stronger contract is one identity and one Outcome/Open Loop model across all providers and surfaces. Voice is a presence capability, not another agent or memory.
+
+> **[Decision — locked]** Build the complete committed software capability envelope through parallel, dependency-aware workstreams. There are no product phases or slices. Team size does not authorize architecture or scope cuts. The current product is online-authoritative; a future local LLM remains a provider/executor adapter and does not create an offline truth fork.
 
 ### 1.1 Quality attributes in priority order
 
 | Priority | Attribute | Architecture consequence | First-proof measure |
 |---:|---|---|---|
 | 1 | User ownership/privacy | Owner root, purpose-bound context, fail-closed authority, correction | No unauthorized context/effect in adversarial tests |
-| 2 | Durable continuity | One per-user writer; replayable commands/events; exact re-entry | Kill/restart every phase without duplicate visible effects |
+| 2 | Durable continuity | One per-user writer; replayable commands/events; exact re-entry | Kill/restart at every durable boundary without duplicate visible effects |
 | 3 | Truth separation | Activity, evidence, verification, acceptance, closure stay distinct | Provider “done” cannot close Work Unit/Outcome/Open Loop |
 | 4 | Effect safety | Intent before I/O; frozen digest; reconcile before retry | Indeterminate effect never causes blind repeat |
 | 5 | Replaceability | Versioned manifests and conformance-gated adapters | Fake and real adapters pass one contract suite |
 | 6 | Restrained attention | Consequence-ranked Needs You and notification budgets | Judgment minutes and missed consequences measured |
 | 7 | Operability | Bounded retries/budgets/breakers and terminal resolution | Every failure reaches visible terminal/recoverable state |
-| 8 | Simplicity | Modular monolith in one DO until measured need | No distributed transaction in first proof |
+| 8 | Simplicity | Modular monolith in one DO until measured need | No distributed transaction without a load/placement falsifier |
 
 ## 2. Source priority and resolved contradictions
 
@@ -88,7 +91,7 @@ flowchart TB
 | WaldoCoordinator | **Missing** | No symbol, contract, store, module | **[Proposed decision — Adopt]** Same-DO deep module |
 | Waldo owner root | **Partial** | Opaque principal/tenant refs; no aggregate, presence registry, or owner-routed DO proof | **[Proposed decision — Adapt]** Auth outside; owner policy in coordinator |
 | Outcome / Mission / WorkUnit | **Missing** | No canonical contracts, stores, or FSMs | **[Proposed decision — Adopt]** Product spine; Mission optional |
-| Goal | **Partial** | Read contract/table; no public writer; prompt says unavailable | **[Proposed decision — Defer]** Keep only if long-horizon grouping proves useful |
+| Goal | **Partial** | Read contract/table; no public writer; prompt says unavailable | **[Proposed decision — Reject as product root]** Preserve migration evidence; add a distinct long-horizon grouping only if user evidence earns it |
 | AgentSession | **Partial** | Naming collision: existing `SessionState` is per-wake security reset state | **[Proposed decision — Adopt]** Durable provider/executor session |
 | JudgmentRequest | **Missing** | No durable request/status/expiry/decision | **[Proposed decision — Adopt]** Consequential choice boundary |
 | AuthorityGrant | **Partial** | Narrow primitive: invocation verification/checkpoint approval only | **[Proposed decision — Adopt]** Scope, expiry, revocation, digest binding |
@@ -97,7 +100,7 @@ flowchart TB
 | Acceptance/OpenLoop/ReEntryPoint | **Missing** | No product contracts/FSMs | **[Proposed decision — Adopt]** Durable human closure/continuity |
 | Artifact | **Stub** | Partial technical interface: replay source and fixtures; no durable owner | **[Proposed decision — Adopt]** Content-addressed metadata and retention |
 | Spot | **Partial** | Schema only: Supabase table/RLS; no runtime writer | **[Proposed decision — Adapt]** Correctable observation |
-| Constellation | **Stub** | Vocabulary only: soft ref/push literals; no contract/history | **[Proposed decision — Defer]** Until evidence ladder and correction exist |
+| Constellation | **Stub** | Vocabulary only: soft ref/push literals; no contract/history | **[Decision — committed and evidence-gated]** Implement only with evidence ladder, counterevidence, correction, validity, and deletion |
 | Multi-surface protocol | **Stub** | Text ingress/migrations; no production handler | **[Proposed decision — Adopt]** Commands/events/projections/cursors |
 | Capability discovery | **Missing** | Fixed `fake | gateway`, no manifest | **[Proposed decision — Adopt]** Registry + conformance |
 | Context composition | **Partial** | Module shipped with provenance/taint/privacy; production adapter/sources missing | **[Proposed decision — Adapt]** Purpose-bound product compiler |
@@ -126,20 +129,32 @@ flowchart TB
   end
   Presence --> Gateway["Authenticated command/query gateway"]
   subgraph Root["One per-user Durable Object / SQLite authority boundary"]
-    Coord["WaldoCoordinator<br/>identity · Outcomes · Missions · WorkUnits<br/>judgment · attention · acceptance · OpenLoops · re-entry"]
+    Coord["WaldoCoordinator<br/>authorize · sequence · transaction orchestration"]
+    Domain["OutcomeModule<br/>Capture · Outcome · Mission · WorkUnit"]
+    Judgment["JudgmentAuthorityModule"]
+    Acceptance["AcceptanceModule"]
+    Schedule["CommitmentScheduler"]
     Context["ContextCompiler"]
     Cap["CapabilityRegistry"]
     Continuity["ContinuityModule<br/>claims · Spots · Episodes · Constellations"]
     Verify["EvidenceVerifier"]
+    Artifact["ArtifactRegistry"]
+    Workspace["WorkspaceModule"]
     Projection["ProjectionPublisher"]
     Run["RunLoopEngine<br/>admission · journal · sessions · budgets · cancellation"]
     Effect["EffectEngine<br/>intent · digest · reconciliation · receipts"]
     DB[("Per-user SQLite")]
     Gateway --> Coord
+    Coord --> Domain
+    Coord --> Judgment
+    Coord --> Acceptance
+    Coord --> Schedule
     Coord --> Context
     Coord --> Cap
     Coord --> Continuity
     Coord --> Verify
+    Coord --> Artifact
+    Coord --> Workspace
     Coord --> Run
     Run --> Effect
     Coord <--> DB
@@ -176,33 +191,49 @@ packages/
 
 **[Proposed decision — Reject]** Do not put the coordinator in Kennel, a harness, Supabase Edge Functions, a second DO, or a microservice.
 
-### 4.2 Ownership and dependency rules
+### 4.2 Ownership and definitive writer rules
 
-| Module | Owns | Must not own |
+The authoritative aggregate-writer matrix is maintained in the [architecture lock](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#5-definitive-aggregate-writer-matrix). Its placement summary is:
+
+| Module | Sole durable writes | Must not own |
 |---|---|---|
-| WaldoCoordinator | Command authorization/sequencing, Outcome/Mission/WorkUnit application services, attention policy | Direct transitions of other modules’ ledgers; provider syntax; raw I/O/retries/transcripts |
-| ContextCompiler | Purpose/audience/classification projection, provenance, freshness, expiry | Authority; whole-person prompt dumps |
-| CapabilityRegistry | Source-pinned manifests and conformance eligibility | Product policy; approximate fallback |
-| RunLoopEngine | ExecutionRequest/RuntimeRun/AgentSession reducers, checkpoints, budgets, cancellation | Outcome truth, acceptance, memory policy |
-| EffectEngine | EffectIntent/EffectReceipt reducers, frozen args/digest/key, reconciliation | Semantic success/closure |
-| EvidenceVerifier | Evidence admission and Verification reducers; independence policy | Acceptance decisions |
-| ContinuityModule | ContextClaim/Spot/Episode/Constellation/OpenLoop/ReEntryPoint reducers | Personality/productivity scoring |
-| AcceptanceModule | Acceptance reducer and delegated-acceptance policy | Verification generation; effect execution |
-| CommitmentScheduler | Commitment/Schedule/TriggerOccurrence reducers | Outcome acceptance; hidden Outcome creation |
-| ArtifactRegistry | Artifact metadata reducer, content-hash/storage lifecycle | Unscoped blob reads; semantic verification |
-| ProjectionPublisher | Versioned read models and ordered cursors | Source of truth |
-| Presence adapters | Capture commands, render projections, collect judgment | Durable agent loop/memory |
-| Kennel executor | Local operations/processes, raw local transcript/artifacts | Waldo identity, Outcome, acceptance, OpenLoop |
+| `IdentityPresenceModule` | WaldoIdentity, Presence | Outcome/effect/provider state |
+| `OutcomeModule` | Capture, Outcome, Mission, WorkUnit | Provider syntax; raw I/O/retries/transcripts |
+| `JudgmentAuthorityModule` | JudgmentRequest/Decision, AuthorityGrant, SensitiveHandoff | Effect issue; client-authored grants |
+| `ContextCompiler` | ContextProjection | Authority; whole-person prompt dumps |
+| `CapabilityRegistry` | Capability manifests, admission and conformance results | Product truth; approximate fallback |
+| `RunLoopEngine` | ExecutionRequest, RuntimeRun, AgentSession, ExecutionLease | Outcome truth, acceptance, memory policy |
+| `EffectEngine` | EffectIntent, EffectReceipt, reconciliation | Semantic success/closure |
+| `EvidenceVerifier` | Evidence, Verification | Acceptance decisions |
+| `ContinuityModule` | ContextClaim, Spot, Episode, Constellation, OpenLoop, ReEntryPoint | Personality/productivity scoring |
+| `AcceptanceModule` | Acceptance | Verification generation; effect execution |
+| `CommitmentScheduler` | Commitment, Schedule, TriggerOccurrence | Outcome acceptance; hidden Outcome creation |
+| `ArtifactRegistry` | Artifact metadata and lifecycle | Unscoped blob reads; semantic verification |
+| `WorkspaceModule` | Workspace metadata, checkpoints, restore attempts | Outcome truth; credential bytes; acceptance |
+| `BudgetLedger` | BudgetReservation, UsageReceipt | Outcome acceptance; provider billing policy |
+| `SourceAttributionLedger` | SourceUsageReceipt, AttributionEvent | Source content truth; acceptance |
+| `DelegationModule` | ExternalDelegationRequest/Disposition, DelegationReply, SharedContextGrant | Transitive authority; counterparty private state |
+| `WorkloadIdentityModule` | ExecutionPrincipal, WorkloadIdentity, DelegationGrant, CredentialHandle metadata | Reusable secret values; transitive authority |
+| `ProtocolBindingRegistry` | ProtocolBinding and versioned mapping state | Waldo product truth; silent lossy downgrade |
+| `BehaviorPackageRegistry` | Routine/Skill/Recipe/CapabilityPackage lifecycle and installation state | Credentials; authority; Outcome truth |
+| `EvaluationRegistry` | EvaluationEnvelope and promotion eligibility evidence | Runtime execution; acceptance oracle mutation by executor |
+| `PortabilityModule` | WaldoExportBundle and import/restore jobs | Implicit owner merge; credential export |
+| `DeletionCoordinator` | DeletionTombstone and per-store acknowledgements | Silent physical deletion claims without receipts |
+| `PostureModule` | ExecutionPosture and containment disposition | User personality/productivity scoring |
+| `ProjectionPublisher` | Versioned read models and snapshot/cursor metadata | Source of truth |
+| Kennel `OperationLedger` | Owner-bound local operations/processes | Waldo identity, Outcome, authority, acceptance, OpenLoop |
 
 Rules:
 
 1. **[Proposed decision — Adopt]** Public boundaries depend on canonical contracts, never coordinator implementation.
-2. **[Proposed decision — Adopt]** Each aggregate has exactly one reducer/table writer: Coordinator owns Outcome/Mission/WorkUnit commands; specialized modules own their ledgers as listed above. Coordinator authorizes and sequences cross-aggregate commands; it does not mutate another reducer’s tables. Provider events normalize to observations first.
+2. **[Decision — locked]** Each aggregate has exactly one reducer/table writer. `WaldoCoordinator` authenticates, authorizes, and sequences cross-aggregate commands; it does not mutate another reducer's tables. Provider and executor events normalize to untrusted observations first.
 3. **[Proposed decision — Adopt]** Only ContextCompiler creates execution context.
 4. **[Proposed decision — Adopt]** Every external mutation passes EffectEngine.
 5. **[Proposed decision — Adopt]** WorkUnit transition + `ExecutionRequest` commit atomically; RunLoop admits idempotently by request ID.
 6. **[Proposed decision — Reject]** No cross-repository database writes; exchange commands/events/manifests/artifact refs/projections.
 7. **[Proposed decision — Reject]** No hidden SDK retries on effectful paths.
+
+Kennel and every other presence can propose a command or report an observation; only the authenticated gateway can create a trusted command envelope, and only the owner Durable Object can admit the corresponding transition.
 
 “One writer” means one serialized durable authority boundary and one named reducer per aggregate/table, not one function that writes everything. Same-DO atomicity is limited to SQLite commits such as product event + `ExecutionRequest`/outbox. Context retrieval, provider calls, connector I/O, and verification reads always occur outside the transaction and return through a new checked transition.
 
@@ -214,7 +245,7 @@ Rules:
 
 **[Proposed decision — Adapt]** Keep it as the canonical schema source, but add SemVer protocol releases, immutable tags, changelog/compatibility window, generated JSON Schema/OpenAPI/AsyncAPI and Swift/Kotlin/TypeScript bindings, golden fixtures, reducer tests, and version negotiation. Enum/state semantic changes require a major version.
 
-### 5.2 Common envelope
+### 5.2 Untrusted request and trusted envelope
 
 ```ts
 type ID = string;
@@ -223,20 +254,37 @@ type Digest = `sha256:${string}`;
 type Timestamp = string;
 interface AggregateRef { kind: string; id: ID; revision: Revision }
 interface ActorRef { kind: "owner"|"presence"|"service"|"provider"|"person"; id: ID }
-interface CommandEnvelope<T> {
-  schemaVersion: string; commandId: ID; commandType: string;
+interface SurfaceCommandRequest<T> {
+  protocolVersion: "0.1"; requestId: ID; commandType: string;
+  presenceRegistrationId: ID;
+  aggregate?: { kind: string; id: ID; expectedRevision?: Revision };
+  correlationId?: ID; clientIssuedAt: Timestamp; payload: T;
+}
+interface TrustedCommandEnvelope<T> {
+  protocolVersion: "0.1"; commandId: ID; commandType: string;
   ownerId: ID; presenceId: ID; actor: ActorRef;
+  authenticatedSessionId: ID; ownerPolicyRevision: number;
+  authAssurance: string; ownerRootRoutingVersion: number;
   aggregate?: AggregateRef; expectedRevision?: Revision;
-  causationId?: ID; correlationId: ID; issuedAt: Timestamp; payload: T;
+  requestDigest: Digest; causationId?: ID; correlationId: ID;
+  receivedAt: Timestamp; payload: T;
 }
 interface DomainEvent<T> {
   schemaVersion: string; eventId: ID; eventType: string; ownerId: ID;
   aggregate: AggregateRef; ownerCursor: number;
   causationId?: ID; correlationId: ID; occurredAt: Timestamp; payload: T;
 }
+interface ProjectionPage<T> {
+  protocolVersion: "0.1"; ownerId: ID; projectionName: string;
+  snapshotId: ID; snapshotBaseCursor: number;
+  fromExclusiveCursor: number; highWaterCursor: number; nextCursor: number;
+  items: T[]; hasMore: boolean; generatedAt: Timestamp;
+}
 ```
 
-The gateway derives and validates `ownerId`; a client claim is never authoritative.
+`SurfaceCommandRequest` is untrusted and cannot carry authoritative owner, actor role, target Durable Object, grant, credential, provider/model selector, acceptance, or closure fields. The gateway derives and validates the trusted fields from the authenticated session, registered presence, current owner policy, and routing version; a client claim is never authoritative. Snapshot/cursor semantics and their gap/duplicate/account-switch fixtures ship in protocol v0.1 rather than being retrofitted after event history grows.
+
+Every public gateway route enforces authentication, owner/presence authorization, strict schema/size validation, request-digest replay/conflict checks, and bounded per-session/per-owner/per-source rate limits before expensive or stateful work. Rejections use a versioned, content-free generic problem envelope that leaks no owner, Durable Object, provider, credential, policy, or internal-state detail.
 
 ### 5.3 Catalogue and minimum schema
 
@@ -247,8 +295,8 @@ The gateway derives and validates `ownerId`; a client claim is never authoritati
 | **WorkUnit** | `responsibility, inputs, dependencies, expectedEvidence, requiredCapabilities, authorityCeiling, budget, isolation, stopConditions, assignee, sessionIds, state` |
 | **AgentSession** | `workUnitId, provider/executor manifest refs, providerSessionRef, leaseId, cancellationGeneration, contextProjectionId, authorityGrantIds, eventCursor, state` |
 | **JudgmentRequest** | `subject, question, options, recommendation, evidence, risk, reversibility, affectedDigest, requestedAuthority, reEntryPointId, expiry, decision` |
-| **AuthorityGrant** | `grantor/grantee, exact scope/resources/purpose, argument/context digests, effect family, use limit, validity, revocationGeneration, state` |
-| **EffectIntent** | `workUnitId/runId, family, adapter, reconciliationKey, canonicalArgumentsRef, argumentDigest, digestEncoding/version, data classification, grant/revision, provider idempotency window, retryOwner/budget, cancellationGeneration, state`; the argument ref is an encrypted immutable content-addressed blob/version committed with the intent, and every attempt must resolve it and verify `argumentDigest` before I/O |
+| **AuthorityGrant** | `grantor/grantee, exact scope/resources/purpose, argument/context/artifact digests, effect family, useLimit, usesConsumed, nextUseIndex, validity, revocationGeneration, state` |
+| **EffectIntent** | `workUnitId/runId, family, adapter, reconciliationKey, canonicalArgumentsRef, argumentDigest, digestEncoding/version, data classification, authorityGrantId, grantUseIndex, grantRevocationGeneration, provider idempotency window, retryOwner/budget, cancellationGeneration, state`; `(authorityGrantId, grantUseIndex)` is unique and is committed atomically with grant consumption; the argument ref is an encrypted immutable content-addressed blob/version committed with the intent, and every attempt must resolve it and verify `argumentDigest` before I/O |
 | **EffectReceipt** | `intentId, key/digest, provider operation/idempotency refs, applied/not_applied/partial/unknown, bounded response digest, adapter version, provenance` |
 | **Evidence** | `subject, claim, kind, artifact/source refs, contentDigest, collector, provenance, data policy, candidate/admitted/stale/invalidated/deleted` |
 | **Verification** | `outcome/revision, acceptanceCheckId, evidenceIds/digest, verifier, independence, methodVersion, pending/passed/failed/indeterminate/stale, findings` |
@@ -280,8 +328,9 @@ Presence deletion or account switching cannot merge identities: local caches and
 2. **[Proposed decision — Adopt]** Every mutable aggregate has owner, revision, event history, and optimistic concurrency.
 3. **[Proposed decision — Adopt]** No provider/session transition directly changes Outcome acceptance or OpenLoop resolution.
 4. **[Proposed decision — Adopt]** Acceptance binds an Outcome revision and evidence-set digest; later changes make it historical, not mutable.
-5. **[Proposed decision — Adapt]** Delegated acceptance requires a narrow policy and AuthorityGrant; first proof defaults to explicit user acceptance.
+5. **[Proposed decision — Adapt]** Delegated acceptance requires a narrow policy and AuthorityGrant; the current default is explicit user acceptance until that policy passes conformance.
 6. **[Proposed decision — Adopt]** Artifacts are content-addressed; events contain bounded metadata, not full transcripts or raw health.
+7. **[Decision — locked]** Each grant use is identified by `(authorityGrantId, grantUseIndex)` with a database uniqueness constraint and golden concurrent-admission fixtures. The same grant/use cannot bind two intents, and the same intent cannot change its grant binding.
 
 ## 6. Separate state machines
 
@@ -446,7 +495,7 @@ stateDiagram-v2
 
 ### 6.5 Judgment and approval
 
-`JudgmentRequest` and `AuthorityGrant` are separate aggregates. An answered judgment may cause the Coordinator to issue `CreateAuthorityGrant`; it never changes the request into a grant.
+`JudgmentRequest` and `AuthorityGrant` are separate aggregates. A presence can submit `AnswerJudgment`; it cannot submit, construct, or select the fields of an `AuthorityGrant`. `JudgmentAuthorityModule` evaluates the authenticated answer against the current affected revision/digests and owner policy, then creates or refuses the grant.
 
 #### JudgmentRequest
 
@@ -479,6 +528,8 @@ stateDiagram-v2
 ```
 
 **[Proposed decision — Adopt]** Approval binds exact effect arguments/artifact and context versions. After expiry or long suspension, revalidate authority, arguments, context freshness, cancellation generation, and provider idempotency window.
+
+**[Decision — locked]** Grant consumption and `EffectIntent` creation are one SQLite transaction. It validates state, scope, purpose, resource, use limit, expiry, revocation generation, argument/context/artifact digests, and effect family; increments or consumes the unique grant-use slot; and inserts the immutable intent. If any step fails, neither mutation commits. A single-use grant is consumed when the intent is created, even if the intent is later cancelled before issue; changed or replacement arguments require a new judgment and grant.
 
 ### 6.6 Evidence, verification, and acceptance
 
@@ -520,7 +571,7 @@ stateDiagram-v2
   historical --> [*]
 ```
 
-**[Proposed decision — Adapt]** Prefer deterministic checks or an independent source/agent. If the same agent verifies, disclose reduced independence; never describe self-assertion as independent verification.
+**[Decision — locked]** Deterministic independent read-back is always required when an external effect exposes a trustworthy read path. Artifact checks are deterministic where a declared `AcceptanceCheck` permits it. LLM-based semantic verification runs only when the owner declared that check, explicitly requests it, or policy requires it; the model, harness, grader, evidence, and independence limits are disclosed. If no independent verifier is available, record `indeterminate`; never describe self-assertion as independent verification.
 
 ### 6.7 Open Loop and re-entry
 
@@ -568,7 +619,7 @@ Every nonterminal OpenLoop has one exact `ReEntryPoint`: last stable event, next
 | Large artifact bytes | Encrypted R2 or source-owned store | Parent policy | Signed/short-lived scoped access | Cryptographic/logical deletion + blob erasure |
 | New Spot/Constellation claims | Target per-owner DO SQLite with correction history | Until user deletes | Only when relevant and permitted | Tombstone; prevent re-inference from deleted evidence |
 | Legacy Supabase Spots | Supabase remains authority until user-reviewed cutover | Existing user/source policy | Read-only migration projection | Supabase tombstone propagates before/through cutover |
-| Surface projection/cache | Presence local store | Short/offline window | Surface-specific | Cursor tombstone, remote wipe where supported |
+| Surface projection/cache | Presence local store | Short disconnected-display window | Surface-specific read-only rendering | Cursor tombstone, remote wipe where supported; no command admission or truth change |
 | Observability | Redacted aggregate telemetry | Short operational window | No content/credentials/raw health | Automatic expiry; deletion by owner key where feasible |
 | Billing/usage attribution | Backend ledger + daily provider reconciliation | Finance policy | No personal content | Aggregate/anonymize after attribution window |
 
@@ -599,6 +650,7 @@ flowchart LR
 8. **[Proposed decision — Adapt]** User corrections invalidate downstream claims/projections and are test inputs for non-recurrence.
 9. **[Proposed decision — Reject]** A health observation or derived health claim cannot by itself create or promote a Capture, proposal, Outcome, WorkUnit, JudgmentRequest, OpenLoop, Schedule, attention-priority escalation, or AuthorityGrant. It may influence wording/options only inside an already existing user-grounded Capture, Outcome, commitment, question, or explicitly enabled caring purpose; ordinary user intent still controls every promotion.
 10. **[Proposed decision — Adopt]** Conformance includes negative tests proving health-derived inputs cannot change capability eligibility, authority ceilings, effect admission, or Outcome priority unless an explicit owner policy names that exact purpose and the user action remains reversible/correctable.
+11. **[Decision — locked]** “Private” and “user-owned” require the explicit threat actors, operator-access policy, key lifecycle, content-minimized event references, per-store deletion acknowledgements, crypto-erasure, backup/PITR behavior, and restore/re-delete proof in the [architecture lock](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#64-operational-meaning-of-private-and-user-owned). No stronger end-to-end or operator-inaccessibility claim is made without its implemented key protocol.
 
 ### 8.2 Context compilation algorithm
 
@@ -654,14 +706,24 @@ Cross-family invariants:
 
 | Capability | Current evidence | Decision | Waldo boundary / gate |
 |---|---|---|---|
-| Durable Objects + SQLite | Existing trusted runtime and tests | **[Proposed decision — Adopt]** | Per-user durable authority and single writer |
+| Durable Objects + SQLite | Existing trusted runtime and tests | **[Decision — locked]** | Initial per-user canonical authority root and one serialized durable boundary; placement changes only after load/size falsification and a replacement single-writer design |
+| R2 | Existing Cloudflare object store; current code has only contract-level workspace/blob seams | **[Decision — locked]** initial blob adapter | Encrypted content-addressed checkpoint chunks, large Artifact bytes, backup/export payloads; canonical metadata stays in SQLite; FUSE/object access is not native-SSD semantics |
+| Sandbox SDK + Containers | Available isolated execution/container primitives | **[Decision — locked]** initial cloud-executor candidate | Executor only; pin image digest, run non-root/read-only base where possible, drop capabilities, forbid privileged/host namespaces and host/runtime sockets, bound resources, default-deny egress, broker credentials, and pass lease/fence, checkpoint, deletion, cost, process-tree cancellation, and secret-free-log conformance |
+| Workflows | Durable long-running workflow primitive | **[Proposed decision — Adapt]** peripheral jobs only | May own deterministic waits/service jobs; never product FSMs, authority, effect admission, acceptance, or OpenLoop closure |
+| Queues | At-least-once delivery primitive | **[Proposed decision — Adapt]** transport only | Consumers deduplicate by stable ID/digest; delivery cannot prove a product transition |
+| AI Gateway | Current provider routing, observability, and spend controls | **[Proposed decision — Adapt]** | Provider routing/budgets/usage only; private payload logging off, metadata minimized, Waldo owns policy and atomic budget reservation |
+| Workers AI | Current model and embedding surface | **[Proposed decision — Adapt]** adapter | Evaluated model/embedding option only; no special authority or model-generated memory truth |
+| Vectorize / AI Search | Current vector/search primitives; AI Search remains an evaluated implementation choice | **[Proposed decision — Spike/Adapt]** | Rebuildable permitted-source projection only; correction/deletion must rebuild and it never owns ContextClaim truth |
+| Browser / Browser Run | Browser automation with supervised/handoff capabilities | **[Proposed decision — Spike/Adapt]** | Prefer API/WebMCP; browser mutation remains an effect and needs reconciliation/read-back where possible |
+| Artifacts | Versioned handoff primitive with maturity caveats in the source refresh | **[Proposed decision — Spike]** | Candidate `ArtifactStoreAdapter`; R2/Git-compatible ports remain available and beta maturity cannot become product authority |
+| Agent Memory | Memory extraction/recall primitive with private-beta evidence limits | **[Proposed decision — Benchmark only]** | Compare extraction/supersession/temporal/export patterns; Waldo retains canonical provenance, correction, retention, and authority |
 | Think turns/submissions/session trees/recovery | `@cloudflare/think@0.15.1`; docs updated 2026-07-23; experimental ([pinned overview](https://github.com/cloudflare/agents/blob/2b2b5980e1945cf55f5a11626bc395e7c460516f/docs/think/index.md#L1-L28)) | **[Proposed decision — Spike]** | Adapt only where conformance proves code reduction; Waldo owns product state |
 | Think approval descriptors | Cold-loadable pending approvals and pause patterns | **[Proposed decision — Adapt]** | Map to Waldo JudgmentRequest; Waldo owns decision/grant |
 | Think Actions ledger | Pending before execute, but thrown/timed-out rows deleted; stale explicit-key row reruns after 5m; authorization defaults full | **[Proposed decision — Reject]** as effect/retry/authority owner | No frozen digest conflict or reconcile-first guarantee; route effects into RunLoop instead ([ledger](https://github.com/cloudflare/agents/blob/2b2b5980e1945cf55f5a11626bc395e7c460516f/docs/think/actions.md#L82-L118), [authorization](https://github.com/cloudflare/agents/blob/2b2b5980e1945cf55f5a11626bc395e7c460516f/docs/think/actions.md#L188-L220)) |
-| Cloudflare Computer | `cloudflare/computer` commit `63d3636`; npm `@cloudflare/computer@0.1.1` points to it; preview-only; DO workspace plus isolate/container backends | **[Proposed decision — Spike]** | Adapt only as feature-flagged `ExecutionEnvironmentAdapter`; never product truth ([pinned README](https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/README.md#L1-L49)) |
-| Python↔JS Workers RPC | Structured-clone RPC/live objects; announced 2026-08-03 | **[Proposed decision — Defer]** | Only a named Python-native workload and benchmark can justify; explicit DTOs still required ([source](https://blog.cloudflare.com/python-workers-rpc/)) |
+| Cloudflare Computer | `cloudflare/computer` commit `63d3636`; npm `@cloudflare/computer@0.1.1` points to it; preview-only; DO workspace plus isolate/container backends | **[Decision — locked]** feature-flagged preview adapter | Implement only behind `WorkspacePort`/`ExecutionEnvironmentAdapter`; never product truth, sole copy, or production dependency until maturity/durability/deletion/restore gates pass ([pinned README](https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/README.md#L1-L49)) |
+| Python↔JS Workers RPC | Structured-clone RPC/live objects; announced 2026-08-03 | **[Implementation choice — not selected]** | Only a named Python-native workload and benchmark can justify; explicit DTOs still required ([source](https://blog.cloudflare.com/python-workers-rpc/)) |
 | Kimi K2.6 / GLM-5.2 serving | Official platform pages expose 262,144-token contexts; serving optimizations are not a Waldo contract | **[Proposed decision — Spike]** | Add to the versioned roster only after Waldo evals; no unbounded personal prompt ([Kimi](https://developers.cloudflare.com/ai/models/%40cf/moonshotai/kimi-k2.6/), [GLM](https://developers.cloudflare.com/changelog/post/2026-06-16-glm-5-2-workers-ai/), [serving](https://blog.cloudflare.com/smaller-faster-safer-models/)) |
-| Inbound TCP/gRPC | Private beta | **[Proposed decision — Defer]** | HTTP/WebSocket envelopes are enough for first Kennel bridge ([source](https://blog.cloudflare.com/grpc-workers/)) |
+| Inbound TCP/gRPC | Private beta | **[Implementation choice — not selected]** | Current Kennel protocol does not require it; activate only after measured transport need ([source](https://blog.cloudflare.com/grpc-workers/)) |
 | Billable Usage API | Daily account/product cost; not real time | **[Proposed decision — Adopt]** for FinOps | Delayed reconciliation only; own per-WorkUnit usage ledger remains required ([source](https://blog.cloudflare.com/billable-usage-api/)) |
 | Retry article | Useful synthesis; author disclaims production experience | **[Proposed decision — Adapt]** as checklist, **Reject** as authority | Existing Waldo invariant is stronger ([source](https://bhavishyapandit9.substack.com/p/idempotency-and-retry-semantics-for)) |
 | ChatGPT Voice in Work/Codex | Starts tasks, checks progress, coordinates agents; selected-experience permissions; one voice conversation; desktop-only for Work/Codex; Codex history separate | **[Proposed decision — Adapt]** as Presence | One Waldo command/event truth improves on documented ChatGPT/Codex history separation ([official guide](https://help.openai.com/en/articles/20001275-chatgpt-work-and-codex)) |
@@ -674,13 +736,13 @@ Computer remains preview-only until all pass: owner/Outcome/WorkUnit isolation; 
 
 **[Proposed decision — Adapt]** Route by tested capability, not provider prestige or window size. Each model version must be evaluated for tool choice and argument accuracy, multi-turn result continuity, false-done/premature-closure rate, evidence-grounded verification, judgment calibration, privacy/redaction, bounded retrieval at realistic budgets, latency/cost/cancellation, and failure/fallback compatibility. Production eligibility expires when version/source fingerprints drift.
 
-**[Unknown / blocked]** No current evidence establishes that Python RPC, gRPC, or the new model candidates improve the first vertical slice. Do not add them until a named workload and falsifiable benchmark exist.
+**[Unknown / blocked]** No current evidence establishes that Python RPC, gRPC, or the new model candidates improve a named committed workload. Do not add them until a falsifiable benchmark earns the adapter; this implementation decision does not shrink the product capability envelope.
 
 ## 11. Kennel executor protocol and synchronization
 
 ### 11.1 Boundary
 
-**[Proposed decision — Adapt]** Kennel is both a rich presence and a local `ExecutionEnvironmentAdapter`. Its UI reads backend projections. Its local executor owns local process/session mechanics and a local operation ledger. It never becomes an alternate product database.
+**[Decision — locked]** Kennel is both a rich presence and the initial local `ExecutionEnvironmentAdapter`. Its UI reads backend projections. Its local executor owns local process/session mechanics and a local operation ledger. Kennel proposes; the owner Durable Object admits. It never becomes an alternate product database or authority root.
 
 ### 11.2 Operation protocol
 
@@ -731,7 +793,7 @@ Kennel → Backend events:
 | Backend lease changes while old process runs | Fence old writer; quarantine late events |
 | Provider emits out-of-order events | Kennel normalizes local sequence; backend requests missing range |
 | Artifact changes after approval | New digest invalidates grant and verification |
-| Offline UI issues consequential command | Queue locally only as unacknowledged intent; do not claim product transition |
+| Disconnected UI drafts a consequential command | Store only an owner-bound, explicitly unacknowledged draft; reauthenticate/revalidate before submission and never claim a product transition |
 | Local transcript deleted | Preserve bounded product events/evidence refs; mark unavailable source honestly |
 
 ## 12. Multi-surface event and command protocol
@@ -748,13 +810,13 @@ Minimum command set for the first product:
 CaptureIntent, PromoteCaptureToOutcome, ClarifyOutcome, CorrectStatement,
 PlanOutcome, ApproveMissionPlan, CreateOrReviseWorkUnit, AssignWorkUnit,
 StartWorkUnit, SteerSession, PauseWorkUnit, CancelWorkUnit,
-AnswerJudgment, GrantAuthority, RevokeAuthority,
+AnswerJudgment, RequestAuthorityRevocation,
 AcceptOutcome, RejectOutcome, RequestRepair, ReopenOutcome, ReleaseOutcome,
 ResolveOpenLoop, SnoozeOpenLoop, UpdateAttentionPolicy,
 RegisterPresence, AcknowledgeProjection, RequestProjectionSnapshot
 ```
 
-Every command has stable `command_id`, payload digest, actor/presence, expected aggregate revision, correlation/causation, schema version, and client issue time. Duplicate ID/same digest returns the original acknowledgement. Same ID/different digest is a hard conflict. Stale expected revision returns current truth and a safe rebase instruction; the server does not last-write-win.
+Every untrusted surface request has a stable request ID, payload digest, registered presence, expected aggregate revision, correlation, protocol version, and client issue time. The gateway derives authenticated owner/actor/session fields and creates the trusted command envelope. Duplicate ID/same digest returns the original acknowledgement. Same ID/different digest is a hard conflict. Stale expected revision returns current truth and a safe rebase instruction; the server does not last-write-win.
 
 ### 12.3 Events and projections
 
@@ -847,19 +909,19 @@ type ConformanceStatus =
 | Provider harness | session create/resume/steer/pause/cancel, event stream, artifact access, subagents, approval interrupts, reconciliation, transcript locality |
 | Executor | OS/runtime, filesystem, network/egress, credentials, isolation, resource limits, checkpoint/recovery, artifact/evidence, process-tree cancellation |
 | Connector | read/write operation families, scopes, idempotency window, lookup/reconciliation, versioning, rate limits, webhooks, data retention |
-| Presence | command/modalities, offline behavior, judgment affordances, projection support, local security, audio/transcript policy |
+| Presence | command/modalities, disconnected behavior, judgment affordances, projection support, local security, audio/transcript policy |
 
 **[Proposed decision — Reject]** Capability declarations are not self-certifying. Sensitive-effect eligibility requires current conformance evidence.
 
-## 14. First end-to-end proof
+## 14. Whole-product end-to-end integration scenario
 
-### 14.1 Proof choice
+### 14.1 Initial real-effect choice
 
 **[Proposed decision — Adapt]** Use one real, reversible Google Calendar mutation as the first external effect: schedule a follow-up block after a Kennel/provider session produces a reviewed artifact. Google Calendar permits a client-generated event ID specifically to keep local and remote records synchronized and prevent duplicate creation after an operation succeeds but the response fails ([official guide](https://developers.google.com/workspace/calendar/api/guides/create-events)). Reconcile by the frozen client-generated event ID and bounded field digest. Add email send only after its provider-specific sent-state reconciliation passes.
 
-**[Unknown / blocked]** Product must ratify Google Calendar create/update, the target account/calendar, minimal OAuth scopes, attendee/notification policy, test tenant, and cleanup. The architecture does not depend on this provider, but Phase 8 tests and reconciliation do.
+**[Unknown / blocked]** Product must ratify Google Calendar create/update, the target account/calendar, minimal OAuth scopes, attendee/notification policy, test tenant, and cleanup before that connector becomes active. The architecture and other workstreams do not depend on this provider choice.
 
-### 14.2 Sequence
+### 14.2 Continuous integration sequence
 
 ```mermaid
 sequenceDiagram
@@ -867,7 +929,13 @@ sequenceDiagram
   participant Surface as Mobile/Kennel/Voice
   participant Gate as Command Gateway
   participant Coord as WaldoCoordinator
+  participant Tx as Same-DO TransactionRunner
+  participant Domain as OutcomeModule
+  participant Judge as JudgmentAuthorityModule
   participant Run as RunLoopEngine
+  participant Effect as EffectEngine
+  participant Accept as AcceptanceModule
+  participant Continuity as ContinuityModule
   participant Kennel as Kennel Executor
   participant Provider
   participant Conn as Calendar Connector
@@ -875,21 +943,30 @@ sequenceDiagram
 
   User->>Surface: “Prepare proposal and block follow-up tomorrow”
   Surface->>Gate: CaptureIntent(command_id)
-  Gate->>Coord: authenticated command
+  Gate->>Coord: TrustedCommandEnvelope
+  Coord->>Tx: authorize CaptureIntent
+  Tx->>Domain: reduce Capture/Outcome proposal
   Coord-->>Surface: Capture + proposed Outcome projection
   User->>Surface: confirm intended state + acceptance checks
   Surface->>Coord: ClarifyOutcome(expected revision)
-  Coord->>Coord: Outcome ready; plan optional Mission + WorkUnits
-  Coord->>Run: atomic ExecutionRequest for research/draft WorkUnit
+  Coord->>Tx: authorize Outcome/Mission/WorkUnit command
+  Tx->>Domain: reduce Outcome ready + optional Mission/WorkUnits
+  Coord->>Tx: admit research/draft WorkUnit
+  Tx->>Domain: reduce WorkUnit queued
+  Tx->>Run: atomically reduce ExecutionRequest
   Run->>Kennel: StartSession(operation_id, lease, projection, grant ceiling)
   Kennel->>Kennel: persist local operation intent
   Kennel->>Provider: start/resume provider session
   Provider-->>Kennel: draft artifact + asks which final framing
   Kennel-->>Run: JudgmentNeeded + artifact hash/evidence
   Run-->>Coord: normalized observation
+  Coord->>Tx: authorize JudgmentRequest creation
+  Tx->>Judge: reduce canonical JudgmentRequest
   Coord-->>Surface: JudgmentRequest in Needs You
   User->>Surface: choose framing
   Surface->>Coord: AnswerJudgment(framing digest)
+  Coord->>Tx: validate answer/current digest
+  Tx->>Judge: reduce JudgmentDecision
   Coord->>Run: resume provider session
   Run->>Kennel: SteerSession(framing decision)
   Provider-->>Kennel: final artifact
@@ -897,41 +974,47 @@ sequenceDiagram
   Run-->>Coord: normalized final-artifact observation
   Coord-->>Surface: review final artifact + exact calendar EffectIntent summary
   User->>Surface: approve exact calendar effect
-  Surface->>Coord: AnswerJudgment + GrantAuthority(final artifact/context/effect digests, expiry)
-  Coord->>Run: prepared external WorkUnit/effect
-  Run->>Run: persist EffectIntent + frozen args/digest/key
-  Run->>Conn: create calendar event with idempotency key
+  Surface->>Coord: AnswerJudgment(approval of displayed digest)
+  Coord->>Tx: authorize answer + admitted effect command
+  Tx->>Judge: reduce decision + exact AuthorityGrant
+  Note over Tx,Effect: One transaction through Judgment and Effect: consume unique grant use and create immutable intent
+  Tx->>Judge: consume (grant_id, use_index)
+  Tx->>Effect: reduce EffectIntent/frozen args/digest/key
+  Effect->>Conn: create calendar event with idempotency key
   alt attributable response
-    Conn-->>Run: provider operation receipt
+    Conn-->>Effect: provider operation receipt
   else timeout/ambiguous
-    Run->>Conn: reconcile by key/provider reference
-    Conn-->>Run: applied/not applied/unknown
+    Effect->>Conn: reconcile by key/provider reference
+    Conn-->>Effect: applied/not applied/unknown
   end
-  Run->>Run: persist EffectReceipt
-  Run-->>Coord: execution observation + evidence refs
-  Coord->>Verify: verify artifact check and calendar state independently
+  Effect->>Effect: reduce EffectReceipt/reconciliation state
+  Effect-->>Coord: execution observation + evidence refs
+  Coord->>Verify: read back calendar state; run declared artifact checks only
   Verify-->>Coord: versioned verification result
   Coord-->>Surface: acceptance pending
   alt user accepts
     User->>Surface: AcceptOutcome(revision, evidence digest)
-    Coord->>Coord: record Acceptance; resolve relevant OpenLoop
+    Coord->>Tx: authorize acceptance + continuity commands
+    Tx->>Accept: reduce Acceptance
+    Tx->>Continuity: resolve relevant OpenLoop
     alt no unresolved consequence remains
       Coord-->>Surface: conscious closure; no next-day ReEntryPoint
     else another OpenLoop survives
-      Coord->>Coord: Daily Close stores surviving consequence + ReEntryPoint
+      Tx->>Continuity: store surviving consequence + ReEntryPoint
       Coord-->>Surface: next Morning Brief reads exact OpenLoop/re-entry
     end
   else user rejects/repairs
     User->>Surface: Reopen/request repair
-    Coord->>Coord: new revision + WorkUnit/OpenLoop
-    Coord->>Coord: Daily Close stores unresolved consequence + ReEntryPoint
+    Coord->>Tx: authorize reopen/repair
+    Tx->>Domain: reduce new Outcome revision + WorkUnit
+    Tx->>Continuity: reduce OpenLoop + ReEntryPoint
     Coord-->>Surface: next Morning Brief reads exact OpenLoop/re-entry
   end
 ```
 
-### 14.3 Proof acceptance tests
+### 14.3 Scenario acceptance tests
 
-The proof is complete only if all pass:
+This whole-product scenario is accepted only if all pass. It is an integration proof, not a smaller product release or a boundary on parallel implementation:
 
 1. Capture can remain a Capture; promotion to Outcome is explicit or confirmed.
 2. One Outcome is visible with the same ID/revision from Kennel and another surface.
@@ -949,19 +1032,22 @@ The proof is complete only if all pass:
 14. Kill tests at every durable boundary recover without silent loss or duplicate user-visible effect.
 15. Feature flag rollback disables new Coordinator ingress while existing trusted runtime proof remains green.
 
-## 15. Migration plan preserving the trusted runtime
+## 15. Dependency-aware migration preserving the trusted runtime
 
 ```mermaid
 flowchart LR
-  P0["0. Ratify contracts/ADRs"] --> P1["1. Add same-DO product journal + coordinator shadow"]
-  P1 --> P2["2. Extract ExecutionKernel interface"]
-  P2 --> P3["3. Command/event projections"]
-  P3 --> P4["4. Kennel protocol + fake executor"]
-  P4 --> P5["5. Real provider + judgment"]
-  P5 --> P6["6. One real effect + reconciliation"]
-  P6 --> P7["7. Verification/acceptance/open-loop re-entry"]
-  P7 --> P8["8. Broaden surfaces/adapters"]
+  Contracts["Locked contracts + shared fixtures"] --> Domain["Same-DO domain journal + Coordinator"]
+  Contracts --> Kennel["Kennel protocol + executor"]
+  Domain --> Kernel["ExecutionKernel seam"]
+  Domain --> Projection["Commands · events · projections"]
+  Kernel --> Providers["Provider and connector adapters"]
+  Kennel --> Providers
+  Projection --> Surfaces["All declared presences"]
+  Providers --> Truth["Evidence · verification · acceptance"]
+  Truth --> Continuity["OpenLoop · re-entry · Brief · Close"]
 ```
+
+The arrows are contract or runtime dependencies, not product phases. Independent nodes run in parallel and integrate continuously.
 
 1. **[Proposed decision — Adopt]** Freeze existing RunLoop conformance and recovery fixtures as locked evaluators.
 2. **[Observed fact]** `DEFERRED_DO_PRODUCT_TABLES` is catalog drift: it still lists runs/outbox/schedules/daily push budget as deferred although runtime-specific tables exist (`packages/runtime/src/do-schema.ts:17-26`, `packages/runtime/src/tracer/schema.ts:97-201`, `packages/runtime/src/run-loop/do.ts:4646-4663`). Produce a source-generated current-table manifest before any migration; never let that list drive tooling.
@@ -972,46 +1058,44 @@ flowchart LR
 7. **[Proposed decision — Adapt]** Introduce `ExecutionKernel` around existing RunLoop admission/effect behavior. One real implementation first; a fake test implementation is the second use case. Do not create speculative adapter layers.
 8. **[Proposed decision — Adopt]** Atomically persist product event + ExecutionRequest in the same DO. Existing RunLoop remains the only physical effect executor.
 9. **[Proposed decision — Adapt]** Add gateway and projections behind per-owner feature flags and protocol negotiation.
-10. **[Proposed decision — Adapt]** Migrate legacy Supabase Spots without dual-write: Supabase remains authoritative during a dual-read phase; user reviews promotion into the new claim model; record a cutover cursor; propagate corrections/deletions/tombstones both before and after cutover; rollback makes the new store read-only and returns authority to the recorded Supabase cursor.
+10. **[Proposed decision — Adapt]** Migrate legacy Supabase Spots without dual-write: first inventory real users/rows and correction/deletion history, then choose the simplest safe path. If history/traffic requires a dual-read cutover window, Supabase remains authoritative; user reviews promotion into the new claim model; a cutover cursor is recorded; corrections/deletions/tombstones propagate across the window; rollback makes the new store read-only and returns authority to the recorded Supabase cursor. For a genuinely bounded founder-only dataset, reviewed export/import may satisfy the same invariants without building a permanent cutover subsystem.
 11. **[Proposed decision — Adapt]** Integrate Kennel with fake provider, then one current provider. Keep local operation ledger and backend reconciliation.
 12. **[Proposed decision — Adapt]** Add one connector effect family only after its reconciliation contract passes fault injection.
 13. **[Proposed decision — Adopt]** Turn on verification/acceptance/OpenLoop closure only after independent checks work. Before that, UI labels remain “activity/evidence,” never “complete.”
-14. **[Proposed decision — Defer]** Computer, Think internals, Python, gRPC, multiple providers, collaborative Outcomes, and organizational tenancy stay out of the first proof.
+14. **[Proposed decision — Adapt]** Computer, Think internals, Python, gRPC, additional providers, collaborative Outcomes, and organizational tenancy remain behind their named contracts. Their implementation activates when a committed workload and conformance evidence justify the adapter; they cannot become alternate truth or authority paths.
 
 Rollback boundaries:
 
-- Every phase has a per-owner feature flag and additive schema.
+- Every risky workstream has a per-owner feature flag and additive schema.
 - Protocol readers support at least current and previous version.
 - Old RunLoop proof routes and tables are untouched until new conformance is stronger.
 - Legacy V2 pending effects remain readable/recoverable through the old encoding until no pending record remains and the compatibility retention window closes.
 - A migration never rewrites old Goal/Spot data into Outcome/Constellation truth without user review.
-- There is never a Spot dual-write phase. Authority and cutover cursor are explicit; corrections and tombstones win across both read paths.
+- There is never a Spot dual-write period. Authority and cutover cursor are explicit; corrections and tombstones win across both read paths.
 - Failed new projections can be rebuilt from product events; failed adapter adoption can fall back only to a semantically compatible, conformance-passed adapter.
 - No rollback deletes effect receipts or historical acceptance; rollback disables new commands and preserves audit/re-entry.
 
-## 16. Issue-ready implementation phases
+## 16. Issue-ready parallel workstreams
 
-| Phase / issue cluster | Dependencies | Affected repositories | Acceptance and conformance tests | Rollback boundary |
+| Workstream | Dependencies | Affected repositories | Acceptance and conformance tests | Rollback boundary |
 |---|---|---|---|---|
-| **0. Architecture ratification** | This plan | `waldo-brain`, `waldo-backend`, `kennel`, app repos | ADR consistency; vocabulary linter; contract review; threat model; first-proof choice | No runtime change |
-| **1. Protocol release 1.0-alpha** | Phase 0 ADRs | `waldo-backend`; generated bindings consumed elsewhere | Schema/golden fixture/property/compatibility tests; state transition rejection tests | Unpublished alpha or prior tag |
-| **2. Same-DO Coordinator kernel** | Contracts + current-table manifest | `waldo-backend` | Deterministic owner routing; inside-DO owner mismatch rejection; two-owner negative test; pure domain; command dedupe/conflict; atomic event+ExecutionRequest; shadow determinism | Owner feature flag; additive tables |
-| **3. ExecutionKernel seam** | Coordinator request contract | `waldo-backend` | All 2,201 targeted existing tests; old pending V2 effect recovery under new code; effect/recovery kill tests; exact public-method allowlist; no behavior/privacy drift | Old direct call path/readers |
-| **4. Gateway/event/projections** | Protocol + coordinator | `waldo-backend`, web/mobile clients | Auth fail-closed; cursor gaps/duplicates; stale revision; offline command truth; projection redaction | Read-only/old surfaces |
-| **5. Kennel executor fake** | Protocol/projections | `kennel`, `waldo-backend` | Operation ledger, same-ID/digest conflict, lease fencing, reconnect, cancel, transcript nonexport | Fake/local-only flag |
-| **6. One real provider session** | Kennel fake conformance | `kennel`, `waldo-backend` | Current version manifest; start/resume/steer/pause/cancel; orphan recovery; hidden-retry audit; artifact hashing | Provider disabled; fake remains |
-| **7. Judgment/authority** | Coordinator + presence | `waldo-backend`, `kennel`, selected second surface | Expiry/revocation/use limit; digest/context binding; voice readback if included; stale approval after suspension | Advisory-only judgment mode |
-| **8. One external effect — `needs-info` until effect/provider ratified** | Effect contract + grant + ADR decision | `waldo-backend`, connector repo/package | Intent-before-I/O; frozen digest conflict; apply-then-timeout reconcile; idempotency-window expiry; breaker/terminal UX | Connector/effect family flag off |
-| **9. Evidence/verification/acceptance** | Effect receipt + artifact | `waldo-backend`, `kennel` | Independent evidence; stale evidence; provider done separation; accept/reject/repair/reopen history | Evidence-only labeling |
-| **10. Continuity/OpenLoop/re-entry/Brief/Close** | Acceptance + projections | `waldo-backend`, Kennel, mobile/web, `waldo-brain` policy | Exact next-day re-entry; resolved/released/reopened; legacy Spot dual-read/no-dual-write and cutover/tombstone tests; attention budget; stale/degraded brief | Hide proactive projection; restore recorded Supabase authority cursor |
-| **11. Broaden adapters/surfaces** | First proof passes | Relevant repos | Same conformance suite per adapter; no alternate truth; deletion propagation | Per-adapter/presence flags |
-| **12. External spikes** | Named workload | `waldo-backend` spike worktrees only | Computer gates; Think equivalence; model eval; cost benchmark | No production binding |
+| **Contract and conformance spine** | Architecture lock | `waldo-backend`; generated bindings in consumers | Protocol v0.1 schema/golden fixture/property/compatibility tests; state transition rejection; snapshot/cursor/account-switch fixtures | Unpublished version or prior compatible tag |
+| **Owner root and domain** | Relevant released contracts + current-table manifest | `waldo-backend` | Deterministic routing; inside-DO owner mismatch rejection; two-owner negative; command dedupe/conflict; atomic event+ExecutionRequest; every supported FSM transition and invalid transition | Owner feature flag; additive tables |
+| **ExecutionKernel and effects** | Coordinator request, authority, effect contracts | `waldo-backend` | Full trusted-runtime regression; old pending V2 recovery; grant-use+intent atomicity; effect/recovery kill tests; no behavior/privacy drift | Old direct call path/readers; connector flag off |
+| **Gateway, events, projections** | Protocol + owner root | `waldo-backend`, presence repos | Auth fail-closed; snapshot/cursor gaps/duplicates; stale revision; disconnected-draft truth; projection redaction | Read-only/old surfaces |
+| **Kennel desktop harness** | Protocol/executor/workspace fixtures | `kennel`, `waldo-backend` | Operation ledger, same-ID/digest conflict, lease fencing, reconnect, cancel, transcript nonexport, fake backend and current provider conformance | Fake/local adapter or provider disabled |
+| **Judgment, authority, evidence, acceptance** | Domain + presence + effect/artifact contracts | `waldo-backend`, `kennel`, presence repos | Expiry/revocation/use limit; server-created grant; stale approval; independent read-back; selective artifact checks; accept/reject/repair/reopen history | Advisory/evidence-only labels |
+| **Workspace, artifacts, knowledge** | Workspace/Artifact/BlobStore contracts | `waldo-backend`, `kennel`, cloud adapters | Canonical seal/restore/delete; chunk integrity; provenance; Mac-to-Linux declared support; no secrets; new fence on restore | Per-adapter flag; source workspace preserved |
+| **Personal assistance and continuity** | Domain/projections/acceptance | `waldo-backend`, Kennel, mobile/web/messaging/voice policy | Exact re-entry; Brief/Close/Catch Up/meeting lifecycle; attention budget; correction/deletion; safe Spot cutover | Hide proactive projection; restore recorded authority cursor |
+| **Connectors and real-world effects** | Effect family, exact scopes, reconciliation contract | `waldo-backend`, connector packages | Intent-before-I/O; frozen-digest conflict; apply-then-timeout; idempotency expiry; revoke; deterministic read-back; terminal ambiguity | Per-family flag off |
+| **Distribution and capability packaging** | Capability/protocol/security contracts | Relevant repos | MCP/SDK/Packs cannot mint authority, memory, acceptance, or closure; install/update/revoke/quarantine; no transitive delegation | Per-adapter/package flag |
+| **Security, portability, operations** | Runs with every workstream | All affected repos | Tenant/privacy/health/credential negative proof; export/import/delete; redacted posture/traces; load/storage/cost/recovery/rollback | Global/per-owner kill and preserved audit history |
 
-Mandatory test families across phases: owner/tenant isolation, authorization fail-closed, prompt injection, raw-health/transcript/credential nonleakage, command idempotency, state-machine property tests, fault injection at every durable boundary, retry amplification, reconciliation ambiguity, cancellation fencing, protocol compatibility, deletion/tombstone propagation, observability redaction, and full trusted RunLoop regression.
+Mandatory test families across workstreams: owner/tenant isolation, authorization fail-closed, prompt injection, raw-health/transcript/credential nonleakage, command idempotency, complete supported state-machine property tests, fault injection at every durable boundary, retry amplification, reconciliation ambiguity, cancellation fencing, protocol compatibility, deletion/tombstone propagation, observability redaction, and full trusted RunLoop regression.
 
 ### 16.1 Agent-Ready child-issue contract
 
-The table is the dependency-ordered parent issue map. It is issue-ready only when decomposed into bounded child issues that each include all fields below; no parent may be assigned as a catch-all implementation issue.
+The table is the dependency-aware workstream map. It is issue-ready only when decomposed into bounded child issues that each include all fields below; no workstream may be assigned as a catch-all implementation issue.
 
 | Required child-issue field | Required content |
 |---|---|
@@ -1040,25 +1124,25 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-An issue may narrow the first two commands when its path scope proves the other package unaffected, but the phase gate runs full `verify`. Kennel/mobile/web issues must quote the exact current repository commands after fresh inspection; this plan does not invent them. Phase 8 cannot become `agent-ready` until the effect family, provider, scopes, reconciliation lookup, idempotency window, test tenant, and reversible cleanup are recorded.
+An issue may narrow the first two commands when its path scope proves the other package unaffected, but every integration gate runs full `verify`. Kennel/mobile/web issues must quote the exact current repository commands after fresh inspection; this plan does not invent them. A real connector/effect issue cannot become `agent-ready` until the effect family, provider, scopes, reconciliation lookup, idempotency window, test tenant, and reversible cleanup are recorded.
 
 ## 17. Unknowns, hypotheses, falsifiers, and ADR decisions
 
-### 17.1 Product decisions required before implementation
+### 17.1 Implementation choices resolved inside the owning workstream
 
 | Unknown | Default for planning | Why it matters / decision point |
 |---|---|---|
-| Can low-risk Outcomes be auto-accepted? | **[Proposed decision — Defer]** First proof requires explicit user acceptance | Changes Acceptance/Authority policy and UX |
-| Is Mission optional? | **[Proposed decision — Adapt]** Yes; direct WorkUnit for simple Outcome | Avoids ceremony; requires both-path tests |
-| First real effect family? | **[Proposed decision — Spike]** Calendar create/update | Reconciliation differs materially; ratify before Phase 8 |
-| May root spawn child execution DOs/Workflows later? | **[Unknown / blocked]** Not in first proof | Requires concurrency/load evidence and single-writer design |
+| Can low-risk Outcomes be auto-accepted? | **[Decision — locked default]** Explicit user acceptance until an exact delegated-acceptance policy and conformance suite pass | Changes Acceptance/Authority policy and UX, not the product scope |
+| Is Mission optional? | **[Decision — locked]** Yes; direct WorkUnit for a simple Outcome and Mission for work needing an inspectable plan | Avoids ceremony; both paths remain committed and tested |
+| Initial real effect family? | **[Implementation choice]** Calendar create/update is the recommended reversible candidate | Owning connector workstream ratifies vendor/scopes/reconciliation/test tenant before activation |
+| May root spawn child execution DOs/Workflows later? | **[Implementation choice]** Not unless load evidence earns it | Requires concurrency/load evidence and a replacement single-writer design |
 | Voice retention? | **[Proposed decision — Adapt]** Semantic command by default; raw audio/transcript separate opt-in/short retention | Privacy and correction provenance |
-| Shared/collaborative Outcomes? | **[Proposed decision — Defer]** Out of first proof | Would change tenancy, authority, event ordering |
-| Does Goal remain above Outcome? | **[Proposed decision — Defer]** No user-facing Goal until evidence | Prevents duplicative ontology |
+| Shared/collaborative Outcomes? | **[Committed extension]** Preserve contracts; activate only after counterparty identity, tenancy, disclosure, authority, and ordering conformance pass | Does not narrow the whole-product commitment; prevents an unsafe shortcut |
+| Does Goal remain above Outcome? | **[Decision — locked default]** No user-facing Goal until evidence earns a distinct long-horizon grouping | Prevents duplicative ontology while leaving a replaceable grouping seam |
 | What qualifies as “long suspension”? | **[Unknown / blocked]** Per effect/provider risk and idempotency window | Approval and reconciliation validity |
 | Production retention durations? | **[Unknown / blocked]** Policy classes, not guessed numbers | Legal/privacy/product choice |
-| Independent verifier cost/latency budget? | **[Unknown / blocked]** Measure first proof | Routing and UX SLO |
-| First-user product acceptance thresholds? | **[Unknown / blocked]** Define before Slice A trial | Prevents a technically complete workflow from being mistaken for reduced user burden |
+| Independent verifier cost/latency budget? | **[Implementation choice]** Measure continuously; deterministic effect read-back always, semantic artifact verification only when declared/requested | Routing and UX SLO |
+| First-user product acceptance thresholds? | **[Unknown / blocked for product claims, not construction]** Define before cross-surface acceptance claims | Prevents a technically complete workflow from being mistaken for reduced user burden |
 
 ### 17.2 Hypotheses and falsifiers
 
@@ -1068,7 +1152,7 @@ An issue may narrow the first two commands when its path scope proves the other 
 | Outcome is the correct root object | Users prefer session/task truth and clarification costs more judgment time than re-entry saves |
 | Mission should be optional | Complex general work cannot be planned/audited/resumed unless every Outcome has a Mission |
 | Manifests prevent unsafe drift | Adapters pass admission but fail required controls because declarations cannot be tested deterministically |
-| Purpose-bound context is enough | First-proof quality fails materially without broad history after retrieval/clarification improvements are exhausted |
+| Purpose-bound context is enough | Whole-product trials fail materially without broad history after retrieval/clarification improvements are exhausted |
 | Independent verification builds trust | It adds cost/latency without reducing false completion or repair rate |
 | One Waldo across Home and Work is valuable | Users consistently split identity/context despite scopes and correction controls |
 | Needs You reduces burden | Missed consequences rise or users still inspect raw sessions routinely |
@@ -1110,7 +1194,7 @@ An issue may narrow the first two commands when its path scope proves the other 
 | Older stance | Treatment in new ADR metadata |
 |---|---|
 | Health-oriented DO/Supabase and pre-activity trigger framing | **[Proposed decision — Reject]** Supersede product framing; **Adapt** raw-health storage/security mechanics |
-| Brief/shadow-Fetch/Spots/Chat V1 | **[Proposed decision — Reject]** Supersede with combined Outcome vertical slice |
+| Brief/shadow-Fetch/Spots/Chat V1 | **[Proposed decision — Reject]** Supersede with the one-Waldo whole-product Outcome/OpenLoop architecture |
 | GoalRecord as primary objective | **[Proposed decision — Reject]** Supersede; **Adapt** only through user-reviewed migration |
 | Coarse L1/L2/L3 autonomy | **[Proposed decision — Reject]** Supersede with exact AuthorityGrant; tier may only tighten |
 | Fixed health delivery/intervention tables | **[Proposed decision — Reject]** Supersede with consequence/urgency/expiry/quiet-state/attention policy |
@@ -1122,7 +1206,7 @@ An issue may narrow the first two commands when its path scope proves the other 
 | DO-only runtime, journal/outbox, Loop Governor | **[Proposed decision — Adopt]** Retain and generalize to Home + Work |
 | Sanitization, truth invalidation, credential custody, health authority | **[Proposed decision — Adopt]** Retain under new context/store ADRs |
 
-No product implementation should begin until ADRs 1–10 and the contract release shape, vertical-slice test shape, and migration ordering are internally consistent. The exact real provider and effect must be ratified before Phases 6 and 8 respectively; they do not block Phase 0 ratification, Phase 1 contracts, or the additive same-DO kernel seam.
+Product implementation may begin under the [architecture lock](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md). The ADR set and protocol v0.1 are the first shared contract work, not a pre-build product phase. A real provider or effect activates only after its owning workstream records version/vendor, exact scopes, reconciliation, idempotency window, test environment, cleanup, and conformance evidence; selection proceeds during building and does not block unrelated workstreams.
 
 ## 18. Ecosystem refresh and architecture-lock boundary
 
@@ -1136,7 +1220,7 @@ This section is part of the architecture plan, not a provider roadmap. It record
 | Protocols are still moving quickly | MCP's 2026-07-28 release candidate moved Tasks from experimental core to an independently versioned extension and changed its lifecycle | **[Observed fact — Adopt]** Pin protocol revisions and extensions independently. Never make `WorkUnit`, `AgentSession`, or `JudgmentRequest` aliases of an external protocol object. |
 | Durable harnesses are becoming workspace-centric | Current agent SDKs expose resumable sandbox sessions, predictable filesystems, skills/progressive disclosure, approval interruptions, and traces | **[Inference — Adapt]** A replaceable workspace/checkpoint plane is now a first-class adapter boundary. It strengthens Kennel/cloud re-entry but does not replace Coordinator or RunLoop durability. |
 | Identity and authorization are becoming the constraint on autonomous work | NIST's 2026 initiative explicitly targets agent identity, authorization, secure interoperability, auditing, non-repudiation, prompt injection, and delegation on behalf of people | **[Proposed decision — Adopt]** Represent workload identity and delegation explicitly; authority never propagates merely because one agent called another. |
-| Agent commerce is standardizing around verifiable intent/mandates and receipts | AP2 v0.2 defines linked checkout/payment mandates, receipts, dispute evidence, and autonomous/human-present modes; x402 provides machine-readable HTTP payment challenges | **[Proposed decision — Defer/Adapt]** Keep payment out of the first proof, but ensure AuthorityGrant → EffectIntent → EffectReceipt can later project to mandate/payment protocols without bypassing Waldo approval or reconciliation. |
+| Agent commerce is standardizing around verifiable intent/mandates and receipts | AP2 v0.2 defines linked checkout/payment mandates, receipts, dispute evidence, and autonomous/human-present modes; x402 provides machine-readable HTTP payment challenges | **[Proposed decision — Adapt]** Payment is a separate future effect-family decision, but AuthorityGrant → EffectIntent → EffectReceipt must be able to project to mandate/payment protocols without bypassing Waldo approval or reconciliation. |
 | Agent telemetry is becoming interoperable but schema ownership is still shifting | OpenTelemetry moved GenAI conventions into a dedicated repository; MCP's release candidate adds trace-context propagation | **[Proposed decision — Adapt]** Waldo owns a stable redacted trace model and exports through a versioned OpenTelemetry mapping. Upstream semantic-convention churn must not change domain events. |
 | Persistent context and dynamic capability ecosystems enlarge the attack surface | OWASP's 2026 guidance names goal hijack, tool misuse, identity/privilege abuse, agentic supply-chain compromise, unexpected code execution, and memory/context poisoning | **[Proposed decision — Adopt]** Treat retrieved content, skills, MCP/A2A metadata, workspace files, memories, and generated code as untrusted inputs with provenance, quarantine, revocation, and negative tests. |
 | Skills are becoming portable, but personal-agent memory is not | Agent Skills defines portable procedural packages; no mature primary-source standard found in this refresh defines a user-owned, semantically complete personal-agent memory export/restore contract | **[Proposed decision — Adapt]** Skills may travel as reviewed capability bundles, not identity or memory. Waldo defines an encrypted, versioned export/restore contract for its own user-owned truth. |
@@ -1162,14 +1246,14 @@ flowchart LR
   Identity --> External["Providers · tools · services"]
 ```
 
-1. **[Proposed decision — Adapt] Workspace and knowledge plane.** Add `WorkspacePort`, `WorkspaceCatalog`, `WorkspaceCheckpoint`, `KnowledgeSource`, `KnowledgeProjection`, and `SourceUsageReceipt`. A workspace is mutable execution state; an Artifact is a content-addressed deliverable; a KnowledgeProjection/DeepWiki is an inspectable, rebuildable projection; a ContextClaim is governed memory; R2 or another blob store is storage. These are separate contracts. A filesystem may reduce direct R2 traffic for live session state, but it cannot replace encrypted durable artifact backup, multi-surface availability, deletion propagation, or canonical metadata.
+1. **[Proposed decision — Adapt] Workspace and knowledge plane.** Add `WorkspacePort`, `WorkspaceCatalog`, `WorkspaceCheckpoint`, `WorkspaceRestoreAttempt`, `KnowledgeSource`, `KnowledgeProjection`, and `SourceUsageReceipt`. A workspace is mutable execution state; an immutable sealed checkpoint is reusable input to multiple restore attempts; a restore attempt owns target environment/fence/verification/failure; an Artifact is a content-addressed deliverable; a KnowledgeProjection/DeepWiki is an inspectable, rebuildable projection; a ContextClaim is governed memory; R2 or another blob store is storage. These are separate contracts. A filesystem may reduce direct R2 traffic for live session state, but it cannot replace encrypted durable artifact backup, multi-surface availability, deletion propagation, or canonical metadata.
 2. **[Proposed decision — Adapt] Protocol translation plane.** Add `ProtocolAdapterPort` with revision, extension, authentication, capability, lossiness, and fail-closed downgrade declarations. Mapping rules are explicit: MCP Task/A2A Task → remote execution observation or AgentSession reference, never `WorkUnit`; A2A Artifact → candidate `Artifact`; MCP elicitation/A2A input-required → candidate `JudgmentRequest`; AG-UI state/tool events → ephemeral projection events, never domain events. An MCP server, A2A Agent Card, registry entry, signed descriptor, or remote task status describes a counterparty; it does not confer Waldo authority or prove executable trust.
 3. **[Proposed decision — Adopt] Execution principal and delegation.** Add `ExecutionPrincipal`, `WorkloadIdentity`, `DelegationGrant`, `CredentialHandle`, and `EgressDecision`. Every identity is owner-, WorkUnit-, executor-, audience-, purpose-, lease-, and expiry-bound and records its on-behalf-of chain and attestation references. Delegation intersects authority; it never widens it. Re-entry checks revocation generation and reissues short-lived credentials. Token passthrough and bearer-token chaining are forbidden.
-4. **[Proposed decision — Adapt] Cost, commerce, and source-value extension.** Add `BudgetReservation`, `UsageReceipt`, `Quote`, and `SourceUsageReceipt` now as non-payment ledger contracts. Reserve `PurchaseIntent`, `PaymentAuthorization`, `TermsAcceptanceRequest`, and `AccountReceipt` as future effect-family extensions. No wallet, autonomous purchase, paid MCP call, or account creation enters the first proof.
+4. **[Proposed decision — Adapt] Cost, commerce, and source-value extension.** Add `BudgetReservation`, `UsageReceipt`, `Quote`, and `SourceUsageReceipt` now as non-payment ledger contracts. Reserve `PurchaseIntent`, `PaymentAuthorization`, `TermsAcceptanceRequest`, and `AccountReceipt` as future effect-family extensions. A wallet, autonomous purchase, paid MCP call, or account creation requires its own explicit product decision and conformance; none is implied by the current software lock.
 5. **[Proposed decision — Adopt] Trace/evaluation and capability supply chain.** Add stable internal correlation across command → Outcome → WorkUnit → AgentSession → EffectIntent/Receipt → Evidence/Verification/Acceptance/OpenLoop. `ExecutionTelemetryEnvelope` and `EvaluationEnvelope` pin the model, harness, tools, environment, budgets, manifests, graders, and evidence because an agent result is a property of the complete execution configuration, not the model alone. Export only redacted, policy-permitted fields. Capability bundles include canonical signing serialization, manifest signature, executable/package/source digest, build provenance, dependency/SBOM reference where available, instruction/skill digest, trust-root/key lifecycle, vulnerability/conformance evidence, expiry, revocation, and quarantine state. A signature or registry listing alone is insufficient. The executor cannot edit its promotion evaluator, trust root, or acceptance oracle.
 6. **[Proposed decision — Adapt] User-owned portability.** Add `WaldoExportBundle` and deterministic restore verification for Outcome/Mission/WorkUnit history, unresolved OpenLoops/ReEntryPoints, explicit statements/corrections, governed ContextClaims, Artifact metadata and permitted bytes, source provenance, policy/retention metadata, tombstones, and optional reviewed SkillBundles. Credentials, provider secrets, raw health, and provider-owned transcripts are excluded by default and represented only by reconnect/delete instructions. Export/import never merges owners implicitly.
 7. **[Proposed decision — Adapt] Behavior packaging and distribution.** Keep `RoutineDefinition`, `SkillBundle`, `IntegrationRecipe`, and `CapabilityPackage` distinct. A routine owns trigger/stale/pause/attention behavior; a skill owns a reviewable typed procedure and evals; a recipe owns onboarding, required connections, composition, and update policy; a capability package owns executable/tool/MCP manifests, digests, provenance, conformance, expiry, and revocation. A Waldo Pack may compose them but never embeds authority, credentials, Outcome truth, or silent privilege expansion.
-8. **[Proposed decision — Adapt] External and human delegation.** Reserve `ExternalDelegationRequest`, `ExternalDelegationDisposition`, `DelegationReply`, and `SharedContextGrant` for post-first-proof cross-person/agent work. Add `HumanExecutorAdapter` as an executor family with identity/organization, jurisdiction, job capabilities, SLA, cost/expense policy, data classes, cancellation/refund/dispute behavior, evidence types, and verification availability. Compute near the data owner, disclose status by default, require separate approval for typed data replies, treat returned payloads as untrusted, and never equate a person or remote agent saying “done” with Acceptance.
+8. **[Decision — committed and evidence-gated] External and human delegation.** Add `ExternalDelegationRequest`, `ExternalDelegationDisposition`, `DelegationReply`, and `SharedContextGrant` for cross-person/agent work. Add `HumanExecutorAdapter` as an executor family with identity/organization, jurisdiction, job capabilities, SLA, cost/expense policy, data classes, cancellation/refund/dispute behavior, evidence types, and verification availability. Compute near the data owner, disclose status by default, require separate approval for typed data replies, treat returned payloads as untrusted, and never equate a person or remote agent saying “done” with Acceptance.
 9. **[Proposed decision — Adopt] Sensitive computer handoff.** Browser/computer environments expose a durable `sensitive_handoff` session state for login, CAPTCHA, payment, consent, or private input. Freeze intent before I/O; keep credentials/private values out of model-visible events and transcripts; resume with the same operation key and a new fencing generation; treat screenshots, DOM, and files as untrusted evidence; verify the external postcondition rather than the click; and provide a terminal ambiguous/failure path.
 10. **[Proposed decision — Adopt] Experience capability ledger.** For every user-visible capability, record `architecture_expressible`, `contract_defined`, `adapter_conformance_passed`, and `cross_surface_acceptance_passed` independently. No capability is “supported” merely because one of those is true.
 
@@ -1177,9 +1261,22 @@ Minimum contract sketches:
 
 ```ts
 interface WorkspaceCheckpoint {
-  id: ID; ownerId: ID; workUnitId: ID; workspaceId: ID; generation: number;
-  parent?: ID; filesystemManifestDigest: Digest; artifactRefs: ID[];
-  executorManifest: Digest; dataPolicy: ID; createdAt: Timestamp; state: "candidate"|"sealed"|"restored"|"expired"|"deleted";
+  id: ID; ownerId: ID; outcomeId?: ID; workUnitId: ID; workspaceId: ID;
+  generation: number; fencingGeneration: number; parentCheckpointId?: ID;
+  sourceBase: { kind: "git"|"artifact"|"checkpoint"|"empty"; ref?: string; digest: Digest };
+  manifestDigest: Digest; entries: WorkspaceFileEntry[];
+  excludedPaths: Array<{ path: string; reason: "secret"|"policy"|"ephemeral"|"unsupported" }>;
+  executorManifestDigest: Digest; toolchainManifestDigest: Digest;
+  environmentRecipeDigest: Digest; dataPolicyId: ID; encryptionKeyRef: ID;
+  artifactRefs: ID[]; createdAt: Timestamp;
+  state: "candidate"|"sealing"|"sealed"|"expired"|"deleting"|"deleted";
+}
+interface WorkspaceRestoreAttempt {
+  id: ID; checkpointId: ID; ownerId: ID; workUnitId: ID;
+  targetAdapterManifestDigest: Digest; targetPlatform: string; targetWorkspaceId?: ID;
+  leaseId: ID; fencingGeneration: number; verificationDigest?: Digest; failureCode?: string;
+  deletionGeneration: number; startedAt: Timestamp; completedAt?: Timestamp;
+  state: "requested"|"restoring"|"verifying"|"ready"|"failed"|"cancelled"|"deleting"|"deleted";
 }
 interface ProtocolBinding {
   protocol: "mcp"|"a2a"|"ag_ui"|string; revision: string; extensions: string[];
@@ -1230,31 +1327,28 @@ interface SensitiveHandoff {
 }
 ```
 
-### 18.3 What is locked, open, and deferred
+The complete workspace serialization, path normalization, `mtime` exclusion, symlink containment, secret exclusion, encrypted chunk/deduplication, partial-seal, restore-fence, deletion, and Mac-to-Linux declared-support conformance rules are locked in the [whole-product build direction](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#7-workspace-and-checkpoint-contract). Kennel's Mac filesystem is the initial local adapter, not the canonical filesystem. Cloud continuation recreates from a sealed checkpoint with a new lease/fence; it does not claim live process migration. No offline product-truth mode is in the current architecture.
+
+### 18.3 What is locked and what remains a build-time implementation choice
 
 | Boundary | Lock posture |
 |---|---|
-| One Waldo identity; one owner authority root; same-DO Coordinator + RunLoop; one reducer per aggregate | **[Proposed decision — Lock/Adopt]** Stable kernel. Change only through a superseding ADR plus migration/conformance proof. |
-| Outcome/Mission/WorkUnit; separate AgentSession, effects, evidence, verification, acceptance, OpenLoop/re-entry | **[Proposed decision — Lock/Adopt]** Stable domain vocabulary and state separation. |
-| Intent-before-I/O, frozen immutable arguments/digest, reconciliation before retry, one retry owner, bounded terminal resolution | **[Proposed decision — Lock/Adopt]** Non-negotiable effect spine. |
-| Purpose-bound context, user correction precedence, health as passive caring context, credential nonexposure | **[Proposed decision — Lock/Adopt]** Non-negotiable trust boundary. |
-| Provider/model/executor/connector roster; local versus cloud placement; storage implementation | **[Proposed decision — Keep open/Adapt]** Versioned conformance-gated adapters. |
-| MCP/A2A/AG-UI/AP2/x402/OpenTelemetry revisions | **[Proposed decision — Keep open/Adapt]** Pinned protocol adapters; never canonical product truth. |
-| Cloudflare Computer, Think primitives, Python/gRPC, paid capabilities, autonomous purchasing, shared Outcomes | **[Proposed decision — Spike/Defer]** Outside the first production slice until their named gates pass. |
+| One Waldo identity; one owner authority root; same-DO Coordinator + RunLoop; one reducer per aggregate | **[Decision — locked]** Stable kernel. Change only through a superseding ADR plus migration/conformance proof. |
+| Outcome/Mission/WorkUnit; separate AgentSession, effects, evidence, verification, acceptance, OpenLoop/re-entry | **[Decision — locked]** Stable domain vocabulary and state separation. Mission is optional per Outcome but remains committed. |
+| Intent-before-I/O, frozen immutable arguments/digest, atomic grant-use + intent, reconciliation before retry, one retry owner, bounded terminal resolution | **[Decision — locked]** Non-negotiable effect spine. |
+| Purpose-bound context, user correction precedence, health as passive caring context, credential nonexposure | **[Decision — locked]** Non-negotiable trust boundary. |
+| Backend canonical truth; Kennel proposes and the owner DO admits; no current offline authority mode | **[Decision — locked]** Local LLM support may arrive behind an adapter without forking product truth. |
+| Provider/model/executor/connector roster; local versus cloud placement; storage implementation | **[Decision — open implementation]** Select during building through versioned conformance-gated adapters. |
+| MCP/A2A/AG-UI/AP2/x402/OpenTelemetry revisions | **[Decision — open implementation]** Pinned protocol adapters; never canonical product truth. |
+| Cloudflare Computer, Think primitives, Python/gRPC, paid capabilities, autonomous purchasing, shared Outcomes | **[Decision — contract-planned and evidence-gated]** Implement/activate against named workloads and conformance; none can become an alternate authority path. |
 
 ### 18.4 Build-start gate and verdict
 
-**[Proposed decision — Adapt] Lock the stable kernel after Phase 0 rewrites or ratifies the ADR set as needed and incorporates Section 18 into its contracts. Do not lock provider implementations or fast-moving external protocol revisions.** This is a finite lock, not a promise that the ecosystem will stop changing.
+**[Decision — locked] The stable kernel is locked and implementation starts now.** Provider implementations and fast-moving external protocol revisions remain open behind their stable Interfaces. This is a finite architecture lock, not a promise that implementations or the ecosystem stop changing.
 
-Work may start in this order:
+The backend publishes protocol v0.1, schemas, golden fixtures, and the definitive writer/authority rules as the shared seam. Backend domain/runtime and Kennel presence/executor work then proceed in parallel with the other workstreams in Section 16. Fake adapters can prove contracts while real implementations are selected, but they cannot prove user capability. A real provider/effect is activated only after its exact version/vendor, scopes, reconciliation, idempotency, test environment, cleanup, and conformance are recorded. Before a production claim, security threat modeling, retention values, deletion drills, external-adapter conformance, load/recovery tests, and rollout/rollback acceptance must pass.
 
-1. **Phase 0 only:** rewrite or ratify the complete ADR set in Section 17.3, preserving rationale and migration history; choose the contract versioning policy, exact product-capability status ledger, and first-proof decision deadline.
-2. **Phases 1–3:** contracts, same-DO Coordinator kernel, and ExecutionKernel seam may start once those ADRs are accepted. They can use fake adapters and do not require the final provider or calendar vendor.
-3. **Before Phase 6:** pin one Kennel provider/harness version and prove its start/resume/steer/pause/cancel/orphan behavior with the common conformance suite.
-4. **Before Phase 8:** ratify the exact external effect family, vendor, scopes, reconciliation lookup, idempotency window, test tenant, and cleanup. The recommended first choice remains one reversible calendar create/update effect.
-5. **Before production:** finish security threat modeling, retention values, deletion drills, external-adapter conformance, load/recovery tests, and rollout/rollback acceptance. Architecture lock is not production approval.
-
-The only product decisions that still block the complete first vertical slice are the exact Kennel provider/version, exact calendar provider/account scope, and first-user acceptance thresholds for reduced reassembly, safe judgment, verified completion, and next-day re-entry. They do not justify reopening the core architecture.
+The lock reopens only when measured evidence falsifies a locked constraint: owner-root load or storage is untenable; a new product decision requires disconnected canonical truth; an effect family cannot be made reconcilable; workspace portability/deletion/credential isolation cannot fit the port; or the one-Waldo user-owned thesis changes. Provider, connector, model, cloud, storage, framework, protocol-revision, and UI choices are ordinary build-time decisions and do not reopen the core.
 
 ## Appendix A. Source pins
 
@@ -1304,7 +1398,7 @@ All files below were read from `waldo-brain@6e5cbd7a0711b883e75e606487ac1cdb0b7c
 | Understand Anything + Paxel + Webhound | **[Proposed decision — Adapt]** Clean-room evidence-linked graph/session judgment and correctable continuity | No activity-derived personality/productivity truth |
 | Pi + Hermes + QM + Think | **[Proposed decision — Adapt]** Replaceable harness contracts, durable sessions, capability manifests, policy floors | Effect, authority, memory, acceptance remain Waldo-owned |
 | OpenClaw + Waldo privacy | **[Proposed decision — Adapt]** User ownership, local/private execution where useful | Local does not mean ungoverned or alternate truth |
-| Notion + Dust + Glean + Agent365 | **[Proposed decision — Adapt]** Shared knowledge/connectors/admin patterns where product scope requires | No organization-first tenancy in first proof |
+| Notion + Dust + Glean + Agent365 | **[Proposed decision — Adapt]** Shared knowledge/connectors/admin patterns where product scope requires | Personal owner-root tenancy remains canonical unless a separate organization-tenancy decision passes authority and isolation review |
 | Omi + bounded executors | **[Proposed decision — Spike]** Ambient capture/voice and physical execution later | Explicit consent, attention, privacy, authority, and receipt gates |
 
 ## Appendix C. Failure-path checklist
@@ -1327,7 +1421,7 @@ All files below were read from `waldo-brain@6e5cbd7a0711b883e75e606487ac1cdb0b7c
 | Verifier unavailable | Verification indeterminate; acceptance pending |
 | User rejects result | Repair/reopen/release; preserve history |
 | Cancel during provider activity | Persist generation; quarantine late events |
-| Surface offline | Cache projections; consequential truth waits for backend |
+| Surface disconnected | Cached projections may render as stale; no consequential command or canonical truth changes until backend acknowledgement |
 | Events duplicate/out of order | Cursor reducer dedupes/requests missing range |
 | Deletion requested | Tombstone propagates across DO/local/index/blob/projection/source copies where supported |
 | Brief freshness cannot be proved | Show stale/degraded; never manufacture continuity |

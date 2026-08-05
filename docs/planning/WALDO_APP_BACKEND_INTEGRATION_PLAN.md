@@ -1,7 +1,12 @@
 # Waldo App -> Backend Ownership And Migration Plan
 
-Status: HEY-150 artifact supplied for review; HEY-150 remains In Progress until this matrix is
-accepted. This document is not parity, cutover, staging, or decommission proof.
+Status: historical commit-pinned app migration evidence. HEY-150 tracker status remains a separate
+tracker fact. This document is not current whole-product build sequencing, parity, cutover, staging,
+or decommission proof.
+
+Current architecture and build direction: [`WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md).
+This migration inventory remains useful for app path ownership and deployed-residue checks, but its
+July Alpha/phase/deferred product boundaries do not override the August one-Waldo whole-product lock.
 
 Date: 2026-07-10 IST.
 

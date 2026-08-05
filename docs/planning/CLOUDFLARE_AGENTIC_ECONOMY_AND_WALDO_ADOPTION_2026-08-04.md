@@ -1,10 +1,11 @@
 # Cloudflare's Agentic Economy Thesis and Waldo Adoption Plan
 
 **Date:** 2026-08-04
-**Status:** source-backed product and architecture research
+**Status:** source-backed research plus locked Cloudflare implementation posture
 **Scope:** recent Cloudflare first-party posts through the live 2026-08-04 feed refresh
 **Evidence language:** Observed fact, Inference, Proposed decision, Unknown
 **Decision language:** Adopt, Adapt, Spike, Defer, Reject
+**Build-direction authority:** [`WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md). This document evaluates infrastructure choices; Cloudflare never owns Waldo identity, authority, product truth, acceptance, or closure.
 
 ## Executive conclusion
 
@@ -70,6 +71,25 @@ The Agents Week tag/RSS showed the August 2 welcome and five August 3 posts at r
 - **[Observed fact]** Cloudflare's “more than 50% non-human” traffic claim is a Cloudflare network/methodology signal, not an independently established measurement of all Internet traffic.
 - **[Proposed decision — Adopt]** Treat every preview/beta source as a hypothesis and adapter candidate with feature flag, conformance gates, rollback, and an owned export path.
 
+## Locked Cloudflare implementation map
+
+| Primitive | Waldo use | Locked boundary |
+|---|---|---|
+| Workers + per-owner Durable Objects/SQLite | Gateway host and initial canonical authority root | Same-DO Coordinator/RunLoop and one serialized durable boundary until measured load/size evidence earns a replacement design |
+| R2 | Encrypted content-addressed checkpoint chunks, large Artifact bytes, backup/export payloads | Canonical metadata remains in SQLite; object/FUSE access is an adapter and carries no native-SSD assumption |
+| Sandbox SDK / Containers | Initial cloud executor for isolated tools and restored workspaces | Executor only; egress, credentials, lease/fence, checkpoint, process cancellation, deletion, and cost conformance required |
+| Computer | Feature-flagged preview WorkspacePort/executor adapter | Never canonical, never the sole copy, and no production dependency until maturity/durability/restore/deletion gates pass |
+| Workflows | Peripheral deterministic waits and long-running service jobs | Never product FSM, effect-admission, authority, acceptance, or OpenLoop owner |
+| Queues | At-least-once transport for rebuildable/deduplicated work | Consumer dedupe required; delivery never proves a domain transition |
+| AI Gateway | Provider routing, real-time budgets, usage attribution, compatible fallback | Private payload logging off; metadata minimized; Waldo owns policy and atomic spend reservation |
+| Workers AI | Replaceable model/embedding adapter | Must pass Waldo eval/data policy; no special authority or model-memory truth |
+| Vectorize / AI Search | Rebuildable permitted-source knowledge projection | Never canonical ContextClaim or authority; correction/deletion rebuilds deterministically |
+| Browser / Browser Run | Supervised long-tail web executor with takeover/recording | Prefer APIs/WebMCP; mutations still require EffectIntent and independent postcondition evidence |
+| Artifacts | Evaluated versioned handoff adapter | Beta maturity cannot become product authority; R2/Git-compatible ports remain available |
+| Agent Memory | Benchmark extraction, supersession, temporal recall, export | Benchmark only; Waldo retains canonical provenance, correction, retention, deletion, and authority |
+| Billable Usage | Daily/delayed infrastructure FinOps reconciliation | Not real-time authorization or Outcome-value truth |
+| Think and new runtime primitives | Selective provider/executor adapters after conformance | Never Coordinator, memory, acceptance, or closure owner |
+
 ## Fourteen industry moves and what Waldo should do
 
 ### 1. The agent loop is being commoditized
@@ -84,9 +104,9 @@ The Agents Week tag/RSS showed the August 2 welcome and five August 3 posts at r
 
 **[Observed fact]** Computer provides a Durable Object-backed filesystem and interchangeable container, Worker-shell, and JavaScript execution. Its pinned README says it is preview-only, approximately 10 GB per workspace, and aimed at agent-scale rather than heavy monorepo workloads. [Pinned source](https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/README.md#L1-L36)
 
-**[Proposed decision — Spike]** Add `WaldoWorkspace`, `WorkspaceCatalog`, DeepWiki projection, WorkUnit overlays, and local/cloud session checkpoints. Use Computer as the first experimental `WorkspaceAdapter` and `ExecutionEnvironmentAdapter`, never as the contract.
+**[Decision — committed]** Add `WaldoWorkspace`, `WorkspaceCatalog`, DeepWiki projection, WorkUnit overlays, and local/cloud session checkpoints. Kennel is the initial local adapter; Sandbox SDK/Containers are the initial cloud-execution candidate; Computer remains a feature-flagged preview adapter. None is the contract or source of product truth.
 
-**[Proposed decision — Adapt]** Store hot mutable knowledge, indexes, checkpoints, and active artifacts in the workspace. Retain R2/Artifacts for large, immutable, cold, shared, and recovery data.
+**[Proposed decision — Adapt]** Store active mutable working files, disposable caches, and derived indexes in the workspace. Seal encrypted checkpoint chunks and durable Artifact bytes through R2/`BlobStorePort`; store canonical checkpoint/Artifact metadata in the owner root. A workspace filesystem cannot replace recovery, multi-surface access, correction/deletion propagation, or canonical truth.
 
 ### 3. Agents are becoming account holders and economic actors
 
@@ -299,24 +319,24 @@ flowchart TB
   Runtime --> Ecosystem
 ```
 
-## Concrete capabilities to add to the architecture backlog
+## Parallel Cloudflare capability roles
 
-| Capability | Decision | First product use |
+| Capability | Decision | Waldo use |
 |---|---|---|
-| `WaldoWorkspace` and DeepWiki | **Spike/Adapt** | Durable user knowledge and cloud/local session continuity |
+| `WaldoWorkspace` and DeepWiki | **Committed/Adapt** | Durable workspace continuity plus rebuildable, inspectable knowledge projection |
 | WorkUnit filesystem overlays | **Adopt** | Multiple agents safely use one source snapshot |
 | Separate workspace/artifact/index/memory ports | **Adopt** | Prevent filesystem or vendor memory from becoming product truth |
 | Cloudflare Artifacts | **Spike** | Versioned session/WorkUnit handoff and verifier input |
 | AI Search | **Spike** | Replaceable retrieval index over permitted DeepWiki/source corpora |
-| Agent Memory | **Defer** as production store; benchmark patterns | Compare extraction/recall while Waldo keeps canonical correction/provenance |
+| Agent Memory | **Benchmark only** as production store | Compare extraction/recall while Waldo keeps canonical correction/provenance |
 | Environment routing | **Adopt** | Kennel vs isolate vs Linux vs provider cloud |
 | Temporary account/environment intent | **Adapt** | Throwaway deploy-and-verify loop |
-| External account/subscription/domain effects | **Defer** until exact authority UX | Agent completes a business setup flow for the user |
+| External account/subscription/domain effects | **Separate product decision** | Agent completes a business setup flow only after exact authority/terms/payment contracts |
 | Purpose-declared web access | **Adopt** | Honest agent retrieval and source-policy compliance |
 | Source freshness/change manifest | **Adopt** | Avoid redundant DeepWiki ingestion and stale context |
 | SourceUsageReceipt/AttributionEvent | **Adapt** | Explain citations, cost, licensing, deletion, and value |
 | Paid capability/x402 adapter | **Spike** | Buy one bounded dataset/API/MCP result under budget |
-| Waldo MCP monetization | **Defer** until free protocol works | Sell governed verification/execution, never private memory |
+| Waldo MCP monetization | **Separate business decision** | Sell governed verification/execution, never private memory |
 | Outcome/WorkUnit cost ledger | **Adopt** | Model/executor budget and unit economics |
 | Real-time AI Gateway budget | **Adapt** | Prevent provider/model overspend |
 | Continuous ExecutionPosture | **Adopt** | Detect exfiltration, drift, orphaned execution, policy breaches |
@@ -325,6 +345,10 @@ flowchart TB
 | Progressive Code Mode discovery | **Adapt** | Keep large API/MCP catalogs out of context; route writes through EffectIntent |
 | Browser Run/WebMCP adapter | **Spike/Adapt** | Supervised human-web translation with semantic actions when available |
 | Channel/presence SDK | **Adopt** | Distribute Waldo through Slack, IDEs, web, voice, and other harnesses |
+| Workflows | **Adapt** | Peripheral deterministic waits/service jobs, never Waldo product FSM authority |
+| Queues | **Adapt** | At-least-once transport with mandatory stable-ID/digest deduplication |
+| R2/BlobStorePort | **Adopt** | Encrypted checkpoint chunks, large Artifact bytes, backup/export payloads |
+| Sandbox SDK/Containers | **Adopt as initial cloud candidate** | Isolated cloud execution restored from sealed checkpoints with new lease/fence |
 
 ## What Waldo should sell in the agentic economy
 
@@ -350,30 +374,31 @@ Do not monetize:
 - credentials;
 - inferred personality claims.
 
-## Sequenced adoption
+## Parallel adoption and dependency gates
 
-### Now
+### Locked bindings
 
-1. Ratify Waldo runtime/harness/product layering.
-2. Add workspace, overlay, checkpoint, source-purpose, attribution, and cost contracts.
-3. Build DeepWiki as an inspectable projection with provenance/corrections.
-4. Add per-Outcome/WorkUnit cost and execution-posture events.
-5. Make every web/source adapter declare purpose and retention.
+1. Durable Objects/SQLite host the initial owner authority root; R2 implements encrypted blob/checkpoint storage.
+2. Kennel implements the local workspace/executor; Sandbox SDK/Containers implement the initial cloud candidate; Computer remains a preview adapter.
+3. Workspace, overlay, checkpoint, source-purpose, attribution, cost, credential, egress, and posture contracts are shared before adapters claim support.
+4. DeepWiki is an inspectable, rebuildable projection with provenance/corrections, never canonical memory.
+5. Every web/source adapter declares purpose and retention; AI Gateway private payload logging is off.
 
-### First spikes
+### Concurrent falsification and conformance
 
-1. Computer-backed small workspace versus current DO/R2 design.
-2. Kennel → cloud checkpoint/re-entry, not process migration.
-3. Temporary deploy–verify environment with expiry and claim.
-4. One paid data/MCP request with frozen quote and user-approved budget.
-5. One source freshness/change flow proving avoided re-ingestion.
+1. Owner-root event/storage density and snapshot/compaction behavior.
+2. Kennel Mac checkpoint → admitted cloud restore/recreation → manifest verification → delete/non-restore proof.
+3. Cost per accepted Outcome across provider, workspace, verification, projections, and infrastructure.
+4. Computer conformance versus the portable WorkspacePort without making preview infrastructure a dependency.
+5. Temporary deploy–verify environment with expiry/claim and one source freshness/change flow proving avoided re-ingestion.
 
-### Later
+### Separate product or business decisions
 
 1. Account, subscription, domain, and agent purchase effect families.
 2. Signed Waldo agent identity/purpose attestation.
 3. Capability marketplace and outcome-priced services.
-4. TCP/gRPC only after measured transport need.
+4. Autonomous payment/wallet authority and paid capability policies.
+5. TCP/gRPC activation only after measured transport need.
 
 ### Explicitly reject
 
