@@ -45,6 +45,7 @@ export * from './runtime/loop-policy';
 export * from './runtime/sink';
 export * from './runtime/routing';
 export * from './runtime/evidence';
+export * from './protocol/responsibility-handshake-v0-1';
 export * from './telemetry/engagement';
 export * from './public/dto';
 export * from './public/morning-brief';

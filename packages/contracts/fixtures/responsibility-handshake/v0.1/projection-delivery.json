@@ -1,0 +1,197 @@
+{
+  "protocolVersion": "0.1",
+  "validPage": {
+    "protocolVersion": "0.1",
+    "ownerId": "owner_server_01",
+    "projectionName": "responsibility.summary",
+    "snapshotId": "snapshot_01",
+    "snapshotBaseCursor": 10,
+    "fromExclusiveCursor": 10,
+    "highWaterCursor": 14,
+    "nextCursor": 12,
+    "items": [
+      {
+        "aggregateId": "responsibility_01",
+        "revision": 1
+      },
+      {
+        "aggregateId": "responsibility_02",
+        "revision": 1
+      }
+    ],
+    "hasMore": true,
+    "generatedAt": "2026-08-05T12:06:00Z"
+  },
+  "pairs": [
+    {
+      "name": "duplicate page",
+      "previous": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_01",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_01",
+        "snapshotBaseCursor": 10,
+        "fromExclusiveCursor": 10,
+        "highWaterCursor": 14,
+        "nextCursor": 12,
+        "items": [
+          {
+            "aggregateId": "responsibility_01",
+            "revision": 1
+          },
+          {
+            "aggregateId": "responsibility_02",
+            "revision": 1
+          }
+        ],
+        "hasMore": true,
+        "generatedAt": "2026-08-05T12:06:00Z"
+      },
+      "next": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_01",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_01",
+        "snapshotBaseCursor": 10,
+        "fromExclusiveCursor": 10,
+        "highWaterCursor": 14,
+        "nextCursor": 12,
+        "items": [
+          {
+            "aggregateId": "responsibility_01",
+            "revision": 1
+          },
+          {
+            "aggregateId": "responsibility_02",
+            "revision": 1
+          }
+        ],
+        "hasMore": true,
+        "generatedAt": "2026-08-05T12:06:00Z"
+      },
+      "expectedDisposition": "ignore_duplicate"
+    },
+    {
+      "name": "cursor gap",
+      "previous": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_01",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_01",
+        "snapshotBaseCursor": 10,
+        "fromExclusiveCursor": 10,
+        "highWaterCursor": 14,
+        "nextCursor": 12,
+        "items": [
+          {
+            "aggregateId": "responsibility_01",
+            "revision": 1
+          },
+          {
+            "aggregateId": "responsibility_02",
+            "revision": 1
+          }
+        ],
+        "hasMore": true,
+        "generatedAt": "2026-08-05T12:06:00Z"
+      },
+      "next": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_01",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_01",
+        "snapshotBaseCursor": 10,
+        "fromExclusiveCursor": 13,
+        "highWaterCursor": 14,
+        "nextCursor": 14,
+        "items": [
+          {
+            "aggregateId": "responsibility_03",
+            "revision": 1
+          }
+        ],
+        "hasMore": false,
+        "generatedAt": "2026-08-05T12:06:01Z"
+      },
+      "expectedDisposition": "recover_gap"
+    },
+    {
+      "name": "snapshot replacement",
+      "previous": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_01",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_01",
+        "snapshotBaseCursor": 10,
+        "fromExclusiveCursor": 10,
+        "highWaterCursor": 14,
+        "nextCursor": 12,
+        "items": [
+          {
+            "aggregateId": "responsibility_01",
+            "revision": 1
+          },
+          {
+            "aggregateId": "responsibility_02",
+            "revision": 1
+          }
+        ],
+        "hasMore": true,
+        "generatedAt": "2026-08-05T12:06:00Z"
+      },
+      "next": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_01",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_02",
+        "snapshotBaseCursor": 14,
+        "fromExclusiveCursor": 14,
+        "highWaterCursor": 14,
+        "nextCursor": 14,
+        "items": [],
+        "hasMore": false,
+        "generatedAt": "2026-08-05T12:06:02Z"
+      },
+      "expectedDisposition": "replace_snapshot"
+    },
+    {
+      "name": "owner account switch",
+      "previous": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_01",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_01",
+        "snapshotBaseCursor": 10,
+        "fromExclusiveCursor": 10,
+        "highWaterCursor": 14,
+        "nextCursor": 12,
+        "items": [
+          {
+            "aggregateId": "responsibility_01",
+            "revision": 1
+          },
+          {
+            "aggregateId": "responsibility_02",
+            "revision": 1
+          }
+        ],
+        "hasMore": true,
+        "generatedAt": "2026-08-05T12:06:00Z"
+      },
+      "next": {
+        "protocolVersion": "0.1",
+        "ownerId": "owner_server_02",
+        "projectionName": "responsibility.summary",
+        "snapshotId": "snapshot_owner_02",
+        "snapshotBaseCursor": 0,
+        "fromExclusiveCursor": 0,
+        "highWaterCursor": 0,
+        "nextCursor": 0,
+        "items": [],
+        "hasMore": false,
+        "generatedAt": "2026-08-05T12:06:03Z"
+      },
+      "expectedDisposition": "reset_owner"
+    }
+  ]
+}

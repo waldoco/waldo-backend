@@ -1,0 +1,35 @@
+{
+  "formatVersion": 1,
+  "protocolVersion": "0.1",
+  "previousVersionCompatibility": "not_run",
+  "files": [
+    {
+      "path": "observations.json",
+      "sha256": "sha256:947237e332f85678d5baf33448161ec62d733f9aab91b4225c4d94ba185b6cd0"
+    },
+    {
+      "path": "presence-capability.json",
+      "sha256": "sha256:f38b95e895d3540f140c0b2b5848676bab2bcae0c3e162832e62ccde2338cbd2"
+    },
+    {
+      "path": "projection-delivery.json",
+      "sha256": "sha256:a7da0a47590844d30ccfa3a4db8c80a60fc352709037d3e948e29e38c15392bf"
+    },
+    {
+      "path": "request-digests.json",
+      "sha256": "sha256:b621b3d3f6c9b2bdd2e1db4fd9bd8ae13218b3cbe0cb0c1dd85bce447cd8020a"
+    },
+    {
+      "path": "surface-command.rejections.json",
+      "sha256": "sha256:bc699b4a1384de05c0a3ddce9b49905933b1f85a3406e3c18f104544bc9de1b6"
+    },
+    {
+      "path": "surface-command.valid.json",
+      "sha256": "sha256:5c7462ad98684981b6a59ae9d442f0ba43638468fe1b0b37dc0c91770985d6c0"
+    },
+    {
+      "path": "trusted-command.valid.json",
+      "sha256": "sha256:bbce0348f1ff13e084a79ca9041769c9f621efb8204ce89124b6d475c2e7b6b6"
+    }
+  ]
+}

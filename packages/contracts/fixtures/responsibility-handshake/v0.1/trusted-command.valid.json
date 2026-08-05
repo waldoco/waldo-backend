@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "0.1",
+  "commandId": "command_capture_01",
+  "commandType": "responsibility.capture",
+  "ownerId": "owner_server_01",
+  "actor": {
+    "kind": "presence",
+    "id": "presence_server_01"
+  },
+  "presenceId": "presence_server_01",
+  "authenticatedSessionId": "session_server_01",
+  "ownerPolicyRevision": 3,
+  "authAssurance": "verified_session",
+  "ownerRootRoutingVersion": 2,
+  "requestDigest": "sha256:f37410173ee8d1265a1c6ca79777df3496d482a10b323702f3d86737a632459a",
+  "correlationId": "correlation_capture_01",
+  "receivedAt": "2026-08-05T12:00:01Z",
+  "payload": {
+    "userStatement": "Make sure the reviewed update is handled."
+  }
+}
