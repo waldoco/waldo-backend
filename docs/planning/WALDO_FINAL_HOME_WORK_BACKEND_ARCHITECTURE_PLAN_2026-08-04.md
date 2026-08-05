@@ -26,6 +26,8 @@ Every recommendation is marked **[Observed fact]**, **[Inference]**, **[Proposed
 
 > **[Decision — locked]** Build the complete committed software capability envelope through parallel, dependency-aware workstreams. There are no product phases or slices. Team size does not authorize architecture or scope cuts. The current product is online-authoritative; a future local LLM remains a provider/executor adapter and does not create an offline truth fork.
 
+> **[Proposed decision — Adopt]** The canonical reusable synthesis of Waldo's owner-side controls is the lock's [Agent Governance Layer](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md#31-agent-governance-layer). It is cross-cutting composition of the existing gateway, context, authority, effects, capability, credential, budget/posture, evidence/acceptance, continuity, portability, and deletion owners—not a new module or writer.
+
 ### 1.1 Quality attributes in priority order
 
 | Priority | Attribute | Architecture consequence | First-proof measure |
@@ -781,7 +783,7 @@ Kennel → Backend events:
 4. **[Proposed decision — Adopt]** Reconnect starts with `ReconcileOperation` and cursor exchange; it never assumes a lost acknowledgement means “not started.”
 5. **[Proposed decision — Adopt]** Leases use fencing tokens. Expired/superseded executors cannot publish authoritative new observations, though late results may be quarantined as candidate evidence.
 6. **[Proposed decision — Adopt]** Raw transcripts and sensitive local file contents remain local by default. Semantic summaries carry provenance and are proposals until admitted.
-7. **[Proposed decision — Adopt]** Local mode is not a second identity: all product commands require backend acknowledgement before consequential truth changes.
+7. **[Proposed decision — Adopt]** Local mode is not a second identity: all product commands and Waldo execution require available online backend authority. Loss of that authority pauses or contains execution under the current lease/fence; reconnection reconciles before resume.
 8. **[Proposed decision — Reject]** Git repository, branch, session, task, or PR is not the universal Outcome. Kennel supports general work.
 
 ### 11.4 Synchronization failure cases
@@ -793,7 +795,7 @@ Kennel → Backend events:
 | Backend lease changes while old process runs | Fence old writer; quarantine late events |
 | Provider emits out-of-order events | Kennel normalizes local sequence; backend requests missing range |
 | Artifact changes after approval | New digest invalidates grant and verification |
-| Disconnected UI drafts a consequential command | Store only an owner-bound, explicitly unacknowledged draft; reauthenticate/revalidate before submission and never claim a product transition |
+| Disconnected UI attempts a command or approval | Do not create or queue it; show an online-required state and, if available, only an explicitly stale read-only last-synced projection |
 | Local transcript deleted | Preserve bounded product events/evidence refs; mark unavailable source honestly |
 
 ## 12. Multi-surface event and command protocol
@@ -822,7 +824,7 @@ Every untrusted surface request has a stable request ID, payload digest, registe
 
 **[Proposed decision — Adapt]** Publish domain events to an owner-ordered outbox and derive surface projections such as `HomeToday`, `WorkBoard`, `NeedsYou`, `OutcomeDetail`, `SessionSummary`, `MorningBrief`, `DailyClose`, `Shelf`, and `Continuity`. Surfaces resume from `owner_cursor`; after an unrecoverable gap they fetch a versioned snapshot then continue.
 
-Projection events are at-least-once and reducible. They contain no secrets, raw health, or raw transcripts. Each projection declares freshness/degraded state. A surface can optimistically render a pending command, but backend acknowledgement remains authority.
+Projection events are at-least-once and reducible. They contain no secrets, raw health, or raw transcripts. Each projection declares freshness/degraded state. While online, a surface may optimistically render a pending state only after transmitting a command to the backend; backend acknowledgement remains authority. Protocol 0.1 does not create or queue disconnected commands.
 
 ### 12.4 Voice as a presence
 
@@ -840,7 +842,7 @@ type Capability =
   | { name: "effect.operation"; family: EffectFamily; operations: string[]; semantics: EffectSemantics }
   | { name: "context.input"; modalities: Array<"text"|"image"|"audio"|"file_ref">; maxBytes: number; maxTokens?: number }
   | { name: "artifact"; mediaTypes: string[]; maxBytes: number; hashing: "sha256"; resumable: boolean }
-  | { name: "presence"; modalities: string[]; offlineCommands: "none"|"pending_only"; approvalReadback: boolean };
+  | { name: "presence"; modalities: string[]; offlineCommands: "none"; approvalReadback: boolean };
 
 interface EffectSemantics {
   retryOwner: "waldo_run_loop" | "adapter_declared";
@@ -909,7 +911,7 @@ type ConformanceStatus =
 | Provider harness | session create/resume/steer/pause/cancel, event stream, artifact access, subagents, approval interrupts, reconciliation, transcript locality |
 | Executor | OS/runtime, filesystem, network/egress, credentials, isolation, resource limits, checkpoint/recovery, artifact/evidence, process-tree cancellation |
 | Connector | read/write operation families, scopes, idempotency window, lookup/reconciliation, versioning, rate limits, webhooks, data retention |
-| Presence | command/modalities, disconnected behavior, judgment affordances, projection support, local security, audio/transcript policy |
+| Presence | command/modalities, `offlineCommands: "none"`, stale read-only projection behavior, judgment affordances, projection support, local security, audio/transcript policy |
 
 **[Proposed decision — Reject]** Capability declarations are not self-certifying. Sensitive-effect eligibility requires current conformance evidence.
 
@@ -1019,7 +1021,7 @@ This whole-product scenario is accepted only if all pass. It is an integration p
 1. Capture can remain a Capture; promotion to Outcome is explicit or confirmed.
 2. One Outcome is visible with the same ID/revision from Kennel and another surface.
 3. Mission is skipped for a simple case or approved for a complex one; both paths work.
-4. A real Kennel/provider session survives disconnect/restart and does not duplicate start.
+4. A real Kennel/provider session pauses or is contained when online authority or its lease is unavailable, then reconciles and resumes after reconnect/restart without duplicating start.
 5. Raw transcript/local files do not appear in backend events by default.
 6. Judgment includes evidence/risk/reversibility/exact affected digest/expiry/re-entry.
 7. Approval becomes stale on argument/artifact/context/cancellation-generation change.
@@ -1031,6 +1033,7 @@ This whole-product scenario is accepted only if all pass. It is an integration p
 13. Daily Close and next-day Morning Brief resume only surviving OpenLoops at the exact unresolved decision/action; clean closure fabricates no re-entry.
 14. Kill tests at every durable boundary recover without silent loss or duplicate user-visible effect.
 15. Feature flag rollback disables new Coordinator ingress while existing trusted runtime proof remains green.
+16. Every disconnected presence rejects command creation/queueing, approval, execution, and canonical mutation while showing only an explicitly stale read-only projection.
 
 ## 15. Dependency-aware migration preserving the trusted runtime
 
@@ -1082,7 +1085,7 @@ Rollback boundaries:
 | **Contract and conformance spine** | Architecture lock | `waldo-backend`; generated bindings in consumers | Protocol v0.1 schema/golden fixture/property/compatibility tests; state transition rejection; snapshot/cursor/account-switch fixtures | Unpublished version or prior compatible tag |
 | **Owner root and domain** | Relevant released contracts + current-table manifest | `waldo-backend` | Deterministic routing; inside-DO owner mismatch rejection; two-owner negative; command dedupe/conflict; atomic event+ExecutionRequest; every supported FSM transition and invalid transition | Owner feature flag; additive tables |
 | **ExecutionKernel and effects** | Coordinator request, authority, effect contracts | `waldo-backend` | Full trusted-runtime regression; old pending V2 recovery; grant-use+intent atomicity; effect/recovery kill tests; no behavior/privacy drift | Old direct call path/readers; connector flag off |
-| **Gateway, events, projections** | Protocol + owner root | `waldo-backend`, presence repos | Auth fail-closed; snapshot/cursor gaps/duplicates; stale revision; disconnected-draft truth; projection redaction | Read-only/old surfaces |
+| **Gateway, events, projections** | Protocol + owner root | `waldo-backend`, presence repos | Auth fail-closed; snapshot/cursor gaps/duplicates; stale revision; disconnected command/approval rejection; stale read-only projection; projection redaction | Read-only/old surfaces |
 | **Kennel desktop harness** | Protocol/executor/workspace fixtures | `kennel`, `waldo-backend` | Operation ledger, same-ID/digest conflict, lease fencing, reconnect, cancel, transcript nonexport, fake backend and current provider conformance | Fake/local adapter or provider disabled |
 | **Judgment, authority, evidence, acceptance** | Domain + presence + effect/artifact contracts | `waldo-backend`, `kennel`, presence repos | Expiry/revocation/use limit; server-created grant; stale approval; independent read-back; selective artifact checks; accept/reject/repair/reopen history | Advisory/evidence-only labels |
 | **Workspace, artifacts, knowledge** | Workspace/Artifact/BlobStore contracts | `waldo-backend`, `kennel`, cloud adapters | Canonical seal/restore/delete; chunk integrity; provenance; Mac-to-Linux declared support; no secrets; new fence on restore | Per-adapter flag; source workspace preserved |
@@ -1421,7 +1424,7 @@ All files below were read from `waldo-brain@6e5cbd7a0711b883e75e606487ac1cdb0b7c
 | Verifier unavailable | Verification indeterminate; acceptance pending |
 | User rejects result | Repair/reopen/release; preserve history |
 | Cancel during provider activity | Persist generation; quarantine late events |
-| Surface disconnected | Cached projections may render as stale; no consequential command or canonical truth changes until backend acknowledgement |
+| Surface disconnected | Explicitly stale last-synced projections may render read-only; command creation/queueing, approval, execution, and canonical mutation fail closed until online backend authority is available |
 | Events duplicate/out of order | Cursor reducer dedupes/requests missing range |
 | Deletion requested | Tombstone propagates across DO/local/index/blob/projection/source copies where supported |
 | Brief freshness cannot be proved | Show stale/degraded; never manufacture continuity |

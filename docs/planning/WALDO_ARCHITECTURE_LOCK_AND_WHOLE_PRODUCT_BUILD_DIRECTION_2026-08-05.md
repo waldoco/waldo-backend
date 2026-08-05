@@ -15,7 +15,9 @@ Accepted ADRs remain the repository's ratified architecture authority until amen
 
 **[Decision — locked] This is a whole-product build, not a sequence of product slices.** Every software capability marked committed in the product matrix remains in scope. Dependency edges, parallel workstreams, contract releases, integration scenarios, and proof gates organize the work; they do not define smaller versions of the product or authorize silent scope cuts. Team size is not an architecture or product-scope constraint.
 
-**[Decision — locked] Online authority is required for the current product.** The per-owner backend authority root remains canonical. A presence may cache projections and queue an explicitly marked draft while disconnected, but it cannot admit consequential commands, mint authority, change canonical truth, or claim completion offline. Local-LLM execution may be added later as another evaluated provider/executor adapter; it does not require an offline Waldo truth fork.
+**[Decision — locked] Online backend authority is required for the current product.** Protocol/capability version 0.1 advertises `offlineCommands: "none"`. While disconnected, Kennel, mobile, and every other presence cannot create or queue commands, submit approval, mint authority, execute Waldo work, change canonical state, or claim completion. A presence may display an explicitly stale last-synced projection as read-only presentation; that is not offline Waldo functionality. Local-LLM support may be added later as an online-governed, evaluated provider/executor adapter; it does not create offline authority or an offline truth fork.
+
+**[Accepted-ADR conflict — blocked from silent reconciliation]** Accepted ADR-0077 permits app-local drafts/offline queues that never become committed messages, and accepted ADR-0082 defines retained offline chat drafts. The current founder decision is stricter: protocol 0.1 permits no disconnected command creation or queue. Neither ADR is modified by this planning update; implementation that removes or retains those draft paths requires an explicit ADR reconciliation before merge.
 
 ## 2. Whole-product thesis checksum
 
@@ -54,6 +56,27 @@ flowchart LR
 4. Providers, harnesses, connectors, people, and execution environments return untrusted observations, receipts, and candidate evidence. Their `done` state changes no Waldo product truth by implication.
 5. No transitive delegation exists. A downstream executor receives the intersection of the owner's current grant, WorkUnit ceiling, adapter capability, purpose, resource, audience, lease, expiry, and revocation generation.
 
+### 3.1 Agent Governance Layer
+
+**[Proposed decision — Adopt]** Waldo's Agent Governance Layer is the first-party, owner-side control system between a person's intent and every model, agent, tool, connector, human executor, or execution environment acting on their behalf.
+
+It governs which authenticated command is admitted; what purpose-bound context may be disclosed; which capability may run; under whose current, exact, and revocable authority; with which credential, budget, lease, egress, and containment limits; what evidence is required before Acceptance or Open Loop closure; and how the owner corrects, revokes, exports, and deletes state. Providers execute and return untrusted observations. They never own Waldo identity, canonical `ContextClaim` truth, `AuthorityGrant`, Acceptance, or closure.
+
+Agent Governance is cross-cutting policy and enforcement, not a new central module or durable writer. Existing owners compose it:
+
+| Governance responsibility | Existing owner |
+|---|---|
+| Authenticate presence and admit an owner-bound command | Gateway + `IdentityPresenceModule` |
+| Compile minimum purpose-bound context | `ContextCompiler` |
+| Create, revalidate, revoke, and consume exact authority | `JudgmentAuthorityModule` + `EffectEngine` |
+| Admit and revoke executable behavior and capabilities | `CapabilityRegistry` + `BehaviorPackageRegistry` |
+| Bind workload identity and broker credentials outside model context | `WorkloadIdentityModule` + credential broker |
+| Enforce spend, lease, egress, and containment limits | `BudgetLedger` + `PostureModule` |
+| Separate observations from verification and human/delegated acceptance | `EvidenceVerifier` + `AcceptanceModule` |
+| Preserve, correct, export, delete, and prevent resurrection of continuity | `ContinuityModule` + `PortabilityModule` + `DeletionCoordinator` |
+
+The [definitive aggregate-writer matrix](#5-definitive-aggregate-writer-matrix) remains normative. This synthesis neither grants the Coordinator direct writes nor changes any sole-writer boundary.
+
 ## 4. Cross-repository protocol v0.1
 
 The backend publishes the canonical schema package. Kennel and every other consumer bind to released schemas and the same golden fixtures; neither repository carries handwritten parallel DTOs.
@@ -88,6 +111,11 @@ interface TrustedCommandEnvelope<T> {
   correlationId: ID;
   receivedAt: Timestamp;
   payload: T;
+}
+
+interface PresenceCapabilityV01 {
+  protocolVersion: "0.1";
+  offlineCommands: "none";
 }
 ```
 
@@ -191,6 +219,29 @@ Operational requirements:
 - crypto-erasure destroys applicable content keys while preserving only the minimum nonsecret receipt/audit digest required for effect and acceptance history;
 - restore imports the deletion/tombstone generation before content, re-applies deletion to restored/late data, rebuilds projections, and proves deleted content cannot reappear;
 - residency, retention, legal-request handling, incident response, backup windows, and irreducible third-party retention are disclosed by data class before a production privacy claim.
+
+### 6.5 Negative governance conformance
+
+These scenarios are mandatory shared fixtures, not separate product features:
+
+1. Untrusted surface or provider fields cannot become owner identity, role, capability eligibility, context policy, credential scope, `AuthorityGrant`, Acceptance, or closure.
+2. A stale, revoked, expired, superseded, or replayed grant cannot create another `EffectIntent`; same grant/use index or reconciliation key with a different digest hard-conflicts.
+3. Prompt-injected source, workspace, tool, or provider content cannot expand disclosed context, selected capability, credential audience, or authority scope.
+4. A revoked, expired, version-drifted, or quarantined capability/package becomes ineligible before enqueue and before I/O.
+5. Credential values never appear in prompts, model-visible context, events, logs, traces, artifacts, surface projections, or workspace checkpoints.
+6. Cancellation-generation, lease, or fence violations stop or contain the executor; late output is quarantined as an untrusted observation and cannot mutate canonical truth.
+7. Provider completion remains an observation until required Evidence exists, Verification resolves to its honest state, and the user or an exact delegated-acceptance policy records Acceptance.
+8. Deletion and restore import the current tombstone generation first and prove deleted context, indexes, checkpoints, and cached projections cannot be resurrected.
+9. A disconnected presence can render only an explicitly stale last-synced projection; attempts to create/queue a command, approve, execute, or mutate truth fail closed with an online-required state.
+
+### 6.6 Public-language boundary
+
+- Use **“target architecture,” “is designed to,”** or **“will”** for capability that has not passed its implementation, conformance, cross-surface acceptance, and operational proof gates.
+- Do not claim universal market uniqueness. Comparator research supports a scoped design observation, not proof that no other system has equivalent behavior.
+- “Private” and “user-owned” do not mean cryptographically operator-inaccessible end-to-end encryption without an implemented key protocol and recovery proof.
+- Distinguish device/OS isolation or credential custody from canonical Waldo authority. Device enforcement can contain an executor; only the owner backend admits product commands and truth transitions.
+- Preserve **“Kennel proposes; the owner backend admits.”** Do not imply Kennel, a local model, or an execution environment owns Waldo truth.
+- An individual acceptance scenario is a conformance obligation, not a product slice.
 
 ## 7. Workspace and checkpoint contract
 
@@ -323,6 +374,7 @@ The following are continuous acceptance scenarios, not releases or scope boundar
 4. another harness receiving a bounded WorkUnit through Waldo's MCP/SDK, returning candidate Artifact/Evidence, and failing to mint authority, memory, Acceptance, or closure;
 5. user correction, consent withdrawal, account switch, credential revocation, provider replacement, and adapter rollback propagating without cross-owner or stale-context residue;
 6. routines, skills, integration recipes, and capability packages installed, updated, revoked, and quarantined independently with no hidden privilege expansion.
+7. a disconnected presence shows an explicitly stale last-synced projection while every command, approval, execution, and canonical-state mutation attempt fails closed until online backend authority is available.
 
 ## 10. Concurrent falsification and cost work
 
