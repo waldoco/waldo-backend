@@ -34,20 +34,19 @@ Which one owns the state?"
 
 ### Sharpen fuzzy language
 
-When user uses vague terms, propose a precise canonical term from CONTEXT.md. "You said 'memory' — Tier 1 semantic, Tier 2 episodic, or Tier 3 procedural?"
+When the user uses vague terms, propose the precise term from the architecture lock, language rules, or owning contract. “You said memory—do you mean an explicit `ContextClaim`, an inferred Spot, an execution workspace, or a rebuildable knowledge projection?”
 
 ### Stress-test scenarios
 
-For domain relationships, invent edge cases. "If Morning Wag fires at 6 AM but DO is hibernating, who wakes it? What if user has 2 devices?"
+For domain relationships, invent edge cases. “If a scheduled WorkUnit wakes while its grant is expired and Kennel is disconnected, which state survives and who may resume it?”
 
 ### Cross-reference with code
 
 When user states behavior, check the code. If contradiction, surface it. "Your code uses checkpoint key without targetDate, but you just said multi-day recovery works — which is right?"
 
-### Update CONTEXT.md inline
+### Update the owning source inline
 
-When a term resolves, prefer updating the owning foundation doc, accepted ADR, or
-contract comment/test name. Do not create a glossary file just to have one.
+When a term resolves, prefer updating the architecture lock, owning foundation document, accepted ADR, or contract comment/test name. Do not create a glossary file just to have one.
 
 Keep vocabulary updates domain-meaningful; avoid implementation-only churn.
 
@@ -66,12 +65,14 @@ in Waldo Brain.
 
 ### Waldo-specific anchors (don't re-litigate)
 
-- Accepted ADRs and `docs/foundation/FOUNDATION-HANDOVER.md`
-- 9 Demo Day backend patterns (R1-R6, I1-I3) — built, locked
-- 4 Demo Day pillars (Morning Wag, Fetch Alert, Spot, Chat)
-- Hexagonal/adapter pattern as core architecture
-- Soul files, safety rules, CRS algorithm = immutable
-- iOS-first, Android second
-- Cloudflare DO as agent runtime, Supabase as data layer
+- The August architecture lock, current session entrypoint, accepted ADRs, and freshly inspected source/tests
+- One Waldo identity and one per-owner backend authority root across Home and Work
+- One named durable writer per aggregate; the Coordinator sequences but does not bypass reducers
+- The trusted RunLoop remains the physical execution/effect path during additive migration
+- Kennel proposes; the owner backend admits
+- Purpose-bound context, exact revocable authority, credential brokering, and fail-closed capability admission
+- Agent activity, Evidence, Verification, Acceptance, and Open Loop closure remain distinct
+- Protocol v0.1 uses `offlineCommands: "none"`
+- Parallel dependency-aware workstreams integrate continuously through shared contracts and golden fixtures
 
 If a question conflicts with one of these, surface the conflict. Don't grill on changing them.

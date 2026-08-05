@@ -28,6 +28,16 @@ const checks = [
     message: 'use the bounded workstream handoff named by the current session entrypoint',
   },
   {
+    id: 'missing-foundation-handover',
+    pattern: /docs\/foundation\/FOUNDATION-HANDOVER\.md/,
+    message: 'use docs/foundation/NEXT-SESSION-PLAN.md and the August architecture lock',
+  },
+  {
+    id: 'superseded-demo-day-anchors',
+    pattern: /9 Demo Day backend patterns|4 Demo Day pillars|Morning Wag|Fetch Alert/,
+    message: 'use the whole-product Outcome/OpenLoop architecture and current capability matrix',
+  },
+  {
     id: 'retired-rule-file',
     pattern: /\.claude\/rules\/(?:architecture|coding-standards|phase-orchestration)\.md/,
     message: 'use .claude/rules/INDEX.md and the six mirrored universal rule files',
