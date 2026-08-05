@@ -1,6 +1,6 @@
 # Waldo Backend
 
-Waldo Backend is the Supabase + Cloudflare foundation for Waldo's agentic harness: health data ingestion, contracts, Worker/Durable Object runtime, typed tools, memory boundaries, delivery gates, and verification surfaces.
+Waldo Backend is the durable owner-side runtime for one Waldo across personal assistance and agent orchestration. It contains the trusted RunLoop foundation and is the target home for the per-owner Coordinator, canonical product contracts, governed execution, effects, evidence, acceptance, continuity, and cross-surface projections.
 
 This repo is not meant to be worked on in isolation. Keep the Waldo Brain repository available as the companion source of truth for ADRs, foundation context, agent-harness research, source maps, and builder philosophy:
 
@@ -11,15 +11,15 @@ This repo is not meant to be worked on in isolation. Keep the Waldo Brain reposi
 
 Before coding, read:
 
-1. [Contributor Onboarding](docs/foundation/CONTRIBUTOR-ONBOARDING.md) for the current build lanes and safety boundaries.
-2. [AGENTS.md](AGENTS.md) for repo-specific agent orchestration.
-3. [Agent Operating Workflow](docs/foundation/AGENT-OPERATING-WORKFLOW.md) for the session loop, skill map, plugin boundaries, and verification wall.
-4. [Next Session Plan](docs/foundation/NEXT-SESSION-PLAN.md) for the current harness entrypoint.
-5. [Harness Runtime Build Plan](docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md) for the source-backed async pillar map.
+1. [Next Session Plan](docs/foundation/NEXT-SESSION-PLAN.md) for the current entrypoint and source/target boundary.
+2. [Architecture Lock](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) for build authority, ownership, invariants, and parallel workstreams.
+3. [Final Home + Work Architecture](docs/planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) for the source-pinned current state, target contracts, state machines, and migration rules.
+4. [Product Capability Matrix](docs/planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) for committed product scope and honest delivery status.
+5. [Contributor Onboarding](docs/foundation/CONTRIBUTOR-ONBOARDING.md), [AGENTS.md](AGENTS.md), and [Agent Operating Workflow](docs/foundation/AGENT-OPERATING-WORKFLOW.md) for execution discipline.
 6. [Local Dev Testing Pipeline](docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md) for verification expectations.
-7. `.claude/rules/INDEX.md` plus the relevant accepted ADRs and Waldo Brain pages for the seam you are touching.
+7. `.claude/rules/INDEX.md` plus the relevant accepted ADRs and Waldo Brain pages for the seam you are touching. Report conflicts; do not silently treat older wording as current target direction.
 
-Historical phase handoffs and old benchmark reports live in `docs/foundation/archive/`. They are useful for archaeology, not onboarding.
+Historical handoffs and old benchmark/build reports are evidence only. Files that retain an old stable path carry an explicit superseded banner; archived material lives in `docs/foundation/archive/`.
 
 ## Operating Loop
 
@@ -31,7 +31,7 @@ Open context -> define done -> design the seam -> build with tests -> break it -
 
 Session flow:
 
-1. Read HEY-109 plus the current coordinator ledger or phase handoff.
+1. Read the current architecture lock and inspect the source/tests for the seam being changed.
 2. Shape fuzzy work with `/current-ideal-gap`.
 3. Use `/waldo-isa-run-contract` for non-trivial work, shared contracts, architecture changes, agent-harness work, or handoffs.
 4. Use `/thinking-mode-router` when the problem needs the right reasoning mode before action.
@@ -39,8 +39,8 @@ Session flow:
 6. Build with `/tdd` for new behavior or `/diagnose` for bugs and regressions.
 7. Use `/check-contract` whenever touching DTOs, schemas, tool outputs, adapters, Worker/EF responses, or `packages/contracts`.
 8. Break the feature with `/break-feature`, then review with `/code-review` or `/review-all`.
-9. Close with verification, `/compound-learning-capture` when useful, `/phase-handoff` at phase
-   boundaries, and a concise HEY-109/Linear/ledger update.
+9. Close with verification, `/compound-learning-capture` when useful, `/phase-handoff` for a
+   workstream handoff, and a concise issue/PR evidence update.
 
 ## Skill Guide
 
@@ -48,7 +48,7 @@ Use these skills intentionally:
 
 | Skill | Use when |
 | --- | --- |
-| Legacy `/session-bus` | Not a loadable package in this checkout. Use HEY-109, Linear comments, the coordinator ledger, and phase handoffs; record its packaging repair gap. |
+| Legacy `/session-bus` | Not a loadable package in this checkout. Use issue/PR evidence and an explicit workstream handoff; record its packaging repair gap. |
 | `/current-ideal-gap` | The ask is directionally clear but needs a current state, ideal state, gaps, and verification path. |
 | `/waldo-isa-run-contract` | Done needs to be durable: acceptance criteria, tests, work slices, evidence, and learning. |
 | `/thinking-mode-router` | The work needs first-principles, systems thinking, RCA, red-team, research, creative, or council mode. |
@@ -63,7 +63,7 @@ Use these skills intentionally:
 | `/compound-learning-capture` | A reusable lesson emerged from a fix, review, source recheck, or repeated agent failure. |
 | `/waldo-builder-registry` | Adding, auditing, or promoting builder skills, tool manifests, source-backed philosophies, or eval gates. |
 | `/waldo-memory-proposal-review` | Reviewing durable memory, goal, preference, user-context, health-adjacent, or skill-learning proposals. |
-| `/phase-handoff` | Closing a phase or wave and preparing the next session. |
+| `/phase-handoff` | Closing a bounded workstream change and preparing the next session. |
 
 Canonical skills live in `.claude/skills/`. `.agents/skills/` is a compatibility mirror when present and must not become a separate source of truth.
 

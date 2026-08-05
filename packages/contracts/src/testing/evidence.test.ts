@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { evidenceLaneSchema, evidenceRunSchema, HERMETIC_EVIDENCE_LANES } from './evidence';
 
 describe('evidence lanes', () => {
-  it('pins the Phase D verification lane names', () => {
+  it('pins the verification lane names', () => {
     expect(evidenceLaneSchema.options).toEqual(['scenario', 'property', 'mutation', 'live_dogfood']);
     expect(HERMETIC_EVIDENCE_LANES).toEqual(['scenario', 'property', 'mutation']);
   });

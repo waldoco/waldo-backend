@@ -1,5 +1,5 @@
 // The sole home for the tracer's non-deterministic primitives: clock, id generation, and
-// hashing. New Phase C tracer modules take Deps by injection and never reach for Date.now /
+// hashing. Trace modules take Deps by injection and never reach for Date.now /
 // crypto.randomUUID / crypto.subtle directly, so a crash/resume run is replayable under a
 // test Deps with a fixed clock and fixed ids.
 export interface Deps {

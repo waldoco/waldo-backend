@@ -23,7 +23,7 @@ Before changing harness code, read only the source set needed for the change:
 
 - `docs/foundation/CONTRIBUTOR-ONBOARDING.md`
 - `docs/foundation/NEXT-SESSION-PLAN.md`
-- `docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md`
+- `docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`
 - this file
 - the relevant DeepWiki page under [waldo-harness-deepwiki](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/waldo-harness-deepwiki)
 - the accepted ADRs that own the touched seam
@@ -502,7 +502,7 @@ Rules:
 Every new coding session should start with this checklist:
 
 1. Confirm branch and dirty tree.
-2. Read `CONTRIBUTOR-ONBOARDING.md`, `NEXT-SESSION-PLAN.md`, and this file.
+2. Read `NEXT-SESSION-PLAN.md`, the architecture lock, and this file.
 3. Read only relevant ADR/DeepWiki pages.
 4. State the owning invariant before editing.
 5. Add or update the failing proof first.

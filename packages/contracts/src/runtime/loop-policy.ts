@@ -68,7 +68,8 @@ export type SocketResidency = z.infer<typeof socketResidencySchema>;
 
 // Move-2 autonomy ladder (ADR-0074 §Move2): L0 immutable (soul/CRS/safety — never ratchets),
 // L1 observe, L2 propose+measure+human-approve, L3 unattended low-stakes behind a graduation gate.
-// Every V1 loop is L0; L1–L3 activation is Phase-G. The field is pinned now so the runtime inherits it.
+// Every current V1 loop is L0. Any L1–L3 activation requires an explicit policy/contract update
+// and conformance proof; the field is pinned so readers reject vocabulary drift.
 export const autonomyLevelSchema = z.enum(['L0', 'L1', 'L2', 'L3']);
 export type AutonomyLevel = z.infer<typeof autonomyLevelSchema>;
 

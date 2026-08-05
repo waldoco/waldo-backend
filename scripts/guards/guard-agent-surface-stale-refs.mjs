@@ -25,7 +25,7 @@ const checks = [
   {
     id: 'missing-docs-handoffs',
     pattern: /Docs\/handoffs\b/,
-    message: 'use /phase-handoff or /session-bus handoff locations',
+    message: 'use the bounded workstream handoff named by the current session entrypoint',
   },
   {
     id: 'retired-rule-file',
@@ -73,10 +73,11 @@ const roots = [
   'AGENTS.md',
   'CLAUDE.md',
   'docs/foundation/NEXT-SESSION-PLAN.md',
-  'docs/foundation/HARNESS-RUNTIME-BUILD-PLAN.md',
-  'docs/foundation/FOUNDATION-HANDOVER.md',
-  'docs/foundation/BUILD-PLAN.md',
+  'docs/foundation/CONTRIBUTOR-ONBOARDING.md',
   'docs/foundation/AGENT-OPERATING-WORKFLOW.md',
+  'docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md',
+  'docs/planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md',
+  'docs/planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md',
 ];
 
 const scannedExt = new Set(['.md', '.yaml', '.yml', '.json']);
