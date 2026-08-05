@@ -58,16 +58,15 @@ The architecture succeeds only when it produces continuity, follow-through, exec
 | Target product requirement | Final company thesis, Home + Work blueprint, Outcome/Work Unit, cross-surface, and life-context language |
 | Ratified architecture constraint | Current accepted ADR revisions and their recorded supersession/migration history; this document proposes but does not itself ratify them |
 | External/vendor capability | Current primary vendor source plus source/version pin and Waldo conformance |
-| Historical rationale | Older health-first, OneSync-first, plugin-first, or fixed-model plans, clearly marked historical |
 
-| Conflict | Resolution |
+| Active constraint | Resolution |
 |---|---|
-| June Think stance is health-first | **[Proposed decision — Reject]** Supersede its product framing. Keep only “buy plumbing, keep governance.” Health is passive rich context for care. |
-| Older plans make mobile/Brief the product root | **[Proposed decision — Reject]** One Waldo and durable Outcomes/Open Loops are the root; UIs are presences. |
-| Runtime plans imply the topology is finished | **[Inference]** They establish a useful execution substrate, not the final Home + Work kernel. |
-| Runtime prose says “exactly once” | **[Proposed decision — Reject]** Say at-least-once execution plus idempotency, keyed reconciliation, and effectively-once visible effects. |
-| Larger windows imply more personal context | **[Proposed decision — Reject]** Prompt size is not consent; context stays purpose-bound and bounded. |
-| Harness “done” means work complete | **[Proposed decision — Reject]** It is an AgentSession observation only. |
+| Product root | **[Decision — locked]** One Waldo and durable Outcomes/Open Loops are the root; UIs are presences. |
+| Runtime maturity | **[Inference]** The existing runtime is a useful execution substrate, not the complete Home + Work kernel. |
+| Effect semantics | **[Decision — locked]** Use at-least-once execution plus idempotency, keyed reconciliation, and effectively-once visible effects; never claim cross-system exactly-once execution. |
+| Context size | **[Decision — locked]** Prompt capacity is not consent; context stays purpose-bound and bounded. |
+| Session completion | **[Decision — locked]** Provider or harness `done` is an AgentSession observation only. |
+| Health/body data | **[Decision — locked]** It is optional passive context for care, never Waldo's category, agenda, or authority source. |
 
 ## 3. Observed current state at the pinned SHA
 

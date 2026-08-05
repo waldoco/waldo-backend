@@ -1,4 +1,0 @@
-npm notice run npx
-npm notice run 'supabase' migration up --local
-Connecting to local database...
-Local database is up to date.

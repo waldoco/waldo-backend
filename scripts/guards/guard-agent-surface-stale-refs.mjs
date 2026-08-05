@@ -33,6 +33,12 @@ const checks = [
     message: 'use docs/foundation/NEXT-SESSION-PLAN.md and the August architecture lock',
   },
   {
+    id: 'retired-live-doc',
+    pattern:
+      /docs\/(?:foundation\/(?:archive\/|HEY-\d|HARNESS-(?:RUNTIME-BUILD-PLAN|WAVE-COORDINATION)|DEFERRED-DO-SCHEMA-COVERAGE)|superpowers\/|planning\/WALDO_APP_BACKEND_INTEGRATION_PLAN)/,
+    message: 'use the current docs index and Git history for retired implementation evidence',
+  },
+  {
     id: 'superseded-demo-day-anchors',
     pattern: /9 Demo Day backend patterns|4 Demo Day pillars|Morning Wag|Fetch Alert/,
     message: 'use the whole-product Outcome/OpenLoop architecture and current capability matrix',
@@ -82,7 +88,9 @@ const roots = [
   '.agents/skills',
   'AGENTS.md',
   'CLAUDE.md',
+  'docs/README.md',
   'docs/foundation/NEXT-SESSION-PLAN.md',
+  'docs/foundation/NEXT-BACKEND-SESSION-PROMPT.md',
   'docs/foundation/CONTRIBUTOR-ONBOARDING.md',
   'docs/foundation/AGENT-OPERATING-WORKFLOW.md',
   'docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md',

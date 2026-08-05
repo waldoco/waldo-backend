@@ -1,609 +1,171 @@
-# Waldo Harness Local Development & Verification Pipeline
+# Waldo Backend Local Verification
 
-> Status: target standard for `waldo-backend` harness work.
-> Audience: Claude/Codex sessions, human developers, and future reviewers.
-> Scope: local development, CI gates, runtime verification, scenario evidence, and test discipline for the Waldo agent harness.
+**Status:** current merge and evidence standard
+**Scope:** contracts, Durable Object runtime, Supabase migrations, static guards, and cross-repository responsibility flows
 
 ## Purpose
 
-This pipeline exists to prove the harness is correct, not to accumulate tests.
+Tests prove a named invariant at a named proof level. They do not promote architecture, fixtures, fake adapters, or local success into shipped product capability.
 
-Every test or gate must answer at least one of these questions:
+Before changing code, read the [current session entrypoint](./NEXT-SESSION-PLAN.md), the [architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), the touched source/tests, and the accepted ADRs for the seam.
 
-1. Did the code implement a specific accepted ADR or DeepWiki target?
-2. Would this test fail if the implementation violated the invariant?
-3. Does the evidence show what happened during the run, not just that a command exited `0`?
-4. Can a new agent/developer reproduce the result without hidden state or real secrets?
+## Proof levels
 
-If a test cannot name the invariant it protects, it is documentation at best and noise at worst.
+Record these independently:
 
-## Canonical Inputs
+```text
+contract
+local_node
+workers_runtime
+local_supabase
+cross_repo_conformance
+live_adapter
+staging
+production
+product_acceptance
+```
 
-Before changing harness code, read only the source set needed for the change:
+A higher-sounding label is not implied by a lower one. In particular:
 
-- `docs/foundation/CONTRIBUTOR-ONBOARDING.md`
-- `docs/foundation/NEXT-SESSION-PLAN.md`
-- `docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`
-- this file
-- the relevant DeepWiki page under [waldo-harness-deepwiki](https://github.com/Pin4sf/waldo-brain/tree/main/01-Waldo/waldo-harness-deepwiki)
-- the accepted ADRs that own the touched seam
-- the touched package/module code
+- schema parsing is not runtime behavior;
+- a fake provider is not adapter conformance;
+- provider `done` is not Outcome Verification or Acceptance;
+- local tests are not staging or production proof;
+- an external-effect receipt is not proof that the intended result remains true.
 
-Do not treat legacy code or old package snippets as canon unless the DeepWiki labels them as current target/code evidence.
+## Current command surface
 
-## Gate Ladder
-
-The Waldo harness has ten verification layers. They are cumulative: higher gates do not replace lower gates.
-
-| Gate | Name | Runs where | Blocks merge? | Purpose |
-|---|---|---:|---:|---|
-| 0 | Source/canon gate | local + review | yes | Prove the work maps to accepted ADR/DeepWiki target, not stale plans. |
-| 1 | Static wall | local + CI | yes | Typecheck, lockfile, lint/security greps, package/import guards. |
-| 2 | Contract tests | local + CI | yes | Zod schemas, exact enum tuples, valid/invalid fixtures, OpenAPI freshness. |
-| 3 | Pure deterministic tests | local + CI | yes | Math, routing, policies, idempotency keys, trust comparators, sanitizers. |
-| 4 | Property/fuzz tests | local + scheduled CI | targeted | Generate many inputs for security-critical deterministic code. |
-| 5 | Hermetic runtime tests | local + CI | yes for runtime work | Run Worker/DO code inside the Cloudflare runtime with SQLite, alarms, bindings. |
-| 6 | Deterministic simulation | local + CI for core paths | yes for runtime core | Crash/resume, retry storms, time travel, outbox exactly-once. |
-| 7 | Scenario/evidence tests | local + CI smoke | yes for harness flows | End-to-end behavior traces with fake model/provider/sinks. |
-| 8 | Live/dogfood lanes | manual/opt-in | no for ordinary PRs | Real provider/channel checks, cost/latency smoke, human review. |
-| 9 | Mutation testing | nightly/beta gate | targeted | Prove tests kill meaningful mutants in deterministic core. |
-
-The **beta gate** is the release-readiness gate before real beta users or real staging dogfood depend on the harness. It is not an ordinary PR merge gate and not a calendar date. It is where Waldo must prove the deterministic core is hard to break: runtime scenarios, crash/resume, privacy fuzzing, and targeted mutation must have evidence.
-
-## Current Command Surface
-
-Current committed root command surface:
+Install with the repository-pinned package manager:
 
 ```bash
-npx -y pnpm@10.34.4 verify    # full merge gate
-git diff --check              # whitespace/conflict-marker sanity
+npx -y pnpm@10.34.4 install --frozen-lockfile
 ```
 
-`pnpm verify` is also acceptable when the active pnpm is exactly `10.34.4`. The full gate runs:
-
-1. package-manager guard
-2. frozen install with the release-age policy active
-3. workspace typecheck
-4. contract tests
-5. workerd runtime tests
-6. static guards
-
-Current targeted commands:
+Full source/integration merge wall:
 
 ```bash
-pnpm -r typecheck
-pnpm verify:node              # @waldo/contracts tests
-pnpm verify:workers           # @waldo/runtime workerd tests
-pnpm verify:guards            # repo conformance guards
-pnpm verify:property          # focused fast-check lane; not part of the default verify wall
-pnpm verify:mutation          # focused Stryker lane; not part of the default verify wall
+npx -y pnpm@10.34.4 verify
+git diff --check
 ```
 
-Target-only gates still to build in Phase D+:
+`verify` currently runs the package-manager guard, frozen install, workspace typecheck, contract tests, isolated Supabase verification, Workers runtime tests, and static guards.
+
+Documentation and instruction-only changes:
 
 ```bash
-pnpm verify:fast         # targeted dev loop: typecheck + affected tests + guards
-pnpm verify:contracts    # contract tests + OpenAPI freshness + leak checks
-pnpm verify:scenarios    # deterministic scenario traces with fake model/sinks
+git diff --check
+npx -y pnpm@10.34.4 verify:guards
 ```
 
-Do not overstate a focused property or mutation run as whole-repository evidence. Do not pretend a
-missing target-only gate passed; report it honestly and run the closest current lower-level command.
-
-## Standard Local Loop
-
-For every feature or fix:
-
-1. **Orient**
-   - Identify the owning ADR/DeepWiki section.
-   - Write down the invariant in one sentence.
-   - Identify the smallest seam that can prove it.
-
-2. **Create the failing proof**
-   - Contract change: add exact valid/invalid tests first.
-   - Runtime change: add hermetic Workers/DO test first.
-   - Deterministic policy: add table/golden/property test first.
-   - Bug fix: add a regression test that fails on the old behavior.
-
-3. **Implement narrowly**
-   - Change only the module that owns the seam.
-   - Keep policy single-owner. Do not duplicate delivery, model, trigger, auth, or budget logic in adapters.
-   - Do not add broad abstractions before two real call sites need them.
-
-4. **Run targeted checks**
-   - Run package typecheck.
-   - Run the specific test file.
-   - Run the nearest gate for the touched layer.
-
-5. **Run merge gate**
-   - Run `npx -y pnpm@10.34.4 verify`.
-   - Run `git diff --check`.
-
-6. **Record evidence**
-   - Final response or PR body must include commands run, pass/fail, and skipped gates.
-   - If a gate is target-only, say so explicitly.
-
-## Test Discipline Rules
-
-### Every test must be anchored
-
-Each nontrivial test file should include or clearly imply:
-
-- source: ADR/DeepWiki/code issue it validates
-- invariant: what must always be true
-- failure mode: what bad implementation it catches
-- fixture class: synthetic, golden, property-generated, or live opt-in
-
-Example:
-
-```ts
-// ADR-0068: DeliveryGate stamps admission once during GATED.
-// Catches double budget decrement on alarm retry after outbox commit.
-```
-
-### Avoid library-testing
-
-Bad:
-
-```ts
-expect(schema.parse(value)).toEqual(value);
-```
-
-Good:
-
-```ts
-expect(triggerTypeSchema.options).toEqual([
-  "brief",
-  "fetch_alert",
-  "patrol",
-  "handoff_explore",
-  "handoff_plan",
-  "handoff_act",
-  "handoff_replan",
-  "intervention",
-  "user_message",
-  "dreaming_mode",
-  "pre_activity_spot",
-]);
-expect(triggerTypeSchema.safeParse("morning_wag").success).toBe(false);
-```
-
-The first test mostly proves Zod works. The second proves Waldo's contract did not drift.
-
-### No silent skips
-
-No `--passWithNoTests`.
-No broad `.skip` without issue/reference.
-No tests that require real provider keys in the default gate.
-No generated snapshots without a human-readable summary of what changed.
-
-### Tests own their fixtures
-
-Use synthetic data by default. Real health data must never be committed.
-
-Fixture names should state intent:
-
-- `synthetic-pro-user-fetch-budget.json`
-- `synthetic-empty-profile-brief1.json`
-- `golden-delivery-trace-fetch-adjustment-spot.json`
-- `attack-prompt-canary-leak.json`
-
-## Runtime Verification Spine
-
-Phase C landed the first verification spine. It proves Waldo can test Durable Object code in the
-real Workers runtime before the full contract spine exists.
-
-Current proven tracer:
-
-```text
-DO alarm
-  -> Loop Governor
-  -> run journal
-  -> DeliveryGate
-  -> outbox
-  -> fake channel sink
-```
-
-Already present:
-
-- `@cloudflare/vitest-pool-workers`
-- `wrangler.jsonc`
-- SQLite-backed Durable Object migration using `new_sqlite_classes`
-- fake clock/alarm controls
-- fake channel sink
-- crash injection points
-
-Still target-only for Phase D+:
-
-- fake model/provider scripts
-- fake APNs/Telegram/in-app sink adapters beyond the tracer sink
-- trace recorder
-- evidence JSON artifacts
-
-The Phase C tracer proves:
-
-1. alarm fires
-2. Governor admits the run
-3. run opens and journals steps
-4. DeliveryGate produces a stamped verdict
-5. outbox row commits transactionally
-6. fake sink receives exactly one delivery
-7. replay/resume does not double-send
-
-## Hermetic Cloudflare Tests
-
-Use Workers Vitest for anything involving Worker APIs, Durable Objects, SQLite, alarms, bindings, or runtime-specific behavior.
-
-Required patterns:
-
-- `runInDurableObject()` to inspect or seed DO internals in tests.
-- `runDurableObjectAlarm()` to execute scheduled alarms immediately.
-- `evictDurableObject()` / `evictAllDurableObjects()` to simulate production eviction and resume behavior.
-- per-test-file isolated storage as the default.
-- no real Workers AI, Vectorize, APNs, Telegram, Supabase, or provider calls in default tests.
-
-Outbound calls in hermetic tests must go through explicit fake bindings or request mocks.
-
-## Deterministic Simulation
-
-For durable execution, example-based tests are not enough.
-
-The run-journal/outbox simulator should model:
-
-- deterministic clock
-- deterministic IDs
-- seeded pseudo-random schedule where needed
-- alarm retry count
-- eviction after selected steps
-- throw after selected steps
-- duplicate alarm delivery
-- sink ack/no-ack/permanent failure
-
-Crash points covered by the Phase C tracer:
-
-1. after `RUN_OPENED`
-2. after `GOVERNOR_ADMITTED`
-3. after `GATED` decision but before outbox insert
-4. after outbox insert but before sink call
-5. after sink call but before sink ack is recorded
-6. after ack record but before handler returns
-
-Required invariant for future runtime slices:
-
-```text
-For a fixed event_id and idempotency_key:
-  counted budget decrements at most once
-  exempt class telemetry increments at most once
-  outbox contains at most one delivery for the run/kind
-  fake sink observes at most one successful send
-  resume reaches the same terminal state
-```
-
-## Property/Fuzz Testing
-
-Use property-based tests for pure code where the input space is large and failures are high-impact.
-
-Adopt `fast-check` for:
-
-- DeliveryGate budgets, cooldowns, day boundaries, time zones, quiet hours
-- idempotency-key canonicalization
-- Scribe/PII/health sanitizer
-- canary leak detector
-- prompt/output taint gates
-- CRS math invariants
-- memory `dominates()` ordering and tie-breaks
-
-Property tests must record the failing seed in output. A failure without a reproducible seed is not acceptable.
-
-Example property statement:
-
-```text
-For any generated sequence of candidates within one local day,
-counted APNs sends must never exceed the user's tier budget,
-and exempt sends must not consume counted budget.
-```
-
-## Mutation Testing
-
-Mutation testing is how we answer "are the tests real?" with evidence.
-
-Use Stryker only on deterministic core at first:
-
-- `core/trigger`
-- CRS math
-- sanitizer
-- DeliveryGate
-- Loop Governor
-- run-journal/outbox idempotency
-- memory trust comparator
-
-Do not run broad mutation across the whole repo in the normal dev loop. It is too slow and will create noise before the core is stable.
-
-Initial thresholds:
-
-- local exploratory: report only
-- CI scheduled/nightly: fail below agreed score for deterministic core
-- beta gate: fail if critical-policy mutants survive
-
-Important Stryker/Vitest note: if a mutation target is only tested through API/runtime integration tests that do not directly import the source file, configure Stryker so Vitest does not only run "related" tests by import graph.
-
-## Scenario/Evidence Harness
-
-Every meaningful end-to-end harness behavior should be expressible as a scenario file:
-
-```text
-scenario id
-source refs
-initial DO SQLite rows
-synthetic user/tier/timezone
-trigger/alarm event
-fake model response script
-expected journal events
-expected DeliveryGate verdicts
-expected outbox rows
-expected sink deliveries
-expected trace redactions
-```
-
-The scenario runner should emit:
-
-```text
-artifacts/verification/<run-id>/
-  summary.json
-  trace.jsonl
-  journal.json
-  outbox.json
-  sqlite-inspection.json
-  command.txt
-  git.txt
-```
-
-`summary.json` must include:
-
-- git commit SHA
-- dirty tree flag
-- command
-- scenario IDs
-- random/property seeds
-- package manager version
-- pass/fail
-- failure class
-- source refs
-
-This gives future agents something to inspect instead of guessing from terminal text.
-
-## Agent Behavior Evals
-
-Agent behavior evals are not the same as runtime correctness tests.
-
-Runtime correctness asks:
-
-```text
-Did the harness enforce the state machine, policy, and delivery guarantees?
-```
-
-Behavior evals ask:
-
-```text
-Did the model produce a useful, safe, on-brand result under the allowed tools/context?
-```
-
-For now, wire trace hooks and fake-model scenario support. Do not block foundation work on live LLM judging.
-
-Later eval lanes:
-
-- deterministic fake-model trajectories for tool-policy behavior
-- golden prompt/context assembly snapshots
-- LLM-as-judge for soul/voice only after trace capture is stable
-- provider shadow-eval for ADR-0069 routing
-- cost/latency reports per trigger class
-
-## CI Wall
-
-Implemented CI wall:
-
-1. checkout with pinned GitHub Actions SHAs
-2. setup pnpm/node using declared versions
-3. install with lockfile and release-age policy active
-4. typecheck
-5. unit/contract tests
-6. Workers/DO tests
-7. stale import guard: no `@waldo/types`
-8. model-name guard: no hardcoded non-roster model IDs
-9. health/internal leak scan
-10. ADR-status lint
-11. direct `setAlarm` guard
-12. no `--passWithNoTests`
-
-Target-only gates still to add:
-
-1. OpenAPI freshness once emitter exists
-2. generated-client freshness once clients exist
-3. credential-boundary scan once auth/env seams exist
-4. scenario/evidence artifacts once the scenario runner exists
-5. property and mutation lanes for deterministic core
-
-Add CI slicing only when test runtime justifies it. Borrow the Hermes pattern: store test durations, slice by longest-processing-time, and merge duration artifacts after successful main-branch runs.
-
-## Local Dev Modes
-
-### Fast edit loop
-
-Use while writing one module:
+Targeted development commands:
 
 ```bash
-pnpm --filter @waldo/contracts typecheck
-pnpm --filter @waldo/contracts test -- src/path/to/file.test.ts
+npx -y pnpm@10.34.4 --filter @waldo/contracts typecheck
+npx -y pnpm@10.34.4 --filter @waldo/contracts test
+npx -y pnpm@10.34.4 --filter @waldo/runtime typecheck
+npx -y pnpm@10.34.4 --filter @waldo/runtime test
+npx -y pnpm@10.34.4 verify:supabase
+npx -y pnpm@10.34.4 verify:guards
 ```
 
-### Runtime loop
-
-Use when touching Worker/DO behavior:
+Property and mutation lanes are targeted evidence, not substitutes for `verify`:
 
 ```bash
-pnpm verify:workers -- path/to/scenario.test.ts
+npx -y pnpm@10.34.4 verify:property
+npx -y pnpm@10.34.4 verify:mutation
 ```
 
-The test must run inside the Workers runtime, not a Node-only approximation.
+Do not claim a command exists until it is present in the current package scripts. Do not use `--passWithNoTests`, broad skips, or repeated reruns to manufacture green output.
 
-### Scenario loop
+## Change loop
 
-Use when changing behavior that spans modules:
+1. **Orient:** record branch/SHA, dirty state, observable result, owning module/reducer, contracts, stores, trust boundaries, downstream consumers, and rollback.
+2. **Write the failing proof:** use an exact schema rejection, deterministic policy case, Workers/DO test, Supabase contract test, or regression reproducer.
+3. **Implement narrowly:** keep one writer per aggregate and one retry owner per call path. Do not add provider authority or a parallel DTO.
+4. **Exercise degraded paths:** test the relevant null, hostile, concurrent, disconnected, timeout, cancellation, expiry, replay, account-switch, and restart cases.
+5. **Run targeted checks:** use the smallest fast loop while editing.
+6. **Run the merge wall:** use the commands above before a ready PR.
+7. **Report evidence:** distinguish passed, failed, skipped, unavailable, and not-run checks.
 
-```bash
-pnpm verify:scenarios -- --scenario scheduled-fetch-budget
-```
+## Required proof by surface
 
-Inspect `artifacts/verification/<run-id>/summary.json` before calling it done.
-
-### Manual local server
-
-Use `wrangler dev` for manual exploration only.
-
-Manual checks do not replace hermetic tests. If manual exploration finds a bug, capture it as a scenario or regression test before fixing.
-
-## Live Tests
-
-Live tests are opt-in and never part of the default merge gate.
-
-They may use:
-
-- real Workers AI or AI Gateway
-- real Supabase staging
-- real APNs/Telegram sandbox
-- real provider model calls
-
-Rules:
-
-- require explicit env var such as `WALDO_LIVE=1`
-- never use production user data
-- write artifacts under `artifacts/live/`
-- print estimated cost before running
-- redact secrets and raw health values
-- fail closed if required credentials are missing
-
-## Quality Bars By Module Type
-
-| Module type | Required tests before merge |
+| Surface | Minimum merge evidence |
 |---|---|
-| Contract schema | exact tuple tests, valid/invalid fixtures, typecheck, OpenAPI freshness if public. |
-| Pure policy/math | golden tests, edge cases, property test for invariant, targeted mutation later. |
-| Worker route | auth/authz test, input validation, generic error test, rate-limit plan/test. |
-| Durable Object state | hermetic runtime test, SQLite inspection, alarm/eviction coverage. |
-| Run journal/outbox | deterministic simulation, crash/resume matrix, idempotency property. |
-| DeliveryGate | ADR-0068 golden traces, budget/cooldown properties, hostile candidate tests. |
-| Scribe/sanitizer | fuzz/property tests, canary/PII health leak tests, no raw prompt/log leakage. |
-| Adapter boundary | fake adapter tests, `adapterResultSchema(dataSchema)`, timeout/error mapping. |
-| Model routing | roster guard, fake provider tests, no untyped model IDs, cost/escalation telemetry. |
-| Public DTO/API | no internal fields, OpenAPI artifact diff, generated client freshness. |
+| Contract/schema | Strict valid/invalid cases, unknown-key rejection, semantic invariants, exports, typecheck, generated artifact freshness when applicable |
+| Public gateway | Authentication/authorization, owner and presence binding, size/rate limits, replay/digest conflict, content-free errors |
+| Durable Object state | Workers runtime test, SQLite inspection, deterministic replay, invalid transition, eviction/restart |
+| External effect | Intent and frozen digest before I/O, same-key/different-digest conflict, apply-then-timeout reconciliation, one retry owner, expiry/cancellation |
+| Provider/executor | Manifest/version pin, lease/fence, start/reconcile/cancel, truthful unsupported states, transcript and credential boundary |
+| Evidence/verification | Candidate/admission boundary, source provenance, stale/indeterminate states, provider `done` cannot imply verification |
+| Acceptance/continuity | Revision/evidence-digest binding, accept/reopen/release history, exact surviving OpenLoop/ReEntryPoint |
+| Supabase migration/RLS | Migrate from zero, pgTAP/schema contract, canonical migration ordering, two-owner rejection when relevant |
+| Cross-repository protocol | Shared golden fixtures, compatibility policy, backend/Kennel consumer conformance, no handwritten parallel truth model |
 
-## Developer And Agent Session Discipline
+## Responsibility-backbone integration order
 
-Every new coding session should start with this checklist:
+These are dependency edges, not separate products:
 
-1. Confirm branch and dirty tree.
-2. Read `NEXT-SESSION-PLAN.md`, the architecture lock, and this file.
-3. Read only relevant ADR/DeepWiki pages.
-4. State the owning invariant before editing.
-5. Add or update the failing proof first.
-6. Keep changes scoped to the owning seam.
-7. Run targeted checks, then merge gate.
-8. Report skipped gates honestly.
-9. Do not mark work complete if evidence artifacts are missing.
+1. responsibility-handshake protocol and fixtures;
+2. owner root plus Capture/Outcome/WorkUnit reducers;
+3. canonical Kennel protocol client and stale-cache cutover;
+4. governed session observation and durable Judgment;
+5. one reversible external effect through the trusted RunLoop path;
+6. independent Verification and user Acceptance/reopen/release;
+7. exact next-day OpenLoop/ReEntryPoint;
+8. the same history from another declared presence.
 
-Required final report shape:
+Run both complete proofs:
+
+- “Publish this product update by Friday, but do not publish without my approval.”
+- “Prepare me for tomorrow's investor meeting and make sure every follow-up is handled.”
+
+Provider breadth, cloud workspaces, knowledge ingestion, MCP distribution, or dashboard breadth cannot substitute for this loop.
+
+## Privacy and fixture rules
+
+- Use synthetic data by default.
+- Never commit credentials, production data, raw health values, full transcripts, or unrelated personal context.
+- Keep owner IDs, provider payloads, logs, traces, snapshots, and error fixtures non-identifying.
+- Surface requests cannot supply authoritative owner, actor, authority, credential, provider/model, Acceptance, or closure fields.
+- Credentials remain outside model-visible prompts, events, artifacts, and checkpoints.
+- Missing authorization, capability proof, or current consent fails closed.
+
+## Cloudflare and Supabase boundaries
+
+Use Workers Vitest for Worker APIs, Durable Objects, SQLite, alarms, bindings, eviction, and restart behavior. Node-only mocks cannot prove those semantics.
+
+Default tests must not call Workers AI, external providers, hosted Supabase, messaging services, or production connectors. Supabase verification operates on disposable local containers unless the user explicitly authorizes a named external environment.
+
+Live tests are opt-in and must name the environment, data class, credentials, expected cost, cleanup, and rollback. Missing prerequisites are `unavailable`, not passing.
+
+## Failure classification
+
+| Classification | Meaning | Required action |
+|---|---|---|
+| In-branch | The change broke a previously passing gate | Fix before merge |
+| Introduced | A new proof fails because the work is incomplete | Complete the behavior; do not skip it |
+| Pre-existing | Reproduces unchanged on the pinned base | Record exact evidence; do not hide it |
+| Environment | Required local dependency or permission is unavailable | Report `unavailable` with the failed probe |
+| Flaky | Same source/environment produces inconsistent results | Capture seed/timing and diagnose; do not rerun until green |
+
+## Final report
 
 ```text
 Changed:
-- file/module summary
+- files and behavior
 
 Verified:
 - command -> result
-- scenario/artifact path if applicable
+- scenario/fixture/evidence path
 
-Not run:
+Not run or unavailable:
 - gate -> reason
 
+Rollback:
+- exact boundary
+
 Residual risk:
-- specific, not vague
+- specific remaining uncertainty
 ```
 
-## Anti-Patterns
-
-Block or rewrite work that does any of these:
-
-- uses Node mocks for Durable Object behavior that must be proven in Workers runtime
-- adds broad schema snapshots without exact semantic assertions
-- adds behavior without a source ref
-- introduces a second writer for budget, outbox, memory, model roster, or trigger vocabulary
-- calls real providers in default tests
-- stores raw health values in logs, prompts, traces, or committed fixtures
-- treats `wrangler dev` manual success as proof
-- claims a target-only gate passed before it exists, or claims the full harness is green while
-  OpenAPI, generated-client, scenario, property, or mutation gates remain target-only
-- adds full mutation testing before deterministic core has stable tests
-
-## Research Baseline
-
-The pipeline intentionally borrows from peer systems but adapts to Waldo's constraints:
-
-- Cloudflare Workers Vitest: real Workers runtime, bindings, isolated storage, local Miniflare.
-- Cloudflare Durable Object tests: direct DO access, alarms, SQLite, eviction helpers.
-- Hermes: pinned supply chain, split CI lanes, per-file isolation, duration-based test slicing, live-test artifacts, observer hooks with correlation IDs.
-- Pi: faux providers, in-memory session managers, scripted model responses, event capture, queue/session replay discipline.
-- OpenClaw: explicit local/pre-push/e2e/live lanes, Docker/VM runners, QA scenario evidence.
-- Aider/HAL: benchmark/eval reporting with commit SHA, cost, pass rate, and reproducible artifacts.
-
-Waldo differs from coding agents because its hard guarantees are stateful, privacy-sensitive, and user-health-adjacent. Therefore the first-class proof is durable runtime correctness, not only model task pass rate.
-
-## Current Integration And Verification Order
-
-The former health-first Alpha/Wave/HEY sequence is historical and no longer governs build order. The
-current authority is the [architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md)
-and [whole-product entrypoint](./NEXT-SESSION-PLAN.md).
-
-These are dependency edges and verification obligations, not smaller product phases:
-
-1. **Responsibility-handshake protocol and fixtures:** strict untrusted request/trusted envelope,
-   presence capability, event/projection cursor semantics, content-free problems, and golden
-   cross-repo fixtures.
-2. **Owner root and domain reducers:** canonical Capture/Outcome, optional Mission, WorkUnit,
-   Judgment, Acceptance, OpenLoop, and ReEntry state with one writer per aggregate and deterministic
-   replay/invalid-transition proof.
-3. **Kennel continuous integration:** the canonical Kennel repository consumes released fixtures,
-   treats backend projections as truth, retains only device-local operation/workspace durability,
-   and passes fake-backend plus real-adapter conformance.
-4. **Trusted execution and one reversible effect:** preserve RunLoop regression guarantees,
-   intent-before-I/O, frozen digest, one retry owner, reconciliation-before-retry, cancellation,
-   lease/fence, and terminal ambiguity.
-5. **Evidence, independent verification, Acceptance, and continuity:** prove that session activity
-   and receipts cannot close responsibility; accept/reopen/release and next-day re-entry use the
-   same canonical revision and evidence digest.
-6. **Personal/work proof:** run both “publish by Friday, but do not publish without my approval” and
-   “prepare tomorrow's investor meeting and handle every follow-up” through the same responsibility
-   backbone.
-
-Backend domain work and Kennel consumer work proceed in parallel after their exact contract fixtures
-land. Fakes prove contracts, not user capability. Provider breadth, cloud workspaces, knowledge
-ingestion, MCP distribution, and dashboard breadth do not replace the complete responsibility proof.
-
-Any work touching the accepted offline-draft behavior must first reconcile ADR-0077/ADR-0082 with
-protocol v0.1's locked `offlineCommands: "none"`; tests must not silently encode one side.
-
-## Definition Of Done
-
-Harness work is done only when:
-
-- the owning source refs are named
-- the invariant is tested
-- the relevant gate passes
-- runtime behavior is proven in Workers when applicable
-- deterministic failures are reproducible by seed or scenario ID
-- evidence artifacts exist for scenario/runtime work
-- skipped target gates are named honestly
-- no raw health/secrets/internal-only DTOs leak into public artifacts or logs
-- public contracts generate downstream clients reproducibly and reject stale/handwritten parallel
-  shapes
-- proof labels distinguish contract, local runtime, native device, staging, Alpha, and production
-
-Green terminal output is necessary. It is not sufficient.
+Work is complete only when the claimed proof level is observed, privacy and authority boundaries remain intact, the relevant downstream contract is checked, and no stale instructions or generated residue remain in the diff.

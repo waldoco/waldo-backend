@@ -11,7 +11,7 @@ Before implementation:
 5. Inspect fresh source/tests and the current issue/PR; pin the SHA behind implementation claims.
 6. Read accepted ADRs and Waldo Brain sources for the exact seam. Report conflicts rather than silently applying stale wording.
 
-`HARNESS-RUNTIME-BUILD-PLAN.md`, `HARNESS-WAVE-COORDINATION.md`, July phase handoffs, and the old health-first Alpha plan are historical evidence only. They do not define current product scope, assignment, sequence, or public claims.
+Retired ticket handoffs, wave plans, and health-first build narratives are absent from the live documentation tree. Git history preserves them for archaeology; they do not define current product scope, assignment, sequence, or public claims.
 
 ## Stable constraints
 
@@ -33,7 +33,7 @@ Before implementation:
 - `packages/runtime`: Durable Object runtime, trusted RunLoop/effect foundations, persistence, adapters.
 - `scripts/guards`: static architecture and agent-surface invariants.
 - `docs/planning`: target architecture and capability/source evidence.
-- `docs/foundation`: current contributor/verification guidance plus clearly marked historical evidence.
+- `docs/foundation`: current contributor, session-handoff, and verification guidance.
 - `supabase`: migrations/RLS/Vault; no hosted mutation without explicit authority.
 
 No mobile or marketing implementation belongs in this repository.

@@ -19,7 +19,7 @@ Before coding, read:
 6. [Local Dev Testing Pipeline](docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md) for verification expectations.
 7. `.claude/rules/INDEX.md` plus the relevant accepted ADRs and Waldo Brain pages for the seam you are touching. Report conflicts; do not silently treat older wording as current target direction.
 
-Historical handoffs and old benchmark/build reports are evidence only. Files that retain an old stable path carry an explicit superseded banner; archived material lives in `docs/foundation/archive/`.
+The live documentation tree contains only current guidance and source-backed planning evidence. Retired ticket handoffs, wave plans, superseded app plans, and one-off verification logs remain available in Git history; do not restore them as current instructions.
 
 ## Operating Loop
 
