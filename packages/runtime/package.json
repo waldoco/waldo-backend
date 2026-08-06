@@ -6,6 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:responsibility-integration": "vitest run --config vitest.integration.config.ts",
     "test:property": "vitest run --config vitest.scribe.config.ts",
     "test:mutation": "stryker run stryker.config.mjs",
     "test:mutation:delivery-gate": "stryker run stryker.delivery-gate.config.mjs",

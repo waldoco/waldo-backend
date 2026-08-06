@@ -53,6 +53,7 @@ export const DO_RUNTIME_SUBSTRATE_TABLES = [
   'runtime_journal',
   'runtime_trace',
   'local_ingress_rate',
+  'responsibility_ingress_rate',
   'runtime_run_scribe_audit',
 ] as const;
 

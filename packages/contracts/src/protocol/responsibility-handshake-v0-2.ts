@@ -134,6 +134,12 @@ export type ResponsibilityCaptureTrustedEnvelopeV02 = z.infer<
   typeof responsibilityCaptureTrustedEnvelopeV02Schema
 >;
 
+export function canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest(
+  value: unknown,
+): string {
+  return canonicalizeProtocolJson(responsibilityCaptureTrustedEnvelopeV02Schema.parse(value));
+}
+
 export const responsibilityProtocolCapabilitiesV02Schema = z.strictObject({
   protocolName: z.literal('responsibility-handshake'),
   supportedVersions: z.tuple([z.literal('0.1'), z.literal('0.2')]),

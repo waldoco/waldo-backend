@@ -52,6 +52,7 @@ export {
   aggregateRefSchema,
   candidateEvidenceObservationPayloadSchema,
   candidateEvidenceObservedEventSchema,
+  canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest,
   canonicalizeSurfaceCommandRequestForDigest,
   domainEventSchema,
   judgmentNeededObservationPayloadSchema,
@@ -89,6 +90,7 @@ export type {
 
 export {
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
   missionRecordV02Schema,
   outcomeProjectionItemV02Schema,
   outcomeRecordV02Schema,
@@ -112,6 +114,7 @@ export {
   workUnitProjectionItemV02Schema,
   workUnitRecordV02Schema,
 } from './protocol/responsibility-handshake-v0-2';
+export * from './protocol/responsibility-http-adapter-v0-1';
 export type {
   MissionRecordV02,
   OutcomeRecordV02,

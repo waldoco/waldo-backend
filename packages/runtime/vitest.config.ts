@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    include: ['test/**/*.test.ts'],
     // Runtime fakes intentionally keep process-local state across DO eviction; keep files serial
     // so per-test resets cannot race another file's fake-sink assertions.
     fileParallelism: false,
@@ -14,6 +15,7 @@ export default defineConfig({
           WALDO_ENV: 'test',
           RUN_LOOP_PROVIDER_MODE: 'fake',
           RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
+          RESPONSIBILITY_INGRESS_HMAC_SECRET: 'test-responsibility-ingress-hmac-secret-000000000000',
         },
       },
       wrangler: { configPath: './wrangler.jsonc' },

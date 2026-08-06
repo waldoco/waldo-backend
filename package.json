@@ -13,6 +13,7 @@
     "generate:openapi": "node scripts/generate-public-openapi.mjs",
     "generate:responsibility-handshake": "node scripts/generate-responsibility-handshake-v0-1.mjs && node scripts/generate-responsibility-handshake-v0-2.mjs",
     "verify:supabase": "node scripts/verify-supabase.mjs",
+    "verify:supabase:session-revocation": "pnpm --filter @waldo/runtime test:responsibility-integration",
     "verify:workers": "pnpm --filter @waldo/runtime test",
     "verify:property": "pnpm --filter @waldo/runtime test:property",
     "verify:mutation": "pnpm --filter @waldo/runtime test:mutation",

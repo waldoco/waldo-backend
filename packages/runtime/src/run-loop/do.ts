@@ -1,6 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import {
   TOOL_PERMISSIONS,
+  canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest,
+  canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
   acceptTrustedInvocation,
   buildSessionState,
   canonicalInvocationIdempotencySerialization,
@@ -68,6 +70,10 @@ import {
   type ResponsibilityReplay,
 } from '../coordinator/waldo-coordinator';
 import { provisionDoSchema } from '../do-schema';
+import {
+  verifyResponsibilityIngress,
+  type SignedResponsibilityIngressContext,
+} from '../responsibility/ingress-signature';
 import {
   RuntimeLLMProvider,
   TRUSTED_PROVIDER_EFFECT_METERING_CAP,
@@ -137,6 +143,9 @@ const TRUSTED_V2_SCRIBE_AUDIT_VERSION = 3;
 const LOCAL_RUN_TOKEN_HEADER = 'x-waldo-local-run-token';
 const LOCAL_INGRESS_RATE_WINDOW_MS = 60_000;
 const LOCAL_INGRESS_MAX_REQUESTS_PER_WINDOW = 32;
+const RESPONSIBILITY_INGRESS_RATE_WINDOW_MS = 60_000;
+const RESPONSIBILITY_INGRESS_MAX_REQUESTS_PER_WINDOW = 60;
+const RESPONSIBILITY_OWNER_MAX_REQUESTS_PER_WINDOW = 240;
 const TRUSTED_V2_SYNTHESIS_MESSAGE_MAX_UTF8_BYTES = 32_768;
 const REPLAY_ARTIFACT_MAX_UTF8_BYTES = 32_768;
 const REPLAY_ARTIFACT_MAX_NODES = 1_024;
@@ -328,6 +337,35 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   ): Promise<ResponsibilityCaptureResult> {
     this.#assertLocalTestSeam();
     return this.waldoCoordinator.captureResponsibility(admission);
+  }
+
+  async captureResponsibilityFromWorker(
+    admission: ResponsibilityCaptureAdmission,
+    ingress: SignedResponsibilityIngressContext,
+  ): Promise<ResponsibilityCaptureResult> {
+    await this.#assertResponsibilityIngress(admission, ingress);
+    this.#admitResponsibilityIngress(ingress.authenticatedSessionId);
+    return this.waldoCoordinator.captureResponsibility(admission);
+  }
+
+  async readResponsibilityProjectionFromWorker(
+    input: ResponsibilityProjectionRead,
+    ingress: SignedResponsibilityIngressContext,
+  ) {
+    await this.#assertResponsibilityIngressContext(ingress, 'projection');
+    const expectedDigest = `sha256:${await this.deps.sha256Hex(JSON.stringify([
+      input.protocolVersion ?? '0.2', input.fromExclusiveCursor, input.limit,
+      input.snapshotId ?? null,
+    ]))}`;
+    if (
+      ingress.ownerId !== input.routedOwnerId ||
+      ingress.requestDigest !== expectedDigest ||
+      ingress.operationDigest !== expectedDigest
+    ) {
+      throw new Error('responsibility ingress authority mismatch');
+    }
+    this.#admitResponsibilityIngress(ingress.authenticatedSessionId);
+    return this.waldoCoordinator.readResponsibilityProjection(input);
   }
 
   __waldoReadResponsibilityProjectionForTest(
@@ -917,6 +955,100 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       admitted = count <= LOCAL_INGRESS_MAX_REQUESTS_PER_WINDOW;
     });
     return admitted;
+  }
+
+  async #assertResponsibilityIngress(
+    admission: ResponsibilityCaptureAdmission,
+    ingress: SignedResponsibilityIngressContext,
+  ): Promise<void> {
+    await this.#assertResponsibilityIngressContext(ingress, 'capture');
+    const envelope = admission.trustedEnvelope;
+    if (
+      envelope === null || typeof envelope !== 'object' || Array.isArray(envelope) ||
+      ingress.ownerId !== admission.routedOwnerId ||
+      (envelope as Record<string, unknown>).ownerId !== ingress.ownerId ||
+      (envelope as Record<string, unknown>).presenceId !== ingress.presenceId ||
+      (envelope as Record<string, unknown>).authenticatedSessionId !==
+        ingress.authenticatedSessionId ||
+      (envelope as Record<string, unknown>).ownerPolicyRevision !== ingress.ownerPolicyRevision ||
+      (envelope as Record<string, unknown>).ownerRootRoutingVersion !==
+        ingress.ownerRootRoutingVersion ||
+      (envelope as Record<string, unknown>).requestDigest !== ingress.requestDigest
+    ) {
+      throw new Error('responsibility ingress authority mismatch');
+    }
+    const envelopeDigest = `sha256:${await this.deps.sha256Hex(
+      (envelope as { protocolVersion?: unknown }).protocolVersion === '0.1'
+        ? canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest(envelope)
+        : canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest(envelope),
+    )}`;
+    if (ingress.operationDigest !== envelopeDigest) {
+      throw new Error('responsibility ingress authority mismatch');
+    }
+  }
+
+  async #assertResponsibilityIngressContext(
+    ingress: SignedResponsibilityIngressContext,
+    operation: 'capture' | 'projection',
+  ): Promise<void> {
+    const now = this.deps.now();
+    const secret = this.envBindings.RESPONSIBILITY_INGRESS_HMAC_SECRET;
+    if (
+      !ingress ||
+      typeof secret !== 'string' || secret.length < 32 ||
+      ingress.operation !== operation ||
+      typeof ingress.ownerId !== 'string' ||
+      typeof ingress.presenceId !== 'string' ||
+      typeof ingress.presenceRegistrationId !== 'string' ||
+      typeof ingress.authenticatedSessionId !== 'string' ||
+      !/^authenticated_session_[a-f0-9]{64}$/.test(ingress.authenticatedSessionId) ||
+      !Number.isSafeInteger(ingress.ownerPolicyRevision) ||
+      ingress.ownerPolicyRevision < 0 ||
+      !Number.isSafeInteger(ingress.ownerRootRoutingVersion) ||
+      ingress.ownerRootRoutingVersion < 0 ||
+      !Number.isSafeInteger(ingress.issuedAt) ||
+      ingress.issuedAt > now + 5_000 || now - ingress.issuedAt > 60_000 ||
+      !/^sha256:[a-f0-9]{64}$/.test(ingress.requestDigest) ||
+      !/^sha256:[a-f0-9]{64}$/.test(ingress.operationDigest) ||
+      !(await verifyResponsibilityIngress(ingress, secret))
+    ) {
+      throw new Error('responsibility ingress authority mismatch');
+    }
+  }
+
+  #admitResponsibilityIngress(authenticatedSessionId: string): void {
+    const now = this.deps.now();
+    const bucket = Math.floor(now / RESPONSIBILITY_INGRESS_RATE_WINDOW_MS);
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        'DELETE FROM responsibility_ingress_rate WHERE bucket < ?',
+        bucket,
+      );
+      for (const [rateKey, maximum] of [
+        [`session:${authenticatedSessionId}`, RESPONSIBILITY_INGRESS_MAX_REQUESTS_PER_WINDOW],
+        ['owner', RESPONSIBILITY_OWNER_MAX_REQUESTS_PER_WINDOW],
+      ] as const) {
+        const row = this.ctx.storage.sql.exec<{ count: number }>(
+          `SELECT count FROM responsibility_ingress_rate
+            WHERE rate_key = ? AND bucket = ?`,
+          rateKey,
+          bucket,
+        ).toArray()[0];
+        const count = (row?.count ?? 0) + 1;
+        if (count > maximum) throw new Error('responsibility ingress rate limited');
+        this.ctx.storage.sql.exec(
+          `INSERT INTO responsibility_ingress_rate
+            (rate_key, bucket, count, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(rate_key, bucket)
+           DO UPDATE SET count = excluded.count, updated_at = excluded.updated_at`,
+          rateKey,
+          bucket,
+          count,
+          now,
+        );
+      }
+    });
   }
 
   async #driveScheduledRun(entry: ScheduleEntry): Promise<void> {
@@ -4735,6 +4867,15 @@ function ensureRunLoopSchema(storage: DurableObjectStorage): void {
       bucket     INTEGER PRIMARY KEY,
       count      INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
+    );
+  `);
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS responsibility_ingress_rate (
+      rate_key   TEXT NOT NULL,
+      bucket     INTEGER NOT NULL,
+      count      INTEGER NOT NULL CHECK (count > 0),
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (rate_key, bucket)
     );
   `);
   sql.exec(`

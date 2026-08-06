@@ -1,0 +1,13 @@
+{
+  "cases": [
+    { "name": "duplicate-key", "disposition": 400 },
+    { "name": "malformed-unicode", "disposition": 400 },
+    { "name": "server-owned-field", "disposition": 400 },
+    { "name": "protocol-downgrade", "disposition": 406 },
+    { "name": "missing-or-revoked-auth", "disposition": 401 },
+    { "name": "wrong-owner-root", "disposition": 404 },
+    { "name": "digest-conflict", "disposition": 409 },
+    { "name": "stale-snapshot-or-cursor", "disposition": 409 },
+    { "name": "rate-limited", "disposition": 429 }
+  ]
+}

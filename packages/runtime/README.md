@@ -58,6 +58,39 @@ pnpm --filter @waldo/runtime test
   when the binding is absent or shorter than 16 characters. The Vitest pool supplies a
   non-secret synthetic value in `vitest.config.ts`.
 
+### Responsibility public adapter
+
+The responsibility HTTP adapter defaults off. `RESPONSIBILITY_PUBLIC_API_ENABLED=true`
+enables only the version-pinned capture/projection routes; missing configuration fails
+closed. Enabling it requires:
+
+- `SUPABASE_PROJECT_URL` and the non-secret `SUPABASE_PUBLISHABLE_KEY`. Each request is
+  verified against Supabase Auth's fixed `/auth/v1/user` endpoint and then against the
+  no-argument `waldo_responsibility_session_active` PostgREST RPC. The RPC must derive the
+  caller and `session_id` only from the verified user JWT, return exactly one boolean, and
+  expose no session data. The registered presence, owner ID, policy revision, routing
+  version, state, and expiry must be supplied through admin-controlled `app_metadata`;
+  user metadata is ignored.
+- `RESPONSIBILITY_RATE_LIMITER`, the Cloudflare Rate Limiting binding declared in
+  `wrangler.jsonc`. Its pre-auth bucket is derived only from Cloudflare's trusted
+  `CF-Connecting-IP`; the owner Durable Object separately enforces per-session and
+  per-owner limits.
+- `RESPONSIBILITY_INGRESS_HMAC_SECRET`, provisioned with `wrangler secret put` (or the
+  deployment platform's equivalent), never committed as a production variable. The Worker
+  signs the owner/session/policy/operation/digest envelope before the existing RunLoopDO
+  accepts it.
+
+The runtime fails closed when the active-session RPC is absent, unavailable, unauthorized,
+or does not return a boolean. A local Auth/REST integration test proves active public capture and
+projection, current-session logout, and exact still-unexpired-token retries returning the public
+401 shape before owner-root routing. This is adapter conformance, not proof that the migration or
+Worker is deployed to hosted Supabase/Cloudflare, Kennel acceptance, staging, or operations. Keep
+the deployment switch off until those independent checks pass.
+
+The active-session decision governs admission of a new public request. A request already
+admitted immediately before logout may finish; cancelling already-authorized agent work is
+a separate Waldo WorkUnit lease/cancellation decision, not a side effect of logging out.
+
 Gateway mode currently wires a metadata-only Cloudflare AI Gateway adapter and a
 fail-closed delivery/safety placeholder. It also fails before provider egress until HEY-99
 supplies an auditable daily-spend reader. It is an adapter-readiness seam, not live channel
