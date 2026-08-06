@@ -1,0 +1,85 @@
+{
+  "protocolVersion": "0.1",
+  "digestAlgorithm": "sha256",
+  "canonicalization": "waldo-json-sorted-keys-v1",
+  "canonicalizationSpecification": "waldo-json-sorted-keys-v1.md",
+  "canonicalizationVectors": "canonicalization-vectors.json",
+  "previousVersionCompatibility": "not_run",
+  "cases": [
+    {
+      "name": "original request",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        }
+      },
+      "canonicalRequest": "{\"clientIssuedAt\":\"2026-08-05T12:00:00Z\",\"commandType\":\"responsibility.capture\",\"payload\":{\"userStatement\":\"Make sure the reviewed update is handled.\"},\"presenceRegistrationId\":\"presence_registration_01\",\"protocolVersion\":\"0.1\",\"requestId\":\"request_capture_01\"}",
+      "expectedRequestDigest": "sha256:f37410173ee8d1265a1c6ca79777df3496d482a10b323702f3d86737a632459a"
+    },
+    {
+      "name": "same request id and same semantic request",
+      "request": {
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "presenceRegistrationId": "presence_registration_01",
+        "commandType": "responsibility.capture",
+        "requestId": "request_capture_01",
+        "protocolVersion": "0.1"
+      },
+      "canonicalRequest": "{\"clientIssuedAt\":\"2026-08-05T12:00:00Z\",\"commandType\":\"responsibility.capture\",\"payload\":{\"userStatement\":\"Make sure the reviewed update is handled.\"},\"presenceRegistrationId\":\"presence_registration_01\",\"protocolVersion\":\"0.1\",\"requestId\":\"request_capture_01\"}",
+      "expectedRequestDigest": "sha256:f37410173ee8d1265a1c6ca79777df3496d482a10b323702f3d86737a632459a"
+    },
+    {
+      "name": "same request id and changed payload",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure a different update is handled."
+        }
+      },
+      "canonicalRequest": "{\"clientIssuedAt\":\"2026-08-05T12:00:00Z\",\"commandType\":\"responsibility.capture\",\"payload\":{\"userStatement\":\"Make sure a different update is handled.\"},\"presenceRegistrationId\":\"presence_registration_01\",\"protocolVersion\":\"0.1\",\"requestId\":\"request_capture_01\"}",
+      "expectedRequestDigest": "sha256:c25bcafd6b5731c58fba7a1aa054ac6e14a47fe0df4a267697c5cf2bf127c46a"
+    },
+    {
+      "name": "exact user whitespace is preserved",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_whitespace_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "  Keep the exact user wording.  "
+        }
+      },
+      "canonicalRequest": "{\"clientIssuedAt\":\"2026-08-05T12:00:00Z\",\"commandType\":\"responsibility.capture\",\"payload\":{\"userStatement\":\"  Keep the exact user wording.  \"},\"presenceRegistrationId\":\"presence_registration_01\",\"protocolVersion\":\"0.1\",\"requestId\":\"request_capture_whitespace_01\"}",
+      "expectedRequestDigest": "sha256:2c520972230d48970c597800c59843807d7de994bd7649158d92ea69f00b8757"
+    },
+    {
+      "name": "unicode and JSON escaping",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_escaping_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Handle \"quoted\" paths like C:\\work.\nKeep 🐕 intact."
+        }
+      },
+      "canonicalRequest": "{\"clientIssuedAt\":\"2026-08-05T12:00:00Z\",\"commandType\":\"responsibility.capture\",\"payload\":{\"userStatement\":\"Handle \\\"quoted\\\" paths like C:\\\\work.\\nKeep 🐕 intact.\"},\"presenceRegistrationId\":\"presence_registration_01\",\"protocolVersion\":\"0.1\",\"requestId\":\"request_capture_escaping_01\"}",
+      "expectedRequestDigest": "sha256:965ed8dd0b846d02decdb323db87f2fa112e72f0853a2cd80db2d241dbaa1910"
+    }
+  ]
+}

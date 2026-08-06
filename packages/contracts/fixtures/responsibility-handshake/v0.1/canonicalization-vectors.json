@@ -1,0 +1,75 @@
+{
+  "algorithm": "waldo-json-sorted-keys-v1",
+  "profile": "RFC 8785 JCS-compatible",
+  "specification": "waldo-json-sorted-keys-v1.md",
+  "cases": [
+    {
+      "name": "recursive ordering and array preservation",
+      "inputJson": "{\"z\":[3,2,1],\"a\":{\"z\":true,\"a\":null}}",
+      "canonicalJson": "{\"a\":{\"a\":null,\"z\":true},\"z\":[3,2,1]}",
+      "expectedDigest": "sha256:f59550d9c6d69df5173f53ca278f75b31e0a7fbeb3952cefdfc98fa1de01a459"
+    },
+    {
+      "name": "integer-like key ordering",
+      "inputJson": "{\"2\":\"two\",\"10\":\"ten\",\"a\":\"aye\"}",
+      "canonicalJson": "{\"10\":\"ten\",\"2\":\"two\",\"a\":\"aye\"}",
+      "expectedDigest": "sha256:2f228dcfd8b795151e80113a2c9d8fd3567fad4438ac052fb3e3c4e14f35828d"
+    },
+    {
+      "name": "UTF-16 key ordering",
+      "inputJson": "{\"\":\"basic multilingual plane\",\"😀\":\"astral plane\"}",
+      "canonicalJson": "{\"😀\":\"astral plane\",\"\":\"basic multilingual plane\"}",
+      "utf16Order": [
+        {
+          "key": "😀",
+          "codeUnits": [
+            "d83d",
+            "de00"
+          ]
+        },
+        {
+          "key": "",
+          "codeUnits": [
+            "e000"
+          ]
+        }
+      ],
+      "expectedDigest": "sha256:74a477b60b35640db6b3b24e945a1f11245f8069fce0d9f8f497e4b50d794636"
+    },
+    {
+      "name": "prefix ordering and no Unicode normalization",
+      "inputJson": "{\"é\":\"NFC\",\"é\":\"NFD\",\"aa\":1,\"a\":2}",
+      "canonicalJson": "{\"a\":2,\"aa\":1,\"é\":\"NFD\",\"é\":\"NFC\"}",
+      "expectedDigest": "sha256:8ae3c8e4bed1c8c688f98aeedf8d1a240ad3be8b4daaca0c93b6a1d17cd6c138"
+    },
+    {
+      "name": "ECMAScript string escaping",
+      "inputJson": "{\"value\":\"quote\\\" reverse\\\\ backspace\\b tab\\t line\\n form\\f return\\r nul\\u0000 slash/ euro€ emoji🐕\"}",
+      "canonicalJson": "{\"value\":\"quote\\\" reverse\\\\ backspace\\b tab\\t line\\n form\\f return\\r nul\\u0000 slash/ euro€ emoji🐕\"}",
+      "expectedDigest": "sha256:6f1d0c0395465af1a7ad333c175cd8fb83f4d6966e418fe2169ae89d5dcdac66"
+    },
+    {
+      "name": "ECMAScript number formatting",
+      "inputJson": "{\"values\":[333333333.33333329,1E30,4.50,2e-3,1e-27,-0]}",
+      "canonicalJson": "{\"values\":[333333333.3333333,1e+30,4.5,0.002,1e-27,0]}",
+      "expectedDigest": "sha256:8825d9477acdf65aa2f4a55866aeb6b0c9e855fa0fb423793e5547d1308863f7"
+    }
+  ],
+  "rejectedCases": [
+    {
+      "name": "lone high surrogate",
+      "inputJson": "{\"value\":\"\\ud800\"}",
+      "rejectionStage": "canonicalization"
+    },
+    {
+      "name": "lone low surrogate",
+      "inputJson": "{\"value\":\"\\udfff\"}",
+      "rejectionStage": "canonicalization"
+    },
+    {
+      "name": "duplicate object key",
+      "inputJson": "{\"a\":1,\"a\":2}",
+      "rejectionStage": "raw-json-admission"
+    }
+  ]
+}

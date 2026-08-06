@@ -1,0 +1,23 @@
+{
+  "protocolVersion": "0.1",
+  "valid": {
+    "protocolVersion": "0.1",
+    "offlineCommands": "none"
+  },
+  "rejected": [
+    {
+      "name": "offline queue is not supported",
+      "capability": {
+        "protocolVersion": "0.1",
+        "offlineCommands": "queue"
+      }
+    },
+    {
+      "name": "offline create is not supported",
+      "capability": {
+        "protocolVersion": "0.1",
+        "offlineCommands": "create"
+      }
+    }
+  ]
+}
