@@ -2,6 +2,7 @@ import type {
   ResponsibilityAuthority,
   TrustedResponsibilityContext,
 } from './worker-adapter';
+import { RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION } from './constants';
 
 type SupabaseResponsibilityAuthorityConfig = Readonly<{
   projectUrl: string;
@@ -9,6 +10,8 @@ type SupabaseResponsibilityAuthorityConfig = Readonly<{
   fetch?: typeof fetch;
   now?: () => number;
 }>;
+
+export const RESPONSIBILITY_SESSION_MAX_REMAINING_TTL_MS = 2 * 60 * 60 * 1_000;
 
 export function createSupabaseResponsibilityAuthority(
   config: SupabaseResponsibilityAuthorityConfig,
@@ -48,13 +51,17 @@ export function createSupabaseResponsibilityAuthority(
       let body: unknown;
       try {
         body = await response.json();
-      } catch {
-        return null;
+      } catch (error) {
+        throw new Error('responsibility authority unavailable', { cause: error });
       }
-      const authority = readAuthorityMetadata(body, now());
+      const verifiedUserId = isRecord(body) && typeof body.id === 'string' && isUuid(body.id)
+        ? body.id
+        : null;
+      if (verifiedUserId === null) throw new Error('responsibility authority unavailable');
+      const authority = readAuthorityMetadata(body);
       if (authority === null) return null;
-      const sessionId = verifiedSessionId(token, isRecord(body) ? body.id : null, now());
-      if (sessionId === null) return null;
+      const session = verifiedSession(token, verifiedUserId, now());
+      if (session === null) return null;
       const sessionActive = await readActiveSession({
         endpoint: activeSessionEndpoint,
         fetcher,
@@ -62,13 +69,16 @@ export function createSupabaseResponsibilityAuthority(
         token,
       });
       if (!sessionActive) return null;
-      const sessionDigest = await sha256Hex(sessionId);
+      const sessionDigest = await sha256Hex(session.id);
+      const ownerDigest = await sha256Hex(verifiedUserId);
       return Object.freeze({
-        ownerId: authority.owner_id,
+        ownerId: `owner_${ownerDigest}`,
+        authenticatedSubjectRef: `supabase_subject_${ownerDigest}`,
         actor: Object.freeze({ kind: 'presence' as const, id: authority.presence_id }),
         presenceId: authority.presence_id,
         presenceRegistrationId: authority.presence_registration_id,
         authenticatedSessionId: `authenticated_session_${sessionDigest}`,
+        authenticatedSessionExpiresAt: session.expiresAt,
         ownerPolicyRevision: authority.owner_policy_revision,
         authAssurance: 'supabase_verified_session',
         ownerRootRoutingVersion: authority.owner_root_routing_version,
@@ -110,7 +120,11 @@ async function readActiveSession(input: Readonly<{
   return body;
 }
 
-function verifiedSessionId(token: string, verifiedUserId: unknown, now: number): string | null {
+function verifiedSession(
+  token: string,
+  verifiedUserId: unknown,
+  now: number,
+): Readonly<{ id: string; expiresAt: string }> | null {
   if (typeof verifiedUserId !== 'string') return null;
   const segments = token.split('.');
   if (segments.length !== 3) return null;
@@ -122,43 +136,40 @@ function verifiedSessionId(token: string, verifiedUserId: unknown, now: number):
   }
   if (!isRecord(payload) || payload.sub !== verifiedUserId ||
       typeof payload.session_id !== 'string' || !isUuid(payload.session_id) ||
-      !Number.isSafeInteger(payload.exp) || (payload.exp as number) <= Math.floor(now / 1_000)) {
+      !Number.isSafeInteger(payload.exp) ||
+      (payload.exp as number) <= Math.floor(now / 1_000) ||
+      (payload.exp as number) * 1_000 > now + RESPONSIBILITY_SESSION_MAX_REMAINING_TTL_MS) {
     return null;
   }
-  return payload.session_id;
+  return Object.freeze({
+    id: payload.session_id,
+    expiresAt: new Date((payload.exp as number) * 1_000).toISOString(),
+  });
 }
 
 type AuthorityMetadata = Readonly<{
-  owner_id: string;
   presence_id: string;
   presence_registration_id: string;
   owner_policy_revision: number;
-  owner_root_routing_version: number;
-  state: 'active';
-  expires_at: string;
+  owner_root_routing_version: typeof RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION;
 }>;
 
-function readAuthorityMetadata(body: unknown, now: number): AuthorityMetadata | null {
-  if (!isRecord(body) || typeof body.id !== 'string' || !isUuid(body.id)) return null;
+function readAuthorityMetadata(body: unknown): AuthorityMetadata | null {
+  if (!isRecord(body)) return null;
   if (!isRecord(body.app_metadata)) return null;
   const candidate = body.app_metadata.waldo_responsibility_authority;
   if (!isRecord(candidate)) return null;
   const expectedKeys = [
-    'expires_at', 'owner_id', 'owner_policy_revision', 'owner_root_routing_version',
-    'presence_id', 'presence_registration_id', 'state',
+    'owner_policy_revision', 'owner_root_routing_version',
+    'presence_id', 'presence_registration_id',
   ];
   if (Object.keys(candidate).sort().join('\0') !== expectedKeys.join('\0')) return null;
   if (
-    !isProtocolId(candidate.owner_id) ||
     !isProtocolId(candidate.presence_id) ||
     !isProtocolId(candidate.presence_registration_id) ||
     !isRevision(candidate.owner_policy_revision) ||
-    !isRevision(candidate.owner_root_routing_version) ||
-    candidate.state !== 'active' ||
-    typeof candidate.expires_at !== 'string'
+    candidate.owner_root_routing_version !== RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION
   ) return null;
-  const expiresAt = Date.parse(candidate.expires_at);
-  if (!Number.isFinite(expiresAt) || expiresAt <= now) return null;
   return candidate as AuthorityMetadata;
 }
 

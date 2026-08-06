@@ -2,6 +2,20 @@ import type { ResponsibilityIngressContext } from './worker-adapter';
 
 export type ResponsibilityIngressOperation = 'capture' | 'projection';
 
+export function canonicalizeResponsibilityProjectionIngressForDigest(input: Readonly<{
+  protocolVersion?: '0.1' | '0.2';
+  fromExclusiveCursor: number;
+  limit: number;
+  snapshotId?: string;
+}>): string {
+  return JSON.stringify([
+    input.protocolVersion ?? '0.2',
+    input.fromExclusiveCursor,
+    input.limit,
+    input.snapshotId ?? null,
+  ]);
+}
+
 export type SignedResponsibilityIngressContext = ResponsibilityIngressContext & Readonly<{
   ownerId: string;
   presenceId: string;
@@ -58,9 +72,11 @@ function canonical(input: Omit<SignedResponsibilityIngressContext, 'signature'>)
     'responsibility-worker-ingress-v1',
     input.operation,
     input.ownerId,
+    input.authenticatedSubjectRef,
     input.presenceId,
     input.presenceRegistrationId,
     input.authenticatedSessionId,
+    input.authenticatedSessionExpiresAt,
     input.ownerPolicyRevision,
     input.ownerRootRoutingVersion,
     input.requestDigest,

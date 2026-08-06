@@ -13,6 +13,8 @@ export const DO_PRODUCT_TABLES = [
   'drafts',
   'goals',
   'owner_roots',
+  'presence_registrations',
+  'presence_sessions',
   'owner_event_state',
   'outcomes',
   'missions',
@@ -471,10 +473,58 @@ export const RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+export const RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION: DoMigration = {
+  version: 4,
+  name: 'responsibility-canonical-authority-v0-1',
+  up: [
+    'ALTER TABLE owner_roots ADD COLUMN authenticated_subject_ref TEXT;',
+    `ALTER TABLE owner_roots ADD COLUMN state TEXT
+      CHECK (state IS NULL OR state IN ('active', 'suspended', 'revoked'));`,
+    `ALTER TABLE owner_roots ADD COLUMN owner_policy_revision INTEGER
+      CHECK (owner_policy_revision IS NULL OR owner_policy_revision >= 0);`,
+    `ALTER TABLE owner_roots ADD COLUMN owner_root_routing_version INTEGER
+      CHECK (owner_root_routing_version IS NULL OR owner_root_routing_version > 0);`,
+    'ALTER TABLE owner_roots ADD COLUMN updated_at TEXT;',
+    `CREATE UNIQUE INDEX owner_roots_subject_unique
+      ON owner_roots(authenticated_subject_ref)
+      WHERE authenticated_subject_ref IS NOT NULL;`,
+    `CREATE TABLE presence_registrations (
+      presence_registration_id TEXT PRIMARY KEY,
+      owner_id                  TEXT NOT NULL,
+      presence_id               TEXT NOT NULL,
+      state                     TEXT NOT NULL CHECK (state IN ('active', 'suspended', 'revoked')),
+      created_at                TEXT NOT NULL,
+      updated_at                TEXT NOT NULL,
+      UNIQUE (owner_id, presence_id),
+      FOREIGN KEY (owner_id) REFERENCES owner_roots(owner_id)
+    );`,
+    `CREATE TABLE presence_sessions (
+      authenticated_session_id  TEXT PRIMARY KEY,
+      presence_registration_id  TEXT NOT NULL,
+      expires_at                TEXT NOT NULL,
+      created_at                TEXT NOT NULL,
+      last_seen_at              TEXT NOT NULL,
+      FOREIGN KEY (presence_registration_id)
+        REFERENCES presence_registrations(presence_registration_id)
+    );`,
+  ],
+  down: [
+    'DROP TABLE IF EXISTS presence_sessions;',
+    'DROP TABLE IF EXISTS presence_registrations;',
+    'DROP INDEX IF EXISTS owner_roots_subject_unique;',
+    'ALTER TABLE owner_roots DROP COLUMN updated_at;',
+    'ALTER TABLE owner_roots DROP COLUMN owner_root_routing_version;',
+    'ALTER TABLE owner_roots DROP COLUMN owner_policy_revision;',
+    'ALTER TABLE owner_roots DROP COLUMN state;',
+    'ALTER TABLE owner_roots DROP COLUMN authenticated_subject_ref;',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
   RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
+  RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -609,7 +659,31 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'created_at',
     'updated_at',
   ],
-  owner_roots: ['root_key', 'owner_id', 'created_at'],
+  owner_roots: [
+    'root_key',
+    'owner_id',
+    'authenticated_subject_ref',
+    'state',
+    'owner_policy_revision',
+    'owner_root_routing_version',
+    'created_at',
+    'updated_at',
+  ],
+  presence_registrations: [
+    'presence_registration_id',
+    'owner_id',
+    'presence_id',
+    'state',
+    'created_at',
+    'updated_at',
+  ],
+  presence_sessions: [
+    'authenticated_session_id',
+    'presence_registration_id',
+    'expires_at',
+    'created_at',
+    'last_seen_at',
+  ],
   owner_event_state: ['root_key', 'owner_id', 'high_water_cursor'],
   outcomes: [
     'id',

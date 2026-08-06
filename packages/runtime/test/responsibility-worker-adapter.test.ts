@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import worker, { responsibilityEdgeRateKey } from '../src/index';
 import {
+  ResponsibilityAuthorityDeniedError,
+  ResponsibilityDigestConflictError,
+  ResponsibilityOwnerRootMismatchError,
+  ResponsibilityProjectionCursorError,
+} from '../src/responsibility/errors';
+import {
   createResponsibilityWorkerAdapter,
   type ResponsibilityAuthority,
   type ResponsibilityOwnerRoot,
@@ -9,10 +15,12 @@ import {
 
 const trustedContext: TrustedResponsibilityContext = Object.freeze({
   ownerId: 'owner_server_01',
+  authenticatedSubjectRef: `supabase_subject_${'a'.repeat(64)}`,
   actor: { kind: 'presence' as const, id: 'presence_server_01' },
   presenceId: 'presence_server_01',
   presenceRegistrationId: 'presence_registration_01',
   authenticatedSessionId: 'authenticated_session_01',
+  authenticatedSessionExpiresAt: '2026-08-06T13:00:00.000Z',
   ownerPolicyRevision: 7,
   authAssurance: 'supabase_verified_session',
   ownerRootRoutingVersion: 2,
@@ -186,7 +194,7 @@ describe('responsibility Worker adapter', () => {
     const cases: Array<{ ownerRoot: ResponsibilityOwnerRoot; request: Request; status: number }> = [
       {
         ownerRoot: {
-          async capture() { throw new Error('responsibility capture digest conflict: secret'); },
+          async capture() { throw new ResponsibilityDigestConflictError(); },
           async readProjection() { throw new Error('not used'); },
         },
         request: request(captureBody), status: 409,
@@ -194,7 +202,7 @@ describe('responsibility Worker adapter', () => {
       {
         ownerRoot: {
           async capture() { throw new Error('not used'); },
-          async readProjection() { throw new Error('responsibility projection cursor rejected: cursor_ahead'); },
+          async readProjection() { throw new ResponsibilityProjectionCursorError('cursor_ahead'); },
         },
         request: new Request(
           'https://api.heywaldo.com/public/responsibilities/projection?fromExclusiveCursor=1&limit=25&snapshotId=snapshot_01',
@@ -204,7 +212,7 @@ describe('responsibility Worker adapter', () => {
       {
         ownerRoot: {
           async capture() { throw new Error('not used'); },
-          async readProjection() { throw new Error('owner authority root mismatch: owner_secret'); },
+          async readProjection() { throw new ResponsibilityOwnerRootMismatchError(); },
         },
         request: new Request(
           'https://api.heywaldo.com/public/responsibilities/projection?fromExclusiveCursor=0&limit=25',
@@ -235,7 +243,7 @@ describe('responsibility Worker adapter', () => {
       async capture(input) {
         const digest = (input.trustedEnvelope as { requestDigest: string }).requestDigest;
         if (storedDigest !== null && digest !== storedDigest) {
-          throw new Error('responsibility capture digest conflict');
+          throw new ResponsibilityDigestConflictError();
         }
         storedDigest = digest;
         return result;
@@ -306,6 +314,25 @@ describe('responsibility Worker adapter', () => {
     }
   });
 
+  it('maps a canonical Waldo authority denial to the same non-enumerating response', async () => {
+    const { adapter } = harness({
+      ownerRoot: {
+        async capture() {
+          throw new ResponsibilityAuthorityDeniedError();
+        },
+        async readProjection() { throw new Error('not used'); },
+      },
+    });
+    const response = await adapter.fetch(request(captureBody));
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      type: 'https://api.heywaldo.com/problems/unauthorized',
+      title: 'Authentication required',
+      status: 401,
+      code: 'unauthorized',
+    });
+  });
+
   it('rejects server-owned field smuggling without routing', async () => {
     const { adapter, calls } = harness();
     const response = await adapter.fetch(request({ ...captureBody, ownerId: 'owner_attacker' }));
@@ -346,6 +373,51 @@ describe('responsibility Worker adapter', () => {
     const { adapter, calls, ownerRootCalls } = harness();
     const response = await adapter.fetch(new Request(
       'https://api.heywaldo.com/public/responsibilities/projection?fromExclusiveCursor=0&limit=25&ownerId=owner_attacker',
+      { headers: {
+        authorization: 'Bearer session-token',
+        accept: 'application/vnd.waldo.responsibility.v0.2+json',
+      } },
+    ));
+    expect(response.status).toBe(400);
+    expect(calls).toEqual([]);
+    expect(ownerRootCalls()).toBe(0);
+  });
+
+  it('rejects every capture query after edge rate limiting but before auth or owner routing', async () => {
+    let rateCalls = 0;
+    let authCalls = 0;
+    let routeCalls = 0;
+    const adapter = createResponsibilityWorkerAdapter({
+      authority: { authenticate: async () => { authCalls += 1; return trustedContext; } },
+      edgeRateLimit: { admit: async () => { rateCalls += 1; return true; } },
+      failureReporter: { report: () => undefined },
+      ownerRootFor: async () => { routeCalls += 1; throw new Error('must not route'); },
+      now: () => '2026-08-06T12:00:01.000Z',
+      newId: (kind) => `${kind}_server_01`,
+    });
+    const response = await adapter.fetch(new Request(
+      'https://api.heywaldo.com/public/responsibilities?ownerId=owner_attacker',
+      {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer session-token',
+          accept: 'application/vnd.waldo.responsibility.v0.2+json',
+          'content-type': 'application/vnd.waldo.responsibility.v0.2+json',
+        },
+        body: JSON.stringify(captureBody),
+      },
+    ));
+
+    expect(response.status).toBe(400);
+    expect({ rateCalls, authCalls, routeCalls }).toEqual({
+      rateCalls: 1, authCalls: 0, routeCalls: 0,
+    });
+  });
+
+  it('bounds projection query bytes before authentication or owner routing', async () => {
+    const { adapter, calls, ownerRootCalls } = harness();
+    const response = await adapter.fetch(new Request(
+      `https://api.heywaldo.com/public/responsibilities/projection?fromExclusiveCursor=0&limit=25&snapshotId=${'a'.repeat(2_049)}`,
       { headers: {
         authorization: 'Bearer session-token',
         accept: 'application/vnd.waldo.responsibility.v0.2+json',

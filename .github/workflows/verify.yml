@@ -36,19 +36,11 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Start isolated Supabase database
-        run: supabase db start
+      - name: Start isolated Supabase Auth, REST, and database stack
+        run: supabase start > /dev/null
 
       - name: Verify
         run: pnpm verify
-
-      - name: Start local Auth and REST proof stack
-        run: |
-          supabase stop --no-backup
-          supabase start > /dev/null
-
-      - name: Verify responsibility session revocation at the public adapter
-        run: pnpm verify:supabase:session-revocation
 
   verify-supabase:
     name: Supabase migrate-from-zero and pgTAP

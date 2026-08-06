@@ -2,11 +2,15 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest,
   canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
+  responsibilityHttpProblemV01,
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
-import { signResponsibilityIngress } from './responsibility/ingress-signature';
+import {
+  canonicalizeResponsibilityProjectionIngressForDigest,
+  signResponsibilityIngress,
+} from './responsibility/ingress-signature';
 import {
   createResponsibilityWorkerAdapter,
   type ResponsibilityOwnerRoot,
@@ -19,6 +23,8 @@ export * from './llm/provider';
 export * from './do-schema';
 export * from './run-loop/do';
 export * from './responsibility/raw-json';
+export * from './responsibility/constants';
+export * from './responsibility/errors';
 export * from './responsibility/ingress-signature';
 export * from './responsibility/supabase-authority';
 export * from './responsibility/worker-adapter';
@@ -96,12 +102,7 @@ export default {
       return await createResponsibilityPublicHandler(env).fetch(request);
     } catch (error) {
       reportResponsibilityFailure('handler_unavailable', error);
-      return new Response(JSON.stringify({
-        type: 'https://api.heywaldo.com/problems/temporarily-unavailable',
-        title: 'Temporarily unavailable',
-        status: 503,
-        code: 'temporarily_unavailable',
-      }), {
+      return new Response(JSON.stringify(responsibilityHttpProblemV01(503)), {
         status: 503,
         headers: {
           'cache-control': 'no-store',
@@ -164,7 +165,6 @@ async function ownerRootFor(
 ): Promise<ResponsibilityOwnerRoot> {
   const stub = namespace.get(namespace.idFromName(await responsibilityOwnerRootName(
     context.ownerId,
-    context.ownerRootRoutingVersion,
   )));
   return {
     async capture(input, ingress) {
@@ -186,10 +186,9 @@ async function ownerRootFor(
       }));
     },
     async readProjection(input, ingress) {
-      const projectionDigest = `sha256:${await sha256Hex(JSON.stringify([
-        input.protocolVersion ?? '0.2', input.fromExclusiveCursor, input.limit,
-        input.snapshotId ?? null,
-      ]))}` as const;
+      const projectionDigest = `sha256:${await sha256Hex(
+        canonicalizeResponsibilityProjectionIngressForDigest(input),
+      )}` as const;
       return stub.readResponsibilityProjectionFromWorker(input, await signResponsibilityIngress({
         context: { ...ingress, ...authorityForIngress(context) },
         operation: 'projection',
@@ -205,6 +204,7 @@ async function ownerRootFor(
 function authorityForIngress(context: TrustedResponsibilityContext) {
   return {
     ownerId: context.ownerId,
+    authenticatedSubjectRef: context.authenticatedSubjectRef,
     presenceId: context.presenceId,
     presenceRegistrationId: context.presenceRegistrationId,
     ownerRootRoutingVersion: context.ownerRootRoutingVersion,
@@ -221,12 +221,9 @@ function responsibilityIngressSecret(env: Env): string {
 
 export async function responsibilityOwnerRootName(
   ownerId: string,
-  ownerRootRoutingVersion: number,
 ): Promise<string> {
-  const digest = await sha256Hex(
-    `waldo-owner-root\0${ownerRootRoutingVersion}\0${ownerId}`,
-  );
-  return `owner-root:v${ownerRootRoutingVersion}:sha256:${digest}`;
+  const digest = await sha256Hex(`waldo-owner-root\0${ownerId}`);
+  return `owner-root:sha256:${digest}`;
 }
 
 async function sha256Hex(value: string): Promise<string> {

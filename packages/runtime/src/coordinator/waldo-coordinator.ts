@@ -15,7 +15,16 @@ import {
   type ResponsibilityProjectionPageV01Compatibility,
   type ResponsibilityProjectionPageV02,
 } from '@waldo/contracts';
-import { IdentityPresenceModule } from './identity-presence-module';
+import {
+  IdentityPresenceModule,
+  type ResponsibilityCanonicalAuthority,
+  type ResponsibilityCanonicalAuthorityRegistration,
+} from './identity-presence-module';
+import {
+  ResponsibilityDigestConflictError,
+  ResponsibilityOwnerRootMismatchError,
+  ResponsibilityProjectionCursorError,
+} from '../responsibility/errors';
 import { OwnerEventLog } from './owner-event-log';
 import {
   OutcomeModule,
@@ -47,13 +56,6 @@ export type ResponsibilityProjectionRead = Readonly<{
   limit: number;
   snapshotId?: string;
 }>;
-
-export class ResponsibilityProjectionCursorError extends Error {
-  constructor(readonly code: 'snapshot_replaced' | 'cursor_ahead' | 'cursor_corrupt') {
-    super(`responsibility projection cursor rejected: ${code}`);
-    this.name = 'ResponsibilityProjectionCursorError';
-  }
-}
 
 export type CoordinatorWriteStage =
   | 'owner_root'
@@ -108,8 +110,43 @@ export class WaldoCoordinator {
     this.#outcomes = new OutcomeModule(storage, dependencies.newId);
   }
 
+  admitCanonicalAuthority(
+    registration: ResponsibilityCanonicalAuthorityRegistration,
+    beforeCommit?: () => void,
+  ): ResponsibilityCanonicalAuthority {
+    return this.#storage.transactionSync(() => {
+      const authority = this.#identity
+        .bootstrapOrRefreshCanonicalAuthorityInCurrentTransaction(registration);
+      beforeCommit?.();
+      return authority;
+    });
+  }
+
+  assertCanonicalAuthority(
+    authority: ResponsibilityCanonicalAuthority,
+  ): ResponsibilityCanonicalAuthority {
+    return this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+      authority,
+      this.#deps.now(),
+    );
+  }
+
   async captureResponsibility(
     admission: ResponsibilityCaptureAdmission,
+  ): Promise<ResponsibilityCaptureResult> {
+    return this.#captureResponsibility(admission);
+  }
+
+  async captureAuthorizedResponsibility(
+    admission: ResponsibilityCaptureAdmission,
+    canonicalAuthority: ResponsibilityCanonicalAuthority,
+  ): Promise<ResponsibilityCaptureResult> {
+    return this.#captureResponsibility(admission, canonicalAuthority);
+  }
+
+  async #captureResponsibility(
+    admission: ResponsibilityCaptureAdmission,
+    canonicalAuthority?: ResponsibilityCanonicalAuthority,
   ): Promise<ResponsibilityCaptureResult> {
     const parsed = this.#parseAdmission(admission);
     const { request, trustedEnvelope } = parsed;
@@ -117,12 +154,16 @@ export class WaldoCoordinator {
       parsed.canonicalRequest,
     )}`;
     if (trustedEnvelope.requestDigest !== requestDigest) {
-      throw new Error('responsibility capture digest conflict');
+      throw new ResponsibilityDigestConflictError();
     }
 
     return this.#storage.transactionSync(() => {
       const at = this.#deps.now();
-      this.#identity.bindOrAssertOwnerRootInCurrentTransaction(admission.routedOwnerId, at);
+      if (canonicalAuthority === undefined) {
+        this.#identity.bindOrAssertOwnerRootInCurrentTransaction(admission.routedOwnerId, at);
+      } else {
+        this.#identity.assertCanonicalAuthorityInCurrentTransaction(canonicalAuthority, at);
+      }
       this.#deps.afterWrite?.('owner_root');
 
       const existing = this.#storage.sql.exec<StoredCommandRow>(
@@ -133,7 +174,7 @@ export class WaldoCoordinator {
       if (existing !== undefined) {
         if (existing.owner_id !== admission.routedOwnerId ||
             existing.request_digest !== requestDigest) {
-          throw new Error('responsibility capture digest conflict');
+          throw new ResponsibilityDigestConflictError();
         }
         const persisted = responsibilityCaptureResultSchema.parse(
           JSON.parse(existing.result_json),
@@ -185,13 +226,34 @@ export class WaldoCoordinator {
   readResponsibilityProjection(
     input: ResponsibilityProjectionRead,
   ): ResponsibilityProjectionPageV02 | ResponsibilityProjectionPageV01Compatibility {
+    return this.#readResponsibilityProjection(input);
+  }
+
+  readAuthorizedResponsibilityProjection(
+    input: ResponsibilityProjectionRead,
+    canonicalAuthority: ResponsibilityCanonicalAuthority,
+  ): ResponsibilityProjectionPageV02 | ResponsibilityProjectionPageV01Compatibility {
+    return this.#readResponsibilityProjection(input, canonicalAuthority);
+  }
+
+  #readResponsibilityProjection(
+    input: ResponsibilityProjectionRead,
+    canonicalAuthority?: ResponsibilityCanonicalAuthority,
+  ): ResponsibilityProjectionPageV02 | ResponsibilityProjectionPageV01Compatibility {
     if (!Number.isSafeInteger(input.fromExclusiveCursor) || input.fromExclusiveCursor < 0) {
       throw new Error('invalid responsibility projection cursor');
     }
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 256) {
       throw new Error('invalid responsibility projection page limit');
     }
-    this.#identity.assertOwnerRoot(input.routedOwnerId);
+    if (canonicalAuthority === undefined) {
+      this.#identity.assertOwnerRoot(input.routedOwnerId);
+    } else {
+      this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+    }
     const snapshot = this.#outcomes.projections.readSnapshot(input.routedOwnerId);
     if (input.fromExclusiveCursor > 0 && input.snapshotId === undefined) {
       throw new ResponsibilityProjectionCursorError('snapshot_replaced');
@@ -270,7 +332,7 @@ export class WaldoCoordinator {
     }>,
   ): void {
     if (trustedEnvelope.ownerId !== routedOwnerId) {
-      throw new Error('owner authority root mismatch');
+      throw new ResponsibilityOwnerRootMismatchError();
     }
     if (request.protocolVersion !== trustedEnvelope.protocolVersion) {
       throw new Error('responsibility protocol version mismatch');

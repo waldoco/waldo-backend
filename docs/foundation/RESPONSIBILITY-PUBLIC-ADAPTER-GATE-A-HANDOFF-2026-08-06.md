@@ -2,10 +2,12 @@
 
 ## Outcome and proof level
 
-Gate A is complete at `adapter_conformance_passed` in the local/CI contract environment.
-The public responsibility adapter, trusted owner-root route, canonical Supabase session
-authority, fresh-schema migration wall, and exact-token revocation behavior are implemented
-through the same interfaces used by production configuration.
+The repaired Gate A candidate is `adapter_conformance_passed` in the local/CI contract environment
+at the current PR head. The exact full verification wall and independent Standards, Spec, Security,
+and adversarial breaker reviews pass. The public responsibility adapter, stable owner-root route,
+Supabase session authentication, Waldo-owned identity/Presence authority, upgrade-safe schema
+migration, and exact-token revocation behavior use production interfaces, but the proofs are
+layered rather than one composed end-to-end test. PR #76 remains unmerged.
 
 This is not `cross_surface_acceptance_passed` or `operational_proof_passed`. No migration was
 deployed to a hosted Supabase project, the Worker flag remains off by default, and no Kennel,
@@ -22,15 +24,34 @@ staging, or production request was exercised.
   `auth.uid()` and JWT `session_id`, matches both against a non-expired `auth.sessions` row, pins
   an empty `search_path`, and revokes `PUBLIC`, `anon`, and `service_role` before granting only
   `authenticated` execution.
+- Supabase proves only the account subject and current Auth session. The owner ID/root is derived
+  from that verified subject and does not include policy or routing revisions. Bounded admin
+  metadata is an admission claim, never the final owner/Presence/policy/routing authority.
+- The signed capture/projection admission establishes canonical account-subject, one public Presence,
+  policy-revision, and routing state only when an owner root is empty or is a legacy V3 root with
+  no authority columns populated. Thereafter `IdentityPresenceModule` rejects changed subject,
+  Presence, policy, or routing claims while allowing bounded renewed-login session bindings to the
+  same Presence. Capture revalidates this state inside the Outcome transaction; projection
+  revalidates it immediately before its synchronous read. Bootstrap/refresh and the owner/session
+  rate increments share one transaction; rejection rolls all of them back.
+- V4 extends the already-merged V3 tables instead of rewriting V3. Upgrade tests preserve existing
+  Outcome, event, idempotency, projection, and cursor rows and leave legacy roots unauthorized until
+  signed admission; failure tests prove the V4 upgrade rolls back to intact V3 structure.
 - One signed Worker-to-existing-`RunLoopDO` bridge. The DO recomputes the version-specific
   canonical envelope digest before the existing `WaldoCoordinator` writes canonical truth.
 - Edge-source, authenticated-session, and owner rate limits; exact retry, digest conflict,
   cursor/snapshot, owner isolation, and eviction/reconstruction coverage.
+- Executable version-pinned fixtures cover both capture versions, projection queries, raw duplicate-
+  key/malformed-Unicode bodies, harness fault conditions, statuses, and exact problem responses.
 - A real local Supabase Auth/REST integration proof. It signs in a temporary user with bounded
-  admin authority metadata, successfully invokes public capture and projection, signs out the
+  admin claim metadata, successfully invokes the adapter contract for capture and projection,
+  signs out the
   current session, reuses the exact still-unexpired access token, receives the content-free 401
   shape on both routes, and proves the adapter never resolves the owner root after revocation.
-  The temporary user is removed. CI runs this proof after the standard repository wall.
+  The temporary user is removed. The integration and its Node configuration are TypeScript-
+  checked, and the canonical repository `verify` wall runs this proof. It uses an adapter-contract
+  fake owner root. Separate workerd tests cover the production signed bridge and real RunLoopDO/
+  Coordinator persistence; no single test composes local Supabase Auth through the real DO.
 
 No WorkUnit execution vocabulary, provider planning turn, Kennel integration, connector,
 Evidence/Verification, Acceptance, OpenLoop, or ReEntry behavior was added.
@@ -41,14 +62,16 @@ Evidence/Verification, Acceptance, OpenLoop, or ReEntry behavior was added.
 
 - `npx -y pnpm@10.34.4 install --frozen-lockfile`.
 - `@waldo/contracts`: 57 files / 1,468 tests.
-- `@waldo/runtime`: 36 files / 957 tests.
+- `@waldo/runtime`: 37 files / 969 tests.
 - Supabase schema: eight canonical migrations, 53 pgTAP assertions, migration-list/history
   freshness, transactional DROP rollback rehearsal, and no pending migration.
-- Local security advisor: no warning-or-higher findings.
-- Public-adapter exact-token revocation integration: one file / one test.
+- Local `supabase db lint --level warning`: no schema errors.
+- Node adapter integrations: two files / five tests (four executable fixture tests and one real
+  local Supabase exact-token revocation test).
 - `DOCKER_CONTEXT=desktop-linux npx -y pnpm@10.34.4 verify`: typecheck, frozen install,
   contracts, fresh Supabase reset, pgTAP, runtime, and all repository guards.
 - `git diff --check`.
+- Independent Standards, Spec, Security, and adversarial breaker reviews: PASS on the final source.
 
 ### Failed, then fixed
 
@@ -61,6 +84,25 @@ Evidence/Verification, Acceptance, OpenLoop, or ReEntry behavior was added.
 - The first full runtime rerun included the Node-only integration test in the Cloudflare pool;
   the normal suite was pinned to `test/**/*.test.ts` and the integration received its own Node
   Vitest configuration. Both suites then passed.
+- External review found that routing-version metadata partitioned one owner into multiple DOs,
+  Supabase metadata acted as final Waldo authority, authority TTL was unbounded, malformed Auth
+  success mapped to 401, capture queries were ignored, integration code was not typechecked, and
+  public problems were duplicated/string-mapped. Each lead was reproduced before repair: routing
+  now depends only on the verified subject-derived owner, Waldo state revalidates authority,
+  access-token TTL is bounded, malformed Auth success maps to 503, capture queries are rejected,
+  the Node lane is in `verify`, and contract-owned problems/stable error names drive responses.
+- Follow-up reviews caught a rewritten merged V3 migration, no production canonical-authority
+  admission caller, permanent login-session binding, authority writes before rate limiting, and a
+  Presence/session expiry race. V3 is now unchanged; additive V4 upgrade/rollback preserves data;
+  signed capture/projection admission supports bounded renewed sessions; and authority plus both
+  rate counters commit or roll back in one transaction.
+- The first post-repair runtime wall failed because the exact RPC allowlist had not included the
+  temporary authority RPC. The RPC was removed by the atomic-admission design, the allowlist remains
+  narrow, and the final runtime wall passes.
+- Breaker reviews found that the first owner-limit test hit the session limit and that raw-byte
+  fixtures were vacuous. The final test uses a fresh fifth session to reach owner count 241 and
+  compares all authority/rate rows; strict hash-pinned fixtures remain schema-valid under ordinary
+  parsing and fail only when duplicate-key/fatal-UTF-8 protections are active.
 
 ### Unavailable or deferred
 
@@ -77,8 +119,10 @@ Evidence/Verification, Acceptance, OpenLoop, or ReEntry behavior was added.
 
 - `RunLoopDO` and `WaldoCoordinator` remain the only owner root and canonical truth writer.
   There is no new DO, store, service, provider path, or production test RPC.
-- Owner, actor, presence, authenticated session, policy revision, and routing derive only from
-  verified server context. Clients cannot select them.
+- Supabase authenticates the account/session; `IdentityPresenceModule` is the canonical resolver
+  for owner, actor/Presence, policy revision, routing generation, and active login-session binding.
+  Clients cannot select them. Exact-shape admin metadata can bootstrap an empty or legacy owner
+  root once, but cannot mutate established Waldo authority; user metadata is ignored.
 - The runtime carries a publishable key, not a Supabase secret/service-role key.
 - A session decision admits a new request. Logout cannot retroactively erase a transaction that
   was already admitted, and it does not implicitly cancel already-authorized WorkUnit execution.
@@ -93,8 +137,9 @@ the public Worker and canonical migration are deployed in an authorized environm
 
 ## Next phase
 
-Gate B may begin in a new bounded session because Gate A's local contract and security wall pass.
-Build one explicitly authorized, Outcome-bound, no-tools provider planning turn through the
+Gate B remains closed while PR #76 is under review. It may begin only after this repaired Gate A
+diff is merged. Then build one explicitly authorized,
+Outcome-bound, no-tools provider planning turn through the
 existing RunLoop effect path. Keep the two candidate-plan scenarios on the same interfaces and
 keep Outcome completion, Evidence/Verification, Acceptance, OpenLoop/ReEntry, connectors,
 Kennel UI acceptance, staging, production, and operations outside any unsupported claim.
@@ -115,11 +160,14 @@ Kennel UI acceptance, staging, production, and operations outside any unsupporte
 - `packages/runtime/src/responsibility/*`
 - `packages/runtime/test/responsibility-worker-adapter.test.ts`
 - `packages/runtime/test/responsibility-public-do.test.ts`
+- `packages/runtime/test/identity-presence-module.test.ts`
 - `packages/runtime/test/supabase-responsibility-authority.test.ts`
 - `packages/runtime/test/trusted-run-loop.test.ts`
 - `packages/runtime/integration/responsibility-local-supabase.test.ts`
+- `packages/runtime/integration/responsibility-contract-fixtures.test.ts`
 - `packages/runtime/vitest.config.ts`
 - `packages/runtime/vitest.integration.config.ts`
+- `packages/runtime/tsconfig.integration.json`
 - `packages/runtime/wrangler.jsonc`
 - `packages/runtime/README.md`
 - `scripts/verify-supabase-migrations.mjs`

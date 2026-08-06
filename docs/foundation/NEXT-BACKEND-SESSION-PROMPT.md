@@ -1,4 +1,4 @@
-# Next Backend Session Prompt — Gate B minimum Outcome-bound working agent
+# Next Backend Session Prompt — merge Gate A, then build the minimum Outcome-bound working agent
 
 Continue from the Gate A branch/worktree without discarding its changes or touching the saved and
 dirty checkouts. Read the [Gate A handoff](./RESPONSIBILITY-PUBLIC-ADAPTER-GATE-A-HANDOFF-2026-08-06.md),
@@ -8,9 +8,12 @@ then the repository rules, architecture lock, responsibility phase handoff, curr
 
 ## Starting truth
 
-Gate A passes local adapter conformance: the v0.1/v0.2 authenticated public adapter, canonical
-Supabase session predicate, fresh migration/pgTAP wall, and real local exact-token sign-out retry
-through capture/projection are green. The production feature flag remains off.
+PR #76 contains the repaired Gate A candidate. Do not begin Gate B unless the PR's current head
+passes the full verification/review wall and is merged. Its local proof covers the v0.1/v0.2
+authenticated public adapter, stable subject-derived owner routing, Supabase account/session
+authentication, Waldo-owned canonical identity/Presence revalidation, fresh migration/pgTAP wall,
+and a real local exact-token sign-out retry through capture/projection. The production feature flag
+remains off, and public identity/Presence enrollment is not implemented.
 
 Hosted/staging deployment is unavailable, and Kennel acceptance is unproved. The hosted Waldo and
 Waldo Staging Supabase projects were visible but inactive and were not restored or changed. Treat

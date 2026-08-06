@@ -12,6 +12,7 @@ import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { responsibilityOwnerRootName } from '../src/index';
 import {
+  canonicalizeResponsibilityProjectionIngressForDigest,
   signResponsibilityIngress,
   type SignedResponsibilityIngressContext,
 } from '../src/responsibility/ingress-signature';
@@ -20,7 +21,9 @@ import type { RunLoopDO } from '../src/run-loop/do';
 let sequence = 0;
 const TEST_INGRESS_SECRET = 'test-responsibility-ingress-hmac-secret-000000000000';
 const ingress = {
+  authenticatedSubjectRef: `supabase_subject_${'a'.repeat(64)}`,
   authenticatedSessionId: `authenticated_session_${'a'.repeat(64)}`,
+  authenticatedSessionExpiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
   ownerPolicyRevision: 7,
 };
 
@@ -57,7 +60,7 @@ async function admission(
 
 async function stubFor(ownerId: string): Promise<DurableObjectStub<RunLoopDO>> {
   sequence += 1;
-  const name = `${await responsibilityOwnerRootName(ownerId, 2)}:test:${sequence}`;
+  const name = `${await responsibilityOwnerRootName(ownerId)}:test:${sequence}`;
   return env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(name));
 }
 
@@ -127,16 +130,107 @@ describe('production responsibility RunLoopDO RPC', () => {
     });
   });
 
-  it('rejects session/policy substitution before owner state is admitted', async () => {
+  it('rejects signed claims that do not match Waldo-owned canonical authority', async () => {
     const ownerId = 'owner_public_authority_01';
     const stub = await stubFor(ownerId);
     const input = await admission(ownerId, 'request_public_authority_01');
-    const changedIngress = await signedCaptureIngress(ownerId, input, {
-      ownerPolicyRevision: ingress.ownerPolicyRevision + 1,
-    });
+    await stub.captureResponsibilityFromWorker(
+      input,
+      await signedCaptureIngress(ownerId, input),
+    );
     await runInDurableObject(stub, async (instance) => {
-      await expect(instance.captureResponsibilityFromWorker(input, changedIngress))
+      for (const [envelopeChange, ingressChange] of [
+        [{ ownerPolicyRevision: 8 }, { ownerPolicyRevision: 8 }],
+        [
+          { actor: { kind: 'presence', id: 'presence_substituted' }, presenceId: 'presence_substituted' },
+          { presenceId: 'presence_substituted' },
+        ],
+        [{}, { authenticatedSubjectRef: `supabase_subject_${'c'.repeat(64)}` }],
+      ] as const) {
+        const changed = {
+          ...input,
+          trustedEnvelope: { ...input.trustedEnvelope, ...envelopeChange },
+        };
+        const changedIngress = await signedCaptureIngress(ownerId, changed, ingressChange);
+        await expect(instance.captureResponsibilityFromWorker(changed, changedIngress))
+          .rejects.toMatchObject({ name: 'ResponsibilityAuthorityDeniedError' });
+      }
+      const unsupportedRouting = {
+        ...input,
+        trustedEnvelope: { ...input.trustedEnvelope, ownerRootRoutingVersion: 3 },
+      };
+      await expect(instance.captureResponsibilityFromWorker(
+        unsupportedRouting,
+        await signedCaptureIngress(ownerId, unsupportedRouting, {
+          ownerRootRoutingVersion: 3,
+        }),
+      )).rejects.toThrow('responsibility ingress authority mismatch');
+    });
+  });
+
+  it('admits a renewed login session only for the stable canonical Presence', async () => {
+    const ownerId = 'owner_public_session_rotation_01';
+    const stub = await stubFor(ownerId);
+    const firstInput = await admission(ownerId, 'request_public_session_initial_01');
+    await stub.captureResponsibilityFromWorker(
+      firstInput,
+      await signedCaptureIngress(ownerId, firstInput),
+    );
+    const renewedSessionId = `authenticated_session_${'d'.repeat(64)}`;
+    const renewedInput = await admission(
+      ownerId,
+      'request_public_session_rotation_01',
+      renewedSessionId,
+    );
+    await expect(stub.captureResponsibilityFromWorker(
+      renewedInput,
+      await signedCaptureIngress(ownerId, renewedInput, {
+        authenticatedSessionId: renewedSessionId,
+      }),
+    )).resolves.toMatchObject({ ownerId });
+
+    await runInDurableObject(stub, (_instance, state) => {
+      expect(state.storage.sql.exec<{
+        authenticated_subject_ref: string;
+        owner_policy_revision: number;
+        owner_root_routing_version: number;
+      }>(
+        `SELECT authenticated_subject_ref, owner_policy_revision,
+                owner_root_routing_version FROM owner_roots`,
+      ).one()).toEqual({
+        authenticated_subject_ref: ingress.authenticatedSubjectRef,
+        owner_policy_revision: ingress.ownerPolicyRevision,
+        owner_root_routing_version: 2,
+      });
+      expect(state.storage.sql.exec(
+        'SELECT presence_registration_id, presence_id FROM presence_registrations',
+      ).toArray()).toEqual([{
+        presence_registration_id: 'presence_registration_01',
+        presence_id: 'presence_01',
+      }]);
+      expect(state.storage.sql.exec<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM presence_sessions',
+      ).one().count).toBe(2);
+    });
+  });
+
+  it('denies invalid signed admission without creating canonical or rate state', async () => {
+    const ownerId = 'owner_public_invalid_admission_01';
+    const stub = await stubFor(ownerId);
+    const input = await admission(ownerId, 'request_public_invalid_admission_01');
+    const signed = await signedCaptureIngress(ownerId, input, {}, {
+      secret: 'wrong-responsibility-ingress-secret-000000000000000000',
+    });
+
+    await runInDurableObject(stub, async (instance, state) => {
+      await expect(instance.captureResponsibilityFromWorker(input, signed))
         .rejects.toThrow('authority mismatch');
+      expect(state.storage.sql.exec('SELECT * FROM owner_roots').toArray()).toEqual([]);
+      expect(state.storage.sql.exec('SELECT * FROM presence_registrations').toArray()).toEqual([]);
+      expect(state.storage.sql.exec('SELECT * FROM presence_sessions').toArray()).toEqual([]);
+      expect(state.storage.sql.exec('SELECT * FROM outcomes').toArray()).toEqual([]);
+      expect(state.storage.sql.exec('SELECT * FROM responsibility_ingress_rate').toArray())
+        .toEqual([]);
     });
   });
 
@@ -204,12 +298,28 @@ describe('production responsibility RunLoopDO RPC', () => {
         routedOwnerId: ownerId, ...projectionInput,
       }, projectionIngress);
     }
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+      const before = {
+        authority: state.storage.sql.exec(
+          'SELECT * FROM presence_sessions ORDER BY authenticated_session_id',
+        ).toArray(),
+        rates: state.storage.sql.exec(
+          'SELECT * FROM responsibility_ingress_rate ORDER BY rate_key, bucket',
+        ).toArray(),
+      };
       await expect(Promise.resolve().then(() =>
         instance.readResponsibilityProjectionFromWorker({
           routedOwnerId: ownerId, ...projectionInput,
         }, projectionIngress),
       )).rejects.toThrow('rate limited');
+      expect({
+        authority: state.storage.sql.exec(
+          'SELECT * FROM presence_sessions ORDER BY authenticated_session_id',
+        ).toArray(),
+        rates: state.storage.sql.exec(
+          'SELECT * FROM responsibility_ingress_rate ORDER BY rate_key, bucket',
+        ).toArray(),
+      }).toEqual(before);
     });
   });
 
@@ -242,10 +352,26 @@ describe('production responsibility RunLoopDO RPC', () => {
     const overflow = await signedProjectionIngress(ownerId, projectionInput, {
       authenticatedSessionId: `authenticated_session_${'f'.repeat(64)}`,
     });
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+      const authorityBefore = {
+        root: state.storage.sql.exec('SELECT * FROM owner_roots').toArray(),
+        presences: state.storage.sql.exec('SELECT * FROM presence_registrations').toArray(),
+        sessions: state.storage.sql.exec('SELECT * FROM presence_sessions ORDER BY authenticated_session_id').toArray(),
+        rates: state.storage.sql.exec(
+          'SELECT * FROM responsibility_ingress_rate ORDER BY rate_key, bucket',
+        ).toArray(),
+      };
       await expect(Promise.resolve().then(() => instance.readResponsibilityProjectionFromWorker({
         routedOwnerId: ownerId, ...projectionInput,
       }, overflow))).rejects.toThrow('rate limited');
+      expect({
+        root: state.storage.sql.exec('SELECT * FROM owner_roots').toArray(),
+        presences: state.storage.sql.exec('SELECT * FROM presence_registrations').toArray(),
+        sessions: state.storage.sql.exec('SELECT * FROM presence_sessions ORDER BY authenticated_session_id').toArray(),
+        rates: state.storage.sql.exec(
+          'SELECT * FROM responsibility_ingress_rate ORDER BY rate_key, bucket',
+        ).toArray(),
+      }).toEqual(authorityBefore);
     });
   });
 
@@ -269,11 +395,10 @@ describe('production responsibility RunLoopDO RPC', () => {
     expect(page).toMatchObject({ ownerId, highWaterCursor: 1, nextCursor: 1 });
   });
 
-  it('derives stable, owner- and version-isolated routing names', async () => {
-    const first = await responsibilityOwnerRootName('owner_route_01', 2);
-    expect(await responsibilityOwnerRootName('owner_route_01', 2)).toBe(first);
-    expect(await responsibilityOwnerRootName('owner_route_02', 2)).not.toBe(first);
-    expect(await responsibilityOwnerRootName('owner_route_01', 3)).not.toBe(first);
+  it('derives exactly one stable routing name from the owner identity', async () => {
+    const first = await responsibilityOwnerRootName('owner_route_01');
+    expect(await responsibilityOwnerRootName('owner_route_01')).toBe(first);
+    expect(await responsibilityOwnerRootName('owner_route_02')).not.toBe(first);
     expect(first).not.toContain('owner_route_01');
   });
 });
@@ -281,17 +406,17 @@ describe('production responsibility RunLoopDO RPC', () => {
 async function signedCaptureIngress(
   ownerId: string,
   input: Awaited<ReturnType<typeof admission>>,
-  overrides: Partial<typeof ingress> = {},
+  overrides: IngressOverrides = {},
   signature: Readonly<{ issuedAt?: number; secret?: string }> = {},
 ): Promise<SignedResponsibilityIngressContext> {
   return signResponsibilityIngress({
     context: {
-      ...ingress,
-      ...overrides,
       ownerId,
       presenceId: 'presence_01',
       presenceRegistrationId: 'presence_registration_01',
       ownerRootRoutingVersion: 2,
+      ...ingress,
+      ...overrides,
     },
     operation: 'capture',
     requestDigest: input.trustedEnvelope.requestDigest as `sha256:${string}`,
@@ -306,19 +431,20 @@ async function signedCaptureIngress(
 async function signedProjectionIngress(
   ownerId: string,
   input: { protocolVersion: '0.1' | '0.2'; fromExclusiveCursor: number; limit: number; snapshotId?: string },
-  overrides: Partial<typeof ingress> = {},
+  overrides: IngressOverrides = {},
 ): Promise<SignedResponsibilityIngressContext> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([
-    input.protocolVersion, input.fromExclusiveCursor, input.limit, input.snapshotId ?? null,
-  ])));
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(canonicalizeResponsibilityProjectionIngressForDigest(input)),
+  );
   return signResponsibilityIngress({
     context: {
-      ...ingress,
-      ...overrides,
       ownerId,
       presenceId: 'presence_01',
       presenceRegistrationId: 'presence_registration_01',
       ownerRootRoutingVersion: 2,
+      ...ingress,
+      ...overrides,
     },
     operation: 'projection',
     requestDigest: `sha256:${Array.from(new Uint8Array(digest), (byte) =>
@@ -331,6 +457,12 @@ async function signedProjectionIngress(
     secret: TEST_INGRESS_SECRET,
   });
 }
+
+type IngressOverrides = Partial<typeof ingress> & Readonly<{
+  presenceId?: string;
+  presenceRegistrationId?: string;
+  ownerRootRoutingVersion?: number;
+}>;
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));

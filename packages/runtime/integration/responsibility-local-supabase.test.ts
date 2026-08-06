@@ -8,7 +8,6 @@ import {
 } from '../src/responsibility/worker-adapter';
 
 const MEDIA_TYPE = 'application/vnd.waldo.responsibility.v0.2+json';
-const OWNER_ID = 'owner_local_revocation_01';
 const PRESENCE_ID = 'presence_local_revocation_01';
 const REGISTRATION_ID = 'presence_registration_local_revocation_01';
 
@@ -73,13 +72,10 @@ describe.sequential('local Supabase responsibility revocation', () => {
         email_confirm: true,
         app_metadata: {
           waldo_responsibility_authority: {
-            owner_id: OWNER_ID,
             presence_id: PRESENCE_ID,
             presence_registration_id: REGISTRATION_ID,
             owner_policy_revision: 1,
-            owner_root_routing_version: 1,
-            state: 'active',
-            expires_at: '2099-01-01T00:00:00.000Z',
+            owner_root_routing_version: 2,
           },
         },
       },
@@ -117,16 +113,17 @@ describe.sequential('local Supabase responsibility revocation', () => {
   });
 
   it('denies the exact unexpired signed-out token before owner-root routing', async () => {
+    let canonicalOwnerId = '';
     const ownerRoot: ResponsibilityOwnerRoot = {
       async capture() {
         captureCalls += 1;
         return {
           protocolVersion: '0.2',
-          ownerId: OWNER_ID,
+          ownerId: canonicalOwnerId,
           requestId: 'request_local_revocation_01',
           outcome: {
             id: 'outcome_local_revocation_01',
-            ownerId: OWNER_ID,
+            ownerId: canonicalOwnerId,
             revision: 1,
             userStatement: 'Prepare a reviewable update, but do not publish it.',
             state: 'captured',
@@ -142,7 +139,7 @@ describe.sequential('local Supabase responsibility revocation', () => {
         projectionCalls += 1;
         return {
           protocolVersion: '0.2',
-          ownerId: OWNER_ID,
+          ownerId: canonicalOwnerId,
           projectionName: 'responsibility.summary',
           snapshotId: 'snapshot_local_revocation_01',
           snapshotBaseCursor: 0,
@@ -167,8 +164,9 @@ describe.sequential('local Supabase responsibility revocation', () => {
       authority,
       edgeRateLimit: { admit: async () => true },
       failureReporter: { report: () => undefined },
-      ownerRootFor: async () => {
+      ownerRootFor: async (context) => {
         routedOwnerRoots += 1;
+        canonicalOwnerId = context.ownerId;
         return ownerRoot;
       },
       now: () => '2026-08-06T12:00:01.000Z',

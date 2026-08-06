@@ -2,13 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createSupabaseResponsibilityAuthority } from '../src/responsibility/supabase-authority';
 
 const authorityMetadata = {
-  owner_id: 'owner_server_01',
   presence_id: 'presence_server_01',
   presence_registration_id: 'presence_registration_01',
   owner_policy_revision: 7,
   owner_root_routing_version: 2,
-  state: 'active',
-  expires_at: '2026-08-07T00:00:00.000Z',
 };
 
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -22,7 +19,7 @@ function token(
   const encode = (value: unknown) => btoa(JSON.stringify(value))
     .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
   return `${encode({ alg: 'ES256', typ: 'JWT' })}.${encode({
-    sub: userId, session_id: session, exp: 1_786_070_400, ...claimOverrides,
+    sub: userId, session_id: session, exp: 1_786_019_400, ...claimOverrides,
   })}.${signature}`;
 }
 
@@ -54,16 +51,20 @@ describe('Supabase responsibility authority', () => {
       },
     });
 
-    await expect(authority.authenticate(authRequest())).resolves.toEqual({
-      ownerId: authorityMetadata.owner_id,
+    const authenticated = await authority.authenticate(authRequest());
+    expect(authenticated).toEqual({
+      ownerId: expect.stringMatching(/^owner_[a-f0-9]{64}$/),
+      authenticatedSubjectRef: expect.stringMatching(/^supabase_subject_[a-f0-9]{64}$/),
       actor: { kind: 'presence', id: authorityMetadata.presence_id },
       presenceId: authorityMetadata.presence_id,
       presenceRegistrationId: authorityMetadata.presence_registration_id,
       authenticatedSessionId: expect.stringMatching(/^authenticated_session_[a-f0-9]{64}$/),
+      authenticatedSessionExpiresAt: '2026-08-06T12:30:00.000Z',
       ownerPolicyRevision: 7,
       authAssurance: 'supabase_verified_session',
       ownerRootRoutingVersion: 2,
     });
+    expect(authenticated?.ownerId).not.toBe('owner_attacker');
     expect(calls).toHaveLength(2);
     expect(calls[0]!.url).toBe('https://project.supabase.co/auth/v1/user');
     expect(calls[0]!.headers.get('authorization')).toBe(`Bearer ${token()}`);
@@ -147,6 +148,42 @@ describe('Supabase responsibility authority', () => {
       .rejects.toThrow('responsibility authority unavailable');
   });
 
+  it('fails closed as unavailable when Auth returns malformed JSON with status 200', async () => {
+    const authority = createSupabaseResponsibilityAuthority({
+      projectUrl: 'https://project.supabase.co', publishableKey: 'publishable-key',
+      fetch: async () => new Response('{not-json', {
+        status: 200, headers: { 'content-type': 'application/json' },
+      }),
+    });
+
+    await expect(authority.authenticate(authRequest()))
+      .rejects.toThrow('responsibility authority unavailable');
+  });
+
+  it('denies an access token whose remaining lifetime exceeds the bounded session lease', async () => {
+    let oracleCalls = 0;
+    const authority = createSupabaseResponsibilityAuthority({
+      projectUrl: 'https://project.supabase.co', publishableKey: 'publishable-key',
+      now: () => Date.parse('2026-08-06T12:00:00.000Z'),
+      fetch: async (input) => {
+        if (String(input).endsWith('/rest/v1/rpc/waldo_responsibility_session_active')) {
+          oracleCalls += 1;
+          return Response.json(true);
+        }
+        return Response.json({
+          id: userId,
+          app_metadata: { waldo_responsibility_authority: authorityMetadata },
+        });
+      },
+    });
+    const tooLong = token('signature', sessionId, {
+      exp: Math.floor(Date.parse('2026-08-06T14:00:01.000Z') / 1_000),
+    });
+
+    await expect(authority.authenticate(authRequest(`Bearer ${tooLong}`))).resolves.toBeNull();
+    expect(oracleCalls).toBe(0);
+  });
+
   it.each([
     ['subject mismatch', token('signature', sessionId, { sub: '33333333-3333-4333-8333-333333333333' })],
     ['missing session claim', token('signature', sessionId, { session_id: undefined })],
@@ -223,9 +260,8 @@ describe('Supabase responsibility authority', () => {
 
   it.each([
     ['expired session', Response.json({}, { status: 401 })],
-    ['revoked presence', Response.json({ id: '11111111-1111-4111-8111-111111111111', app_metadata: { waldo_responsibility_authority: { ...authorityMetadata, state: 'revoked' } } })],
-    ['expired presence', Response.json({ id: '11111111-1111-4111-8111-111111111111', app_metadata: { waldo_responsibility_authority: { ...authorityMetadata, expires_at: '2026-08-06T11:59:59.000Z' } } })],
     ['missing policy', Response.json({ id: '11111111-1111-4111-8111-111111111111', app_metadata: { waldo_responsibility_authority: { ...authorityMetadata, owner_policy_revision: undefined } } })],
+    ['unsupported routing version', Response.json({ id: '11111111-1111-4111-8111-111111111111', app_metadata: { waldo_responsibility_authority: { ...authorityMetadata, owner_root_routing_version: 3 } } })],
   ])('denies %s', async (_name, authResponse) => {
     const authority = createSupabaseResponsibilityAuthority({
       projectUrl: 'https://project.supabase.co', publishableKey: 'publishable-key',

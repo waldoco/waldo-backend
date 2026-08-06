@@ -9,6 +9,7 @@ import {
   DoSchemaDriftError,
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
+  RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
   getSchemaVersion,
@@ -69,7 +70,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     );
   });
 
-  it('provisions all required product tables and schema metadata at V3', async () => {
+  it('provisions all required product tables and schema metadata at the current version', async () => {
     const stub = freshStub();
 
     const result = await runInDurableObject(stub, (_instance, state) => {
@@ -83,7 +84,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(3);
+    expect(result.version).toBe(4);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -100,7 +101,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     }
   });
 
-  it('migrates an existing V1 database to V3 without changing a V1 row', async () => {
+  it('migrates an existing V1 database to the current version without changing a V1 row', async () => {
     const stub = freshStub();
 
     const result = await runInDurableObject(stub, (_instance, state) => {
@@ -152,7 +153,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(3);
+    expect(result.version).toBe(4);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
     expect(result.draft).toEqual({
@@ -165,7 +166,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
   });
 
-  it('migrates V2 to V3 without changing existing product state', async () => {
+  it('migrates V2 to the current version without changing existing product state', async () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
       applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
@@ -184,7 +185,111 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 3, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 4, description: 'Preserve this row.' });
+  });
+
+  it('migrates the merged V3 responsibility schema to V4 without changing responsibility state', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      const sql = state.storage.sql;
+      applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, HEY144_GOALS_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION);
+
+      sql.exec(
+        'INSERT INTO owner_roots (root_key, owner_id, created_at) VALUES (1, ?, ?)',
+        'owner-v3',
+        '2026-08-06T00:00:00.000Z',
+      );
+      sql.exec(
+        'INSERT INTO owner_event_state (root_key, owner_id, high_water_cursor) VALUES (1, ?, 1)',
+        'owner-v3',
+      );
+      sql.exec(
+        `INSERT INTO outcomes (
+          id, owner_id, revision, user_statement, state, created_at, updated_at
+        ) VALUES (?, ?, 1, ?, 'captured', ?, ?)`,
+        'outcome-v3',
+        'owner-v3',
+        'Preserve this responsibility.',
+        '2026-08-06T00:00:00.000Z',
+        '2026-08-06T00:00:00.000Z',
+      );
+      sql.exec(
+        `INSERT INTO owner_domain_events (
+          owner_cursor, schema_version, event_id, owner_id, aggregate_kind,
+          aggregate_id, revision, event_type, causation_id, correlation_id,
+          occurred_at, payload_json
+        ) VALUES (1, '0.2', 'event-v3', 'owner-v3', 'outcome', 'outcome-v3',
+          1, 'outcome_captured', 'request-v3', 'request-v3',
+          '2026-08-06T00:00:00.000Z', '{"outcomeId":"outcome-v3"}')`,
+      );
+      sql.exec(
+        `INSERT INTO responsibility_commands (
+          request_id, owner_id, request_digest, result_json, recorded_at
+        ) VALUES ('request-v3', 'owner-v3', 'digest-v3', '{"ok":true}',
+          '2026-08-06T00:00:00.000Z')`,
+      );
+      sql.exec(
+        `INSERT INTO responsibility_projection (owner_cursor, owner_id, item_json)
+         VALUES (1, 'owner-v3', '{"kind":"outcome"}')`,
+      );
+      sql.exec(
+        `INSERT INTO responsibility_projection_state (
+          owner_id, snapshot_id, snapshot_base_cursor, updated_at
+        ) VALUES ('owner-v3', 'snapshot-v3', 1, '2026-08-06T00:00:00.000Z')`,
+      );
+
+      const before = {
+        version: getSchemaVersion(sql),
+        outcome: sql.exec('SELECT * FROM outcomes').toArray(),
+        events: sql.exec('SELECT * FROM owner_domain_events').toArray(),
+        commands: sql.exec('SELECT * FROM responsibility_commands').toArray(),
+        projection: sql.exec('SELECT * FROM responsibility_projection').toArray(),
+        projectionState: sql.exec('SELECT * FROM responsibility_projection_state').toArray(),
+      };
+      provisionDoSchema(state.storage);
+      return {
+        before,
+        after: {
+          version: getSchemaVersion(sql),
+          outcome: sql.exec('SELECT * FROM outcomes').toArray(),
+          events: sql.exec('SELECT * FROM owner_domain_events').toArray(),
+          commands: sql.exec('SELECT * FROM responsibility_commands').toArray(),
+          projection: sql.exec('SELECT * FROM responsibility_projection').toArray(),
+          projectionState: sql.exec('SELECT * FROM responsibility_projection_state').toArray(),
+        },
+        authority: sql.exec<{
+          authenticated_subject_ref: string | null;
+          state: string | null;
+          owner_policy_revision: number | null;
+          owner_root_routing_version: number | null;
+          updated_at: string | null;
+        }>(
+          `SELECT authenticated_subject_ref, state, owner_policy_revision,
+                  owner_root_routing_version, updated_at
+             FROM owner_roots WHERE root_key = 1`,
+        ).one(),
+        presenceCount: sql.exec<{ count: number }>(
+          'SELECT COUNT(*) AS count FROM presence_registrations',
+        ).one().count,
+        sessionCount: sql.exec<{ count: number }>(
+          'SELECT COUNT(*) AS count FROM presence_sessions',
+        ).one().count,
+      };
+    });
+
+    expect(result.before.version).toBe(3);
+    expect(result.after).toEqual({ ...result.before, version: 4 });
+    expect(result.authority).toEqual({
+      authenticated_subject_ref: null,
+      state: null,
+      owner_policy_revision: null,
+      owner_root_routing_version: null,
+      updated_at: null,
+    });
+    expect(result.presenceCount).toBe(0);
+    expect(result.sessionCount).toBe(0);
   });
 
   it('rolls back V3 metadata and all new tables when a legacy name collision is incompatible', async () => {
@@ -206,6 +311,37 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
     expect(result).toEqual({ version: 2, v3Tables: ['outcomes'] });
+  });
+
+  it('rolls back a failed V4 authority upgrade without altering the merged V3 owner root', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, HEY144_GOALS_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION);
+      state.storage.sql.exec('CREATE TABLE presence_registrations (id TEXT PRIMARY KEY)');
+
+      expect(() => provisionDoSchema(state.storage)).toThrow();
+      return {
+        version: getSchemaVersion(state.storage.sql),
+        ownerRootColumns: state.storage.sql.exec<{ name: string }>(
+          'PRAGMA table_info(owner_roots)',
+        ).toArray().map((row) => row.name),
+        authorityTables: listTables(state.storage.sql).filter((table) =>
+          table === 'presence_registrations' || table === 'presence_sessions'),
+        authorityIndexes: state.storage.sql.exec<{ name: string }>(
+          `SELECT name FROM sqlite_master
+            WHERE type = 'index' AND name = 'owner_roots_subject_unique'`,
+        ).toArray(),
+      };
+    });
+
+    expect(result).toEqual({
+      version: 3,
+      ownerRootColumns: ['root_key', 'owner_id', 'created_at'],
+      authorityTables: ['presence_registrations'],
+      authorityIndexes: [],
+    });
   });
 
   it('keeps the memory-block contract columns needed by Scribe rollback and recall', async () => {
@@ -335,14 +471,14 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
   });
 
-  it('rolls back a failed post-V3 migration without disturbing responsibility tables', async () => {
+  it('rolls back a failed post-current migration without disturbing responsibility tables', async () => {
     const stub = freshStub();
 
     const result = await runInDurableObject(stub, (_instance, state) => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 4,
+        version: 5,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -364,8 +500,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 3,
-      afterVersion: 3,
+      beforeVersion: 4,
+      afterVersion: 4,
       outcomesPresent: true,
       probeTables: [],
     });

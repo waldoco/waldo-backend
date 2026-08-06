@@ -3,6 +3,7 @@ import {
   canonicalizeSurfaceCommandRequestForDigest,
   responsibilityHttpMediaTypeV01,
   responsibilityHttpMediaTypeV02,
+  responsibilityHttpProblemV01,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureResultV01CompatibilitySchema,
@@ -17,16 +18,19 @@ import type {
   ResponsibilityCaptureAdmission,
   ResponsibilityProjectionRead,
 } from '../coordinator/waldo-coordinator';
+import { responsibilityBoundaryStatus } from './errors';
 import { parseResponsibilityJsonBytes, readBoundedResponsibilityBody } from './raw-json';
 
 export type ResponsibilityProtocolVersion = '0.1' | '0.2';
 
 export type TrustedResponsibilityContext = Readonly<{
   ownerId: string;
+  authenticatedSubjectRef: string;
   actor: ActorRef;
   presenceId: string;
   presenceRegistrationId: string;
   authenticatedSessionId: string;
+  authenticatedSessionExpiresAt: string;
   ownerPolicyRevision: number;
   authAssurance: string;
   ownerRootRoutingVersion: number;
@@ -42,7 +46,9 @@ export interface ResponsibilityOwnerRoot {
 }
 
 export type ResponsibilityIngressContext = Readonly<{
+  authenticatedSubjectRef: string;
   authenticatedSessionId: string;
+  authenticatedSessionExpiresAt: string;
   ownerPolicyRevision: number;
 }>;
 
@@ -92,6 +98,10 @@ export function createResponsibilityWorkerAdapter(
         dependencies.failureReporter.report('edge_rate_unavailable', error);
         return problem(503);
       }
+      if (capture && url.search !== '') return problem(400);
+      if (projection && (
+        url.search.length > 1_024 || boundedQueryParameterCount(url.searchParams, 3) === null
+      )) return problem(400);
 
       let body: unknown = null;
       if (capture) {
@@ -206,13 +216,8 @@ export function createResponsibilityWorkerAdapter(
         }
         return json(publicResult, 200, version);
       } catch (error) {
-        if (error instanceof Error && error.message.includes('rate limited')) return problem(429);
-        if (error instanceof Error && error.message.includes('digest conflict')) return problem(409);
-        if (error instanceof Error && error.message.includes('projection cursor rejected')) return problem(409);
-        if (error instanceof Error && (
-          error.message.includes('owner authority root mismatch') ||
-          error.message.includes('projection snapshot missing')
-        )) return problem(404);
+        const publicStatus = responsibilityBoundaryStatus(error);
+        if (publicStatus !== null) return problem(publicStatus);
         dependencies.failureReporter.report('owner_root_failure', error);
         return problem(500);
       }
@@ -237,6 +242,18 @@ function boundedInteger(value: string | null, minimum: number, maximum: number):
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null;
 }
 
+function boundedQueryParameterCount(
+  parameters: URLSearchParams,
+  maximum: number,
+): number | null {
+  let count = 0;
+  for (const _entry of parameters) {
+    count += 1;
+    if (count > maximum) return null;
+  }
+  return count;
+}
+
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -256,21 +273,7 @@ function json(body: unknown, status: number, version: ResponsibilityProtocolVers
 }
 
 function problem(status: 400 | 401 | 404 | 406 | 409 | 429 | 500 | 503): Response {
-  const values = {
-    400: ['invalid-request', 'Request rejected', 'invalid_request'],
-    401: ['unauthorized', 'Authentication required', 'unauthorized'],
-    404: ['not-found', 'Resource not found', 'not_found'],
-    406: ['not-acceptable', 'Unsupported representation', 'not_acceptable'],
-    409: ['request-conflict', 'Request conflict', 'request_conflict'],
-    429: ['rate-limited', 'Rate limited', 'rate_limited'],
-    500: ['internal-error', 'Internal error', 'internal_error'],
-    503: ['temporarily-unavailable', 'Temporarily unavailable', 'temporarily_unavailable'],
-  } as const;
-  const [kind, title, code] = values[status];
-  return new Response(JSON.stringify({
-    type: `https://api.heywaldo.com/problems/${kind}`,
-    title, status, code,
-  }), {
+  return new Response(JSON.stringify(responsibilityHttpProblemV01(status)), {
     status,
     headers: {
       'cache-control': 'no-store',
@@ -283,7 +286,9 @@ function problem(status: 400 | 401 | 404 | 406 | 409 | 429 | 500 | 503): Respons
 
 function ingressContext(context: TrustedResponsibilityContext): ResponsibilityIngressContext {
   return Object.freeze({
+    authenticatedSubjectRef: context.authenticatedSubjectRef,
     authenticatedSessionId: context.authenticatedSessionId,
+    authenticatedSessionExpiresAt: context.authenticatedSessionExpiresAt,
     ownerPolicyRevision: context.ownerPolicyRevision,
   });
 }

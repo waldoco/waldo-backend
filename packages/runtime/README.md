@@ -68,24 +68,36 @@ closed. Enabling it requires:
   verified against Supabase Auth's fixed `/auth/v1/user` endpoint and then against the
   no-argument `waldo_responsibility_session_active` PostgREST RPC. The RPC must derive the
   caller and `session_id` only from the verified user JWT, return exactly one boolean, and
-  expose no session data. The registered presence, owner ID, policy revision, routing
-  version, state, and expiry must be supplied through admin-controlled `app_metadata`;
-  user metadata is ignored.
+  expose no session data. The owner root is derived only from the verified Auth subject and is
+  stable across policy/routing revisions. Exact-shape admin-controlled `app_metadata` supplies
+  only bounded bootstrap references for one Presence registration, policy revision, and the pinned
+  routing version; user metadata is ignored. The signed capture/projection admission may establish
+  those values in an empty or legacy owner root exactly once. `IdentityPresenceModule` then owns
+  them: later
+  metadata cannot change the subject, Presence, policy revision, or route, while a renewed Supabase
+  login may add a bounded session binding to that same Presence. Capture and projection revalidate
+  the Waldo-owned state. Public enrollment, multi-Presence onboarding, policy transitions, and
+  Presence lifecycle endpoints are not implemented by this adapter.
 - `RESPONSIBILITY_RATE_LIMITER`, the Cloudflare Rate Limiting binding declared in
   `wrangler.jsonc`. Its pre-auth bucket is derived only from Cloudflare's trusted
   `CF-Connecting-IP`; the owner Durable Object separately enforces per-session and
-  per-owner limits.
+  per-owner limits. Canonical authority bootstrap/refresh and both counters commit atomically, so a
+  rate rejection cannot leave authority or rate state partially changed.
 - `RESPONSIBILITY_INGRESS_HMAC_SECRET`, provisioned with `wrangler secret put` (or the
   deployment platform's equivalent), never committed as a production variable. The Worker
   signs the owner/session/policy/operation/digest envelope before the existing RunLoopDO
   accepts it.
 
 The runtime fails closed when the active-session RPC is absent, unavailable, unauthorized,
-or does not return a boolean. A local Auth/REST integration test proves active public capture and
+or does not return a boolean. Malformed successful Auth responses are treated as upstream
+unavailability, not invalid credentials, and remaining access-token lifetime is bounded to two
+hours at this seam. A local Auth/REST integration test proves active public capture and
 projection, current-session logout, and exact still-unexpired-token retries returning the public
-401 shape before owner-root routing. This is adapter conformance, not proof that the migration or
-Worker is deployed to hosted Supabase/Cloudflare, Kennel acceptance, staging, or operations. Keep
-the deployment switch off until those independent checks pass.
+401 shape before owner-root routing. Separately, workerd tests exercise the production HMAC bridge,
+canonical authority admission, RunLoopDO/Coordinator writes, retry, rate limits, and reconstruction.
+These are layered conformance proofs, not one composed local Supabase-to-real-DO test and not proof
+that the migration or Worker is deployed to hosted Supabase/Cloudflare, Kennel acceptance, staging,
+or operations. Keep the deployment switch off until those independent checks pass.
 
 The active-session decision governs admission of a new public request. A request already
 admitted immediately before logout may finish; cancelling already-authorized agent work is
