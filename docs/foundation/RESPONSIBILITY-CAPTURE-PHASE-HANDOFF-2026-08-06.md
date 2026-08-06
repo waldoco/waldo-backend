@@ -61,7 +61,7 @@ The final PR report must record each command as passed, failed, skipped, unavail
 - passed: separate Standards and Spec reviews, mandatory owner-routing/DO-write security review, and the adversarial breaker pass after their blockers were reproduced and corrected;
 - failed during iteration and fixed: the bare `vitest` invocation, initial missing v0.2 module, v0.2 generator resolution of the absent root Vitest binary, five focused runtime assertions that exposed cursor/page/error-contract differences, owner-event high-water corruption and deletion cases, and an idempotency record that borrowed another Outcome's cursor;
 - skipped: none in the required local wall;
-- unavailable: Linear/HEY issue and label evidence because the connector requires reauthentication; production adapter, Kennel client, staging, and production environments are not present and are not claimed;
+- unavailable: Linear/HEY issue and label evidence because the connector requires reauthentication; hosted GitHub Actions because workflow dispatch returned `422 Actions has been disabled for this user`; production adapter, Kennel client, staging, and production environments are not present and are not claimed;
 - deferred by scope: production adapter conformance, Kennel cross-surface acceptance, and operational proof;
-- not yet run: hosted CI for the corrective commit and independent other-cluster PR review;
+- not yet run: independent other-cluster PR review requested with `@waldo-review`;
 - not run because no implementation exists: provider/effect, Verification, Acceptance, OpenLoop/ReEntry, and disconnected-draft reconciliation tests.
