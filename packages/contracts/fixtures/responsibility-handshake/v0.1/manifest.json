@@ -36,24 +36,8 @@
       "sha256": "sha256:f0dfd94d60d71fa6c6bbaa2b4171e0af49c87442c6007c241f7090eb3dbf321c"
     },
     {
-      "path": "responsibility-capture-result.schema.json",
-      "sha256": "sha256:5d6202732d97cf521b97df91d47d765795a68b48fd71a3d440afd24aaf6b009a"
-    },
-    {
-      "path": "responsibility-capture-result.valid.json",
-      "sha256": "sha256:e223762339025b8ca63bf300c33418fb0fe7c44babcf62cc91c9d67f7b1c8a3d"
-    },
-    {
-      "path": "responsibility-projection-page.schema.json",
-      "sha256": "sha256:7d6b17fdd30e67827b82b67faa2d73b77790cd2107719d3bd497fe98e8900a81"
-    },
-    {
-      "path": "responsibility-projection.valid.json",
-      "sha256": "sha256:d8f7f7b6c23bd5088929c4356eac4be59c9c0c6cf592e82853d5d078d2f4b30d"
-    },
-    {
       "path": "surface-command-request.schema.json",
-      "sha256": "sha256:798c353e2571633b72dac62077eae3980463cdc8bf4e37ede8f7cb87077c5ce0"
+      "sha256": "sha256:4041acc19ef858a663045e45064b1befce56ec08e2e47bf83e79a71fe6ea53ec"
     },
     {
       "path": "surface-command.rejections.json",
@@ -65,7 +49,7 @@
     },
     {
       "path": "trusted-command-envelope.schema.json",
-      "sha256": "sha256:bbd7545a1a1ebb812bf642013022b74eac876d8b4e28255e10c08abd178667ee"
+      "sha256": "sha256:375aea1d1ee684cb83a8d3ae593307f2ab1f0e122b15c8d630ad4e4c0be222c4"
     },
     {
       "path": "trusted-command.valid.json",

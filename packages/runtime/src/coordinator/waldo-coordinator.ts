@@ -1,38 +1,33 @@
 import {
-  canonicalizeProtocolJson,
-  canonicalizeSurfaceCommandRequestForDigest,
-  responsibilityCaptureRequestSchema,
-  responsibilityCaptureResultV01Schema,
-  responsibilityCaptureTrustedEnvelopeSchema,
-  responsibilityProjectionItemV01Schema,
-  responsibilityProjectionPageSchema,
-  type ResponsibilityCaptureRequest,
-  type ResponsibilityCaptureTrustedEnvelope,
-  type ResponsibilityProjectionPage,
+  canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  responsibilityCaptureRequestV02Schema,
+  responsibilityCaptureResultV02Schema,
+  responsibilityCaptureTrustedEnvelopeV02Schema,
+  responsibilityProjectionItemV02Schema,
+  responsibilityProjectionPageV02Schema,
+  type ResponsibilityCaptureRequestV02,
+  type ResponsibilityCaptureResultV02,
+  type ResponsibilityCaptureTrustedEnvelopeV02,
+  type ResponsibilityProjectionPageV02,
 } from '@waldo/contracts';
+import { IdentityPresenceModule } from './identity-presence-module';
+import { OwnerEventLog } from './owner-event-log';
 import {
   OutcomeModule,
   type MissionRecord,
   type OutcomeRecord,
   type ResponsibilityReplay,
-  type WorkUnitRecord,
+  type WorkUnitProposalRecord,
 } from './outcome-module';
+
 export type {
   MissionRecord,
   OutcomeRecord,
   ResponsibilityReplay,
-  WorkUnitRecord,
+  WorkUnitProposalRecord,
 } from './outcome-module';
 
-export type ResponsibilityCaptureResult = Readonly<{
-  duplicate: boolean;
-  ownerId: string;
-  requestId: string;
-  outcome: OutcomeRecord;
-  mission: MissionRecord | null;
-  workUnits: readonly WorkUnitRecord[];
-  projectionCursor: number;
-}>;
+export type ResponsibilityCaptureResult = ResponsibilityCaptureResultV02;
 
 export type ResponsibilityCaptureAdmission = Readonly<{
   routedOwnerId: string;
@@ -48,7 +43,7 @@ export type ResponsibilityProjectionRead = Readonly<{
 }>;
 
 export class ResponsibilityProjectionCursorError extends Error {
-  constructor(readonly code: 'snapshot_replaced' | 'cursor_ahead' | 'cursor_gap') {
+  constructor(readonly code: 'snapshot_replaced' | 'cursor_ahead' | 'cursor_corrupt') {
     super(`responsibility projection cursor rejected: ${code}`);
     this.name = 'ResponsibilityProjectionCursorError';
   }
@@ -63,7 +58,9 @@ export type CoordinatorWriteStage =
 
 export type CoordinatorDependencies = Readonly<{
   now: () => string;
-  newId: (kind: 'outcome' | 'mission' | 'work_unit' | 'event' | 'snapshot') => string;
+  newId: (
+    kind: 'outcome' | 'mission' | 'work_unit_proposal' | 'event' | 'snapshot',
+  ) => string;
   sha256Hex: (value: string) => Promise<string>;
   afterWrite?: (stage: CoordinatorWriteStage) => void;
 }>;
@@ -73,8 +70,6 @@ type StoredCommandRow = {
   request_digest: string;
   result_json: string;
 };
-
-type OwnerRootRow = { owner_id: string; snapshot_id: string };
 
 function defaultDependencies(): CoordinatorDependencies {
   return {
@@ -92,6 +87,8 @@ function defaultDependencies(): CoordinatorDependencies {
 export class WaldoCoordinator {
   readonly #storage: DurableObjectStorage;
   readonly #deps: CoordinatorDependencies;
+  readonly #identity: IdentityPresenceModule;
+  readonly #events: OwnerEventLog;
   readonly #outcomes: OutcomeModule;
 
   constructor(
@@ -100,20 +97,21 @@ export class WaldoCoordinator {
   ) {
     this.#storage = storage;
     this.#deps = dependencies;
+    this.#identity = new IdentityPresenceModule(storage);
+    this.#events = new OwnerEventLog(storage);
     this.#outcomes = new OutcomeModule(storage, dependencies.newId);
   }
 
   async captureResponsibility(
     admission: ResponsibilityCaptureAdmission,
   ): Promise<ResponsibilityCaptureResult> {
-    const request = responsibilityCaptureRequestSchema.parse(admission.request);
-    const trustedEnvelope = responsibilityCaptureTrustedEnvelopeSchema.parse(
+    const request = responsibilityCaptureRequestV02Schema.parse(admission.request);
+    const trustedEnvelope = responsibilityCaptureTrustedEnvelopeV02Schema.parse(
       admission.trustedEnvelope,
     );
     this.#validateTrustedAdmission(admission.routedOwnerId, request, trustedEnvelope);
-
     const requestDigest = `sha256:${await this.#deps.sha256Hex(
-      canonicalizeSurfaceCommandRequestForDigest(request),
+      canonicalizeResponsibilityCaptureRequestV02ForDigest(request),
     )}`;
     if (trustedEnvelope.requestDigest !== requestDigest) {
       throw new Error('responsibility capture digest conflict');
@@ -121,56 +119,50 @@ export class WaldoCoordinator {
 
     return this.#storage.transactionSync(() => {
       const at = this.#deps.now();
-      this.#bindOrAssertOwnerRoot(admission.routedOwnerId, at);
+      this.#identity.bindOrAssertOwnerRootInCurrentTransaction(admission.routedOwnerId, at);
       this.#deps.afterWrite?.('owner_root');
 
-      const existing = this.#storage.sql
-        .exec<StoredCommandRow>(
-          `SELECT owner_id, request_digest, result_json
-             FROM responsibility_commands
-            WHERE request_id = ?`,
-          request.requestId,
-        )
-        .toArray()[0];
+      const existing = this.#storage.sql.exec<StoredCommandRow>(
+        `SELECT owner_id, request_digest, result_json
+           FROM responsibility_commands WHERE request_id = ?`,
+        request.requestId,
+      ).toArray()[0];
       if (existing !== undefined) {
-        if (
-          existing.owner_id !== admission.routedOwnerId ||
-          existing.request_digest !== requestDigest
-        ) {
+        if (existing.owner_id !== admission.routedOwnerId ||
+            existing.request_digest !== requestDigest) {
           throw new Error('responsibility capture digest conflict');
         }
-        const persisted = responsibilityCaptureResultV01Schema.parse(
+        const persisted = responsibilityCaptureResultV02Schema.parse(
           JSON.parse(existing.result_json),
         );
-        if (
-          persisted.ownerId !== admission.routedOwnerId ||
-          persisted.requestId !== request.requestId
-        ) {
-          throw new Error('responsibility capture persisted result mismatch');
-        }
         this.#assertPersistedCaptureResult(persisted, request);
-        this.#outcomes.replay(admission.routedOwnerId);
         return Object.freeze(persisted);
       }
+
+      this.#outcomes.projections.ensureSnapshotInCurrentTransaction(
+        admission.routedOwnerId,
+        this.#deps.newId('snapshot'),
+        at,
+      );
 
       const captured = this.#outcomes.captureInCurrentTransaction({
         ownerId: admission.routedOwnerId,
         payload: request.payload,
         at,
-        firstCursor: this.#nextOwnerCursor(admission.routedOwnerId),
         commandId: trustedEnvelope.commandId,
         correlationId: trustedEnvelope.correlationId,
         afterCurrentState: () => this.#deps.afterWrite?.('current_state'),
         afterEvents: () => this.#deps.afterWrite?.('events'),
         afterProjection: () => this.#deps.afterWrite?.('projection'),
       });
-      const result = Object.freeze(responsibilityCaptureResultV01Schema.parse({
+      const result = Object.freeze(responsibilityCaptureResultV02Schema.parse({
+        protocolVersion: '0.2',
         duplicate: false,
         ownerId: admission.routedOwnerId,
         requestId: request.requestId,
         outcome: captured.outcome,
         mission: captured.mission,
-        workUnits: captured.workUnits,
+        workUnitProposals: captured.workUnitProposals,
         projectionCursor: captured.finalCursor,
       }));
       this.#storage.sql.exec(
@@ -178,7 +170,7 @@ export class WaldoCoordinator {
           request_id, owner_id, request_digest, result_json, recorded_at
         ) VALUES (?, ?, ?, ?, ?)`,
         request.requestId,
-        captured.outcome.ownerId,
+        result.ownerId,
         requestDigest,
         JSON.stringify(result),
         at,
@@ -190,63 +182,58 @@ export class WaldoCoordinator {
 
   readResponsibilityProjection(
     input: ResponsibilityProjectionRead,
-  ): ResponsibilityProjectionPage {
+  ): ResponsibilityProjectionPageV02 {
     if (!Number.isSafeInteger(input.fromExclusiveCursor) || input.fromExclusiveCursor < 0) {
       throw new Error('invalid responsibility projection cursor');
     }
     if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 256) {
       throw new Error('invalid responsibility projection page limit');
     }
-    const root = this.#assertOwnerRoot(input.routedOwnerId);
+    this.#identity.assertOwnerRoot(input.routedOwnerId);
+    const snapshot = this.#outcomes.projections.readSnapshot(input.routedOwnerId);
     if (input.fromExclusiveCursor > 0 && input.snapshotId === undefined) {
       throw new ResponsibilityProjectionCursorError('snapshot_replaced');
     }
-    if (input.snapshotId !== undefined && input.snapshotId !== root.snapshot_id) {
+    if (input.snapshotId !== undefined && input.snapshotId !== snapshot.snapshotId) {
       throw new ResponsibilityProjectionCursorError('snapshot_replaced');
     }
-    const highWaterCursor = this.#storage.sql
-      .exec<{ high_water_cursor: number }>(
-        'SELECT high_water_cursor FROM responsibility_projection_state WHERE owner_id = ?',
-        input.routedOwnerId,
-      )
-      .toArray()[0]?.high_water_cursor ?? 0;
+    const highWaterCursor = this.#events.readHighWater(input.routedOwnerId);
     if (input.fromExclusiveCursor > highWaterCursor) {
       throw new ResponsibilityProjectionCursorError('cursor_ahead');
     }
-    const projectionRows = this.#storage.sql
-      .exec<{ owner_cursor: number; item_json: string }>(
-        `SELECT owner_cursor, item_json
-           FROM responsibility_projection
-          WHERE owner_id = ? AND owner_cursor > ? AND owner_cursor <= ?
-          ORDER BY owner_cursor ASC
-          LIMIT ?`,
-        input.routedOwnerId,
-        input.fromExclusiveCursor,
-        highWaterCursor,
-        input.limit,
-      )
-      .toArray();
-    let expectedItemCursor = input.fromExclusiveCursor + 1;
-    const items = projectionRows.map((row) => {
-      const item = responsibilityProjectionItemV01Schema.parse(JSON.parse(row.item_json));
-      if (row.owner_cursor !== expectedItemCursor || item.cursor !== row.owner_cursor) {
-        throw new ResponsibilityProjectionCursorError('cursor_gap');
+    const rows = this.#storage.sql.exec<{ owner_cursor: number; item_json: string }>(
+      `SELECT owner_cursor, item_json
+         FROM responsibility_projection
+        WHERE owner_id = ? AND owner_cursor > ? AND owner_cursor <= ?
+        ORDER BY owner_cursor ASC
+        LIMIT ?`,
+      input.routedOwnerId,
+      input.fromExclusiveCursor,
+      highWaterCursor,
+      input.limit,
+    ).toArray();
+    let previous = input.fromExclusiveCursor;
+    const items = rows.map((row) => {
+      const item = responsibilityProjectionItemV02Schema.parse(JSON.parse(row.item_json));
+      if (row.owner_cursor <= previous || row.owner_cursor !== item.cursor) {
+        throw new ResponsibilityProjectionCursorError('cursor_corrupt');
       }
-      expectedItemCursor += 1;
+      previous = row.owner_cursor;
       return item;
     });
-    if (items.length === 0 && input.fromExclusiveCursor < highWaterCursor) {
-      throw new ResponsibilityProjectionCursorError('cursor_gap');
-    }
+    const filledPage = rows.length === input.limit;
     const generatedAt = this.#deps.now();
+    let truncatedByByteLimit = false;
     while (true) {
-      const nextCursor = items.at(-1)?.cursor ?? input.fromExclusiveCursor;
-      const parsed = responsibilityProjectionPageSchema.safeParse({
-        protocolVersion: '0.1',
+      const nextCursor = (filledPage || truncatedByByteLimit) && items.length > 0
+        ? items.at(-1)!.cursor
+        : highWaterCursor;
+      const parsed = responsibilityProjectionPageV02Schema.safeParse({
+        protocolVersion: '0.2',
         ownerId: input.routedOwnerId,
         projectionName: 'responsibility.summary',
-        snapshotId: root.snapshot_id,
-        snapshotBaseCursor: 0,
+        snapshotId: snapshot.snapshotId,
+        snapshotBaseCursor: snapshot.snapshotBaseCursor,
         fromExclusiveCursor: input.fromExclusiveCursor,
         highWaterCursor,
         nextCursor,
@@ -257,186 +244,62 @@ export class WaldoCoordinator {
       if (parsed.success) return parsed.data;
       if (items.length === 0) throw parsed.error;
       items.pop();
+      truncatedByByteLimit = true;
     }
   }
 
   replayResponsibility(routedOwnerId: string): ResponsibilityReplay {
-    this.#assertOwnerRoot(routedOwnerId);
+    this.#identity.assertOwnerRoot(routedOwnerId);
     return this.#outcomes.replay(routedOwnerId);
   }
 
   #validateTrustedAdmission(
     routedOwnerId: string,
-    request: ResponsibilityCaptureRequest,
-    trustedEnvelope: ResponsibilityCaptureTrustedEnvelope,
+    request: ResponsibilityCaptureRequestV02,
+    trustedEnvelope: ResponsibilityCaptureTrustedEnvelopeV02,
   ): void {
     if (trustedEnvelope.ownerId !== routedOwnerId) {
       throw new Error('owner authority root mismatch');
     }
-    if (request.aggregate !== undefined || trustedEnvelope.aggregate !== undefined) {
-      throw new Error('responsibility capture aggregate must be server-owned');
+    if (request.protocolVersion !== trustedEnvelope.protocolVersion) {
+      throw new Error('responsibility protocol version mismatch');
     }
-    if (trustedEnvelope.expectedRevision !== undefined) {
-      throw new Error('responsibility capture revision must be server-owned');
+    if (trustedEnvelope.aggregate !== undefined || trustedEnvelope.expectedRevision !== undefined) {
+      throw new Error('responsibility capture authority fields must be server-owned');
     }
-    if (
-      canonicalizeProtocolJson(trustedEnvelope.payload) !==
-      canonicalizeProtocolJson(request.payload)
-    ) {
+    if (JSON.stringify(trustedEnvelope.payload) !== JSON.stringify(request.payload)) {
       throw new Error('responsibility capture payload mismatch');
     }
   }
 
   #assertPersistedCaptureResult(
     persisted: ResponsibilityCaptureResult,
-    request: ResponsibilityCaptureRequest,
+    request: ResponsibilityCaptureRequestV02,
   ): void {
-    const proposalMatches =
-      persisted.outcome.userStatement === request.payload.userStatement &&
-      (persisted.mission?.brief ?? null) === (request.payload.mission?.brief ?? null) &&
-      persisted.workUnits.length === (request.payload.workUnits?.length ?? 0) &&
-      persisted.workUnits.every(
-        (workUnit, index) =>
-          workUnit.responsibility === request.payload.workUnits?.[index]?.responsibility,
-      );
-    if (!proposalMatches) throw new Error('responsibility capture persisted result mismatch');
-
-    const sql = this.#storage.sql;
-    const outcome = sql.exec<{
-      id: string; ownerId: string; revision: number; userStatement: string;
-      state: string; createdAt: string; updatedAt: string;
-    }>(
-      `SELECT id, owner_id AS ownerId, revision, user_statement AS userStatement,
-              state, created_at AS createdAt, updated_at AS updatedAt
-         FROM outcomes WHERE owner_id = ? AND id = ?`,
-      persisted.ownerId, persisted.outcome.id,
-    ).toArray()[0];
-    const mission = persisted.mission === null ? null : sql.exec<{
-      id: string; ownerId: string; outcomeId: string; revision: number; brief: string;
-      state: string; createdAt: string; updatedAt: string;
-    }>(
-      `SELECT id, owner_id AS ownerId, outcome_id AS outcomeId, revision, brief,
-              state, created_at AS createdAt, updated_at AS updatedAt
-         FROM missions WHERE owner_id = ? AND id = ?`,
-      persisted.ownerId, persisted.mission.id,
-    ).toArray()[0];
-    const workUnits = sql.exec<{
-      id: string; ownerId: string; outcomeId: string; missionId: string | null;
-      position: number; revision: number; responsibility: string; state: string;
-      createdAt: string; updatedAt: string;
-    }>(
-      `SELECT id, owner_id AS ownerId, outcome_id AS outcomeId, mission_id AS missionId,
-              position, revision, responsibility, state,
-              created_at AS createdAt, updated_at AS updatedAt
-         FROM work_units WHERE owner_id = ? AND outcome_id = ? ORDER BY position ASC`,
-      persisted.ownerId, persisted.outcome.id,
-    ).toArray();
-    const current = responsibilityCaptureResultV01Schema.safeParse({
-      ...persisted,
-      outcome,
-      mission,
-      workUnits,
-    });
-    if (!current.success ||
-        canonicalizeProtocolJson(current.data) !== canonicalizeProtocolJson(persisted)) {
+    if (persisted.ownerId === '' || persisted.requestId !== request.requestId ||
+        persisted.outcome.userStatement !== request.payload.userStatement ||
+        (persisted.mission?.brief ?? null) !== (request.payload.mission?.brief ?? null) ||
+        persisted.workUnitProposals.length !== (request.payload.workUnitProposals?.length ?? 0) ||
+        persisted.workUnitProposals.some((proposal, index) =>
+          proposal.responsibility !== request.payload.workUnitProposals?.[index]?.responsibility)) {
       throw new Error('responsibility capture persisted result mismatch');
     }
-
-    const itemCount = 1 + (persisted.mission === null ? 0 : 1) + persisted.workUnits.length;
-    const firstCursor = persisted.projectionCursor - itemCount + 1;
-    if (firstCursor < 1) throw new Error('responsibility capture persisted result mismatch');
-    const projectionItems = sql.exec<{ owner_cursor: number; item_json: string }>(
-      `SELECT owner_cursor, item_json FROM responsibility_projection
-        WHERE owner_id = ? AND owner_cursor BETWEEN ? AND ?
-        ORDER BY owner_cursor ASC`,
-      persisted.ownerId, firstCursor, persisted.projectionCursor,
-    ).toArray().map((row) => {
-      const item = responsibilityProjectionItemV01Schema.parse(JSON.parse(row.item_json));
-      if (item.cursor !== row.owner_cursor) {
-        throw new Error('responsibility capture persisted result mismatch');
-      }
-      return item;
-    });
-    const expectedItems = [
-      responsibilityProjectionItemV01Schema.parse({
-        cursor: firstCursor,
-        itemType: 'outcome',
-        aggregateId: persisted.outcome.id,
-        outcomeId: persisted.outcome.id,
-        revision: persisted.outcome.revision,
-        state: persisted.outcome.state,
-        userStatement: persisted.outcome.userStatement,
-        createdAt: persisted.outcome.createdAt,
-      }),
-      ...(persisted.mission === null ? [] : [responsibilityProjectionItemV01Schema.parse({
-        cursor: firstCursor + 1,
-        itemType: 'mission',
-        aggregateId: persisted.mission.id,
-        outcomeId: persisted.mission.outcomeId,
-        revision: persisted.mission.revision,
-        state: persisted.mission.state,
-        brief: persisted.mission.brief,
-        createdAt: persisted.mission.createdAt,
-      })]),
-      ...persisted.workUnits.map((workUnit, index) =>
-        responsibilityProjectionItemV01Schema.parse({
-          cursor: firstCursor + 1 + (persisted.mission === null ? 0 : 1) + index,
-          itemType: 'work_unit',
-          aggregateId: workUnit.id,
-          outcomeId: workUnit.outcomeId,
-          missionId: workUnit.missionId,
-          position: workUnit.position,
-          revision: workUnit.revision,
-          state: workUnit.state,
-          responsibility: workUnit.responsibility,
-          createdAt: workUnit.createdAt,
-        })),
-    ];
-    if (projectionItems.length !== expectedItems.length || projectionItems.some(
-      (item, index) =>
-        canonicalizeProtocolJson(item) !== canonicalizeProtocolJson(expectedItems[index]),
-    )) {
-      throw new Error('responsibility capture persisted result mismatch');
-    }
-  }
-
-  #bindOrAssertOwnerRoot(ownerId: string, at: string): OwnerRootRow {
-    const root = this.#storage.sql
-      .exec<OwnerRootRow>('SELECT owner_id, snapshot_id FROM owner_roots WHERE root_key = 1')
-      .toArray()[0];
-    if (root !== undefined) {
-      if (root.owner_id !== ownerId) throw new Error('owner authority root mismatch');
-      return root;
-    }
-    const snapshotId = this.#deps.newId('snapshot');
-    this.#storage.sql.exec(
-      'INSERT INTO owner_roots (root_key, owner_id, snapshot_id, created_at) VALUES (1, ?, ?, ?)',
-      ownerId,
-      snapshotId,
-      at,
+    const replay = this.#outcomes.replay(persisted.ownerId);
+    const outcome = replay.outcomes.find((value) => value.id === persisted.outcome.id);
+    const mission = persisted.mission === null ? null
+      : replay.missions.find((value) => value.id === persisted.mission!.id) ?? null;
+    const proposals = replay.workUnitProposals.filter(
+      (value) => value.outcomeId === persisted.outcome.id,
+    ).sort((left, right) => left.position - right.position);
+    const outcomeItems = replay.items.filter(
+      (item) => item.outcomeId === persisted.outcome.id,
     );
-    return { owner_id: ownerId, snapshot_id: snapshotId };
-  }
-
-  #assertOwnerRoot(ownerId: string): OwnerRootRow {
-    const root = this.#storage.sql
-      .exec<OwnerRootRow>('SELECT owner_id, snapshot_id FROM owner_roots WHERE root_key = 1')
-      .toArray()[0];
-    if (root === undefined || root.owner_id !== ownerId) {
-      throw new Error('owner authority root mismatch');
+    const finalOutcomeCursor = outcomeItems.at(-1)?.cursor;
+    if (JSON.stringify(outcome) !== JSON.stringify(persisted.outcome) ||
+        JSON.stringify(mission) !== JSON.stringify(persisted.mission) ||
+        JSON.stringify(proposals) !== JSON.stringify(persisted.workUnitProposals) ||
+        finalOutcomeCursor !== persisted.projectionCursor) {
+      throw new Error('responsibility capture persisted result mismatch');
     }
-    return root;
-  }
-
-  #nextOwnerCursor(ownerId: string): number {
-    const row = this.#storage.sql
-      .exec<{ high_water_cursor: number }>(
-        `SELECT high_water_cursor
-           FROM responsibility_projection_state
-          WHERE owner_id = ?`,
-        ownerId,
-      )
-      .toArray()[0];
-    return (row?.high_water_cursor ?? 0) + 1;
   }
 }

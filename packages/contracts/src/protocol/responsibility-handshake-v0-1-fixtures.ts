@@ -8,9 +8,7 @@ import {
   judgmentNeededObservedEventSchema,
   presenceCapabilityV01Schema,
   projectionPageEnvelopeSchemaFor,
-  responsibilityProjectionPageSchema,
   responsibilityCaptureRequestSchema,
-  responsibilityCaptureResultV01Schema,
   responsibilityCaptureTrustedEnvelopeSchema,
   surfaceCommandRequestSchema,
   trustedCommandEnvelopeSchema,
@@ -135,55 +133,6 @@ export function buildResponsibilityHandshakeV01Bundle(
     nextCursor: 256,
     items: Array.from({ length: 256 }, () => projectionLimitItem),
     hasMore: false,
-  };
-  const responsibilityProjectionPage = {
-    protocolVersion: '0.1',
-    ownerId: 'owner_server_01',
-    projectionName: 'responsibility.summary',
-    snapshotId: 'snapshot_01',
-    snapshotBaseCursor: 0,
-    fromExclusiveCursor: 0,
-    highWaterCursor: 2,
-    nextCursor: 2,
-    items: [
-      {
-        cursor: 1,
-        itemType: 'outcome',
-        aggregateId: 'outcome_01',
-        outcomeId: 'outcome_01',
-        revision: 1,
-        state: 'captured',
-        userStatement: surfaceRequest.payload.userStatement,
-        createdAt: '2026-08-05T12:00:01Z',
-      },
-      {
-        cursor: 2,
-        itemType: 'work_unit',
-        aggregateId: 'work_unit_01',
-        outcomeId: 'outcome_01',
-        missionId: null,
-        position: 0,
-        revision: 1,
-        state: 'proposed',
-        responsibility: 'Prepare the reviewed update.',
-        createdAt: '2026-08-05T12:00:01Z',
-      },
-    ],
-    hasMore: false,
-    generatedAt: '2026-08-05T12:06:00Z',
-  };
-  const responsibilityCaptureResult = {
-    duplicate: false,
-    ownerId: 'owner_server_01',
-    requestId: surfaceRequest.requestId,
-    outcome: {
-      id: 'outcome_01', ownerId: 'owner_server_01', revision: 1,
-      userStatement: surfaceRequest.payload.userStatement, state: 'captured',
-      createdAt: '2026-08-05T12:00:01Z', updatedAt: '2026-08-05T12:00:01Z',
-    },
-    mission: null,
-    workUnits: [],
-    projectionCursor: 1,
   };
 
   const reorderedDuplicate = {
@@ -497,23 +446,6 @@ export function buildResponsibilityHandshakeV01Bundle(
         },
       ),
     ),
-    'responsibility-projection-page.schema.json': jsonFile(
-      schemaDocument(
-        responsibilityProjectionPageSchema,
-        'urn:waldo:protocol:responsibility-handshake:0.1:responsibility-projection-page',
-        'Waldo Responsibility ProjectionPage protocol v0.1',
-        {
-          maxItemsPerPage: 256,
-          maxPageUtf8Bytes: 262_144,
-          itemCursorOrder: 'strictly ascending and bounded by page cursors',
-          emptyPage: 'must not advance nextCursor',
-          nonEmptyPage: 'nextCursor equals final item cursor',
-          hasMore: 'nextCursor < highWaterCursor',
-          offlineCommands: 'none',
-        },
-      ),
-    ),
-    'responsibility-projection.valid.json': jsonFile(responsibilityProjectionPage),
     'request-digests.json': jsonFile({
       protocolVersion: '0.1',
       digestAlgorithm: 'sha256',
@@ -567,20 +499,6 @@ export function buildResponsibilityHandshakeV01Bundle(
         },
       ],
     }),
-    'responsibility-capture-result.schema.json': jsonFile(
-      schemaDocument(
-        responsibilityCaptureResultV01Schema,
-        'urn:waldo:protocol:responsibility-handshake:0.1:responsibility-capture-result',
-        'Waldo ResponsibilityCaptureResult protocol v0.1',
-        {
-          ownerBinding: 'all aggregates equal result ownerId',
-          relationships: 'Mission and WorkUnits belong to the admitted Outcome',
-          workUnitOrder: 'position equals array index',
-          idempotency: 'exact retries return the persisted original result',
-        },
-      ),
-    ),
-    'responsibility-capture-result.valid.json': jsonFile(responsibilityCaptureResult),
     'surface-command.rejections.json': jsonFile({
       protocolVersion: '0.1',
       cases: rejectedClientFields.map(([name, extra]) => ({

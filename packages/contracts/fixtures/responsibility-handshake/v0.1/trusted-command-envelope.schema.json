@@ -99,12 +99,6 @@
           "properties": {
             "userStatement": {
               "$ref": "#/$defs/__schema2"
-            },
-            "mission": {
-              "$ref": "#/$defs/__schema3"
-            },
-            "workUnits": {
-              "$ref": "#/$defs/__schema4"
             }
           },
           "required": [
@@ -149,37 +143,6 @@
       "minLength": 1,
       "maxLength": 8192,
       "pattern": "\\S"
-    },
-    "__schema3": {
-      "type": "object",
-      "properties": {
-        "brief": {
-          "$ref": "#/$defs/__schema2"
-        }
-      },
-      "required": [
-        "brief"
-      ],
-      "additionalProperties": false
-    },
-    "__schema4": {
-      "maxItems": 32,
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/__schema5"
-      }
-    },
-    "__schema5": {
-      "type": "object",
-      "properties": {
-        "responsibility": {
-          "$ref": "#/$defs/__schema2"
-        }
-      },
-      "required": [
-        "responsibility"
-      ],
-      "additionalProperties": false
     }
   },
   "$id": "urn:waldo:protocol:responsibility-handshake:0.1:trusted-command-envelope",

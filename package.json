@@ -11,7 +11,7 @@
     "test": "pnpm -r test",
     "verify:node": "pnpm --filter @waldo/contracts test",
     "generate:openapi": "node scripts/generate-public-openapi.mjs",
-    "generate:responsibility-handshake": "node scripts/generate-responsibility-handshake-v0-1.mjs",
+    "generate:responsibility-handshake": "node scripts/generate-responsibility-handshake-v0-1.mjs && node scripts/generate-responsibility-handshake-v0-2.mjs",
     "verify:supabase": "node scripts/verify-supabase.mjs",
     "verify:workers": "pnpm --filter @waldo/runtime test",
     "verify:property": "pnpm --filter @waldo/runtime test:property",

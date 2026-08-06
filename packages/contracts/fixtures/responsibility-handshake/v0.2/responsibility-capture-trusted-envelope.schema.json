@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.2"
+    },
+    "commandId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "commandType": {
+      "type": "string",
+      "const": "responsibility.capture"
+    },
+    "ownerId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "presence",
+            "service",
+            "provider",
+            "person"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "presenceId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "authenticatedSessionId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "ownerPolicyRevision": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "authAssurance": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "ownerRootRoutingVersion": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "aggregate": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "expectedRevision": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "requestDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "causationId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "correlationId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "receivedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "userStatement": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "mission": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "workUnitProposals": {
+          "$ref": "#/$defs/__schema4"
+        }
+      },
+      "required": [
+        "userStatement"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "commandId",
+    "commandType",
+    "ownerId",
+    "actor",
+    "presenceId",
+    "authenticatedSessionId",
+    "ownerPolicyRevision",
+    "authAssurance",
+    "ownerRootRoutingVersion",
+    "requestDigest",
+    "correlationId",
+    "receivedAt",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema1": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema2": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "\\S"
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "brief": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "brief"
+      ],
+      "additionalProperties": false
+    },
+    "__schema4": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema5"
+      }
+    },
+    "__schema5": {
+      "type": "object",
+      "properties": {
+        "responsibility": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "responsibility"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-handshake:0.2:responsibility-capture-trusted-envelope",
+  "title": "Waldo responsibility-handshake v0.2 responsibility-capture-trusted-envelope",
+  "description": "Structural interoperability schema. Canonical admission also requires the listed Waldo runtime invariants.",
+  "x-waldo-validation-level": "structural",
+  "x-waldo-runtime-validator-required": true,
+  "x-waldo-runtime-invariants": {
+    "ownerBinding": "ownerId is supplied only by trusted server context",
+    "digest": "recomputed from the admitted surface request",
+    "payload": "must equal the admitted request payload",
+    "aggregateAndRevision": "server-owned and absent for direct capture"
+  },
+  "x-waldo-offline-commands": "none"
+}

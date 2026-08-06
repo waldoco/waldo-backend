@@ -1,0 +1,18 @@
+{
+  "protocolVersion": "0.2",
+  "requestId": "request_capture_02",
+  "commandType": "responsibility.capture",
+  "presenceRegistrationId": "presence_registration_01",
+  "clientIssuedAt": "2026-08-06T06:00:00.000Z",
+  "payload": {
+    "userStatement": "Prepare and review the release.",
+    "mission": {
+      "brief": "Prepare a reviewable release."
+    },
+    "workUnitProposals": [
+      {
+        "responsibility": "Review the release artifact."
+      }
+    ]
+  }
+}

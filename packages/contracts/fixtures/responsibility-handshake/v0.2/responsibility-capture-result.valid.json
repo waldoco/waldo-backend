@@ -1,0 +1,40 @@
+{
+  "protocolVersion": "0.2",
+  "duplicate": false,
+  "ownerId": "owner_server_01",
+  "requestId": "request_capture_02",
+  "outcome": {
+    "id": "outcome_01",
+    "ownerId": "owner_server_01",
+    "revision": 1,
+    "userStatement": "Prepare and review the release.",
+    "state": "captured",
+    "createdAt": "2026-08-06T06:00:01.000Z",
+    "updatedAt": "2026-08-06T06:00:01.000Z"
+  },
+  "mission": {
+    "id": "mission_01",
+    "ownerId": "owner_server_01",
+    "outcomeId": "outcome_01",
+    "revision": 1,
+    "brief": "Prepare a reviewable release.",
+    "state": "proposed",
+    "createdAt": "2026-08-06T06:00:01.000Z",
+    "updatedAt": "2026-08-06T06:00:01.000Z"
+  },
+  "workUnitProposals": [
+    {
+      "id": "work_unit_proposal_01",
+      "ownerId": "owner_server_01",
+      "outcomeId": "outcome_01",
+      "missionId": "mission_01",
+      "position": 0,
+      "revision": 1,
+      "responsibility": "Review the release artifact.",
+      "state": "proposed",
+      "createdAt": "2026-08-06T06:00:01.000Z",
+      "updatedAt": "2026-08-06T06:00:01.000Z"
+    }
+  ],
+  "projectionCursor": 3
+}

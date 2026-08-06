@@ -163,36 +163,18 @@ export function canonicalizeProtocolJson(value: unknown): string {
   return serializeCanonicalProtocolJson(protocolJsonValueSchema.parse(value));
 }
 
-const responsibilityCaptureTextSchema = z
-  .string()
-  .min(1)
-  .max(8_192)
-  .refine(isWellFormedUtf16, {
-    error: 'responsibility text must contain well-formed Unicode',
-  })
-  .regex(/\S/, {
-    error: 'responsibility text must contain non-whitespace content',
-  });
-
-export const responsibilityCaptureMissionProposalSchema = z.strictObject({
-  brief: responsibilityCaptureTextSchema,
-});
-export type ResponsibilityCaptureMissionProposal = z.infer<
-  typeof responsibilityCaptureMissionProposalSchema
->;
-
-export const responsibilityCaptureWorkUnitProposalSchema = z.strictObject({
-  responsibility: responsibilityCaptureTextSchema,
-});
-export type ResponsibilityCaptureWorkUnitProposal = z.infer<
-  typeof responsibilityCaptureWorkUnitProposalSchema
->;
-
 export const responsibilityCapturePayloadSchema = z
   .strictObject({
-    userStatement: responsibilityCaptureTextSchema,
-    mission: responsibilityCaptureMissionProposalSchema.optional(),
-    workUnits: z.array(responsibilityCaptureWorkUnitProposalSchema).max(32).optional(),
+    userStatement: z
+      .string()
+      .min(1)
+      .max(8_192)
+      .refine(isWellFormedUtf16, {
+        error: 'userStatement must contain well-formed Unicode',
+      })
+      .regex(/\S/, {
+        error: 'userStatement must contain non-whitespace content',
+      }),
   })
   .refine(
     (value) => utf8ByteLength(JSON.stringify(value)) <= MAX_PROTOCOL_PAYLOAD_BYTES,
@@ -514,155 +496,6 @@ export function projectionPageEnvelopeSchemaFor<
       }
     });
 }
-
-const responsibilityProjectionItemBaseSchema = z.strictObject({
-  cursor: protocolRevisionSchema,
-  aggregateId: protocolIdSchema,
-  outcomeId: protocolIdSchema,
-  revision: z.int().positive(),
-  createdAt: iso8601Schema,
-});
-
-export const outcomeProjectionItemV01Schema =
-  responsibilityProjectionItemBaseSchema.extend({
-    itemType: z.literal('outcome'),
-    state: z.literal('captured'),
-    userStatement: responsibilityCaptureTextSchema,
-  }).superRefine((item, context) => {
-    if (item.aggregateId !== item.outcomeId) {
-      context.addIssue({
-        code: 'custom',
-        path: ['outcomeId'],
-        message: 'Outcome projection aggregateId must equal outcomeId',
-      });
-    }
-  });
-
-export const missionProjectionItemV01Schema =
-  responsibilityProjectionItemBaseSchema.extend({
-    itemType: z.literal('mission'),
-    state: z.literal('proposed'),
-    brief: responsibilityCaptureTextSchema,
-  });
-
-export const workUnitProjectionItemV01Schema =
-  responsibilityProjectionItemBaseSchema.extend({
-    itemType: z.literal('work_unit'),
-    missionId: protocolIdSchema.nullable(),
-    position: protocolRevisionSchema,
-    state: z.literal('proposed'),
-    responsibility: responsibilityCaptureTextSchema,
-  });
-
-export const responsibilityProjectionItemV01Schema = z.discriminatedUnion('itemType', [
-  outcomeProjectionItemV01Schema,
-  missionProjectionItemV01Schema,
-  workUnitProjectionItemV01Schema,
-]);
-export type ResponsibilityProjectionItemV01 = z.infer<
-  typeof responsibilityProjectionItemV01Schema
->;
-
-export const responsibilityProjectionPageSchema = projectionPageEnvelopeSchemaFor(
-  responsibilityProjectionItemV01Schema,
-).safeExtend({
-  projectionName: z.literal('responsibility.summary'),
-}).superRefine((page, context) => {
-  let previous = page.fromExclusiveCursor;
-  for (let index = 0; index < page.items.length; index += 1) {
-    const cursor = page.items[index]!.cursor;
-    if (cursor <= previous || cursor > page.nextCursor) {
-      context.addIssue({
-        code: 'custom',
-        path: ['items', index, 'cursor'],
-        message: 'projection item cursors must be strictly ordered inside the page range',
-      });
-      return;
-    }
-    previous = cursor;
-  }
-  if (page.items.length === 0 && page.nextCursor !== page.fromExclusiveCursor) {
-    context.addIssue({
-      code: 'custom',
-      path: ['nextCursor'],
-      message: 'an empty projection page must not advance the cursor',
-    });
-  } else if (page.items.length > 0 && previous !== page.nextCursor) {
-    context.addIssue({
-      code: 'custom',
-      path: ['nextCursor'],
-      message: 'nextCursor must equal the last projection item cursor',
-    });
-  }
-});
-export type ResponsibilityProjectionPage = z.infer<
-  typeof responsibilityProjectionPageSchema
->;
-
-export const outcomeRecordV01Schema = z.strictObject({
-  id: protocolIdSchema,
-  ownerId: protocolIdSchema,
-  revision: z.int().positive(),
-  userStatement: responsibilityCaptureTextSchema,
-  state: z.literal('captured'),
-  createdAt: iso8601Schema,
-  updatedAt: iso8601Schema,
-});
-export type OutcomeRecordV01 = z.infer<typeof outcomeRecordV01Schema>;
-
-export const missionRecordV01Schema = z.strictObject({
-  id: protocolIdSchema,
-  ownerId: protocolIdSchema,
-  outcomeId: protocolIdSchema,
-  revision: z.int().positive(),
-  brief: responsibilityCaptureTextSchema,
-  state: z.literal('proposed'),
-  createdAt: iso8601Schema,
-  updatedAt: iso8601Schema,
-});
-export type MissionRecordV01 = z.infer<typeof missionRecordV01Schema>;
-
-export const workUnitRecordV01Schema = z.strictObject({
-  id: protocolIdSchema,
-  ownerId: protocolIdSchema,
-  outcomeId: protocolIdSchema,
-  missionId: protocolIdSchema.nullable(),
-  position: protocolRevisionSchema,
-  revision: z.int().positive(),
-  responsibility: responsibilityCaptureTextSchema,
-  state: z.literal('proposed'),
-  createdAt: iso8601Schema,
-  updatedAt: iso8601Schema,
-});
-export type WorkUnitRecordV01 = z.infer<typeof workUnitRecordV01Schema>;
-
-export const responsibilityCaptureResultV01Schema = z.strictObject({
-  duplicate: z.literal(false),
-  ownerId: protocolIdSchema,
-  requestId: protocolIdSchema,
-  outcome: outcomeRecordV01Schema,
-  mission: missionRecordV01Schema.nullable(),
-  workUnits: z.array(workUnitRecordV01Schema).max(32),
-  projectionCursor: z.int().positive(),
-}).superRefine((result, context) => {
-  if (result.outcome.ownerId !== result.ownerId) {
-    context.addIssue({ code: 'custom', path: ['outcome', 'ownerId'], message: 'Outcome owner mismatch' });
-  }
-  if (result.mission !== null &&
-      (result.mission.ownerId !== result.ownerId || result.mission.outcomeId !== result.outcome.id)) {
-    context.addIssue({ code: 'custom', path: ['mission'], message: 'Mission relationship mismatch' });
-  }
-  for (let index = 0; index < result.workUnits.length; index += 1) {
-    const workUnit = result.workUnits[index]!;
-    if (workUnit.ownerId !== result.ownerId || workUnit.outcomeId !== result.outcome.id ||
-        workUnit.missionId !== (result.mission?.id ?? null) || workUnit.position !== index) {
-      context.addIssue({ code: 'custom', path: ['workUnits', index], message: 'WorkUnit relationship mismatch' });
-    }
-  }
-});
-export type ResponsibilityCaptureResultV01 = z.infer<
-  typeof responsibilityCaptureResultV01Schema
->;
 
 export const projectionPageSchema =
   projectionPageEnvelopeSchemaFor(protocolJsonValueSchema);

@@ -1,15 +1,16 @@
 import {
-  canonicalizeSurfaceCommandRequestForDigest,
-  responsibilityCaptureRequestSchema,
-  responsibilityCaptureTrustedEnvelopeSchema,
-  responsibilityProjectionPageSchema,
-  type ResponsibilityCaptureRequest,
+  canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  responsibilityCaptureRequestV02Schema,
+  responsibilityCaptureTrustedEnvelopeV02Schema,
+  responsibilityProjectionPageV02Schema,
+  type ResponsibilityCaptureRequestV02,
 } from '@waldo/contracts';
 import { env } from 'cloudflare:workers';
-import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { WaldoCoordinator } from '../src/coordinator/waldo-coordinator';
 import { OutcomeModule } from '../src/coordinator/outcome-module';
+import { OwnerEventLog } from '../src/coordinator/owner-event-log';
 import {
   DO_PRODUCT_TABLES,
   DO_RUNTIME_SUBSTRATE_TABLES,
@@ -24,9 +25,9 @@ function freshStub(ownerId: string): DurableObjectStub<RunLoopDO> {
   return env.RUN_LOOP_DO.get(env.RUN_LOOP_DO.idFromName(`${ownerId}-${sequence}`));
 }
 
-async function digestRequest(request: ResponsibilityCaptureRequest): Promise<`sha256:${string}`> {
+async function digestRequest(request: ResponsibilityCaptureRequestV02): Promise<`sha256:${string}`> {
   const bytes = new TextEncoder().encode(
-    canonicalizeSurfaceCommandRequestForDigest(request),
+    canonicalizeResponsibilityCaptureRequestV02ForDigest(request),
   );
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return `sha256:${Array.from(new Uint8Array(digest), (byte) =>
@@ -45,18 +46,18 @@ async function captureInput(
   ownerId: string,
   userStatement: string,
   requestId = `request_${sequence}`,
-  planning: Pick<ResponsibilityCaptureRequest['payload'], 'mission' | 'workUnits'> = {},
+  planning: Pick<ResponsibilityCaptureRequestV02['payload'], 'mission' | 'workUnitProposals'> = {},
 ) {
-  const request = responsibilityCaptureRequestSchema.parse({
-    protocolVersion: '0.1',
+  const request = responsibilityCaptureRequestV02Schema.parse({
+    protocolVersion: '0.2',
     requestId,
     commandType: 'responsibility.capture',
     presenceRegistrationId: 'presence_registration_01',
     clientIssuedAt: '2026-08-06T06:00:00.000Z',
     payload: { userStatement, ...planning },
   });
-  const trustedEnvelope = responsibilityCaptureTrustedEnvelopeSchema.parse({
-    protocolVersion: '0.1',
+  const trustedEnvelope = responsibilityCaptureTrustedEnvelopeV02Schema.parse({
+    protocolVersion: '0.2',
     commandId: `command_${sequence}`,
     commandType: 'responsibility.capture',
     ownerId,
@@ -111,7 +112,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         userStatement: input.request.payload.userStatement,
       },
       mission: null,
-      workUnits: [],
+      workUnitProposals: [],
       projectionCursor: 1,
     });
     expect(result.outcome.id).toMatch(/^outcome_[A-Za-z0-9-]+$/);
@@ -122,19 +123,27 @@ describe('WaldoCoordinator responsibility capture', () => {
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Handle this once.');
 
-    const [first, duplicate, counts] = await runInDurableObject(stub, async (instance, state) => {
-      const initial = await instance.__waldoCaptureResponsibilityForTest(input);
-      const replayed = await instance.__waldoCaptureResponsibilityForTest(input);
+    const [first, duplicate, counts, idCounts] = await runInDurableObject(stub, async (_instance, state) => {
+      let idCalls = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-06T06:00:01.000Z',
+        newId: (kind) => `${kind}_duplicate_${++idCalls}`,
+        sha256Hex,
+      });
+      const initial = await coordinator.captureResponsibility(input);
+      const afterFirst = idCalls;
+      const replayed = await coordinator.captureResponsibility(input);
       return [initial, replayed, {
         outcomes: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM outcomes').one().n,
-        events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM outcome_domain_events').one().n,
+        events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_domain_events').one().n,
         projections: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM responsibility_projection').one().n,
         commands: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM responsibility_commands').one().n,
-      }] as const;
+      }, { afterFirst, afterDuplicate: idCalls }] as const;
     });
 
     expect(duplicate).toEqual(first);
     expect(counts).toEqual({ outcomes: 1, events: 1, projections: 1, commands: 1 });
+    expect(idCounts.afterDuplicate).toBe(idCounts.afterFirst);
   });
 
   it('rejects reuse of a request identity with a different admitted digest', async () => {
@@ -162,6 +171,11 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_result_corruption_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Reject a corrupt prior result.', 'request_result_corrupt_01');
+    const otherInput = await captureInput(
+      ownerId,
+      'A different Outcome owns the next cursor.',
+      'request_result_corrupt_02',
+    );
     await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
       const stored = state.storage.sql.exec<{ result_json: string }>(
@@ -180,6 +194,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         'persisted result mismatch',
       );
       outcome.userStatement = input.request.payload.userStatement;
+      await instance.__waldoCaptureResponsibilityForTest(otherInput);
       result.projectionCursor = 2;
       state.storage.sql.exec(
         'UPDATE responsibility_commands SET result_json = ? WHERE request_id = ?',
@@ -198,14 +213,14 @@ describe('WaldoCoordinator responsibility capture', () => {
     const input = await captureInput(ownerId, 'A duplicate requires reconstructable history.', 'request_event_missing_01');
     await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
-      state.storage.sql.exec('DELETE FROM outcome_domain_events');
+      state.storage.sql.exec('DELETE FROM owner_domain_events');
       await expect(instance.__waldoCaptureResponsibilityForTest(input)).rejects.toThrow(
-        'materialization mismatch',
+        'owner event state mismatch',
       );
     });
   });
 
-  it('atomically creates an optional Mission and bounded WorkUnits under the admitted Outcome', async () => {
+  it('atomically creates an optional Mission and bounded WorkUnitProposals under the admitted Outcome', async () => {
     const ownerId = 'owner_planned_capture_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(
@@ -214,7 +229,7 @@ describe('WaldoCoordinator responsibility capture', () => {
       `request_${sequence}`,
       {
         mission: { brief: 'Prepare a reviewable release.' },
-        workUnits: [
+        workUnitProposals: [
           { responsibility: 'Prepare the release artifact.' },
           { responsibility: 'Review the release artifact.' },
         ],
@@ -232,14 +247,14 @@ describe('WaldoCoordinator responsibility capture', () => {
       brief: input.request.payload.mission?.brief,
       state: 'proposed',
     });
-    expect(result.workUnits).toHaveLength(2);
-    expect(result.workUnits).toEqual([
+    expect(result.workUnitProposals).toHaveLength(2);
+    expect(result.workUnitProposals).toEqual([
       expect.objectContaining({
         ownerId,
         outcomeId: result.outcome.id,
         missionId: result.mission?.id,
         position: 0,
-        responsibility: input.request.payload.workUnits?.[0]?.responsibility,
+        responsibility: input.request.payload.workUnitProposals?.[0]?.responsibility,
         state: 'proposed',
       }),
       expect.objectContaining({
@@ -247,7 +262,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         outcomeId: result.outcome.id,
         missionId: result.mission?.id,
         position: 1,
-        responsibility: input.request.payload.workUnits?.[1]?.responsibility,
+        responsibility: input.request.payload.workUnitProposals?.[1]?.responsibility,
         state: 'proposed',
       }),
     ]);
@@ -294,16 +309,18 @@ describe('WaldoCoordinator responsibility capture', () => {
     expect(persisted).toEqual({ roots: 1, outcomesA: 1, outcomesB: 0 });
   });
 
-  it('rolls back state, events, idempotency, and projections after an injected transaction failure', async () => {
-    const ownerId = 'owner_atomic_failure_01';
+  it.each([
+    'owner_root', 'current_state', 'events', 'projection', 'idempotency',
+  ] as const)('rolls back every durable write after an injected %s-stage failure', async (failureStage) => {
+    const ownerId = `owner_atomic_failure_${failureStage}`;
     const stub = freshStub(ownerId);
     const input = await captureInput(
       ownerId,
       'This transaction must be all or nothing.',
-      'request_atomic_failure_01',
+      `request_atomic_failure_${failureStage}`,
       {
         mission: { brief: 'Rollback the whole Mission.' },
-        workUnits: [
+        workUnitProposals: [
           { responsibility: 'Rollback WorkUnit one.' },
           { responsibility: 'Rollback WorkUnit two.' },
         ],
@@ -317,7 +334,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         newId: (kind) => `${kind}_failure_${++id}`,
         sha256Hex,
         afterWrite(stage) {
-          if (stage === 'idempotency') throw new Error('injected transaction failure');
+          if (stage === failureStage) throw new Error('injected transaction failure');
         },
       });
 
@@ -330,8 +347,9 @@ describe('WaldoCoordinator responsibility capture', () => {
           'owner_roots',
           'outcomes',
           'missions',
-          'work_units',
-          'outcome_domain_events',
+          'work_unit_proposals',
+          'owner_domain_events',
+          'owner_event_state',
           'responsibility_commands',
           'responsibility_projection',
           'responsibility_projection_state',
@@ -346,11 +364,47 @@ describe('WaldoCoordinator responsibility capture', () => {
       owner_roots: 0,
       outcomes: 0,
       missions: 0,
-      work_units: 0,
-      outcome_domain_events: 0,
+      work_unit_proposals: 0,
+      owner_domain_events: 0,
+      owner_event_state: 0,
       responsibility_commands: 0,
       responsibility_projection: 0,
       responsibility_projection_state: 0,
+    });
+  });
+
+  it('fails closed when an internal owner-global event cursor is missing', async () => {
+    const ownerId = 'owner_cursor_internal_gap';
+    const stub = freshStub(ownerId);
+    const firstInput = await captureInput(ownerId, 'First responsibility event.', 'request_internal_gap_1');
+    const secondInput = await captureInput(ownerId, 'Third owner event.', 'request_internal_gap_2');
+    await runInDurableObject(stub, async (instance, state) => {
+      await instance.__waldoCaptureResponsibilityForTest(firstInput);
+      state.storage.transactionSync(() => {
+        new OwnerEventLog(state.storage).appendInCurrentTransaction({
+          schemaVersion: '0.2',
+          eventId: 'event_internal_gap_02',
+          ownerId,
+          aggregateKind: 'agent_session',
+          aggregateId: 'session_internal_gap_01',
+          revision: 1,
+          eventType: 'agent_session.observed',
+          causationId: 'command_internal_gap_02',
+          correlationId: 'correlation_internal_gap_02',
+          occurredAt: '2026-08-06T06:00:02.000Z',
+          payloadJson: JSON.stringify({ trust: 'untrusted' }),
+        });
+      });
+      await instance.__waldoCaptureResponsibilityForTest(secondInput);
+      state.storage.sql.exec('DELETE FROM owner_domain_events WHERE owner_cursor = 2');
+      expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
+        'owner event state mismatch',
+      );
+      expect(() => instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        fromExclusiveCursor: 0,
+        limit: 10,
+      })).toThrow('owner event state mismatch');
     });
   });
 
@@ -359,7 +413,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Plan this bounded outcome.', 'request_page_01', {
       mission: { brief: 'Bound the work.' },
-      workUnits: [
+      workUnitProposals: [
         { responsibility: 'First bounded unit.' },
         { responsibility: 'Second bounded unit.' },
       ],
@@ -372,7 +426,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         fromExclusiveCursor: 0,
         limit: 2,
       });
-      expect(responsibilityProjectionPageSchema.parse(first)).toEqual(first);
+      expect(responsibilityProjectionPageV02Schema.parse(first)).toEqual(first);
       expect(first.items.map((item) => item.cursor)).toEqual([1, 2]);
       expect(first.hasMore).toBe(true);
 
@@ -407,20 +461,101 @@ describe('WaldoCoordinator responsibility capture', () => {
     });
   });
 
+  it('uses owner-global cursors while filtered projections and replay tolerate gaps', async () => {
+    const ownerId = 'owner_global_cursor_01';
+    const stub = freshStub(ownerId);
+    const firstInput = await captureInput(ownerId, 'First responsibility.', 'request_global_01');
+    const secondInput = await captureInput(ownerId, 'Second responsibility.', 'request_global_02');
+
+    await runInDurableObject(stub, async (instance, state) => {
+      const first = await instance.__waldoCaptureResponsibilityForTest(firstInput);
+      expect(first.projectionCursor).toBe(1);
+      state.storage.transactionSync(() => {
+        new OwnerEventLog(state.storage).appendInCurrentTransaction({
+          schemaVersion: '0.2',
+          eventId: 'event_unrelated_01',
+          ownerId,
+          aggregateKind: 'agent_session',
+          aggregateId: 'session_01',
+          revision: 1,
+          eventType: 'agent_session.observed',
+          causationId: 'command_unrelated_01',
+          correlationId: 'correlation_unrelated_01',
+          occurredAt: '2026-08-06T06:00:02.000Z',
+          payloadJson: JSON.stringify({ trust: 'untrusted', state: 'provider_done' }),
+        });
+      });
+      const second = await instance.__waldoCaptureResponsibilityForTest(secondInput);
+      expect(second.projectionCursor).toBe(3);
+
+      const pageOne = instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        fromExclusiveCursor: 0,
+        limit: 1,
+      });
+      expect(pageOne.items.map((item) => item.cursor)).toEqual([1]);
+      expect(pageOne.highWaterCursor).toBe(3);
+      expect(pageOne.hasMore).toBe(true);
+      const pageTwo = instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        snapshotId: pageOne.snapshotId,
+        fromExclusiveCursor: pageOne.nextCursor,
+        limit: 1,
+      });
+      expect(pageTwo.items.map((item) => item.cursor)).toEqual([3]);
+      expect(pageTwo.hasMore).toBe(false);
+      expect(instance.__waldoReplayResponsibilityForTest(ownerId).items.map(
+        (item) => item.cursor,
+      )).toEqual([1, 3]);
+
+      state.storage.transactionSync(() => {
+        new OwnerEventLog(state.storage).appendInCurrentTransaction({
+          schemaVersion: '0.2',
+          eventId: 'event_unrelated_02',
+          ownerId,
+          aggregateKind: 'judgment',
+          aggregateId: 'judgment_01',
+          revision: 1,
+          eventType: 'judgment.observed',
+          causationId: 'command_unrelated_02',
+          correlationId: 'correlation_unrelated_02',
+          occurredAt: '2026-08-06T06:00:03.000Z',
+          payloadJson: JSON.stringify({ trust: 'untrusted' }),
+        });
+      });
+      const trailingGap = instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        snapshotId: pageOne.snapshotId,
+        fromExclusiveCursor: 3,
+        limit: 10,
+      });
+      expect(trailingGap.items).toEqual([]);
+      expect(trailingGap.nextCursor).toBe(4);
+      expect(trailingGap.hasMore).toBe(false);
+      expect(instance.__waldoReplayResponsibilityForTest(ownerId).outcomes).toHaveLength(2);
+    });
+  });
+
   it('fails closed when a stored projection cursor column diverges from its typed item', async () => {
     const ownerId = 'owner_projection_cursor_corrupt_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Detect a projection cursor gap.', 'request_cursor_corrupt_01');
     await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
+      const row = state.storage.sql.exec<{ item_json: string }>(
+        'SELECT item_json FROM responsibility_projection WHERE owner_cursor = 1',
+      ).one();
+      const item = JSON.parse(row.item_json) as Record<string, unknown>;
+      item.cursor = 2;
       state.storage.sql.exec(
-        'UPDATE responsibility_projection SET owner_cursor = 2 WHERE owner_cursor = 1',
+        'UPDATE responsibility_projection SET item_json = ? WHERE owner_cursor = 1',
+        JSON.stringify(item),
       );
       expect(() => instance.__waldoReadResponsibilityProjectionForTest({
         routedOwnerId: ownerId,
         fromExclusiveCursor: 0,
         limit: 10,
-      })).toThrow('cursor_gap');
+      })).toThrow('cursor_corrupt');
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
         'materialization mismatch',
       );
@@ -443,7 +578,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         limit: 256,
       });
     });
-    expect(responsibilityProjectionPageSchema.parse(page)).toEqual(page);
+    expect(responsibilityProjectionPageV02Schema.parse(page)).toEqual(page);
     expect(page.items.length).toBeGreaterThan(0);
     expect(page.items.length).toBeLessThan(32);
     expect(page.hasMore).toBe(true);
@@ -453,7 +588,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_replay_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Reconstruct this responsibility.', 'request_replay_01', {
-      workUnits: [{ responsibility: 'A direct bounded WorkUnit.' }],
+      workUnitProposals: [{ responsibility: 'A direct bounded proposal.' }],
     });
 
     const result = await runInDurableObject(stub, async (instance, state) => {
@@ -471,63 +606,107 @@ describe('WaldoCoordinator responsibility capture', () => {
     expect(result.second).toEqual(result.first);
     expect(result.second.outcomes).toEqual([result.captured.outcome]);
     expect(result.second.missions).toEqual([]);
-    expect(result.second.workUnits).toEqual(result.captured.workUnits);
+    expect(result.second.workUnitProposals).toEqual(result.captured.workUnitProposals);
     expect(result.second.items.map((item) => item.cursor)).toEqual([1, 2]);
+  });
+
+  it('reconstructs replay, idempotency, projection snapshots, and the next cursor after eviction', async () => {
+    const ownerId = 'owner_eviction_01';
+    const stub = freshStub(ownerId);
+    const firstInput = await captureInput(ownerId, 'Survive real eviction.', 'request_eviction_01', {
+      workUnitProposals: [{ responsibility: 'Persist the bounded proposal.' }],
+    });
+    const secondInput = await captureInput(
+      ownerId,
+      'Continue the owner event sequence.',
+      'request_eviction_02',
+    );
+    const before = await runInDurableObject(stub, async (instance) => {
+      const capture = await instance.__waldoCaptureResponsibilityForTest(firstInput);
+      const page = instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        fromExclusiveCursor: 0,
+        limit: 10,
+      });
+      return { capture, page };
+    });
+
+    await evictDurableObject(stub);
+
+    const after = await runInDurableObject(stub, async (instance) => {
+      const replay = instance.__waldoReplayResponsibilityForTest(ownerId);
+      const duplicate = await instance.__waldoCaptureResponsibilityForTest(firstInput);
+      const page = instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        snapshotId: before.page.snapshotId,
+        fromExclusiveCursor: before.page.nextCursor,
+        limit: 10,
+      });
+      const next = await instance.__waldoCaptureResponsibilityForTest(secondInput);
+      return { replay, duplicate, page, next };
+    });
+
+    expect(after.duplicate).toEqual(before.capture);
+    expect(after.replay.outcomes).toEqual([before.capture.outcome]);
+    expect(after.replay.workUnitProposals).toEqual(before.capture.workUnitProposals);
+    expect(after.page.items).toEqual([]);
+    expect(after.page.snapshotId).toBe(before.page.snapshotId);
+    expect(after.next.projectionCursor).toBe(3);
   });
 
   it('fails closed on stale revisions and impossible replay relationships', async () => {
     const ownerId = 'owner_corrupt_replay_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Reject corrupt history.', 'request_corrupt_01', {
-      workUnits: [{ responsibility: 'Remain attached to the Outcome.' }],
+      workUnitProposals: [{ responsibility: 'Remain attached to the Outcome.' }],
     });
 
     await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
       state.storage.sql.exec('PRAGMA ignore_check_constraints = ON');
       state.storage.sql.exec(
-        "UPDATE outcome_domain_events SET schema_version = '0.2' WHERE aggregate_kind = 'work_unit'",
+        "UPDATE owner_domain_events SET schema_version = '0.3' WHERE aggregate_kind = 'work_unit_proposal'",
       );
       state.storage.sql.exec('PRAGMA ignore_check_constraints = OFF');
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
         'invalid responsibility event schema version',
       );
       state.storage.sql.exec(
-        "UPDATE outcome_domain_events SET schema_version = '0.1' WHERE aggregate_kind = 'work_unit'",
+        "UPDATE owner_domain_events SET schema_version = '0.2' WHERE aggregate_kind = 'work_unit_proposal'",
       );
       const row = state.storage.sql.exec<{ payload_json: string }>(
-        "SELECT payload_json FROM outcome_domain_events WHERE aggregate_kind = 'work_unit'",
+        "SELECT payload_json FROM owner_domain_events WHERE aggregate_kind = 'work_unit_proposal'",
       ).one();
       const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
       const originalUpdatedAt = payload.updatedAt;
       payload.unexpected = true;
       state.storage.sql.exec(
-        "UPDATE outcome_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit'",
+        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit_proposal'",
         JSON.stringify(payload),
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
-        'invalid WorkUnit event payload',
+        'invalid work_unit_proposal event payload',
       );
       delete payload.unexpected;
       payload.updatedAt = 'not-a-server-timestamp';
       state.storage.sql.exec(
-        "UPDATE outcome_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit'",
+        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit_proposal'",
         JSON.stringify(payload),
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
-        'invalid responsibility event payload',
+        'invalid work_unit_proposal event payload',
       );
       payload.updatedAt = originalUpdatedAt;
       payload.outcomeId = 'outcome_cross_aggregate';
       state.storage.sql.exec(
-        "UPDATE outcome_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit'",
+        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit_proposal'",
         JSON.stringify(payload),
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
-        'invalid WorkUnit relationship',
+        'invalid WorkUnitProposal relationship',
       );
       state.storage.sql.exec(
-        "UPDATE outcome_domain_events SET revision = 2 WHERE aggregate_kind = 'work_unit'",
+        "UPDATE owner_domain_events SET revision = 2 WHERE aggregate_kind = 'work_unit_proposal'",
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
         'invalid responsibility event revision',
@@ -553,7 +732,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         input.request.payload.userStatement, ownerId,
       );
       state.storage.sql.exec(
-        'UPDATE responsibility_projection_state SET high_water_cursor = 2 WHERE owner_id = ?',
+        "UPDATE responsibility_projection SET item_json = '{}' WHERE owner_id = ?",
         ownerId,
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
@@ -562,11 +741,33 @@ describe('WaldoCoordinator responsibility capture', () => {
     });
   });
 
+  it.each([
+    ['downward', 'UPDATE owner_event_state SET high_water_cursor = 0 WHERE root_key = 1'],
+    ['upward', 'UPDATE owner_event_state SET high_water_cursor = 2 WHERE root_key = 1'],
+    ['missing', 'DELETE FROM owner_event_state WHERE root_key = 1'],
+  ] as const)('fails closed when owner-global cursor state is %s-corrupt', async (_case, sql) => {
+    const ownerId = `owner_cursor_state_${_case}`;
+    const stub = freshStub(ownerId);
+    const input = await captureInput(ownerId, 'Detect cursor state corruption.', `request_cursor_state_${_case}`);
+    await runInDurableObject(stub, async (instance, state) => {
+      await instance.__waldoCaptureResponsibilityForTest(input);
+      state.storage.sql.exec(sql);
+      expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
+        'owner event state mismatch',
+      );
+      expect(() => instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        fromExclusiveCursor: 0,
+        limit: 10,
+      })).toThrow('owner event state mismatch');
+    });
+  });
+
   it('enforces an explicit bounded replay ceiling', async () => {
     const ownerId = 'owner_replay_limit_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Bound replay work.', 'request_replay_limit_01', {
-      workUnits: [{ responsibility: 'Second event.' }],
+      workUnitProposals: [{ responsibility: 'Second event.' }],
     });
     await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
@@ -586,7 +787,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_capture_capacity_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Capacity must preserve reconstruction.', 'request_capacity_01', {
-      workUnits: [{ responsibility: 'This would require a second event.' }],
+      workUnitProposals: [{ responsibility: 'This would require a second event.' }],
     });
     const counts = await runInDurableObject(stub, (_instance, state) => {
       let id = 0;
@@ -600,7 +801,6 @@ describe('WaldoCoordinator responsibility capture', () => {
         ownerId,
         payload: input.request.payload,
         at: '2026-08-06T08:00:00.000Z',
-        firstCursor: 1,
         commandId: 'command_capacity_01',
         correlationId: 'correlation_capacity_01',
       })).toThrow('event_limit');
@@ -614,20 +814,19 @@ describe('WaldoCoordinator responsibility capture', () => {
         ownerId,
         payload: { userStatement: 'x'.repeat(1_000) },
         at: '2026-08-06T08:00:00.000Z',
-        firstCursor: 1,
         commandId: 'command_capacity_02',
         correlationId: 'correlation_capacity_02',
       })).toThrow('decoded_byte_limit');
       return {
         outcomes: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM outcomes').one().n,
-        events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM outcome_domain_events').one().n,
+        events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_domain_events').one().n,
         projections: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM responsibility_projection').one().n,
       };
     });
     expect(counts).toEqual({ outcomes: 0, events: 0, projections: 0 });
   });
 
-  it('rejects hostile server-owned fields and WorkUnit overflow before any durable write', async () => {
+  it('rejects hostile server-owned fields and WorkUnitProposal overflow before any durable write', async () => {
     const ownerId = 'owner_hostile_01';
     const stub = freshStub(ownerId);
     const valid = await captureInput(ownerId, 'Reject smuggled authority.', 'request_hostile_01');
@@ -642,7 +841,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         requestId: 'request_overflow_01',
         payload: {
           ...valid.request.payload,
-          workUnits: Array.from({ length: 33 }, (_, index) => ({
+          workUnitProposals: Array.from({ length: 33 }, (_, index) => ({
             responsibility: `Bounded unit ${index}`,
           })),
         },
@@ -691,7 +890,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         'digest conflict',
       );
       await expect(instance.__waldoCaptureResponsibilityForTest(staleRevision)).rejects.toThrow(
-        'revision must be server-owned',
+        'authority fields must be server-owned',
       );
       expect(state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_roots').one().n).toBe(0);
     });
@@ -705,10 +904,10 @@ describe('WaldoCoordinator responsibility capture', () => {
     const before = await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
       return {
-        events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM outcome_domain_events').one().n,
+        events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_domain_events').one().n,
         projections: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM responsibility_projection').one().n,
         cursor: state.storage.sql.exec<{ cursor: number }>(
-          'SELECT high_water_cursor AS cursor FROM responsibility_projection_state',
+          'SELECT high_water_cursor AS cursor FROM owner_event_state',
         ).one().cursor,
       };
     });
@@ -728,10 +927,10 @@ describe('WaldoCoordinator responsibility capture', () => {
       outcome: state.storage.sql.exec<{ state: string; revision: number; user_statement: string }>(
         'SELECT state, revision, user_statement FROM outcomes',
       ).one(),
-      events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM outcome_domain_events').one().n,
+      events: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM owner_domain_events').one().n,
       projections: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM responsibility_projection').one().n,
       cursor: state.storage.sql.exec<{ cursor: number }>(
-        'SELECT high_water_cursor AS cursor FROM responsibility_projection_state',
+        'SELECT high_water_cursor AS cursor FROM owner_event_state',
       ).one().cursor,
     }));
     expect(after).toEqual({

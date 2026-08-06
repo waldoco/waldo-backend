@@ -1,0 +1,36 @@
+{
+  "protocolVersion": "0.2",
+  "ownerId": "owner_server_01",
+  "projectionName": "responsibility.summary",
+  "snapshotId": "snapshot_01",
+  "snapshotBaseCursor": 0,
+  "fromExclusiveCursor": 0,
+  "highWaterCursor": 4,
+  "nextCursor": 4,
+  "items": [
+    {
+      "cursor": 1,
+      "aggregateId": "outcome_01",
+      "outcomeId": "outcome_01",
+      "revision": 1,
+      "createdAt": "2026-08-06T06:00:01.000Z",
+      "itemType": "outcome",
+      "state": "captured",
+      "userStatement": "Prepare and review the release."
+    },
+    {
+      "cursor": 3,
+      "aggregateId": "work_unit_proposal_01",
+      "outcomeId": "outcome_01",
+      "revision": 1,
+      "createdAt": "2026-08-06T06:00:01.000Z",
+      "itemType": "work_unit_proposal",
+      "missionId": "mission_01",
+      "position": 0,
+      "state": "proposed",
+      "responsibility": "Review the release artifact."
+    }
+  ],
+  "hasMore": false,
+  "generatedAt": "2026-08-06T06:00:02.000Z"
+}

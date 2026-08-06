@@ -53,7 +53,7 @@
   "$defs": {
     "__schema0": {
       "type": "string",
-      "const": "0.1"
+      "const": "0.2"
     },
     "__schema1": {
       "type": "string",
@@ -78,7 +78,7 @@
       }
     },
     "__schema5": {
-      "oneOf": [
+      "anyOf": [
         {
           "type": "object",
           "properties": {
@@ -181,7 +181,7 @@
             },
             "itemType": {
               "type": "string",
-              "const": "work_unit"
+              "const": "work_unit_proposal"
             },
             "missionId": {
               "anyOf": [
@@ -248,18 +248,18 @@
       "type": "boolean"
     }
   },
-  "$id": "urn:waldo:protocol:responsibility-handshake:0.1:responsibility-projection-page",
-  "title": "Waldo Responsibility ProjectionPage protocol v0.1",
+  "$id": "urn:waldo:protocol:responsibility-handshake:0.2:responsibility-projection-page",
+  "title": "Waldo responsibility-handshake v0.2 responsibility-projection-page",
   "description": "Structural interoperability schema. Canonical admission also requires the listed Waldo runtime invariants.",
   "x-waldo-validation-level": "structural",
   "x-waldo-runtime-validator-required": true,
   "x-waldo-runtime-invariants": {
     "maxItemsPerPage": 256,
     "maxPageUtf8Bytes": 262144,
-    "itemCursorOrder": "strictly ascending and bounded by page cursors",
-    "emptyPage": "must not advance nextCursor",
-    "nonEmptyPage": "nextCursor equals final item cursor",
-    "hasMore": "nextCursor < highWaterCursor",
-    "offlineCommands": "none"
-  }
+    "itemCursorOrder": "strictly ascending global owner cursors within the scanned range",
+    "filteredGaps": "allowed, including empty pages that advance nextCursor",
+    "cursorRange": "snapshotBaseCursor <= fromExclusiveCursor <= nextCursor <= highWaterCursor",
+    "hasMore": "nextCursor < highWaterCursor"
+  },
+  "x-waldo-offline-commands": "none"
 }

@@ -22,7 +22,7 @@ Do not treat a planning document as shipped truth. Pin the current `origin/main`
 
 ## Immediate implementation start
 
-The responsibility-handshake protocol v0.1 and golden fixtures landed on `main` in PR #74. The current Outcome capture tracer-bullet branch adds the owner-domain module inside `RunLoopDO`; until its PR merges, that work is `module_implemented` on the branch, not shipped on `main`. The bounded, copy-ready [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md) starts only after that merge and targets production adapter conformance rather than repeating contract or domain work.
+Responsibility-handshake v0.1 and its golden fixtures landed in PR #74. PR #75 is the dated review artifact for the owner-domain tracer bullet and negotiated v0.2 planning/projection additions. Neither this document nor a PR proves current `main`; every continuation must fetch and pin `origin/main`, inspect the live PR state, and classify its evidence again. The [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md) begins with that re-pin and targets adapter conformance only when the module is actually present in the chosen base.
 
 That contract work is the first dependency of one complete responsibility backbone:
 
@@ -52,6 +52,8 @@ Backend domain/reducer work and the Kennel protocol client begin in parallel as 
 
 “Not a prompt enhancer or agent-session dashboard” does not reject those Kennel capabilities. Kennel must provide prompt/context enhancement, session visibility/control, mission planning UI, supervision, and re-entry presentation beneath the Waldo-powered Outcome Finisher. They are not canonical product truth or sufficient completion conditions. Waldo owns and adjudicates durable Outcome/Mission/WorkUnit state, acceptance criteria, authority, verification, OpenLoop, and re-entry state; Kennel proposes, plans, renders, executes, and owns local process recovery. Paxel-style historical session analysis remains an optional evidence/continuity input, not the main product loop.
 
+The capture tracer bullet records bounded `WorkUnitProposal` objects only. It does not yet implement the fuller canonical WorkUnit contract described by the ownership split above; promotion, authority, execution, evidence, and completion semantics remain separate work.
+
 ## Stable kernel
 
 - One Waldo identity and one per-owner backend authority root.
@@ -62,7 +64,7 @@ Backend domain/reducer work and the Kennel protocol client begin in parallel as 
 - External effects persist frozen intent and digest before I/O, reconcile ambiguity before retry, and have exactly one retry owner.
 - Agent activity, Evidence, Verification, Acceptance, and Open Loop closure remain separate.
 - User statements and corrections outrank inference. Health is optional passive context inside a user-grounded purpose, never the product category or authority source.
-- Protocol 0.1 advertises `offlineCommands: "none"`. Disconnected presences can show only an explicitly stale read-only projection.
+- Protocol 0.1 and the negotiated v0.2 capability advertise `offlineCommands: "none"`. Disconnected presences can show only an explicitly stale read-only projection.
 
 ## Session start
 

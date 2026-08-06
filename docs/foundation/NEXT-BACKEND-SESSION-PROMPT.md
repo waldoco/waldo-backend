@@ -1,6 +1,6 @@
 # Next Backend Session Prompt — Responsibility Adapter Conformance
 
-Copy the prompt below into a new Codex session rooted at `waldo-backend` only after the Outcome capture PR has merged.
+Copy the prompt below into a new Codex session rooted at `waldo-backend`. Its first gate determines whether the Outcome capture module is present in the chosen base; this document does not establish merge status.
 
 ---
 
@@ -9,19 +9,19 @@ Continue Waldo's durable responsibility backbone with the smallest production ad
 ## Re-pin before claiming state
 
 1. Read `AGENTS.md`, every file required by `.claude/rules/INDEX.md`, `NEXT-SESSION-PLAN.md`, `AGENT-OPERATING-WORKFLOW.md`, and the three current architecture/product plans.
-2. Fetch and pin current `origin/main`; inspect source, tests, the merged Outcome capture PR, and its handoff. Plans and this prompt are target intent, not shipped proof.
+2. Fetch and pin current `origin/main`; inspect source, tests, PR #75's live state, and its handoff. Plans, PR descriptions, and this prompt are not shipped proof.
 3. Preserve dirty checkouts and work only in a clean `codex/` worktree.
 4. Use `/waldo-isa-run-contract`, `/codebase-design`, the planner and workflow-mapper, `/tdd`, separate Standards/Spec reviews, the mandatory security reviewer, and `/break-feature`.
 
 ## Starting boundary
 
-The released protocol v0.1 contract defines strict capture envelopes, canonical request digests, typed responsibility projection pages, and `offlineCommands: "none"`. The Outcome capture module is expected to own canonical Outcome, optional Mission, bounded WorkUnits, idempotency, events, current state, replay, and projections inside the existing per-owner `RunLoopDO` SQLite transaction boundary. Verify all of that from merged source before relying on it.
+Released protocol v0.1 remains the strict, byte-stable simple-capture contract from PR #74. Negotiated v0.2 defines optional Mission input, bounded `WorkUnitProposal` records, typed responsibility projection pages with owner-global cursors, and `offlineCommands: "none"`. The implementation evidence in PR #75 places Outcome state and proposal records inside the existing per-owner `RunLoopDO` SQLite boundary, routes root binding through `IdentityPresenceModule`, and allocates domain event cursors through one owner-wide event log. Verify every claim from the pinned source before relying on it.
 
 The local-only methods used for module integration tests are not a production adapter and are not evidence of Kennel conformance.
 
 ## Observable outcome
 
-A version-pinned, authenticated production backend adapter can route one protocol-v0.1 `responsibility.capture` request to the correct per-owner Durable Object, build the trusted envelope only from server context, invoke the existing Coordinator for authorization/sequencing, and return either the exact idempotent result or a non-enumerating protocol error. `OutcomeModule` and `ProjectionPublisher` remain the sole domain/projection writers. A read adapter can deliver the released typed projection page with stable snapshot/cursor behavior. No new durable store, Durable Object, writer, offline command queue, or provider path is introduced.
+A version-pinned, authenticated production backend adapter can negotiate responsibility-handshake v0.2, route one `responsibility.capture` request to the correct per-owner Durable Object, build the trusted envelope only from server context, invoke the existing Coordinator for authorization/sequencing, and return either the exact idempotent result or a non-enumerating protocol error. `IdentityPresenceModule`, `OwnerEventLog`, `OutcomeModule`, and `ProjectionPublisher` retain their single-writer responsibilities. A read adapter can deliver the typed v0.2 projection page with stable snapshot/cursor behavior. No new durable store, Durable Object, writer, offline command queue, or provider path is introduced.
 
 ## Required proof
 
@@ -36,17 +36,7 @@ A version-pinned, authenticated production backend adapter can route one protoco
 
 ## Product ownership that must remain intact
 
-| Capability | Kennel’s job | Waldo’s job |
-|---|---|---|
-| Mission planning | Interactive planning UI; propose Mission and WorkUnits | Validate and persist canonical Mission/WorkUnits |
-| Prompt enhancement | Present/edit the brief and send it to Codex | Compile governed context from Outcome, decisions, constraints and evidence requirements |
-| Session dashboard | Show running/waiting/blocked/completed sessions | Ensure session status cannot falsely determine Outcome status |
-| Agent control | Start, steer, pause, resume, cancel; recover local processes | Authorize the bounded work and determine whether it remains valid |
-| Evidence | Gather diffs, tests, artifacts and provider reports | Decide what counts as candidate evidence and run independent verification |
-| Re-entry | Show the exact place to return in Kennel | Persist the canonical OpenLoop/ReEntryPoint |
-| Completion | Present acceptance/reopen controls | Own verified state and record the user’s acceptance/reopen decision |
-
-“Not a prompt enhancer or agent-session dashboard” does not reject those Kennel capabilities. Prompt/context enhancement, session visibility/control, mission planning UI, supervision, and re-entry presentation sit beneath the Waldo-powered Outcome Finisher; they are neither canonical product truth nor a sufficient completion condition. Paxel-style historical session analysis is an optional evidence/continuity input, not the main product loop.
+Use the normative [Outcome Finisher ownership split](./NEXT-SESSION-PLAN.md#outcome-finisher-ownership-split), including its clarification about subordinate Kennel capabilities, Waldo completion authority, and Paxel-style analysis.
 
 ## Out of scope
 

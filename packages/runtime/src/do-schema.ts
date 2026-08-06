@@ -13,10 +13,11 @@ export const DO_PRODUCT_TABLES = [
   'drafts',
   'goals',
   'owner_roots',
+  'owner_event_state',
   'outcomes',
   'missions',
-  'work_units',
-  'outcome_domain_events',
+  'work_unit_proposals',
+  'owner_domain_events',
   'responsibility_commands',
   'responsibility_projection',
   'responsibility_projection_state',
@@ -345,14 +346,20 @@ export const HEY144_GOALS_SCHEMA_MIGRATION: DoMigration = {
 
 export const RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION: DoMigration = {
   version: 3,
-  name: 'responsibility-domain-v0-1',
+  name: 'responsibility-domain-v0-2',
   up: [
     `
       CREATE TABLE owner_roots (
         root_key       INTEGER PRIMARY KEY CHECK (root_key = 1),
         owner_id       TEXT NOT NULL UNIQUE,
-        snapshot_id    TEXT NOT NULL UNIQUE,
         created_at     TEXT NOT NULL
+      );
+    `,
+    `
+      CREATE TABLE owner_event_state (
+        root_key          INTEGER PRIMARY KEY CHECK (root_key = 1),
+        owner_id          TEXT NOT NULL UNIQUE,
+        high_water_cursor INTEGER NOT NULL CHECK (high_water_cursor >= 0)
       );
     `,
     `
@@ -382,7 +389,7 @@ export const RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION: DoMigration = {
       );
     `,
     `
-      CREATE TABLE work_units (
+      CREATE TABLE work_unit_proposals (
         id              TEXT PRIMARY KEY,
         owner_id        TEXT NOT NULL,
         outcome_id      TEXT NOT NULL,
@@ -398,12 +405,12 @@ export const RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION: DoMigration = {
       );
     `,
     `
-      CREATE TABLE outcome_domain_events (
+      CREATE TABLE owner_domain_events (
         owner_cursor    INTEGER PRIMARY KEY CHECK (owner_cursor > 0),
-        schema_version  TEXT NOT NULL CHECK (schema_version = '0.1'),
+        schema_version  TEXT NOT NULL,
         event_id        TEXT NOT NULL UNIQUE,
         owner_id        TEXT NOT NULL,
-        aggregate_kind  TEXT NOT NULL CHECK (aggregate_kind IN ('outcome', 'mission', 'work_unit')),
+        aggregate_kind  TEXT NOT NULL,
         aggregate_id    TEXT NOT NULL,
         revision        INTEGER NOT NULL CHECK (revision > 0),
         event_type      TEXT NOT NULL,
@@ -433,9 +440,10 @@ export const RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION: DoMigration = {
     `,
     `
       CREATE TABLE responsibility_projection_state (
-        owner_id          TEXT PRIMARY KEY,
-        high_water_cursor INTEGER NOT NULL CHECK (high_water_cursor >= 0),
-        updated_at        TEXT NOT NULL
+        owner_id             TEXT PRIMARY KEY,
+        snapshot_id          TEXT NOT NULL UNIQUE,
+        snapshot_base_cursor INTEGER NOT NULL CHECK (snapshot_base_cursor >= 0),
+        updated_at           TEXT NOT NULL
       );
     `,
   ],
@@ -443,10 +451,11 @@ export const RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION: DoMigration = {
     'DROP TABLE IF EXISTS responsibility_projection_state;',
     'DROP TABLE IF EXISTS responsibility_projection;',
     'DROP TABLE IF EXISTS responsibility_commands;',
-    'DROP TABLE IF EXISTS outcome_domain_events;',
-    'DROP TABLE IF EXISTS work_units;',
+    'DROP TABLE IF EXISTS owner_domain_events;',
+    'DROP TABLE IF EXISTS work_unit_proposals;',
     'DROP TABLE IF EXISTS missions;',
     'DROP TABLE IF EXISTS outcomes;',
+    'DROP TABLE IF EXISTS owner_event_state;',
     'DROP TABLE IF EXISTS owner_roots;',
   ],
 };
@@ -589,7 +598,8 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'created_at',
     'updated_at',
   ],
-  owner_roots: ['root_key', 'owner_id', 'snapshot_id', 'created_at'],
+  owner_roots: ['root_key', 'owner_id', 'created_at'],
+  owner_event_state: ['root_key', 'owner_id', 'high_water_cursor'],
   outcomes: [
     'id',
     'owner_id',
@@ -609,7 +619,7 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'created_at',
     'updated_at',
   ],
-  work_units: [
+  work_unit_proposals: [
     'id',
     'owner_id',
     'outcome_id',
@@ -621,7 +631,7 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'created_at',
     'updated_at',
   ],
-  outcome_domain_events: [
+  owner_domain_events: [
     'owner_cursor',
     'schema_version',
     'event_id',
@@ -643,7 +653,9 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'recorded_at',
   ],
   responsibility_projection: ['owner_cursor', 'owner_id', 'item_json'],
-  responsibility_projection_state: ['owner_id', 'high_water_cursor', 'updated_at'],
+  responsibility_projection_state: [
+    'owner_id', 'snapshot_id', 'snapshot_base_cursor', 'updated_at',
+  ],
 };
 
 export function provisionDoSchema(storage: DurableObjectStorage): DoSchemaAssertResult {
