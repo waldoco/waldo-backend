@@ -86,6 +86,47 @@ export type {
   SurfaceCommandRequest,
   TrustedCommandEnvelope,
 } from './protocol/responsibility-handshake-v0-1';
+
+export {
+  canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  missionRecordV02Schema,
+  outcomeProjectionItemV02Schema,
+  outcomeRecordV02Schema,
+  protocolVersionV02Schema,
+  responsibilityCaptureMissionProposalV02Schema,
+  responsibilityCapturePayloadV02Schema,
+  responsibilityCaptureRequestV02Schema,
+  responsibilityCaptureResultSchema,
+  responsibilityCaptureResultV01CompatibilitySchema,
+  responsibilityCaptureResultV02Schema,
+  responsibilityCaptureTextV02Schema,
+  responsibilityCaptureTrustedEnvelopeV02Schema,
+  responsibilityCaptureWorkUnitV02Schema,
+  responsibilityProjectionItemV02Schema,
+  responsibilityProjectionPageV01CompatibilitySchema,
+  responsibilityProjectionPageV02Schema,
+  responsibilityProtocolCapabilitiesV02Schema,
+  workUnitAuthorityCeilingV02Schema,
+  workUnitBudgetV02Schema,
+  workUnitIsolationV02Schema,
+  workUnitProjectionItemV02Schema,
+  workUnitRecordV02Schema,
+} from './protocol/responsibility-handshake-v0-2';
+export type {
+  MissionRecordV02,
+  OutcomeRecordV02,
+  ResponsibilityCapturePayloadV02,
+  ResponsibilityCaptureRequestV02,
+  ResponsibilityCaptureResult,
+  ResponsibilityCaptureResultV01Compatibility,
+  ResponsibilityCaptureResultV02,
+  ResponsibilityCaptureTrustedEnvelopeV02,
+  ResponsibilityProjectionItemV02,
+  ResponsibilityProjectionPageV01Compatibility,
+  ResponsibilityProjectionPageV02,
+  ResponsibilityProtocolCapabilitiesV02,
+  WorkUnitRecordV02,
+} from './protocol/responsibility-handshake-v0-2';
 export * from './telemetry/engagement';
 export * from './public/dto';
 export * from './public/morning-brief';

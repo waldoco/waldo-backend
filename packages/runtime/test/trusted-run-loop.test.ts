@@ -1159,6 +1159,9 @@ describe('RunLoopDO trusted invocation convergence', () => {
           '__runLoopScheduleTrustedRunForTest',
           '__runLoopSetKillFlag',
           '__runLoopSetTestOverrides',
+          '__waldoCaptureResponsibilityForTest',
+          '__waldoReadResponsibilityProjectionForTest',
+          '__waldoReplayResponsibilityForTest',
           'alarm',
           'constructor',
           'fetch',
@@ -1193,6 +1196,20 @@ describe('RunLoopDO trusted invocation convergence', () => {
         expect(Reflect.has(prototype, method)).toBe(true);
       }
       await withNonLocalRunLoopEnvironment(instance, async () => {
+        const waldo = instance as unknown as {
+          __waldoCaptureResponsibilityForTest(input: unknown): Promise<unknown>;
+          __waldoReadResponsibilityProjectionForTest(input: unknown): unknown;
+          __waldoReplayResponsibilityForTest(ownerId: string): unknown;
+        };
+        await expect(waldo.__waldoCaptureResponsibilityForTest({})).rejects.toThrow(
+          'run-loop test seam is local-only',
+        );
+        expect(() => waldo.__waldoReadResponsibilityProjectionForTest({})).toThrow(
+          'run-loop test seam is local-only',
+        );
+        expect(() => waldo.__waldoReplayResponsibilityForTest('owner_nonlocal')).toThrow(
+          'run-loop test seam is local-only',
+        );
         await expect(loop.readRunProof('run_nonlocal_proof')).rejects.toThrow(
           'run-loop test seam is local-only',
         );

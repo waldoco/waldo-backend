@@ -1,0 +1,24 @@
+{
+  "protocolVersion": "0.1",
+  "ownerId": "owner_server_01",
+  "projectionName": "responsibility.summary",
+  "snapshotId": "snapshot_v01_compat",
+  "snapshotBaseCursor": 0,
+  "fromExclusiveCursor": 0,
+  "highWaterCursor": 1,
+  "nextCursor": 1,
+  "items": [
+    {
+      "cursor": 1,
+      "aggregateId": "outcome_v01_compat",
+      "outcomeId": "outcome_v01_compat",
+      "revision": 1,
+      "createdAt": "2026-08-06T06:00:01.000Z",
+      "itemType": "outcome",
+      "state": "captured",
+      "userStatement": "Capture this responsibility through released v0.1."
+    }
+  ],
+  "hasMore": false,
+  "generatedAt": "2026-08-06T06:00:02.000Z"
+}

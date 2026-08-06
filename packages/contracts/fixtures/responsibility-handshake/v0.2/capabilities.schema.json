@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolName": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "supportedVersions": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "selectedVersion": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "offlineCommands": {
+      "$ref": "#/$defs/__schema3"
+    }
+  },
+  "required": [
+    "protocolName",
+    "supportedVersions",
+    "selectedVersion",
+    "offlineCommands"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "responsibility-handshake"
+    },
+    "__schema1": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "string",
+          "const": "0.1"
+        },
+        {
+          "type": "string",
+          "const": "0.2"
+        }
+      ]
+    },
+    "__schema2": {
+      "type": "string",
+      "enum": [
+        "0.1",
+        "0.2"
+      ]
+    },
+    "__schema3": {
+      "type": "string",
+      "const": "none"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-handshake:0.2:capabilities",
+  "title": "Waldo responsibility-handshake v0.2 capabilities",
+  "description": "Structural interoperability schema. Canonical admission also requires the listed Waldo runtime invariants.",
+  "x-waldo-validation-level": "structural",
+  "x-waldo-runtime-validator-required": true,
+  "x-waldo-runtime-invariants": {
+    "negotiation": "selectedVersion must be included in supportedVersions",
+    "offlineCommands": "none"
+  },
+  "x-waldo-offline-commands": "none"
+}

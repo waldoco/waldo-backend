@@ -22,7 +22,7 @@ Do not treat a planning document as shipped truth. Pin the current `origin/main`
 
 ## Immediate implementation start
 
-Start the backend with the bounded, copy-ready [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md). It creates the responsibility-handshake subset of protocol v0.1 and its golden fixtures in `@waldo/contracts`; it does not yet add runtime ingress, persistence, reducers, connectors, or Kennel code.
+Responsibility-handshake v0.1 and its golden fixtures landed in PR #74. PR #75 is the dated review artifact for the owner-domain tracer bullet and negotiated v0.2 planning/projection additions. Neither this document nor a PR proves current `main`; every continuation must fetch and pin `origin/main`, inspect the live PR state, and classify its evidence again. The [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md) begins with that re-pin and targets adapter conformance only when the module is actually present in the chosen base.
 
 That contract work is the first dependency of one complete responsibility backbone:
 
@@ -38,6 +38,22 @@ That contract work is the first dependency of one complete responsibility backbo
 
 Backend domain/reducer work and the Kennel protocol client begin in parallel as soon as their exact shared fixtures land. More providers, cloud workspaces, DeepWiki ingestion, capability marketplaces, and dashboard breadth must not substitute for this proof.
 
+## Outcome Finisher ownership split
+
+| Capability | Kennel’s job | Waldo’s job |
+|---|---|---|
+| Mission planning | Interactive planning UI; propose Mission and WorkUnits | Validate and persist canonical Mission/WorkUnits |
+| Prompt enhancement | Present/edit the brief and send it to Codex | Compile governed context from Outcome, decisions, constraints and evidence requirements |
+| Session dashboard | Show running/waiting/blocked/completed sessions | Ensure session status cannot falsely determine Outcome status |
+| Agent control | Start, steer, pause, resume, cancel; recover local processes | Authorize the bounded work and determine whether it remains valid |
+| Evidence | Gather diffs, tests, artifacts and provider reports | Decide what counts as candidate evidence and run independent verification |
+| Re-entry | Show the exact place to return in Kennel | Persist the canonical OpenLoop/ReEntryPoint |
+| Completion | Present acceptance/reopen controls | Own verified state and record the user’s acceptance/reopen decision |
+
+“Not a prompt enhancer or agent-session dashboard” does not reject those Kennel capabilities. Kennel must provide prompt/context enhancement, session visibility/control, mission planning UI, supervision, and re-entry presentation beneath the Waldo-powered Outcome Finisher. They are not canonical product truth or sufficient completion conditions. Waldo owns and adjudicates durable Outcome/Mission/WorkUnit state, acceptance criteria, authority, verification, OpenLoop, and re-entry state; Kennel proposes, plans, renders, executes, and owns local process recovery. Paxel-style historical session analysis remains an optional evidence/continuity input, not the main product loop.
+
+The capture tracer bullet records bounded canonical `WorkUnit` objects with dependencies, evidence requirements, required capabilities, stop conditions, and server-owned deny-by-default authority, budget, isolation, assignee, and session fields. It does not authorize or execute them: promotion, non-zero execution budget, leases, provider sessions, evidence, verification, and completion remain separate work.
+
 ## Stable kernel
 
 - One Waldo identity and one per-owner backend authority root.
@@ -48,7 +64,7 @@ Backend domain/reducer work and the Kennel protocol client begin in parallel as 
 - External effects persist frozen intent and digest before I/O, reconcile ambiguity before retry, and have exactly one retry owner.
 - Agent activity, Evidence, Verification, Acceptance, and Open Loop closure remain separate.
 - User statements and corrections outrank inference. Health is optional passive context inside a user-grounded purpose, never the product category or authority source.
-- Protocol 0.1 advertises `offlineCommands: "none"`. Disconnected presences can show only an explicitly stale read-only projection.
+- Protocol 0.1 and the negotiated v0.2 capability advertise `offlineCommands: "none"`. Disconnected presences can show only an explicitly stale read-only projection.
 
 ## Session start
 

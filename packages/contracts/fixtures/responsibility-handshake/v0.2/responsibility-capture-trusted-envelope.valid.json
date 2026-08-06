@@ -1,0 +1,42 @@
+{
+  "protocolVersion": "0.2",
+  "commandId": "command_capture_02",
+  "commandType": "responsibility.capture",
+  "ownerId": "owner_server_01",
+  "actor": {
+    "kind": "presence",
+    "id": "presence_server_01"
+  },
+  "presenceId": "presence_server_01",
+  "authenticatedSessionId": "authenticated_session_01",
+  "ownerPolicyRevision": 1,
+  "authAssurance": "verified_session",
+  "ownerRootRoutingVersion": 1,
+  "requestDigest": "sha256:e68de4a4f1807e36953c087d7b20605fb3ee5e24eaab88fca8148abde439db9e",
+  "correlationId": "correlation_02",
+  "receivedAt": "2026-08-06T06:00:01.000Z",
+  "payload": {
+    "userStatement": "Prepare and review the release.",
+    "mission": {
+      "brief": "Prepare a reviewable release."
+    },
+    "workUnits": [
+      {
+        "responsibility": "Review the release artifact.",
+        "inputs": [
+          "Prepared release artifact."
+        ],
+        "dependencyPositions": [],
+        "expectedEvidence": [
+          "A review report bound to the artifact digest."
+        ],
+        "requiredCapabilities": [
+          "artifact.read"
+        ],
+        "stopConditions": [
+          "Stop before publication."
+        ]
+      }
+    ]
+  }
+}

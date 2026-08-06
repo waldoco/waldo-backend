@@ -61,6 +61,14 @@ import {
 } from '@waldo/contracts';
 import { runHooks, type HookRuntimeContext } from '../hooks/registry';
 import {
+  WaldoCoordinator,
+  type ResponsibilityCaptureAdmission,
+  type ResponsibilityCaptureResult,
+  type ResponsibilityProjectionRead,
+  type ResponsibilityReplay,
+} from '../coordinator/waldo-coordinator';
+import { provisionDoSchema } from '../do-schema';
+import {
   RuntimeLLMProvider,
   TRUSTED_PROVIDER_EFFECT_METERING_CAP,
   type CircuitBreaker,
@@ -286,6 +294,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   private readonly scheduler: Scheduler;
   private journalOutbox: RunJournalOutbox;
   private llm: RuntimeLLMProvider;
+  private readonly waldoCoordinator: WaldoCoordinator;
   private testCircuitBreaker: CircuitBreaker | undefined;
   private readonly trustedDrivePromises = new Map<string, Promise<void>>();
 
@@ -304,12 +313,33 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     super(ctx, env);
     ensureSchema(ctx.storage);
     ensureRunLoopSchema(ctx.storage);
+    provisionDoSchema(ctx.storage);
     this.envBindings = env;
     this.adapters = resolveRunLoopAdapters(env);
     this.deps = this.adapters.deps;
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, this.deps);
     this.journalOutbox = this.#createJournalOutbox(this.adapters.sink);
     this.llm = new RuntimeLLMProvider({ gateway: this.adapters.gateway });
+    this.waldoCoordinator = new WaldoCoordinator(ctx.storage);
+  }
+
+  async __waldoCaptureResponsibilityForTest(
+    admission: ResponsibilityCaptureAdmission,
+  ): Promise<ResponsibilityCaptureResult> {
+    this.#assertLocalTestSeam();
+    return this.waldoCoordinator.captureResponsibility(admission);
+  }
+
+  __waldoReadResponsibilityProjectionForTest(
+    input: ResponsibilityProjectionRead,
+  ) {
+    this.#assertLocalTestSeam();
+    return this.waldoCoordinator.readResponsibilityProjection(input);
+  }
+
+  __waldoReplayResponsibilityForTest(ownerId: string): ResponsibilityReplay {
+    this.#assertLocalTestSeam();
+    return this.waldoCoordinator.replayResponsibility(ownerId);
   }
 
   // Test-only seam: lets integration tests exercise governor and adapter branches without making
