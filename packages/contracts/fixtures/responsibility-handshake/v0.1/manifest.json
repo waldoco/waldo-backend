@@ -4,8 +4,12 @@
   "previousVersionCompatibility": "not_run",
   "files": [
     {
+      "path": "canonicalization-vectors.json",
+      "sha256": "sha256:8cd17b5c982b42621ce103595513a49d1a8d118515a5d51e9f06940325b85866"
+    },
+    {
       "path": "domain-event.schema.json",
-      "sha256": "sha256:95efefcfa2a71bca5d85985c0bbd8c4f6dfc0f0197b7a35c12c8774385cd7735"
+      "sha256": "sha256:b5b16a06fceafc03cc864f72790eb614f4d7426c89ea86137b5c0cd951f4f4b4"
     },
     {
       "path": "observations.json",
@@ -21,19 +25,19 @@
     },
     {
       "path": "projection-delivery.json",
-      "sha256": "sha256:a7da0a47590844d30ccfa3a4db8c80a60fc352709037d3e948e29e38c15392bf"
+      "sha256": "sha256:4f40dcea3545039749c8163fde5d7b1e965084482dfb3487a9d366c335f72821"
     },
     {
       "path": "projection-page.schema.json",
-      "sha256": "sha256:d7b7a7500ce04e579f796b16638cfce2ec986544459d42ff9b906bb84fa95657"
+      "sha256": "sha256:df359a15cf4497e414c7a0181889d5fbba5687057c3db797e87e76c577008905"
     },
     {
       "path": "request-digests.json",
-      "sha256": "sha256:edca98d1b3aed23caf53b56af042133f9d3bacd42330bf04f6cf709cb1c49720"
+      "sha256": "sha256:f0dfd94d60d71fa6c6bbaa2b4171e0af49c87442c6007c241f7090eb3dbf321c"
     },
     {
       "path": "surface-command-request.schema.json",
-      "sha256": "sha256:610d35915d2b7157f51b151f38acd48412cc81d795adf3fefb06a53c65f2369f"
+      "sha256": "sha256:4041acc19ef858a663045e45064b1befce56ec08e2e47bf83e79a71fe6ea53ec"
     },
     {
       "path": "surface-command.rejections.json",
@@ -45,11 +49,15 @@
     },
     {
       "path": "trusted-command-envelope.schema.json",
-      "sha256": "sha256:81c997b9ab7098482b62958fbfef3bd4c7e038424cd23dfac3b0eb451306ceb1"
+      "sha256": "sha256:375aea1d1ee684cb83a8d3ae593307f2ab1f0e122b15c8d630ad4e4c0be222c4"
     },
     {
       "path": "trusted-command.valid.json",
       "sha256": "sha256:bbce0348f1ff13e084a79ca9041769c9f621efb8204ce89124b6d475c2e7b6b6"
+    },
+    {
+      "path": "waldo-json-sorted-keys-v1.md",
+      "sha256": "sha256:d7dcb3827d80c7546d242071607bd533596e54c903ee0878450b268acafa2fa0"
     }
   ]
 }

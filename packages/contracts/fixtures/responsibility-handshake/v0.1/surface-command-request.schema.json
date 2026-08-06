@@ -92,6 +92,7 @@
   "x-waldo-runtime-validator-required": true,
   "x-waldo-runtime-invariants": {
     "admission": "commandType-discriminated concrete command schemas",
-    "maxPayloadUtf8Bytes": 16384
+    "maxPayloadUtf8Bytes": 16384,
+    "wellFormedUserStatementUnicode": true
   }
 }

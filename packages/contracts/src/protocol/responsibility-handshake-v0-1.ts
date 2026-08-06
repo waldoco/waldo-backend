@@ -15,6 +15,21 @@ const MAX_PROTOCOL_PAYLOAD_BYTES = 16_384;
 const MAX_PROTOCOL_JSON_DEPTH = 64;
 const MAX_PROTOCOL_JSON_NODES = 4_096;
 
+function isWellFormedUtf16(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= value.length) return false;
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+      continue;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) return false;
+  }
+  return true;
+}
+
 const protocolJsonStructureSchema = z.unknown().superRefine((value, context) => {
   const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
   let discoveredNodes = 1;
@@ -25,6 +40,13 @@ const protocolJsonStructureSchema = z.unknown().superRefine((value, context) => 
       context.addIssue({
         code: 'custom',
         message: `protocol JSON must not exceed depth ${MAX_PROTOCOL_JSON_DEPTH}`,
+      });
+      return;
+    }
+    if (typeof current.value === 'string' && !isWellFormedUtf16(current.value)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'protocol JSON strings must contain well-formed Unicode',
       });
       return;
     }
@@ -48,6 +70,13 @@ const protocolJsonStructureSchema = z.unknown().superRefine((value, context) => 
     const record = current.value as Record<string, unknown>;
     for (const key in record) {
       if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+      if (!isWellFormedUtf16(key)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'protocol JSON object keys must contain well-formed Unicode',
+        });
+        return;
+      }
       discoveredNodes += 1;
       if (discoveredNodes > MAX_PROTOCOL_JSON_NODES) {
         context.addIssue({
@@ -104,19 +133,34 @@ export function surfaceCommandRequestEnvelopeSchemaFor<Payload extends z.ZodType
   });
 }
 
-function orderProtocolJson(value: ProtocolJsonValue): ProtocolJsonValue {
-  if (Array.isArray(value)) return value.map(orderProtocolJson);
-  if (value === null || typeof value !== 'object') return value;
+function compareUtf16CodeUnits(left: string, right: string): number {
+  const sharedLength = Math.min(left.length, right.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = left.charCodeAt(index) - right.charCodeAt(index);
+    if (difference !== 0) return difference;
+  }
+  return left.length - right.length;
+}
 
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort()
-      .map((key) => [key, orderProtocolJson(value[key]!)]),
-  );
+function serializeCanonicalProtocolJson(value: ProtocolJsonValue): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(serializeCanonicalProtocolJson).join(',')}]`;
+  }
+
+  const members = Object.keys(value)
+    .sort(compareUtf16CodeUnits)
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${serializeCanonicalProtocolJson(value[key]!)}`,
+    );
+  return `{${members.join(',')}}`;
 }
 
 export function canonicalizeProtocolJson(value: unknown): string {
-  return JSON.stringify(orderProtocolJson(protocolJsonValueSchema.parse(value)));
+  return serializeCanonicalProtocolJson(protocolJsonValueSchema.parse(value));
 }
 
 export const responsibilityCapturePayloadSchema = z
@@ -125,6 +169,9 @@ export const responsibilityCapturePayloadSchema = z
       .string()
       .min(1)
       .max(8_192)
+      .refine(isWellFormedUtf16, {
+        error: 'userStatement must contain well-formed Unicode',
+      })
       .regex(/\S/, {
         error: 'userStatement must contain non-whitespace content',
       }),
@@ -210,11 +257,13 @@ export const presenceCapabilityV01Schema = z.strictObject({
 });
 export type PresenceCapabilityV01 = z.infer<typeof presenceCapabilityV01Schema>;
 
+const domainEventSchemaVersionV01Schema = z.literal('0.1');
+
 export function domainEventEnvelopeSchemaFor<Payload extends z.ZodType>(
   payloadSchema: Payload,
 ) {
   return z.strictObject({
-    schemaVersion: protocolNameSchema,
+    schemaVersion: domainEventSchemaVersionV01Schema,
     eventId: protocolIdSchema,
     eventType: protocolNameSchema,
     ownerId: protocolIdSchema,
@@ -311,7 +360,86 @@ export type DomainEvent = z.infer<typeof domainEventSchema>;
 const MAX_PROJECTION_ITEMS = 256;
 const MAX_PROJECTION_PAGE_BYTES = 262_144;
 
-export function projectionPageEnvelopeSchemaFor<Item extends z.ZodType>(
+function jsonStringUtf8ByteLengthAtMost(value: string, limit: number): number {
+  let bytes = 2;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint === 0x22 || codePoint === 0x5c) {
+      bytes += 2;
+    } else if (
+      codePoint === 0x08 ||
+      codePoint === 0x09 ||
+      codePoint === 0x0a ||
+      codePoint === 0x0c ||
+      codePoint === 0x0d
+    ) {
+      bytes += 2;
+    } else if (codePoint <= 0x1f) {
+      bytes += 6;
+    } else {
+      bytes +=
+        codePoint <= 0x7f
+          ? 1
+          : codePoint <= 0x7ff
+            ? 2
+            : codePoint <= 0xffff
+              ? 3
+              : 4;
+    }
+    if (bytes > limit) return bytes;
+  }
+  return bytes;
+}
+
+function jsonEncodedUtf8ByteLengthAtMost(value: ProtocolJsonValue, limit: number): number {
+  const pending: ProtocolJsonValue[] = [value];
+  let bytes = 0;
+  const add = (count: number): boolean => {
+    bytes += count;
+    return bytes <= limit;
+  };
+
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (current === null) {
+      if (!add(4)) return bytes;
+      continue;
+    }
+    if (typeof current === 'boolean') {
+      if (!add(current ? 4 : 5)) return bytes;
+      continue;
+    }
+    if (typeof current === 'number') {
+      if (!add(JSON.stringify(current).length)) return bytes;
+      continue;
+    }
+    if (typeof current === 'string') {
+      if (!add(jsonStringUtf8ByteLengthAtMost(current, limit - bytes))) return bytes;
+      continue;
+    }
+    if (Array.isArray(current)) {
+      if (!add(2 + Math.max(0, current.length - 1))) return bytes;
+      for (let index = current.length - 1; index >= 0; index -= 1) {
+        pending.push(current[index]!);
+      }
+      continue;
+    }
+
+    const keys = Object.keys(current);
+    if (!add(2 + Math.max(0, keys.length - 1) + keys.length)) return bytes;
+    for (let index = keys.length - 1; index >= 0; index -= 1) {
+      const key = keys[index]!;
+      if (!add(jsonStringUtf8ByteLengthAtMost(key, limit - bytes))) return bytes;
+      pending.push(current[key]!);
+    }
+  }
+
+  return bytes;
+}
+
+export function projectionPageEnvelopeSchemaFor<
+  Item extends z.ZodType<ProtocolJsonValue>,
+>(
   itemSchema: Item,
 ) {
   return z
@@ -357,7 +485,10 @@ export function projectionPageEnvelopeSchemaFor<Item extends z.ZodType>(
           message: 'hasMore must reflect whether nextCursor precedes highWaterCursor',
         });
       }
-      if (utf8ByteLength(JSON.stringify(page)) > MAX_PROJECTION_PAGE_BYTES) {
+      if (
+        jsonEncodedUtf8ByteLengthAtMost(page, MAX_PROJECTION_PAGE_BYTES) >
+        MAX_PROJECTION_PAGE_BYTES
+      ) {
         context.addIssue({
           code: 'custom',
           message: `projection page must not exceed ${MAX_PROJECTION_PAGE_BYTES} UTF-8 bytes`,
@@ -366,7 +497,6 @@ export function projectionPageEnvelopeSchemaFor<Item extends z.ZodType>(
     });
 }
 
-export const projectionPageSchema = protocolJsonStructureSchema.pipe(
-  projectionPageEnvelopeSchemaFor(protocolJsonValueSchema),
-);
+export const projectionPageSchema =
+  projectionPageEnvelopeSchemaFor(protocolJsonValueSchema);
 export type ProjectionPage = z.infer<typeof projectionPageSchema>;

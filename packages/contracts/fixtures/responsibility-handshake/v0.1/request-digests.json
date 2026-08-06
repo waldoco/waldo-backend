@@ -2,6 +2,8 @@
   "protocolVersion": "0.1",
   "digestAlgorithm": "sha256",
   "canonicalization": "waldo-json-sorted-keys-v1",
+  "canonicalizationSpecification": "waldo-json-sorted-keys-v1.md",
+  "canonicalizationVectors": "canonicalization-vectors.json",
   "previousVersionCompatibility": "not_run",
   "cases": [
     {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   agentSessionActivityObservedEventSchema,
   candidateEvidenceObservedEventSchema,
+  canonicalizeProtocolJson,
   canonicalizeSurfaceCommandRequestForDigest,
   domainEventSchema,
   judgmentNeededObservedEventSchema,
@@ -76,6 +77,15 @@ function nestedArrays(depth: number): unknown {
   return value;
 }
 
+function testUtf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+}
+
 describe('responsibility handshake v0.1', () => {
   it('fails bounded JSON validation instead of throwing on hostile nesting', () => {
     let result: { success: boolean } | undefined;
@@ -141,11 +151,75 @@ describe('responsibility handshake v0.1', () => {
     expect(parse().success).toBe(false);
   });
 
-  it('enforces the JSON node bound across the whole projection page', () => {
+  it('scopes the JSON node bound to each projection item', () => {
     expect(
       projectionPageSchema.safeParse({
         ...projectionPage,
         items: [Array(3_000).fill(null), Array(3_000).fill(null)],
+      }).success,
+    ).toBe(true);
+    expect(
+      projectionPageSchema.safeParse({
+        ...projectionPage,
+        items: [Array(4_096).fill(null)],
+      }).success,
+    ).toBe(false);
+    expect(
+      projectionPageSchema.safeParse({
+        ...projectionPage,
+        items: [Array(4_095).fill(null)],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts a full projection page of plausible flat items', () => {
+    const item = Object.fromEntries(
+      Array.from({ length: 20 }, (_, index) => [`field_${index}`, `value_${index}`]),
+    );
+
+    expect(
+      projectionPageSchema.safeParse({
+        ...projectionPage,
+        items: Array.from({ length: 256 }, () => item),
+      }).success,
+    ).toBe(true);
+  });
+
+  it('enforces the serialized projection-page byte limit exactly', () => {
+    const emptyStringPage = { ...projectionPage, items: [''] };
+    const emptyPageBytes = testUtf8ByteLength(JSON.stringify(emptyStringPage));
+    const exactLimitPage = {
+      ...projectionPage,
+      items: ['x'.repeat(262_144 - emptyPageBytes)],
+    };
+    const overLimitPage = {
+      ...projectionPage,
+      items: ['x'.repeat(262_145 - emptyPageBytes)],
+    };
+
+    expect(testUtf8ByteLength(JSON.stringify(exactLimitPage))).toBe(262_144);
+    expect(projectionPageSchema.safeParse(exactLimitPage).success).toBe(true);
+    const overLimitResult = projectionPageSchema.safeParse(overLimitPage);
+    expect(overLimitResult.success).toBe(false);
+    if (!overLimitResult.success) {
+      expect(overLimitResult.error.issues.map((issue) => issue.message)).toContain(
+        'projection page must not exceed 262144 UTF-8 bytes',
+      );
+    }
+
+    const escapingSeed = '🐕"\\\n\t\u0000';
+    const escapingSeedPage = { ...projectionPage, items: [escapingSeed] };
+    const escapingSeedBytes = testUtf8ByteLength(JSON.stringify(escapingSeedPage));
+    const exactEscapingPage = {
+      ...projectionPage,
+      items: [escapingSeed + 'x'.repeat(262_144 - escapingSeedBytes)],
+    };
+    expect(testUtf8ByteLength(JSON.stringify(exactEscapingPage))).toBe(262_144);
+    expect(projectionPageSchema.safeParse(exactEscapingPage).success).toBe(true);
+    expect(
+      projectionPageSchema.safeParse({
+        ...exactEscapingPage,
+        items: [`${exactEscapingPage.items[0]}x`],
       }).success,
     ).toBe(false);
   });
@@ -470,6 +544,22 @@ describe('responsibility handshake v0.1', () => {
     expect(domainEventSchema.safeParse(event).success).toBe(false);
   });
 
+  it('rejects an unknown event schema version through the v0.1 admission union', () => {
+    expect(
+      domainEventSchema.safeParse({
+        ...domainEventBase,
+        schemaVersion: '0.2',
+        payload: {
+          trust: 'untrusted',
+          sessionId: 'agent_session_01',
+          workUnitId: 'work_unit_01',
+          activity: 'progress',
+          observedAt: '2026-08-05T12:04:59Z',
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it('accepts an ordered projection page with snapshot and cursor metadata', () => {
     expect(projectionPageSchema.safeParse(projectionPage).success).toBe(true);
     expect(
@@ -509,6 +599,54 @@ describe('responsibility handshake v0.1', () => {
     expect(canonicalizeSurfaceCommandRequestForDigest(reorderedRequest)).toBe(
       canonicalizeSurfaceCommandRequestForDigest(surfaceRequest),
     );
+  });
+
+  it('sorts canonical JSON object keys by UTF-16 code units', () => {
+    expect(
+      canonicalizeProtocolJson({
+        '\uE000': 'basic multilingual plane',
+        '😀': 'astral plane',
+      }),
+    ).toBe('{"😀":"astral plane","":"basic multilingual plane"}');
+  });
+
+  it('does not let JavaScript reorder integer-like canonical object keys', () => {
+    expect(canonicalizeProtocolJson({ 2: 'two', 10: 'ten', a: 'aye' })).toBe(
+      '{"10":"ten","2":"two","a":"aye"}',
+    );
+  });
+
+  it('rejects malformed UTF-16 before admission or canonicalization', () => {
+    const malformed = '\uD800';
+
+    expect(
+      responsibilityCaptureRequestSchema.safeParse({
+        ...surfaceRequest,
+        payload: { userStatement: malformed },
+      }).success,
+    ).toBe(false);
+    expect(() => canonicalizeProtocolJson({ value: malformed })).toThrow();
+    expect(() => canonicalizeProtocolJson({ [malformed]: 'value' })).toThrow();
+  });
+
+  it.each([
+    NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    undefined,
+    1n,
+    new Date('2026-08-05T00:00:00Z'),
+    new Map([['key', 'value']]),
+    Array(2),
+  ])('rejects non-I-JSON canonicalization input %#', (value) => {
+    expect(() => canonicalizeProtocolJson(value)).toThrow();
+  });
+
+  it('rejects cyclic canonicalization input without overflowing the stack', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+
+    expect(() => canonicalizeProtocolJson(cyclic)).toThrow();
   });
 
   it('changes canonical digest input when the request payload changes', () => {

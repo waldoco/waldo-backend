@@ -119,9 +119,11 @@
   "x-waldo-validation-level": "structural",
   "x-waldo-runtime-validator-required": true,
   "x-waldo-runtime-invariants": {
-    "maxJsonDepth": 64,
-    "maxJsonNodes": 4096,
+    "maxJsonDepthPerItem": 64,
+    "maxJsonNodesPerItem": 4096,
+    "maxItemsPerPage": 256,
     "maxPageUtf8Bytes": 262144,
+    "wellFormedItemUnicode": true,
     "cursorOrder": "snapshotBaseCursor <= fromExclusiveCursor <= nextCursor <= highWaterCursor",
     "hasMore": "nextCursor < highWaterCursor"
   }

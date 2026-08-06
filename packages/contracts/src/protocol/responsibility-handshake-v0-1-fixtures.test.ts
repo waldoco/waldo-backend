@@ -13,6 +13,7 @@ import {
   responsibilityCaptureRequestSchema,
   responsibilityCaptureTrustedEnvelopeSchema,
 } from '../index';
+import { canonicalizeProtocolJson } from './responsibility-handshake-v0-1';
 import {
   buildResponsibilityHandshakeV01Bundle,
 } from './responsibility-handshake-v0-1-fixtures';
@@ -70,6 +71,7 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
     expect(publicContracts.projectionPageSchema).toBeDefined();
     expect(publicContracts.presenceCapabilityV01Schema).toBeDefined();
     expect(publicContracts.canonicalizeSurfaceCommandRequestForDigest).toBeDefined();
+    expect(publicContracts).not.toHaveProperty('canonicalizeProtocolJson');
     expect(publicContracts).not.toHaveProperty('surfaceCommandRequestEnvelopeSchemaFor');
     expect(publicContracts).not.toHaveProperty('trustedCommandEnvelopeSchemaFor');
     expect(publicContracts).not.toHaveProperty('domainEventEnvelopeSchemaFor');
@@ -86,6 +88,53 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
     'projection-page.schema.json',
   ])('publishes the machine-readable %s contract', (name) => {
     expect(bundle[name]).toBeDefined();
+  });
+
+  it('publishes the versioned canonicalization specification and vectors', () => {
+    const specification = bundle['waldo-json-sorted-keys-v1.md'];
+    const catalog = fixture<{
+      algorithm: string;
+      specification: string;
+      cases: Array<{
+        name: string;
+        inputJson: string;
+        canonicalJson: string;
+        expectedDigest: string;
+      }>;
+      rejectedCases: Array<{
+        name: string;
+        inputJson: string;
+        rejectionStage: string;
+      }>;
+    }>('canonicalization-vectors.json');
+
+    expect(specification).toContain('RFC 8785');
+    expect(specification).toContain('UTF-16 code units');
+    expect(specification).toContain('ECMAScript `JSON.stringify`');
+    expect(catalog.algorithm).toBe('waldo-json-sorted-keys-v1');
+    expect(catalog.specification).toBe('waldo-json-sorted-keys-v1.md');
+    expect(catalog.cases.some((entry) => entry.name === 'UTF-16 key ordering')).toBe(
+      true,
+    );
+    expect(
+      catalog.cases.some((entry) => entry.name === 'integer-like key ordering'),
+    ).toBe(true);
+    for (const entry of catalog.cases) {
+      expect(canonicalizeProtocolJson(JSON.parse(entry.inputJson)), entry.name).toBe(
+        entry.canonicalJson,
+      );
+      expect(entry.expectedDigest).toBe(`sha256:${hashHex(entry.canonicalJson)}`);
+    }
+    for (const entry of catalog.rejectedCases.filter(
+      (candidate) => candidate.rejectionStage === 'canonicalization',
+    )) {
+      expect(() => canonicalizeProtocolJson(JSON.parse(entry.inputJson))).toThrow();
+    }
+    expect(catalog.rejectedCases).toContainEqual({
+      name: 'duplicate object key',
+      inputJson: '{"a":1,"a":2}',
+      rejectionStage: 'raw-json-admission',
+    });
   });
 
   it('round-trips every schema document through a machine validator', () => {
@@ -174,22 +223,27 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
       'surface-command-request.schema.json': {
         admission: 'commandType-discriminated concrete command schemas',
         maxPayloadUtf8Bytes: 16_384,
+        wellFormedUserStatementUnicode: true,
       },
       'trusted-command-envelope.schema.json': {
         admission: 'commandType-discriminated concrete trusted envelope schemas',
         maxPayloadUtf8Bytes: 16_384,
+        wellFormedUserStatementUnicode: true,
       },
       'presence-capability-v0.1.schema.json': { offlineCommands: 'none' },
       'domain-event.schema.json': {
+        schemaVersion: '0.1',
         admission: 'eventType-discriminated concrete observation schemas',
         observationTrust: 'untrusted',
         aggregateKind: 'agent_session',
         aggregateId: 'equals payload.sessionId',
       },
       'projection-page.schema.json': {
-        maxJsonDepth: 64,
-        maxJsonNodes: 4_096,
+        maxJsonDepthPerItem: 64,
+        maxJsonNodesPerItem: 4_096,
+        maxItemsPerPage: 256,
         maxPageUtf8Bytes: 262_144,
+        wellFormedItemUnicode: true,
         cursorOrder:
           'snapshotBaseCursor <= fromExclusiveCursor <= nextCursor <= highWaterCursor',
         hasMore: 'nextCursor < highWaterCursor',
@@ -280,6 +334,12 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
       }).success,
     ).toBe(false);
     expect(
+      eventSchema.safeParse({
+        ...observations.events[0]!,
+        schemaVersion: '0.2',
+      }).success,
+    ).toBe(false);
+    expect(
       projectionSchema.safeParse({ ...projection, protocolVersion: '0.2' }).success,
     ).toBe(false);
     expect(
@@ -332,10 +392,12 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
       { ...projection, hasMore: false },
       {
         ...projection,
-        items: [Array(3_000).fill(null), Array(3_000).fill(null)],
+        items: [Array(4_096).fill(null)],
       },
-      { ...projection, items: [nestedArrays(64)] },
+      { ...projection, items: [nestedArrays(65)] },
       { ...projection, items: ['x'.repeat(262_145)] },
+      { ...projection, items: ['\uD800'] },
+      { ...projection, items: [{ ['\uD800']: 'value' }] },
     ];
 
     expect(surfaceSchema.safeParse(unicodeOversize).success).toBe(true);
@@ -350,6 +412,25 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
     expect(
       publicContracts.trustedCommandEnvelopeSchema.safeParse(trustedUnicodeOversize)
         .success,
+    ).toBe(false);
+    const malformedUnicodeRequest = {
+      ...surfaceRequest,
+      payload: { userStatement: '\uD800' },
+    };
+    expect(surfaceSchema.safeParse(malformedUnicodeRequest).success).toBe(true);
+    expect(
+      publicContracts.surfaceCommandRequestSchema.safeParse(malformedUnicodeRequest)
+        .success,
+    ).toBe(false);
+    const malformedUnicodeTrustedEnvelope = {
+      ...trustedEnvelope,
+      payload: { userStatement: '\uD800' },
+    };
+    expect(trustedSchema.safeParse(malformedUnicodeTrustedEnvelope).success).toBe(true);
+    expect(
+      publicContracts.trustedCommandEnvelopeSchema.safeParse(
+        malformedUnicodeTrustedEnvelope,
+      ).success,
     ).toBe(false);
     const mismatchedSessionAggregate = {
       ...activityEvent,
@@ -411,6 +492,7 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
   it('keeps every duplicate, gap, replacement, and account-switch page locally valid', () => {
     const catalog = fixture<{
       validPage: unknown;
+      maxItemPage: { items: unknown[] };
       pairs: Array<{
         previous: ProjectionFixturePage;
         next: ProjectionFixturePage;
@@ -418,6 +500,8 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
       }>;
     }>('projection-delivery.json');
     expect(projectionPageSchema.safeParse(catalog.validPage).success).toBe(true);
+    expect(catalog.maxItemPage.items).toHaveLength(256);
+    expect(projectionPageSchema.safeParse(catalog.maxItemPage).success).toBe(true);
     expect(catalog.pairs.map((pair) => pair.expectedDisposition)).toEqual([
       'ignore_duplicate',
       'recover_gap',
@@ -447,6 +531,8 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
 
   it('pins same-id duplicate and changed-digest semantics', () => {
     const catalog = fixture<{
+      canonicalizationSpecification: string;
+      canonicalizationVectors: string;
       previousVersionCompatibility: string;
       cases: Array<{
         name: string;
@@ -460,6 +546,10 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
     expect(duplicate).toBeDefined();
     expect(changed).toBeDefined();
     expect(catalog.previousVersionCompatibility).toBe('not_run');
+    expect(catalog.canonicalizationSpecification).toBe(
+      'waldo-json-sorted-keys-v1.md',
+    );
+    expect(catalog.canonicalizationVectors).toBe('canonicalization-vectors.json');
     expect(original!.request.requestId).toBe(duplicate!.request.requestId);
     expect(original!.request.requestId).toBe(changed!.request.requestId);
     expect(original!.expectedRequestDigest).toBe(duplicate!.expectedRequestDigest);

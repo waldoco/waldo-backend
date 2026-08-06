@@ -8,31 +8,31 @@
           "$ref": "#/$defs/__schema0"
         },
         "eventId": {
-          "$ref": "#/$defs/__schema0"
-        },
-        "eventType": {
           "$ref": "#/$defs/__schema1"
         },
-        "ownerId": {
-          "$ref": "#/$defs/__schema0"
-        },
-        "aggregate": {
+        "eventType": {
           "$ref": "#/$defs/__schema2"
         },
-        "ownerCursor": {
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
           "$ref": "#/$defs/__schema3"
         },
-        "causationId": {
+        "ownerCursor": {
           "$ref": "#/$defs/__schema4"
         },
-        "correlationId": {
-          "$ref": "#/$defs/__schema0"
-        },
-        "occurredAt": {
+        "causationId": {
           "$ref": "#/$defs/__schema5"
         },
-        "payload": {
+        "correlationId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "occurredAt": {
           "$ref": "#/$defs/__schema6"
+        },
+        "payload": {
+          "$ref": "#/$defs/__schema7"
         }
       },
       "required": [
@@ -55,31 +55,31 @@
           "$ref": "#/$defs/__schema0"
         },
         "eventId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "eventType": {
-          "$ref": "#/$defs/__schema7"
-        },
-        "ownerId": {
-          "$ref": "#/$defs/__schema0"
-        },
-        "aggregate": {
-          "$ref": "#/$defs/__schema2"
-        },
-        "ownerCursor": {
-          "$ref": "#/$defs/__schema3"
-        },
-        "causationId": {
           "$ref": "#/$defs/__schema8"
         },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "ownerCursor": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "causationId": {
+          "$ref": "#/$defs/__schema9"
+        },
         "correlationId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "occurredAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema6"
         },
         "payload": {
-          "$ref": "#/$defs/__schema9"
+          "$ref": "#/$defs/__schema10"
         }
       },
       "required": [
@@ -102,31 +102,31 @@
           "$ref": "#/$defs/__schema0"
         },
         "eventId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "eventType": {
-          "$ref": "#/$defs/__schema10"
-        },
-        "ownerId": {
-          "$ref": "#/$defs/__schema0"
-        },
-        "aggregate": {
-          "$ref": "#/$defs/__schema2"
-        },
-        "ownerCursor": {
-          "$ref": "#/$defs/__schema3"
-        },
-        "causationId": {
           "$ref": "#/$defs/__schema11"
         },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "ownerCursor": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "causationId": {
+          "$ref": "#/$defs/__schema12"
+        },
         "correlationId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "occurredAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema6"
         },
         "payload": {
-          "$ref": "#/$defs/__schema12"
+          "$ref": "#/$defs/__schema13"
         }
       },
       "required": [
@@ -146,15 +146,19 @@
   "$defs": {
     "__schema0": {
       "type": "string",
+      "const": "0.1"
+    },
+    "__schema1": {
+      "type": "string",
       "minLength": 1,
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
     },
-    "__schema1": {
+    "__schema2": {
       "type": "string",
       "const": "agent_session.activity_observed"
     },
-    "__schema2": {
+    "__schema3": {
       "type": "object",
       "properties": {
         "kind": {
@@ -162,10 +166,10 @@
           "const": "agent_session"
         },
         "id": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "revision": {
-          "$ref": "#/$defs/__schema3"
+          "$ref": "#/$defs/__schema4"
         }
       },
       "required": [
@@ -175,20 +179,20 @@
       ],
       "additionalProperties": false
     },
-    "__schema3": {
+    "__schema4": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema4": {
-      "$ref": "#/$defs/__schema0"
-    },
     "__schema5": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "__schema6": {
       "type": "string",
       "format": "date-time",
       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
     },
-    "__schema6": {
+    "__schema7": {
       "type": "object",
       "properties": {
         "trust": {
@@ -196,10 +200,10 @@
           "const": "untrusted"
         },
         "sessionId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "workUnitId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "activity": {
           "type": "string",
@@ -211,7 +215,7 @@
           ]
         },
         "observedAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema6"
         }
       },
       "required": [
@@ -223,14 +227,14 @@
       ],
       "additionalProperties": false
     },
-    "__schema7": {
+    "__schema8": {
       "type": "string",
       "const": "agent_session.judgment_needed_observed"
     },
-    "__schema8": {
-      "$ref": "#/$defs/__schema0"
-    },
     "__schema9": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "__schema10": {
       "type": "object",
       "properties": {
         "trust": {
@@ -238,10 +242,10 @@
           "const": "untrusted"
         },
         "sessionId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "workUnitId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "reasonCode": {
           "type": "string",
@@ -257,11 +261,11 @@
           "maxItems": 8,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema0"
+            "$ref": "#/$defs/__schema1"
           }
         },
         "observedAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema6"
         }
       },
       "required": [
@@ -274,14 +278,14 @@
       ],
       "additionalProperties": false
     },
-    "__schema10": {
+    "__schema11": {
       "type": "string",
       "const": "agent_session.candidate_evidence_observed"
     },
-    "__schema11": {
-      "$ref": "#/$defs/__schema0"
-    },
     "__schema12": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "__schema13": {
       "type": "object",
       "properties": {
         "trust": {
@@ -289,23 +293,23 @@
           "const": "untrusted"
         },
         "sessionId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "workUnitId": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "subjectRef": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "evidenceRef": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "contentDigest": {
           "type": "string",
           "pattern": "^sha256:[a-f0-9]{64}$"
         },
         "observedAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema6"
         }
       },
       "required": [
@@ -326,6 +330,7 @@
   "x-waldo-validation-level": "structural",
   "x-waldo-runtime-validator-required": true,
   "x-waldo-runtime-invariants": {
+    "schemaVersion": "0.1",
     "admission": "eventType-discriminated concrete observation schemas",
     "observationTrust": "untrusted",
     "aggregateKind": "agent_session",
