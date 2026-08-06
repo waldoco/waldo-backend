@@ -1,8 +1,12 @@
 import {
+  canonicalizeSurfaceCommandRequestForDigest,
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
+  responsibilityCaptureTrustedEnvelopeSchema,
   responsibilityCaptureTrustedEnvelopeV02Schema,
   responsibilityProjectionPageV02Schema,
+  type ResponsibilityCaptureRequest,
   type ResponsibilityCaptureRequestV02,
 } from '@waldo/contracts';
 import { env } from 'cloudflare:workers';
@@ -35,6 +39,43 @@ async function digestRequest(request: ResponsibilityCaptureRequestV02): Promise<
   ).join('')}`;
 }
 
+async function captureInputV01(ownerId: string, userStatement: string, requestId: string) {
+  const request = responsibilityCaptureRequestSchema.parse({
+    protocolVersion: '0.1',
+    requestId,
+    commandType: 'responsibility.capture',
+    presenceRegistrationId: 'presence_registration_01',
+    clientIssuedAt: '2026-08-06T06:00:00.000Z',
+    payload: { userStatement },
+  });
+  const bytes = new TextEncoder().encode(canonicalizeSurfaceCommandRequestForDigest(request));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const requestDigest = `sha256:${Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')}` as const;
+  const trustedEnvelope = responsibilityCaptureTrustedEnvelopeSchema.parse({
+    protocolVersion: '0.1',
+    commandId: `command_${sequence}`,
+    commandType: 'responsibility.capture',
+    ownerId,
+    actor: { kind: 'presence', id: 'presence_01' },
+    presenceId: 'presence_01',
+    authenticatedSessionId: 'authenticated_session_01',
+    ownerPolicyRevision: 1,
+    authAssurance: 'verified_session',
+    ownerRootRoutingVersion: 1,
+    requestDigest,
+    correlationId: `correlation_${sequence}`,
+    receivedAt: '2026-08-06T06:00:01.000Z',
+    payload: request.payload,
+  });
+  return { routedOwnerId: ownerId, request, trustedEnvelope } satisfies {
+    routedOwnerId: string;
+    request: ResponsibilityCaptureRequest;
+    trustedEnvelope: unknown;
+  };
+}
+
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) =>
@@ -42,11 +83,22 @@ async function sha256Hex(value: string): Promise<string> {
   ).join('');
 }
 
+function workUnitInput(responsibility: string, dependencyPositions: number[] = []) {
+  return {
+    responsibility,
+    inputs: [],
+    dependencyPositions,
+    expectedEvidence: ['A bounded artifact or test result.'],
+    requiredCapabilities: [],
+    stopConditions: ['Stop before any external effect.'],
+  };
+}
+
 async function captureInput(
   ownerId: string,
   userStatement: string,
   requestId = `request_${sequence}`,
-  planning: Pick<ResponsibilityCaptureRequestV02['payload'], 'mission' | 'workUnitProposals'> = {},
+  planning: Pick<ResponsibilityCaptureRequestV02['payload'], 'mission' | 'workUnits'> = {},
 ) {
   const request = responsibilityCaptureRequestV02Schema.parse({
     protocolVersion: '0.2',
@@ -76,6 +128,46 @@ async function captureInput(
 }
 
 describe('WaldoCoordinator responsibility capture', () => {
+  it('admits the released v0.1 simple-capture command through the owner authority root', async () => {
+    const ownerId = 'owner_capture_v01';
+    const stub = freshStub(ownerId);
+    const input = await captureInputV01(
+      ownerId,
+      'Preserve this v0.1 statement exactly.',
+      'request_capture_v01',
+    );
+
+    const { result, duplicate, page } = await runInDurableObject(stub, async (instance) => {
+      const captured = await instance.__waldoCaptureResponsibilityForTest(input);
+      return {
+        result: captured,
+        duplicate: await instance.__waldoCaptureResponsibilityForTest(input),
+        page: instance.__waldoReadResponsibilityProjectionForTest({
+        routedOwnerId: ownerId,
+        protocolVersion: '0.1',
+        fromExclusiveCursor: 0,
+        limit: 10,
+      }),
+      };
+    });
+
+    expect(result).toMatchObject({
+      protocolVersion: '0.1',
+      ownerId,
+      requestId: input.request.requestId,
+      outcome: { userStatement: input.request.payload.userStatement, state: 'captured' },
+      mission: null,
+      workUnits: [],
+    });
+    expect(duplicate).toEqual(result);
+    expect(page).toMatchObject({
+      protocolVersion: '0.1',
+      ownerId,
+      projectionName: 'responsibility.summary',
+      items: [expect.objectContaining({ itemType: 'outcome' })],
+    });
+  });
+
   it('runs inside the explicitly manifested RunLoop Durable Object substrate', async () => {
     const stub = freshStub('owner_manifest_01');
     const tables = await runInDurableObject(stub, (_instance, state) =>
@@ -102,7 +194,6 @@ describe('WaldoCoordinator responsibility capture', () => {
     );
 
     expect(result).toMatchObject({
-      duplicate: false,
       ownerId,
       requestId: input.request.requestId,
       outcome: {
@@ -112,7 +203,7 @@ describe('WaldoCoordinator responsibility capture', () => {
         userStatement: input.request.payload.userStatement,
       },
       mission: null,
-      workUnitProposals: [],
+      workUnits: [],
       projectionCursor: 1,
     });
     expect(result.outcome.id).toMatch(/^outcome_[A-Za-z0-9-]+$/);
@@ -220,7 +311,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     });
   });
 
-  it('atomically creates an optional Mission and bounded WorkUnitProposals under the admitted Outcome', async () => {
+  it('atomically creates an optional Mission and bounded WorkUnits under the admitted Outcome', async () => {
     const ownerId = 'owner_planned_capture_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(
@@ -229,9 +320,9 @@ describe('WaldoCoordinator responsibility capture', () => {
       `request_${sequence}`,
       {
         mission: { brief: 'Prepare a reviewable release.' },
-        workUnitProposals: [
-          { responsibility: 'Prepare the release artifact.' },
-          { responsibility: 'Review the release artifact.' },
+        workUnits: [
+          workUnitInput('Prepare the release artifact.'),
+          workUnitInput('Review the release artifact.', [0]),
         ],
       },
     );
@@ -247,23 +338,25 @@ describe('WaldoCoordinator responsibility capture', () => {
       brief: input.request.payload.mission?.brief,
       state: 'proposed',
     });
-    expect(result.workUnitProposals).toHaveLength(2);
-    expect(result.workUnitProposals).toEqual([
+    expect(result.workUnits).toHaveLength(2);
+    expect(result.workUnits).toEqual([
       expect.objectContaining({
         ownerId,
         outcomeId: result.outcome.id,
         missionId: result.mission?.id,
         position: 0,
-        responsibility: input.request.payload.workUnitProposals?.[0]?.responsibility,
-        state: 'proposed',
+        responsibility: input.request.payload.workUnits?.[0]?.responsibility,
+        dependencyIds: [],
+        state: 'planned',
       }),
       expect.objectContaining({
         ownerId,
         outcomeId: result.outcome.id,
         missionId: result.mission?.id,
         position: 1,
-        responsibility: input.request.payload.workUnitProposals?.[1]?.responsibility,
-        state: 'proposed',
+        responsibility: input.request.payload.workUnits?.[1]?.responsibility,
+        dependencyIds: [result.workUnits[0]!.id],
+        state: 'planned',
       }),
     ]);
     expect(result.projectionCursor).toBe(4);
@@ -320,9 +413,9 @@ describe('WaldoCoordinator responsibility capture', () => {
       `request_atomic_failure_${failureStage}`,
       {
         mission: { brief: 'Rollback the whole Mission.' },
-        workUnitProposals: [
-          { responsibility: 'Rollback WorkUnit one.' },
-          { responsibility: 'Rollback WorkUnit two.' },
+        workUnits: [
+          workUnitInput('Rollback WorkUnit one.'),
+          workUnitInput('Rollback WorkUnit two.', [0]),
         ],
       },
     );
@@ -347,7 +440,7 @@ describe('WaldoCoordinator responsibility capture', () => {
           'owner_roots',
           'outcomes',
           'missions',
-          'work_unit_proposals',
+          'work_units',
           'owner_domain_events',
           'owner_event_state',
           'responsibility_commands',
@@ -364,7 +457,7 @@ describe('WaldoCoordinator responsibility capture', () => {
       owner_roots: 0,
       outcomes: 0,
       missions: 0,
-      work_unit_proposals: 0,
+      work_units: 0,
       owner_domain_events: 0,
       owner_event_state: 0,
       responsibility_commands: 0,
@@ -413,9 +506,9 @@ describe('WaldoCoordinator responsibility capture', () => {
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Plan this bounded outcome.', 'request_page_01', {
       mission: { brief: 'Bound the work.' },
-      workUnitProposals: [
-        { responsibility: 'First bounded unit.' },
-        { responsibility: 'Second bounded unit.' },
+      workUnits: [
+        workUnitInput('First bounded unit.'),
+        workUnitInput('Second bounded unit.', [0]),
       ],
     });
 
@@ -588,7 +681,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_replay_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Reconstruct this responsibility.', 'request_replay_01', {
-      workUnitProposals: [{ responsibility: 'A direct bounded proposal.' }],
+      workUnits: [workUnitInput('A direct bounded WorkUnit.')],
     });
 
     const result = await runInDurableObject(stub, async (instance, state) => {
@@ -606,7 +699,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     expect(result.second).toEqual(result.first);
     expect(result.second.outcomes).toEqual([result.captured.outcome]);
     expect(result.second.missions).toEqual([]);
-    expect(result.second.workUnitProposals).toEqual(result.captured.workUnitProposals);
+    expect(result.second.workUnits).toEqual(result.captured.workUnits);
     expect(result.second.items.map((item) => item.cursor)).toEqual([1, 2]);
   });
 
@@ -614,7 +707,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_eviction_01';
     const stub = freshStub(ownerId);
     const firstInput = await captureInput(ownerId, 'Survive real eviction.', 'request_eviction_01', {
-      workUnitProposals: [{ responsibility: 'Persist the bounded proposal.' }],
+      workUnits: [workUnitInput('Persist the bounded WorkUnit.')],
     });
     const secondInput = await captureInput(
       ownerId,
@@ -648,7 +741,7 @@ describe('WaldoCoordinator responsibility capture', () => {
 
     expect(after.duplicate).toEqual(before.capture);
     expect(after.replay.outcomes).toEqual([before.capture.outcome]);
-    expect(after.replay.workUnitProposals).toEqual(before.capture.workUnitProposals);
+    expect(after.replay.workUnits).toEqual(before.capture.workUnits);
     expect(after.page.items).toEqual([]);
     expect(after.page.snapshotId).toBe(before.page.snapshotId);
     expect(after.next.projectionCursor).toBe(3);
@@ -658,58 +751,95 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_corrupt_replay_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Reject corrupt history.', 'request_corrupt_01', {
-      workUnitProposals: [{ responsibility: 'Remain attached to the Outcome.' }],
+      workUnits: [workUnitInput('Remain attached to the Outcome.')],
     });
 
     await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
       state.storage.sql.exec('PRAGMA ignore_check_constraints = ON');
       state.storage.sql.exec(
-        "UPDATE owner_domain_events SET schema_version = '0.3' WHERE aggregate_kind = 'work_unit_proposal'",
+        "UPDATE owner_domain_events SET schema_version = '0.3' WHERE aggregate_kind = 'work_unit'",
       );
       state.storage.sql.exec('PRAGMA ignore_check_constraints = OFF');
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
         'invalid responsibility event schema version',
       );
       state.storage.sql.exec(
-        "UPDATE owner_domain_events SET schema_version = '0.2' WHERE aggregate_kind = 'work_unit_proposal'",
+        "UPDATE owner_domain_events SET schema_version = '0.2' WHERE aggregate_kind = 'work_unit'",
       );
       const row = state.storage.sql.exec<{ payload_json: string }>(
-        "SELECT payload_json FROM owner_domain_events WHERE aggregate_kind = 'work_unit_proposal'",
+        "SELECT payload_json FROM owner_domain_events WHERE aggregate_kind = 'work_unit'",
       ).one();
       const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
       const originalUpdatedAt = payload.updatedAt;
       payload.unexpected = true;
       state.storage.sql.exec(
-        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit_proposal'",
+        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit'",
         JSON.stringify(payload),
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
-        'invalid work_unit_proposal event payload',
+        'invalid work_unit event payload',
       );
       delete payload.unexpected;
       payload.updatedAt = 'not-a-server-timestamp';
       state.storage.sql.exec(
-        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit_proposal'",
+        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit'",
         JSON.stringify(payload),
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
-        'invalid work_unit_proposal event payload',
+        'invalid work_unit event payload',
       );
       payload.updatedAt = originalUpdatedAt;
       payload.outcomeId = 'outcome_cross_aggregate';
       state.storage.sql.exec(
-        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit_proposal'",
+        "UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_kind = 'work_unit'",
         JSON.stringify(payload),
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
-        'invalid WorkUnitProposal relationship',
+        'invalid WorkUnit relationship',
       );
       state.storage.sql.exec(
-        "UPDATE owner_domain_events SET revision = 2 WHERE aggregate_kind = 'work_unit_proposal'",
+        "UPDATE owner_domain_events SET revision = 2 WHERE aggregate_kind = 'work_unit'",
       );
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
         'invalid responsibility event revision',
+      );
+    });
+  });
+
+  it('rejects a replayed WorkUnit dependency borrowed from another Outcome', async () => {
+    const ownerId = 'owner_cross_outcome_dependency_01';
+    const stub = freshStub(ownerId);
+    const firstInput = await captureInput(
+      ownerId,
+      'First Outcome owns its WorkUnit.',
+      'request_cross_outcome_dependency_01',
+      { workUnits: [workUnitInput('First Outcome WorkUnit.')] },
+    );
+    const secondInput = await captureInput(
+      ownerId,
+      'Second Outcome must not borrow that dependency.',
+      'request_cross_outcome_dependency_02',
+      { workUnits: [workUnitInput('Second Outcome WorkUnit.')] },
+    );
+
+    await runInDurableObject(stub, async (instance, state) => {
+      const first = await instance.__waldoCaptureResponsibilityForTest(firstInput);
+      const second = await instance.__waldoCaptureResponsibilityForTest(secondInput);
+      const row = state.storage.sql.exec<{ payload_json: string }>(
+        'SELECT payload_json FROM owner_domain_events WHERE aggregate_id = ?',
+        second.workUnits[0]!.id,
+      ).one();
+      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      payload.dependencyIds = [first.workUnits[0]!.id];
+      state.storage.sql.exec(
+        'UPDATE owner_domain_events SET payload_json = ? WHERE aggregate_id = ?',
+        JSON.stringify(payload),
+        second.workUnits[0]!.id,
+      );
+
+      expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(
+        'invalid WorkUnit relationship',
       );
     });
   });
@@ -767,7 +897,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_replay_limit_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Bound replay work.', 'request_replay_limit_01', {
-      workUnitProposals: [{ responsibility: 'Second event.' }],
+      workUnits: [workUnitInput('Second event.')],
     });
     await runInDurableObject(stub, async (instance, state) => {
       await instance.__waldoCaptureResponsibilityForTest(input);
@@ -787,7 +917,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     const ownerId = 'owner_capture_capacity_01';
     const stub = freshStub(ownerId);
     const input = await captureInput(ownerId, 'Capacity must preserve reconstruction.', 'request_capacity_01', {
-      workUnitProposals: [{ responsibility: 'This would require a second event.' }],
+      workUnits: [workUnitInput('This would require a second event.')],
     });
     const counts = await runInDurableObject(stub, (_instance, state) => {
       let id = 0;
@@ -826,7 +956,7 @@ describe('WaldoCoordinator responsibility capture', () => {
     expect(counts).toEqual({ outcomes: 0, events: 0, projections: 0 });
   });
 
-  it('rejects hostile server-owned fields and WorkUnitProposal overflow before any durable write', async () => {
+  it('rejects hostile server-owned fields and WorkUnit overflow before any durable write', async () => {
     const ownerId = 'owner_hostile_01';
     const stub = freshStub(ownerId);
     const valid = await captureInput(ownerId, 'Reject smuggled authority.', 'request_hostile_01');
@@ -841,9 +971,8 @@ describe('WaldoCoordinator responsibility capture', () => {
         requestId: 'request_overflow_01',
         payload: {
           ...valid.request.payload,
-          workUnitProposals: Array.from({ length: 33 }, (_, index) => ({
-            responsibility: `Bounded unit ${index}`,
-          })),
+          workUnits: Array.from({ length: 33 }, (_, index) =>
+            workUnitInput(`Bounded unit ${index}`)),
         },
       },
     };

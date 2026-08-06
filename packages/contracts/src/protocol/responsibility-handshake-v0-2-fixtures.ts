@@ -2,8 +2,10 @@ import { z } from 'zod';
 import {
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
   responsibilityCaptureRequestV02Schema,
+  responsibilityCaptureResultV01CompatibilitySchema,
   responsibilityCaptureResultV02Schema,
   responsibilityCaptureTrustedEnvelopeV02Schema,
+  responsibilityProjectionPageV01CompatibilitySchema,
   responsibilityProjectionPageV02Schema,
   responsibilityProtocolCapabilitiesV02Schema,
 } from './responsibility-handshake-v0-2';
@@ -48,7 +50,14 @@ export function buildResponsibilityHandshakeV02Bundle(
     payload: {
       userStatement: 'Prepare and review the release.',
       mission: { brief: 'Prepare a reviewable release.' },
-      workUnitProposals: [{ responsibility: 'Review the release artifact.' }],
+      workUnits: [{
+        responsibility: 'Review the release artifact.',
+        inputs: ['Prepared release artifact.'],
+        dependencyPositions: [],
+        expectedEvidence: ['A review report bound to the artifact digest.'],
+        requiredCapabilities: ['artifact.read'],
+        stopConditions: ['Stop before publication.'],
+      }],
     },
   });
   const requestDigest = `sha256:${hashHex(
@@ -72,7 +81,6 @@ export function buildResponsibilityHandshakeV02Bundle(
   });
   const result = responsibilityCaptureResultV02Schema.parse({
     protocolVersion: '0.2',
-    duplicate: false,
     ownerId: trusted.ownerId,
     requestId: request.requestId,
     outcome: {
@@ -85,11 +93,21 @@ export function buildResponsibilityHandshakeV02Bundle(
       brief: request.payload.mission!.brief, state: 'proposed',
       createdAt: trusted.receivedAt, updatedAt: trusted.receivedAt,
     },
-    workUnitProposals: [{
-      id: 'work_unit_proposal_01', ownerId: trusted.ownerId, outcomeId: 'outcome_01',
+    workUnits: [{
+      id: 'work_unit_01', ownerId: trusted.ownerId, outcomeId: 'outcome_01',
       missionId: 'mission_01', position: 0, revision: 1,
-      responsibility: request.payload.workUnitProposals![0]!.responsibility,
-      state: 'proposed', createdAt: trusted.receivedAt, updatedAt: trusted.receivedAt,
+      responsibility: request.payload.workUnits![0]!.responsibility,
+      inputs: request.payload.workUnits![0]!.inputs,
+      dependencyIds: [],
+      expectedEvidence: request.payload.workUnits![0]!.expectedEvidence,
+      requiredCapabilities: request.payload.workUnits![0]!.requiredCapabilities,
+      authorityCeiling: { externalEffects: 'none', acceptance: 'none', closure: 'none' },
+      budget: { maxProviderTurns: 0, maxExternalEffects: 0, maxDurationMs: 0 },
+      isolation: { mode: 'unassigned', egress: 'deny_all', credentials: 'none' },
+      stopConditions: request.payload.workUnits![0]!.stopConditions,
+      assignee: null,
+      sessionIds: [],
+      state: 'planned', createdAt: trusted.receivedAt, updatedAt: trusted.receivedAt,
     }],
     projectionCursor: 3,
   });
@@ -109,9 +127,11 @@ export function buildResponsibilityHandshakeV02Bundle(
         createdAt: trusted.receivedAt,
       },
       {
-        cursor: 3, itemType: 'work_unit_proposal', aggregateId: 'work_unit_proposal_01',
+        cursor: 3, itemType: 'work_unit', aggregateId: 'work_unit_01',
         outcomeId: 'outcome_01', missionId: 'mission_01', position: 0, revision: 1,
-        state: 'proposed', responsibility: request.payload.workUnitProposals![0]!.responsibility,
+        state: 'planned', responsibility: request.payload.workUnits![0]!.responsibility,
+        dependencyIds: [],
+        requiredCapabilities: request.payload.workUnits![0]!.requiredCapabilities,
         createdAt: trusted.receivedAt,
       },
     ],
@@ -123,6 +143,36 @@ export function buildResponsibilityHandshakeV02Bundle(
     supportedVersions: ['0.1', '0.2'],
     selectedVersion: '0.2',
     offlineCommands: 'none',
+  });
+  const resultV01 = responsibilityCaptureResultV01CompatibilitySchema.parse({
+    protocolVersion: '0.1',
+    ownerId: trusted.ownerId,
+    requestId: 'request_capture_v01_compat',
+    outcome: {
+      ...result.outcome,
+      id: 'outcome_v01_compat',
+      userStatement: 'Capture this responsibility through released v0.1.',
+    },
+    mission: null,
+    workUnits: [],
+    projectionCursor: 1,
+  });
+  const projectionV01 = responsibilityProjectionPageV01CompatibilitySchema.parse({
+    protocolVersion: '0.1',
+    ownerId: trusted.ownerId,
+    projectionName: 'responsibility.summary',
+    snapshotId: 'snapshot_v01_compat',
+    snapshotBaseCursor: 0,
+    fromExclusiveCursor: 0,
+    highWaterCursor: 1,
+    nextCursor: 1,
+    items: [{
+      cursor: 1, itemType: 'outcome', aggregateId: resultV01.outcome.id,
+      outcomeId: resultV01.outcome.id, revision: 1, state: 'captured',
+      userStatement: resultV01.outcome.userStatement, createdAt: trusted.receivedAt,
+    }],
+    hasMore: false,
+    generatedAt: '2026-08-06T06:00:02.000Z',
   });
 
   const files: Record<string, string> = {
@@ -142,7 +192,7 @@ export function buildResponsibilityHandshakeV02Bundle(
         admission: 'strict command-specific schema before canonicalization',
         userText: 'well-formed UTF-16 with non-whitespace content',
         maxPayloadUtf8Bytes: 16_384,
-        maxWorkUnitProposals: 32,
+        maxWorkUnits: 32,
         serverOwnedFields: 'rejected',
       },
     )),
@@ -162,13 +212,19 @@ export function buildResponsibilityHandshakeV02Bundle(
       responsibilityCaptureResultV02Schema,
       'responsibility-capture-result',
       {
-        ownerBinding: 'Outcome, Mission, and proposals equal result ownerId',
-        relationships: 'Mission and proposals belong to the admitted Outcome',
-        proposalOrder: 'position equals array index',
+        ownerBinding: 'Outcome, Mission, and WorkUnits equal result ownerId',
+        relationships: 'Mission and WorkUnits belong to the admitted Outcome',
+        workUnitOrder: 'position equals array index and dependencies point backward',
         idempotency: 'exact retries return the persisted original result',
       },
     )),
     'responsibility-capture-result.valid.json': jsonFile(result),
+    'responsibility-capture-result-v0.1-compat.schema.json': jsonFile(schemaDocument(
+      responsibilityCaptureResultV01CompatibilitySchema,
+      'responsibility-capture-result-v0.1-compat',
+      { compatibility: 'released v0.1 simple capture returns no Mission or WorkUnits' },
+    )),
+    'responsibility-capture-result-v0.1-compat.valid.json': jsonFile(resultV01),
     'responsibility-projection-page.schema.json': jsonFile(schemaDocument(
       responsibilityProjectionPageV02Schema,
       'responsibility-projection-page',
@@ -182,6 +238,15 @@ export function buildResponsibilityHandshakeV02Bundle(
       },
     )),
     'responsibility-projection-page.valid.json': jsonFile(projection),
+    'responsibility-projection-page-v0.1-compat.schema.json': jsonFile(schemaDocument(
+      responsibilityProjectionPageV01CompatibilitySchema,
+      'responsibility-projection-page-v0.1-compat',
+      {
+        compatibility: 'released v0.1 generic page carrying responsibility summary items',
+        itemCursorOrder: 'strictly ascending global owner cursors within the scanned range',
+      },
+    )),
+    'responsibility-projection-page-v0.1-compat.valid.json': jsonFile(projectionV01),
     'responsibility-v0.2.rejections.json': jsonFile({
       protocolVersion: '0.2',
       cases: [
@@ -194,12 +259,12 @@ export function buildResponsibilityHandshakeV02Bundle(
           },
         },
         {
-          name: 'cross-mission-proposal',
+          name: 'cross-mission-work-unit',
           schema: 'responsibility-capture-result',
           value: {
             ...result,
-            workUnitProposals: [{
-              ...result.workUnitProposals[0]!, missionId: 'mission_other_01',
+            workUnits: [{
+              ...result.workUnits[0]!, missionId: 'mission_other_01',
             }],
           },
         },

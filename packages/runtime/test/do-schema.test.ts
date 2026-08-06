@@ -199,7 +199,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         version: getSchemaVersion(state.storage.sql),
         v3Tables: tables.filter((table) => [
           'owner_roots', 'owner_event_state', 'outcomes', 'missions',
-          'work_unit_proposals', 'owner_domain_events',
+          'work_units', 'owner_domain_events',
           'responsibility_commands', 'responsibility_projection',
           'responsibility_projection_state',
         ].includes(table)),

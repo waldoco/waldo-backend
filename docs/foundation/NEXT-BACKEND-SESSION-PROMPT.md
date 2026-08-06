@@ -15,7 +15,7 @@ Continue Waldo's durable responsibility backbone with the smallest production ad
 
 ## Starting boundary
 
-Released protocol v0.1 remains the strict, byte-stable simple-capture contract from PR #74. Negotiated v0.2 defines optional Mission input, bounded `WorkUnitProposal` records, typed responsibility projection pages with owner-global cursors, and `offlineCommands: "none"`. The implementation evidence in PR #75 places Outcome state and proposal records inside the existing per-owner `RunLoopDO` SQLite boundary, routes root binding through `IdentityPresenceModule`, and allocates domain event cursors through one owner-wide event log. Verify every claim from the pinned source before relying on it.
+Released protocol v0.1 remains the strict, byte-stable simple-capture contract from PR #74. Negotiated v0.2 defines optional Mission input, bounded canonical `WorkUnit` records, typed responsibility projection pages with owner-global cursors, and `offlineCommands: "none"`. The implementation evidence in PR #75 places Outcome and WorkUnit state inside the existing per-owner `RunLoopDO` SQLite boundary, routes root binding through `IdentityPresenceModule`, and allocates domain event cursors through one owner-wide event log. Verify every claim from the pinned source before relying on it.
 
 The local-only methods used for module integration tests are not a production adapter and are not evidence of Kennel conformance.
 

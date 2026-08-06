@@ -14,39 +14,55 @@
     },
     {
       "path": "responsibility-capture-request.schema.json",
-      "sha256": "sha256:00983ef118cf223903d443db21cc81b563673503c633814bee594680dba9f0b9"
+      "sha256": "sha256:043c9f7271d52d4dbae019432a35347da426163f53ac3df6a138a2c8bbab205f"
     },
     {
       "path": "responsibility-capture-request.valid.json",
-      "sha256": "sha256:192149c69ea47ff65e5d92b74b740c64e6347de4e6fe675ccb0966d4cf7c8238"
+      "sha256": "sha256:c50e4655fc5096e51848234f0597961cbfa03026d5e84dadfc29217c3a00cdbb"
+    },
+    {
+      "path": "responsibility-capture-result-v0.1-compat.schema.json",
+      "sha256": "sha256:2b16e222f4be91ea9efa3f2e39ba39cfdd2326cef50cc3654a5032984bf2dd92"
+    },
+    {
+      "path": "responsibility-capture-result-v0.1-compat.valid.json",
+      "sha256": "sha256:3be07e5364d9b5484c16fea92fbea6be13ed5a3a907f472fa23d751c0f860250"
     },
     {
       "path": "responsibility-capture-result.schema.json",
-      "sha256": "sha256:bded18d4cdcaaddf1eed0e94cdc4681ef7971ee5a31a46703b3084f9d6e9210a"
+      "sha256": "sha256:fed773e908cb27dac8d513bd59d7b2184c7dfa65b0cdcd19231fbe2b02b21db6"
     },
     {
       "path": "responsibility-capture-result.valid.json",
-      "sha256": "sha256:c90f1c8d2960fc6c4c345236f8fb99bb4465dfa9962d0f3dee3c5c105ea0566e"
+      "sha256": "sha256:f8fb34a4ba6b22f7372866179b35c5cf1ec198a13c8d5dd4662f1f3a36332ec2"
     },
     {
       "path": "responsibility-capture-trusted-envelope.schema.json",
-      "sha256": "sha256:80d08698a6bb7f173b3d665158f0df64cde364863ff8d809620732c449abf149"
+      "sha256": "sha256:dc5f14e2b484e849443e67620e95057decb4fc9de8db297b99f2ab05ee2faad0"
     },
     {
       "path": "responsibility-capture-trusted-envelope.valid.json",
-      "sha256": "sha256:3244598fee6502492db7f6822ea7298a2e62c2955a8822ea1703297a89bd8fc7"
+      "sha256": "sha256:ac2fb6a0abb167a01671269db6fb824226ba3e4aa296982e6f333b43f765ffd3"
+    },
+    {
+      "path": "responsibility-projection-page-v0.1-compat.schema.json",
+      "sha256": "sha256:360f5fe4db6593112b5497446e4e1d4e45ff1932d317b6de060ad329bd25746a"
+    },
+    {
+      "path": "responsibility-projection-page-v0.1-compat.valid.json",
+      "sha256": "sha256:d8b06e533389f2b178142fdc8d3cd553f5253ffdb6c94836143be5f8e33bbb2b"
     },
     {
       "path": "responsibility-projection-page.schema.json",
-      "sha256": "sha256:1b96121e32c0bb413a95af0b55a95699d517bc4b55b68f3f74b274b6869e0d75"
+      "sha256": "sha256:2e524b058799aedbfaec8ee69b08ae7992a0ce5f7398754d246548ebe89bebfe"
     },
     {
       "path": "responsibility-projection-page.valid.json",
-      "sha256": "sha256:f77933590700ef977df0068bcf9b81f68e2e97bb52f4e2858bf87071f870840e"
+      "sha256": "sha256:696d3d661f1bc2624257b4285a26052ebc9f7f782459887aeae0165e2502e476"
     },
     {
       "path": "responsibility-v0.2.rejections.json",
-      "sha256": "sha256:4cdefdd5446c58859046b4845c88e73b17f9402e1872c371f21845a764274bf6"
+      "sha256": "sha256:c2cd260263b62418139061852ea7b8a283fb2606a1610cf0dd96ef5b27043c3b"
     }
   ]
 }

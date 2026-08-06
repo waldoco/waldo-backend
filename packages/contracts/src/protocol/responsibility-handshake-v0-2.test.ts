@@ -20,7 +20,14 @@ describe('responsibility handshake v0.2', () => {
       payload: {
         userStatement: 'Prepare and review the release.',
         mission: { brief: 'Prepare a reviewable release.' },
-        workUnitProposals: [{ responsibility: 'Review the release artifact.' }],
+        workUnits: [{
+          responsibility: 'Review the release artifact.',
+          inputs: [],
+          dependencyPositions: [],
+          expectedEvidence: ['A review report.'],
+          requiredCapabilities: [],
+          stopConditions: ['Stop before publication.'],
+        }],
       },
     };
 
@@ -37,10 +44,9 @@ describe('responsibility handshake v0.2', () => {
     })).toBeDefined();
   });
 
-  it('names bounded planning inputs WorkUnitProposal and validates their relationships', () => {
+  it('validates bounded canonical WorkUnit relationships', () => {
     const result = {
       protocolVersion: '0.2',
-      duplicate: false,
       ownerId: 'owner_01',
       requestId: 'request_01',
       outcome: {
@@ -49,10 +55,17 @@ describe('responsibility handshake v0.2', () => {
         createdAt: '2026-08-06T06:00:01.000Z', updatedAt: '2026-08-06T06:00:01.000Z',
       },
       mission: null,
-      workUnitProposals: [{
-        id: 'work_unit_proposal_01', ownerId: 'owner_01', outcomeId: 'outcome_01',
+      workUnits: [{
+        id: 'work_unit_01', ownerId: 'owner_01', outcomeId: 'outcome_01',
         missionId: null, position: 0, revision: 1,
-        responsibility: 'Review the release artifact.', state: 'proposed',
+        responsibility: 'Review the release artifact.',
+        inputs: [], dependencyIds: [], expectedEvidence: ['A review report.'],
+        requiredCapabilities: [],
+        authorityCeiling: { externalEffects: 'none', acceptance: 'none', closure: 'none' },
+        budget: { maxProviderTurns: 0, maxExternalEffects: 0, maxDurationMs: 0 },
+        isolation: { mode: 'unassigned', egress: 'deny_all', credentials: 'none' },
+        stopConditions: ['Stop before publication.'], assignee: null, sessionIds: [],
+        state: 'planned',
         createdAt: '2026-08-06T06:00:01.000Z', updatedAt: '2026-08-06T06:00:01.000Z',
       }],
       projectionCursor: 2,
@@ -60,7 +73,66 @@ describe('responsibility handshake v0.2', () => {
     expect(responsibilityCaptureResultV02Schema.parse(result)).toEqual(result);
     expect(responsibilityCaptureResultV02Schema.safeParse({
       ...result,
-      workUnitProposals: [{ ...result.workUnitProposals[0], outcomeId: 'outcome_other' }],
+      workUnits: [{ ...result.workUnits[0], outcomeId: 'outcome_other' }],
+    }).success).toBe(false);
+  });
+
+  it('admits bounded canonical WorkUnits and rejects meaningless duplicate metadata', () => {
+    const request = {
+      protocolVersion: '0.2',
+      requestId: 'request_work_units_01',
+      commandType: 'responsibility.capture',
+      presenceRegistrationId: 'presence_registration_01',
+      clientIssuedAt: '2026-08-06T06:00:00.000Z',
+      payload: {
+        userStatement: 'Prepare the release without publishing it.',
+        workUnits: [{
+          responsibility: 'Prepare the release artifact.',
+          inputs: ['Approved release brief.'],
+          dependencyPositions: [],
+          expectedEvidence: ['A content-addressed release artifact.'],
+          requiredCapabilities: ['artifact.write'],
+          stopConditions: ['Stop before any publication effect.'],
+        }],
+      },
+    };
+    expect(responsibilityCaptureRequestV02Schema.parse(request)).toEqual(request);
+
+    const result = {
+      protocolVersion: '0.2',
+      ownerId: 'owner_01',
+      requestId: request.requestId,
+      outcome: {
+        id: 'outcome_01', ownerId: 'owner_01', revision: 1,
+        userStatement: request.payload.userStatement, state: 'captured',
+        createdAt: '2026-08-06T06:00:01.000Z', updatedAt: '2026-08-06T06:00:01.000Z',
+      },
+      mission: null,
+      workUnits: [{
+        id: 'work_unit_01', ownerId: 'owner_01', outcomeId: 'outcome_01',
+        missionId: null, position: 0, revision: 1,
+        responsibility: request.payload.workUnits[0]!.responsibility,
+        inputs: request.payload.workUnits[0]!.inputs,
+        dependencyIds: [],
+        expectedEvidence: request.payload.workUnits[0]!.expectedEvidence,
+        requiredCapabilities: request.payload.workUnits[0]!.requiredCapabilities,
+        authorityCeiling: {
+          externalEffects: 'none', acceptance: 'none', closure: 'none',
+        },
+        budget: { maxProviderTurns: 0, maxExternalEffects: 0, maxDurationMs: 0 },
+        isolation: { mode: 'unassigned', egress: 'deny_all', credentials: 'none' },
+        stopConditions: request.payload.workUnits[0]!.stopConditions,
+        assignee: null,
+        sessionIds: [],
+        state: 'planned',
+        createdAt: '2026-08-06T06:00:01.000Z', updatedAt: '2026-08-06T06:00:01.000Z',
+      }],
+      projectionCursor: 2,
+    };
+    expect(responsibilityCaptureResultV02Schema.parse(result)).toEqual(result);
+    expect(responsibilityCaptureResultV02Schema.safeParse({
+      ...result,
+      duplicate: false,
     }).success).toBe(false);
   });
 

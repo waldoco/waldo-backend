@@ -12,7 +12,7 @@
   "ownerPolicyRevision": 1,
   "authAssurance": "verified_session",
   "ownerRootRoutingVersion": 1,
-  "requestDigest": "sha256:96819f13999aa617078a00c2dffce69fc4ee3ea82db6939aa92f967b281052a4",
+  "requestDigest": "sha256:e68de4a4f1807e36953c087d7b20605fb3ee5e24eaab88fca8148abde439db9e",
   "correlationId": "correlation_02",
   "receivedAt": "2026-08-06T06:00:01.000Z",
   "payload": {
@@ -20,9 +20,22 @@
     "mission": {
       "brief": "Prepare a reviewable release."
     },
-    "workUnitProposals": [
+    "workUnits": [
       {
-        "responsibility": "Review the release artifact."
+        "responsibility": "Review the release artifact.",
+        "inputs": [
+          "Prepared release artifact."
+        ],
+        "dependencyPositions": [],
+        "expectedEvidence": [
+          "A review report bound to the artifact digest."
+        ],
+        "requiredCapabilities": [
+          "artifact.read"
+        ],
+        "stopConditions": [
+          "Stop before publication."
+        ]
       }
     ]
   }

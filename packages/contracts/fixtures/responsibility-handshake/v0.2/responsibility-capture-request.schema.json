@@ -36,7 +36,7 @@
         "mission": {
           "$ref": "#/$defs/__schema2"
         },
-        "workUnitProposals": {
+        "workUnits": {
           "$ref": "#/$defs/__schema3"
         }
       },
@@ -92,12 +92,52 @@
       "properties": {
         "responsibility": {
           "$ref": "#/$defs/__schema1"
+        },
+        "inputs": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "dependencyPositions": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema6"
+          }
+        },
+        "expectedEvidence": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "requiredCapabilities": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "stopConditions": {
+          "$ref": "#/$defs/__schema5"
         }
       },
       "required": [
-        "responsibility"
+        "responsibility",
+        "inputs",
+        "dependencyPositions",
+        "expectedEvidence",
+        "requiredCapabilities",
+        "stopConditions"
       ],
       "additionalProperties": false
+    },
+    "__schema5": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema1"
+      }
+    },
+    "__schema6": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 31
     }
   },
   "$id": "urn:waldo:protocol:responsibility-handshake:0.2:responsibility-capture-request",
@@ -109,7 +149,7 @@
     "admission": "strict command-specific schema before canonicalization",
     "userText": "well-formed UTF-16 with non-whitespace content",
     "maxPayloadUtf8Bytes": 16384,
-    "maxWorkUnitProposals": 32,
+    "maxWorkUnits": 32,
     "serverOwnedFields": "rejected"
   },
   "x-waldo-offline-commands": "none"

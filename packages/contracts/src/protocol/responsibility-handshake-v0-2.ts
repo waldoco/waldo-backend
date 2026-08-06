@@ -4,6 +4,7 @@ import {
   actorRefSchema,
   aggregateRefSchema,
   canonicalizeProtocolJson,
+  projectionPageEnvelopeSchemaFor,
   protocolDigestSchema,
   protocolIdSchema,
   protocolNameSchema,
@@ -48,14 +49,42 @@ export const responsibilityCaptureMissionProposalV02Schema = z.strictObject({
   brief: responsibilityCaptureTextV02Schema,
 });
 
-export const responsibilityCaptureWorkUnitProposalV02Schema = z.strictObject({
+const boundedTextListV02Schema = z.array(responsibilityCaptureTextV02Schema).max(32)
+  .refine((values) => new Set(values).size === values.length, {
+    error: 'WorkUnit lists must not contain duplicates',
+  });
+
+export const responsibilityCaptureWorkUnitV02Schema = z.strictObject({
   responsibility: responsibilityCaptureTextV02Schema,
+  inputs: boundedTextListV02Schema,
+  dependencyPositions: z.array(z.int().min(0).max(31)).max(32)
+    .refine((values) => new Set(values).size === values.length, {
+      error: 'WorkUnit dependencies must not contain duplicates',
+    }),
+  expectedEvidence: boundedTextListV02Schema,
+  requiredCapabilities: z.array(protocolNameSchema).max(32)
+    .refine((values) => new Set(values).size === values.length, {
+      error: 'WorkUnit capabilities must not contain duplicates',
+    }),
+  stopConditions: boundedTextListV02Schema,
 });
 
 export const responsibilityCapturePayloadV02Schema = z.strictObject({
   userStatement: responsibilityCaptureTextV02Schema,
   mission: responsibilityCaptureMissionProposalV02Schema.optional(),
-  workUnitProposals: z.array(responsibilityCaptureWorkUnitProposalV02Schema).max(32).optional(),
+  workUnits: z.array(responsibilityCaptureWorkUnitV02Schema).max(32).optional(),
+}).superRefine((value, context) => {
+  value.workUnits?.forEach((workUnit, position) => {
+    workUnit.dependencyPositions.forEach((dependencyPosition, dependencyIndex) => {
+      if (dependencyPosition >= position) {
+        context.addIssue({
+          code: 'custom',
+          path: ['workUnits', position, 'dependencyPositions', dependencyIndex],
+          message: 'WorkUnit dependencies must reference an earlier WorkUnit',
+        });
+      }
+    });
+  });
 }).refine(
   (value) => utf8ByteLength(JSON.stringify(value)) <= MAX_CAPTURE_PAYLOAD_BYTES,
   { error: `protocol payload must not exceed ${MAX_CAPTURE_PAYLOAD_BYTES} UTF-8 bytes` },
@@ -142,7 +171,25 @@ export const missionRecordV02Schema = z.strictObject({
 });
 export type MissionRecordV02 = z.infer<typeof missionRecordV02Schema>;
 
-export const workUnitProposalRecordV02Schema = z.strictObject({
+export const workUnitAuthorityCeilingV02Schema = z.strictObject({
+  externalEffects: z.literal('none'),
+  acceptance: z.literal('none'),
+  closure: z.literal('none'),
+});
+
+export const workUnitBudgetV02Schema = z.strictObject({
+  maxProviderTurns: z.literal(0),
+  maxExternalEffects: z.literal(0),
+  maxDurationMs: z.literal(0),
+});
+
+export const workUnitIsolationV02Schema = z.strictObject({
+  mode: z.literal('unassigned'),
+  egress: z.literal('deny_all'),
+  credentials: z.literal('none'),
+});
+
+export const workUnitRecordV02Schema = z.strictObject({
   id: protocolIdSchema,
   ownerId: protocolIdSchema,
   outcomeId: protocolIdSchema,
@@ -150,11 +197,27 @@ export const workUnitProposalRecordV02Schema = z.strictObject({
   position: protocolRevisionSchema,
   revision: z.int().positive(),
   responsibility: responsibilityCaptureTextV02Schema,
-  state: z.literal('proposed'),
+  inputs: boundedTextListV02Schema,
+  dependencyIds: z.array(protocolIdSchema).max(32)
+    .refine((values) => new Set(values).size === values.length, {
+      error: 'WorkUnit dependencies must not contain duplicates',
+    }),
+  expectedEvidence: boundedTextListV02Schema,
+  requiredCapabilities: z.array(protocolNameSchema).max(32)
+    .refine((values) => new Set(values).size === values.length, {
+      error: 'WorkUnit capabilities must not contain duplicates',
+    }),
+  authorityCeiling: workUnitAuthorityCeilingV02Schema,
+  budget: workUnitBudgetV02Schema,
+  isolation: workUnitIsolationV02Schema,
+  stopConditions: boundedTextListV02Schema,
+  assignee: protocolIdSchema.nullable(),
+  sessionIds: z.array(protocolIdSchema).max(32),
+  state: z.literal('planned'),
   createdAt: iso8601Schema,
   updatedAt: iso8601Schema,
 });
-export type WorkUnitProposalRecordV02 = z.infer<typeof workUnitProposalRecordV02Schema>;
+export type WorkUnitRecordV02 = z.infer<typeof workUnitRecordV02Schema>;
 
 const projectionItemBaseV02Schema = z.strictObject({
   cursor: protocolRevisionSchema,
@@ -180,21 +243,46 @@ export const missionProjectionItemV02Schema = projectionItemBaseV02Schema.extend
   brief: responsibilityCaptureTextV02Schema,
 });
 
-export const workUnitProposalProjectionItemV02Schema = projectionItemBaseV02Schema.extend({
-  itemType: z.literal('work_unit_proposal'),
+export const workUnitProjectionItemV02Schema = projectionItemBaseV02Schema.extend({
+  itemType: z.literal('work_unit'),
   missionId: protocolIdSchema.nullable(),
   position: protocolRevisionSchema,
-  state: z.literal('proposed'),
+  state: z.literal('planned'),
   responsibility: responsibilityCaptureTextV02Schema,
+  dependencyIds: z.array(protocolIdSchema).max(32),
+  requiredCapabilities: z.array(protocolNameSchema).max(32),
 });
 
 export const responsibilityProjectionItemV02Schema = z.union([
   outcomeProjectionItemV02Schema,
   missionProjectionItemV02Schema,
-  workUnitProposalProjectionItemV02Schema,
+  workUnitProjectionItemV02Schema,
 ]);
 export type ResponsibilityProjectionItemV02 = z.infer<
   typeof responsibilityProjectionItemV02Schema
+>;
+
+export const responsibilityProjectionPageV01CompatibilitySchema =
+  projectionPageEnvelopeSchemaFor(responsibilityProjectionItemV02Schema)
+    .superRefine((page, context) => {
+      if (page.projectionName !== 'responsibility.summary') {
+        context.addIssue({
+          code: 'custom', path: ['projectionName'], message: 'unexpected responsibility projection',
+        });
+      }
+      let previous = page.fromExclusiveCursor;
+      page.items.forEach((item, index) => {
+        if (item.cursor <= previous || item.cursor > page.nextCursor) {
+          context.addIssue({
+            code: 'custom', path: ['items', index, 'cursor'],
+            message: 'items must be strictly ordered',
+          });
+        }
+        previous = item.cursor;
+      });
+    });
+export type ResponsibilityProjectionPageV01Compatibility = z.infer<
+  typeof responsibilityProjectionPageV01CompatibilitySchema
 >;
 
 export const responsibilityProjectionPageV02Schema = z.strictObject({
@@ -238,12 +326,11 @@ export type ResponsibilityProjectionPageV02 = z.infer<
 
 export const responsibilityCaptureResultV02Schema = z.strictObject({
   protocolVersion: protocolVersionV02Schema,
-  duplicate: z.literal(false),
   ownerId: protocolIdSchema,
   requestId: protocolIdSchema,
   outcome: outcomeRecordV02Schema,
   mission: missionRecordV02Schema.nullable(),
-  workUnitProposals: z.array(workUnitProposalRecordV02Schema).max(32),
+  workUnits: z.array(workUnitRecordV02Schema).max(32),
   projectionCursor: z.int().positive(),
 }).superRefine((result, context) => {
   if (result.outcome.ownerId !== result.ownerId) {
@@ -253,11 +340,13 @@ export const responsibilityCaptureResultV02Schema = z.strictObject({
       (result.mission.ownerId !== result.ownerId || result.mission.outcomeId !== result.outcome.id)) {
     context.addIssue({ code: 'custom', path: ['mission'], message: 'Mission relationship mismatch' });
   }
-  result.workUnitProposals.forEach((proposal, index) => {
-    if (proposal.ownerId !== result.ownerId || proposal.outcomeId !== result.outcome.id ||
-        proposal.missionId !== (result.mission?.id ?? null) || proposal.position !== index) {
+  result.workUnits.forEach((workUnit, index) => {
+    const priorIds = new Set(result.workUnits.slice(0, index).map((value) => value.id));
+    if (workUnit.ownerId !== result.ownerId || workUnit.outcomeId !== result.outcome.id ||
+        workUnit.missionId !== (result.mission?.id ?? null) || workUnit.position !== index ||
+        workUnit.dependencyIds.some((dependencyId) => !priorIds.has(dependencyId))) {
       context.addIssue({
-        code: 'custom', path: ['workUnitProposals', index], message: 'proposal relationship mismatch',
+        code: 'custom', path: ['workUnits', index], message: 'WorkUnit relationship mismatch',
       });
     }
   });
@@ -265,3 +354,26 @@ export const responsibilityCaptureResultV02Schema = z.strictObject({
 export type ResponsibilityCaptureResultV02 = z.infer<
   typeof responsibilityCaptureResultV02Schema
 >;
+
+export const responsibilityCaptureResultV01CompatibilitySchema = z.strictObject({
+  protocolVersion: z.literal('0.1'),
+  ownerId: protocolIdSchema,
+  requestId: protocolIdSchema,
+  outcome: outcomeRecordV02Schema,
+  mission: z.null(),
+  workUnits: z.tuple([]),
+  projectionCursor: z.int().positive(),
+}).superRefine((result, context) => {
+  if (result.outcome.ownerId !== result.ownerId) {
+    context.addIssue({ code: 'custom', path: ['outcome', 'ownerId'], message: 'Outcome owner mismatch' });
+  }
+});
+export type ResponsibilityCaptureResultV01Compatibility = z.infer<
+  typeof responsibilityCaptureResultV01CompatibilitySchema
+>;
+
+export const responsibilityCaptureResultSchema = z.union([
+  responsibilityCaptureResultV01CompatibilitySchema,
+  responsibilityCaptureResultV02Schema,
+]);
+export type ResponsibilityCaptureResult = z.infer<typeof responsibilityCaptureResultSchema>;

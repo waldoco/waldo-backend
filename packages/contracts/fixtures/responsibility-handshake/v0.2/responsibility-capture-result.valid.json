@@ -1,6 +1,5 @@
 {
   "protocolVersion": "0.2",
-  "duplicate": false,
   "ownerId": "owner_server_01",
   "requestId": "request_capture_02",
   "outcome": {
@@ -22,16 +21,46 @@
     "createdAt": "2026-08-06T06:00:01.000Z",
     "updatedAt": "2026-08-06T06:00:01.000Z"
   },
-  "workUnitProposals": [
+  "workUnits": [
     {
-      "id": "work_unit_proposal_01",
+      "id": "work_unit_01",
       "ownerId": "owner_server_01",
       "outcomeId": "outcome_01",
       "missionId": "mission_01",
       "position": 0,
       "revision": 1,
       "responsibility": "Review the release artifact.",
-      "state": "proposed",
+      "inputs": [
+        "Prepared release artifact."
+      ],
+      "dependencyIds": [],
+      "expectedEvidence": [
+        "A review report bound to the artifact digest."
+      ],
+      "requiredCapabilities": [
+        "artifact.read"
+      ],
+      "authorityCeiling": {
+        "externalEffects": "none",
+        "acceptance": "none",
+        "closure": "none"
+      },
+      "budget": {
+        "maxProviderTurns": 0,
+        "maxExternalEffects": 0,
+        "maxDurationMs": 0
+      },
+      "isolation": {
+        "mode": "unassigned",
+        "egress": "deny_all",
+        "credentials": "none"
+      },
+      "stopConditions": [
+        "Stop before publication."
+      ],
+      "assignee": null,
+      "sessionIds": [],
+      "state": "planned",
       "createdAt": "2026-08-06T06:00:01.000Z",
       "updatedAt": "2026-08-06T06:00:01.000Z"
     }

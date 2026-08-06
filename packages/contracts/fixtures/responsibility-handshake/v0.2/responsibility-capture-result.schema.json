@@ -5,23 +5,20 @@
     "protocolVersion": {
       "$ref": "#/$defs/__schema0"
     },
-    "duplicate": {
+    "ownerId": {
       "$ref": "#/$defs/__schema1"
     },
-    "ownerId": {
-      "$ref": "#/$defs/__schema2"
-    },
     "requestId": {
-      "$ref": "#/$defs/__schema2"
+      "$ref": "#/$defs/__schema1"
     },
     "outcome": {
-      "$ref": "#/$defs/__schema3"
+      "$ref": "#/$defs/__schema2"
     },
     "mission": {
-      "$ref": "#/$defs/__schema6"
+      "$ref": "#/$defs/__schema5"
     },
-    "workUnitProposals": {
-      "$ref": "#/$defs/__schema7"
+    "workUnits": {
+      "$ref": "#/$defs/__schema6"
     },
     "projectionCursor": {
       "$ref": "#/$defs/__schema9"
@@ -29,12 +26,11 @@
   },
   "required": [
     "protocolVersion",
-    "duplicate",
     "ownerId",
     "requestId",
     "outcome",
     "mission",
-    "workUnitProposals",
+    "workUnits",
     "projectionCursor"
   ],
   "additionalProperties": false,
@@ -44,23 +40,19 @@
       "const": "0.2"
     },
     "__schema1": {
-      "type": "boolean",
-      "const": false
-    },
-    "__schema2": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
     },
-    "__schema3": {
+    "__schema2": {
       "type": "object",
       "properties": {
         "id": {
-          "$ref": "#/$defs/__schema2"
+          "$ref": "#/$defs/__schema1"
         },
         "ownerId": {
-          "$ref": "#/$defs/__schema2"
+          "$ref": "#/$defs/__schema1"
         },
         "revision": {
           "type": "integer",
@@ -68,17 +60,17 @@
           "maximum": 9007199254740991
         },
         "userStatement": {
-          "$ref": "#/$defs/__schema4"
+          "$ref": "#/$defs/__schema3"
         },
         "state": {
           "type": "string",
           "const": "captured"
         },
         "createdAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema4"
         },
         "updatedAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema4"
         }
       },
       "required": [
@@ -92,30 +84,30 @@
       ],
       "additionalProperties": false
     },
-    "__schema4": {
+    "__schema3": {
       "type": "string",
       "minLength": 1,
       "maxLength": 8192,
       "pattern": "\\S"
     },
-    "__schema5": {
+    "__schema4": {
       "type": "string",
       "format": "date-time",
       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
     },
-    "__schema6": {
+    "__schema5": {
       "anyOf": [
         {
           "type": "object",
           "properties": {
             "id": {
-              "$ref": "#/$defs/__schema2"
+              "$ref": "#/$defs/__schema1"
             },
             "ownerId": {
-              "$ref": "#/$defs/__schema2"
+              "$ref": "#/$defs/__schema1"
             },
             "outcomeId": {
-              "$ref": "#/$defs/__schema2"
+              "$ref": "#/$defs/__schema1"
             },
             "revision": {
               "type": "integer",
@@ -123,17 +115,17 @@
               "maximum": 9007199254740991
             },
             "brief": {
-              "$ref": "#/$defs/__schema4"
+              "$ref": "#/$defs/__schema3"
             },
             "state": {
               "type": "string",
               "const": "proposed"
             },
             "createdAt": {
-              "$ref": "#/$defs/__schema5"
+              "$ref": "#/$defs/__schema4"
             },
             "updatedAt": {
-              "$ref": "#/$defs/__schema5"
+              "$ref": "#/$defs/__schema4"
             }
           },
           "required": [
@@ -153,29 +145,29 @@
         }
       ]
     },
-    "__schema7": {
+    "__schema6": {
       "maxItems": 32,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema8"
+        "$ref": "#/$defs/__schema7"
       }
     },
-    "__schema8": {
+    "__schema7": {
       "type": "object",
       "properties": {
         "id": {
-          "$ref": "#/$defs/__schema2"
+          "$ref": "#/$defs/__schema1"
         },
         "ownerId": {
-          "$ref": "#/$defs/__schema2"
+          "$ref": "#/$defs/__schema1"
         },
         "outcomeId": {
-          "$ref": "#/$defs/__schema2"
+          "$ref": "#/$defs/__schema1"
         },
         "missionId": {
           "anyOf": [
             {
-              "$ref": "#/$defs/__schema2"
+              "$ref": "#/$defs/__schema1"
             },
             {
               "type": "null"
@@ -193,17 +185,126 @@
           "maximum": 9007199254740991
         },
         "responsibility": {
-          "$ref": "#/$defs/__schema4"
+          "$ref": "#/$defs/__schema3"
+        },
+        "inputs": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "dependencyIds": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema1"
+          }
+        },
+        "expectedEvidence": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "requiredCapabilities": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema1"
+          }
+        },
+        "authorityCeiling": {
+          "type": "object",
+          "properties": {
+            "externalEffects": {
+              "type": "string",
+              "const": "none"
+            },
+            "acceptance": {
+              "type": "string",
+              "const": "none"
+            },
+            "closure": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "externalEffects",
+            "acceptance",
+            "closure"
+          ],
+          "additionalProperties": false
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "maxProviderTurns": {
+              "type": "number",
+              "const": 0
+            },
+            "maxExternalEffects": {
+              "type": "number",
+              "const": 0
+            },
+            "maxDurationMs": {
+              "type": "number",
+              "const": 0
+            }
+          },
+          "required": [
+            "maxProviderTurns",
+            "maxExternalEffects",
+            "maxDurationMs"
+          ],
+          "additionalProperties": false
+        },
+        "isolation": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "const": "unassigned"
+            },
+            "egress": {
+              "type": "string",
+              "const": "deny_all"
+            },
+            "credentials": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "mode",
+            "egress",
+            "credentials"
+          ],
+          "additionalProperties": false
+        },
+        "stopConditions": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "assignee": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessionIds": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema1"
+          }
         },
         "state": {
           "type": "string",
-          "const": "proposed"
+          "const": "planned"
         },
         "createdAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema4"
         },
         "updatedAt": {
-          "$ref": "#/$defs/__schema5"
+          "$ref": "#/$defs/__schema4"
         }
       },
       "required": [
@@ -214,11 +315,28 @@
         "position",
         "revision",
         "responsibility",
+        "inputs",
+        "dependencyIds",
+        "expectedEvidence",
+        "requiredCapabilities",
+        "authorityCeiling",
+        "budget",
+        "isolation",
+        "stopConditions",
+        "assignee",
+        "sessionIds",
         "state",
         "createdAt",
         "updatedAt"
       ],
       "additionalProperties": false
+    },
+    "__schema8": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema3"
+      }
     },
     "__schema9": {
       "type": "integer",
@@ -232,9 +350,9 @@
   "x-waldo-validation-level": "structural",
   "x-waldo-runtime-validator-required": true,
   "x-waldo-runtime-invariants": {
-    "ownerBinding": "Outcome, Mission, and proposals equal result ownerId",
-    "relationships": "Mission and proposals belong to the admitted Outcome",
-    "proposalOrder": "position equals array index",
+    "ownerBinding": "Outcome, Mission, and WorkUnits equal result ownerId",
+    "relationships": "Mission and WorkUnits belong to the admitted Outcome",
+    "workUnitOrder": "position equals array index and dependencies point backward",
     "idempotency": "exact retries return the persisted original result"
   },
   "x-waldo-offline-commands": "none"

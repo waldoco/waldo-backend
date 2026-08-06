@@ -1,13 +1,18 @@
 import {
+  canonicalizeSurfaceCommandRequestForDigest,
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
-  responsibilityCaptureResultV02Schema,
+  responsibilityCaptureResultSchema,
+  responsibilityCaptureTrustedEnvelopeSchema,
   responsibilityCaptureTrustedEnvelopeV02Schema,
   responsibilityProjectionItemV02Schema,
+  responsibilityProjectionPageV01CompatibilitySchema,
   responsibilityProjectionPageV02Schema,
+  type ResponsibilityCaptureResult as ResponsibilityCaptureResultContract,
   type ResponsibilityCaptureRequestV02,
-  type ResponsibilityCaptureResultV02,
   type ResponsibilityCaptureTrustedEnvelopeV02,
+  type ResponsibilityProjectionPageV01Compatibility,
   type ResponsibilityProjectionPageV02,
 } from '@waldo/contracts';
 import { IdentityPresenceModule } from './identity-presence-module';
@@ -17,17 +22,17 @@ import {
   type MissionRecord,
   type OutcomeRecord,
   type ResponsibilityReplay,
-  type WorkUnitProposalRecord,
+  type WorkUnitRecord,
 } from './outcome-module';
 
 export type {
   MissionRecord,
   OutcomeRecord,
   ResponsibilityReplay,
-  WorkUnitProposalRecord,
+  WorkUnitRecord,
 } from './outcome-module';
 
-export type ResponsibilityCaptureResult = ResponsibilityCaptureResultV02;
+export type ResponsibilityCaptureResult = ResponsibilityCaptureResultContract;
 
 export type ResponsibilityCaptureAdmission = Readonly<{
   routedOwnerId: string;
@@ -37,6 +42,7 @@ export type ResponsibilityCaptureAdmission = Readonly<{
 
 export type ResponsibilityProjectionRead = Readonly<{
   routedOwnerId: string;
+  protocolVersion?: '0.1' | '0.2';
   fromExclusiveCursor: number;
   limit: number;
   snapshotId?: string;
@@ -59,7 +65,7 @@ export type CoordinatorWriteStage =
 export type CoordinatorDependencies = Readonly<{
   now: () => string;
   newId: (
-    kind: 'outcome' | 'mission' | 'work_unit_proposal' | 'event' | 'snapshot',
+    kind: 'outcome' | 'mission' | 'work_unit' | 'event' | 'snapshot',
   ) => string;
   sha256Hex: (value: string) => Promise<string>;
   afterWrite?: (stage: CoordinatorWriteStage) => void;
@@ -105,13 +111,10 @@ export class WaldoCoordinator {
   async captureResponsibility(
     admission: ResponsibilityCaptureAdmission,
   ): Promise<ResponsibilityCaptureResult> {
-    const request = responsibilityCaptureRequestV02Schema.parse(admission.request);
-    const trustedEnvelope = responsibilityCaptureTrustedEnvelopeV02Schema.parse(
-      admission.trustedEnvelope,
-    );
-    this.#validateTrustedAdmission(admission.routedOwnerId, request, trustedEnvelope);
+    const parsed = this.#parseAdmission(admission);
+    const { request, trustedEnvelope } = parsed;
     const requestDigest = `sha256:${await this.#deps.sha256Hex(
-      canonicalizeResponsibilityCaptureRequestV02ForDigest(request),
+      parsed.canonicalRequest,
     )}`;
     if (trustedEnvelope.requestDigest !== requestDigest) {
       throw new Error('responsibility capture digest conflict');
@@ -132,10 +135,10 @@ export class WaldoCoordinator {
             existing.request_digest !== requestDigest) {
           throw new Error('responsibility capture digest conflict');
         }
-        const persisted = responsibilityCaptureResultV02Schema.parse(
+        const persisted = responsibilityCaptureResultSchema.parse(
           JSON.parse(existing.result_json),
         );
-        this.#assertPersistedCaptureResult(persisted, request);
+        this.#assertPersistedCaptureResult(persisted, request, parsed.responseVersion);
         return Object.freeze(persisted);
       }
 
@@ -155,14 +158,13 @@ export class WaldoCoordinator {
         afterEvents: () => this.#deps.afterWrite?.('events'),
         afterProjection: () => this.#deps.afterWrite?.('projection'),
       });
-      const result = Object.freeze(responsibilityCaptureResultV02Schema.parse({
-        protocolVersion: '0.2',
-        duplicate: false,
+      const result = Object.freeze(responsibilityCaptureResultSchema.parse({
+        protocolVersion: parsed.responseVersion,
         ownerId: admission.routedOwnerId,
         requestId: request.requestId,
         outcome: captured.outcome,
         mission: captured.mission,
-        workUnitProposals: captured.workUnitProposals,
+        workUnits: captured.workUnits,
         projectionCursor: captured.finalCursor,
       }));
       this.#storage.sql.exec(
@@ -182,7 +184,7 @@ export class WaldoCoordinator {
 
   readResponsibilityProjection(
     input: ResponsibilityProjectionRead,
-  ): ResponsibilityProjectionPageV02 {
+  ): ResponsibilityProjectionPageV02 | ResponsibilityProjectionPageV01Compatibility {
     if (!Number.isSafeInteger(input.fromExclusiveCursor) || input.fromExclusiveCursor < 0) {
       throw new Error('invalid responsibility projection cursor');
     }
@@ -228,8 +230,8 @@ export class WaldoCoordinator {
       const nextCursor = (filledPage || truncatedByByteLimit) && items.length > 0
         ? items.at(-1)!.cursor
         : highWaterCursor;
-      const parsed = responsibilityProjectionPageV02Schema.safeParse({
-        protocolVersion: '0.2',
+      const candidate = {
+        protocolVersion: input.protocolVersion ?? '0.2',
         ownerId: input.routedOwnerId,
         projectionName: 'responsibility.summary',
         snapshotId: snapshot.snapshotId,
@@ -240,7 +242,10 @@ export class WaldoCoordinator {
         items,
         hasMore: nextCursor < highWaterCursor,
         generatedAt,
-      });
+      };
+      const parsed = input.protocolVersion === '0.1'
+        ? responsibilityProjectionPageV01CompatibilitySchema.safeParse(candidate)
+        : responsibilityProjectionPageV02Schema.safeParse(candidate);
       if (parsed.success) return parsed.data;
       if (items.length === 0) throw parsed.error;
       items.pop();
@@ -255,8 +260,14 @@ export class WaldoCoordinator {
 
   #validateTrustedAdmission(
     routedOwnerId: string,
-    request: ResponsibilityCaptureRequestV02,
-    trustedEnvelope: ResponsibilityCaptureTrustedEnvelopeV02,
+    request: Readonly<{ protocolVersion: string; payload: unknown }>,
+    trustedEnvelope: Readonly<{
+      protocolVersion: string;
+      ownerId: string;
+      aggregate?: unknown;
+      expectedRevision?: number;
+      payload: unknown;
+    }>,
   ): void {
     if (trustedEnvelope.ownerId !== routedOwnerId) {
       throw new Error('owner authority root mismatch');
@@ -272,23 +283,71 @@ export class WaldoCoordinator {
     }
   }
 
+  #parseAdmission(admission: ResponsibilityCaptureAdmission): Readonly<{
+    request: ResponsibilityCaptureRequestV02;
+    trustedEnvelope: ResponsibilityCaptureTrustedEnvelopeV02;
+    canonicalRequest: string;
+    responseVersion: '0.1' | '0.2';
+  }> {
+    const version = (admission.request as { protocolVersion?: unknown } | null)?.protocolVersion;
+    if (version === '0.1') {
+      const requestV01 = responsibilityCaptureRequestSchema.parse(admission.request);
+      const envelopeV01 = responsibilityCaptureTrustedEnvelopeSchema.parse(
+        admission.trustedEnvelope,
+      );
+      this.#validateTrustedAdmission(admission.routedOwnerId, requestV01, envelopeV01);
+      return Object.freeze({
+        request: responsibilityCaptureRequestV02Schema.parse({
+          ...requestV01,
+          protocolVersion: '0.2',
+        }),
+        trustedEnvelope: responsibilityCaptureTrustedEnvelopeV02Schema.parse({
+          ...envelopeV01,
+          protocolVersion: '0.2',
+        }),
+        canonicalRequest: canonicalizeSurfaceCommandRequestForDigest(requestV01),
+        responseVersion: '0.1',
+      });
+    }
+    const request = responsibilityCaptureRequestV02Schema.parse(admission.request);
+    const trustedEnvelope = responsibilityCaptureTrustedEnvelopeV02Schema.parse(
+      admission.trustedEnvelope,
+    );
+    this.#validateTrustedAdmission(admission.routedOwnerId, request, trustedEnvelope);
+    return Object.freeze({
+      request,
+      trustedEnvelope,
+      canonicalRequest: canonicalizeResponsibilityCaptureRequestV02ForDigest(request),
+      responseVersion: '0.2',
+    });
+  }
+
   #assertPersistedCaptureResult(
     persisted: ResponsibilityCaptureResult,
     request: ResponsibilityCaptureRequestV02,
+    responseVersion: '0.1' | '0.2',
   ): void {
-    if (persisted.ownerId === '' || persisted.requestId !== request.requestId ||
+    if (persisted.protocolVersion !== responseVersion || persisted.ownerId === '' ||
+        persisted.requestId !== request.requestId ||
         persisted.outcome.userStatement !== request.payload.userStatement ||
         (persisted.mission?.brief ?? null) !== (request.payload.mission?.brief ?? null) ||
-        persisted.workUnitProposals.length !== (request.payload.workUnitProposals?.length ?? 0) ||
-        persisted.workUnitProposals.some((proposal, index) =>
-          proposal.responsibility !== request.payload.workUnitProposals?.[index]?.responsibility)) {
+        persisted.workUnits.length !== (request.payload.workUnits?.length ?? 0) ||
+        persisted.workUnits.some((workUnit, index) => {
+          const admitted = request.payload.workUnits?.[index];
+          return admitted === undefined || workUnit.responsibility !== admitted.responsibility ||
+            JSON.stringify(workUnit.inputs) !== JSON.stringify(admitted.inputs) ||
+            JSON.stringify(workUnit.expectedEvidence) !== JSON.stringify(admitted.expectedEvidence) ||
+            JSON.stringify(workUnit.requiredCapabilities) !==
+              JSON.stringify(admitted.requiredCapabilities) ||
+            JSON.stringify(workUnit.stopConditions) !== JSON.stringify(admitted.stopConditions);
+        })) {
       throw new Error('responsibility capture persisted result mismatch');
     }
     const replay = this.#outcomes.replay(persisted.ownerId);
     const outcome = replay.outcomes.find((value) => value.id === persisted.outcome.id);
     const mission = persisted.mission === null ? null
       : replay.missions.find((value) => value.id === persisted.mission!.id) ?? null;
-    const proposals = replay.workUnitProposals.filter(
+    const workUnits = replay.workUnits.filter(
       (value) => value.outcomeId === persisted.outcome.id,
     ).sort((left, right) => left.position - right.position);
     const outcomeItems = replay.items.filter(
@@ -297,7 +356,7 @@ export class WaldoCoordinator {
     const finalOutcomeCursor = outcomeItems.at(-1)?.cursor;
     if (JSON.stringify(outcome) !== JSON.stringify(persisted.outcome) ||
         JSON.stringify(mission) !== JSON.stringify(persisted.mission) ||
-        JSON.stringify(proposals) !== JSON.stringify(persisted.workUnitProposals) ||
+        JSON.stringify(workUnits) !== JSON.stringify(persisted.workUnits) ||
         finalOutcomeCursor !== persisted.projectionCursor) {
       throw new Error('responsibility capture persisted result mismatch');
     }

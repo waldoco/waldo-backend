@@ -20,15 +20,19 @@
     },
     {
       "cursor": 3,
-      "aggregateId": "work_unit_proposal_01",
+      "aggregateId": "work_unit_01",
       "outcomeId": "outcome_01",
       "revision": 1,
       "createdAt": "2026-08-06T06:00:01.000Z",
-      "itemType": "work_unit_proposal",
+      "itemType": "work_unit",
       "missionId": "mission_01",
       "position": 0,
-      "state": "proposed",
-      "responsibility": "Review the release artifact."
+      "state": "planned",
+      "responsibility": "Review the release artifact.",
+      "dependencyIds": [],
+      "requiredCapabilities": [
+        "artifact.read"
+      ]
     }
   ],
   "hasMore": false,

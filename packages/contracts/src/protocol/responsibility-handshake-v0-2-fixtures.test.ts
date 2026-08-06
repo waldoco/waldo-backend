@@ -7,8 +7,10 @@ import { buildResponsibilityHandshakeV01Bundle } from './responsibility-handshak
 import { buildResponsibilityHandshakeV02Bundle } from './responsibility-handshake-v0-2-fixtures';
 import {
   responsibilityCaptureRequestV02Schema,
+  responsibilityCaptureResultV01CompatibilitySchema,
   responsibilityCaptureResultV02Schema,
   responsibilityCaptureTrustedEnvelopeV02Schema,
+  responsibilityProjectionPageV01CompatibilitySchema,
   responsibilityProjectionPageV02Schema,
   responsibilityProtocolCapabilitiesV02Schema,
 } from './responsibility-handshake-v0-2';
@@ -28,7 +30,7 @@ describe('responsibility handshake v0.2 golden fixtures', () => {
         'sha256:9553fceb9797cbc6e3fe6441c099dfccaed2e4d3b199dcb4c1e5c9b754db2cca',
     });
     expect(bundle['responsibility-projection-page.valid.json']).toContain(
-      'work_unit_proposal',
+      'work_unit',
     );
     expect(JSON.parse(bundle['manifest.json']!).previousVersionManifestSha256).toBe(
       `sha256:${hashHex(v01Manifest)}`,
@@ -75,7 +77,9 @@ describe('responsibility handshake v0.2 golden fixtures', () => {
       ['responsibility-capture-request', responsibilityCaptureRequestV02Schema],
       ['responsibility-capture-trusted-envelope', responsibilityCaptureTrustedEnvelopeV02Schema],
       ['responsibility-capture-result', responsibilityCaptureResultV02Schema],
+      ['responsibility-capture-result-v0.1-compat', responsibilityCaptureResultV01CompatibilitySchema],
       ['responsibility-projection-page', responsibilityProjectionPageV02Schema],
+      ['responsibility-projection-page-v0.1-compat', responsibilityProjectionPageV01CompatibilitySchema],
     ] as const;
     for (const [name, runtimeSchema] of schemaCases) {
       const structuralDocument = JSON.parse(bundle[`${name}.schema.json`]!) as Record<string, unknown>;

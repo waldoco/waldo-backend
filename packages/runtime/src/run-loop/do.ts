@@ -67,7 +67,6 @@ import {
   type ResponsibilityProjectionRead,
   type ResponsibilityReplay,
 } from '../coordinator/waldo-coordinator';
-import type { ResponsibilityProjectionPageV02 } from '@waldo/contracts';
 import { provisionDoSchema } from '../do-schema';
 import {
   RuntimeLLMProvider,
@@ -333,7 +332,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   __waldoReadResponsibilityProjectionForTest(
     input: ResponsibilityProjectionRead,
-  ): ResponsibilityProjectionPageV02 {
+  ) {
     this.#assertLocalTestSeam();
     return this.waldoCoordinator.readResponsibilityProjection(input);
   }

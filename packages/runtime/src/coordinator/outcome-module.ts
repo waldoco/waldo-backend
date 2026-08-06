@@ -2,23 +2,23 @@ import {
   missionRecordV02Schema,
   outcomeRecordV02Schema,
   responsibilityProjectionItemV02Schema,
-  workUnitProposalRecordV02Schema,
+  workUnitRecordV02Schema,
   type MissionRecordV02,
   type OutcomeRecordV02,
   type ResponsibilityCapturePayloadV02,
   type ResponsibilityProjectionItemV02,
-  type WorkUnitProposalRecordV02,
+  type WorkUnitRecordV02,
 } from '@waldo/contracts';
 import { OwnerEventLog } from './owner-event-log';
 
 export type OutcomeRecord = OutcomeRecordV02;
 export type MissionRecord = MissionRecordV02;
-export type WorkUnitProposalRecord = WorkUnitProposalRecordV02;
+export type WorkUnitRecord = WorkUnitRecordV02;
 
 export type CapturedResponsibility = Readonly<{
   outcome: OutcomeRecord;
   mission: MissionRecord | null;
-  workUnitProposals: readonly WorkUnitProposalRecord[];
+  workUnits: readonly WorkUnitRecord[];
   finalCursor: number;
 }>;
 
@@ -26,7 +26,7 @@ export type ResponsibilityReplay = Readonly<{
   ownerId: string;
   outcomes: readonly OutcomeRecord[];
   missions: readonly MissionRecord[];
-  workUnitProposals: readonly WorkUnitProposalRecord[];
+  workUnits: readonly WorkUnitRecord[];
   items: readonly ResponsibilityProjectionItemV02[];
   highWaterCursor: number;
 }>;
@@ -38,8 +38,8 @@ export class ResponsibilityCapacityError extends Error {
   }
 }
 
-type DomainRecord = OutcomeRecord | MissionRecord | WorkUnitProposalRecord;
-type ResponsibilityAggregateKind = 'outcome' | 'mission' | 'work_unit_proposal';
+type DomainRecord = OutcomeRecord | MissionRecord | WorkUnitRecord;
+type ResponsibilityAggregateKind = 'outcome' | 'mission' | 'work_unit';
 type StoredEventRow = {
   owner_cursor: number;
   schema_version: string;
@@ -103,7 +103,7 @@ export class ProjectionPublisher {
   }
 }
 
-/** Sole writer and reducer owner for captured Outcome, Mission, and WorkUnitProposal state. */
+/** Sole writer and reducer owner for captured Outcome, Mission, and WorkUnit state. */
 export class OutcomeModule {
   readonly projections: ProjectionPublisher;
   private readonly events: OwnerEventLog;
@@ -111,7 +111,7 @@ export class OutcomeModule {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly newId: (
-      kind: 'outcome' | 'mission' | 'work_unit_proposal' | 'event' | 'snapshot',
+      kind: 'outcome' | 'mission' | 'work_unit' | 'event' | 'snapshot',
     ) => string,
     private readonly replayEventLimit = MAX_REPLAY_EVENTS,
     private readonly replayDecodedByteLimit = MAX_REPLAY_DECODED_BYTES,
@@ -157,24 +157,37 @@ export class OutcomeModule {
         updatedAt: input.at,
       }),
     );
-    const workUnitProposals = Object.freeze((input.payload.workUnitProposals ?? []).map(
-      (proposal, position) => Object.freeze(workUnitProposalRecordV02Schema.parse({
-        id: this.newId('work_unit_proposal'),
+    const workUnits: WorkUnitRecord[] = [];
+    for (const [position, workUnit] of (input.payload.workUnits ?? []).entries()) {
+      workUnits.push(Object.freeze(workUnitRecordV02Schema.parse({
+        id: this.newId('work_unit'),
         ownerId: input.ownerId,
         outcomeId: outcome.id,
         missionId: mission?.id ?? null,
         position,
         revision: 1,
-        responsibility: proposal.responsibility,
-        state: 'proposed',
+        responsibility: workUnit.responsibility,
+        inputs: workUnit.inputs,
+        dependencyIds: workUnit.dependencyPositions.map(
+          (dependencyPosition) => workUnits[dependencyPosition]!.id,
+        ),
+        expectedEvidence: workUnit.expectedEvidence,
+        requiredCapabilities: workUnit.requiredCapabilities,
+        authorityCeiling: { externalEffects: 'none', acceptance: 'none', closure: 'none' },
+        budget: { maxProviderTurns: 0, maxExternalEffects: 0, maxDurationMs: 0 },
+        isolation: { mode: 'unassigned', egress: 'deny_all', credentials: 'none' },
+        stopConditions: workUnit.stopConditions,
+        assignee: null,
+        sessionIds: [],
+        state: 'planned',
         createdAt: input.at,
         updatedAt: input.at,
-      })),
-    ));
+      })));
+    }
     this.assertCaptureCapacity([
       outcome,
       ...(mission === null ? [] : [mission]),
-      ...workUnitProposals,
+      ...workUnits,
     ]);
 
     this.storage.sql.exec(
@@ -193,15 +206,23 @@ export class OutcomeModule {
         mission.brief, mission.state, mission.createdAt, mission.updatedAt,
       );
     }
-    for (const proposal of workUnitProposals) {
+    for (const workUnit of workUnits) {
       this.storage.sql.exec(
-        `INSERT INTO work_unit_proposals (
+        `INSERT INTO work_units (
           id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+          inputs_json, dependency_ids_json, expected_evidence_json,
+          required_capabilities_json, authority_ceiling_json, budget_json,
+          isolation_json, stop_conditions_json, assignee, session_ids_json,
           state, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        proposal.id, proposal.ownerId, proposal.outcomeId, proposal.missionId,
-        proposal.position, proposal.revision, proposal.responsibility,
-        proposal.state, proposal.createdAt, proposal.updatedAt,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        workUnit.id, workUnit.ownerId, workUnit.outcomeId, workUnit.missionId,
+        workUnit.position, workUnit.revision, workUnit.responsibility,
+        JSON.stringify(workUnit.inputs), JSON.stringify(workUnit.dependencyIds),
+        JSON.stringify(workUnit.expectedEvidence), JSON.stringify(workUnit.requiredCapabilities),
+        JSON.stringify(workUnit.authorityCeiling), JSON.stringify(workUnit.budget),
+        JSON.stringify(workUnit.isolation), JSON.stringify(workUnit.stopConditions),
+        workUnit.assignee, JSON.stringify(workUnit.sessionIds),
+        workUnit.state, workUnit.createdAt, workUnit.updatedAt,
       );
     }
     input.afterCurrentState?.();
@@ -237,18 +258,19 @@ export class OutcomeModule {
       finalCursor = appended.cursor;
       projectionItems.push(appended.item);
     }
-    for (const proposal of workUnitProposals) {
+    for (const workUnit of workUnits) {
       appended = this.appendChange({
-        aggregateKind: 'work_unit_proposal',
-        eventType: 'work_unit_proposal.recorded',
-        record: proposal,
+        aggregateKind: 'work_unit',
+        eventType: 'work_unit.recorded',
+        record: workUnit,
         commandId: input.commandId,
         correlationId: input.correlationId,
         projectionItem: (cursor) => ({
-          cursor, itemType: 'work_unit_proposal', aggregateId: proposal.id,
-          outcomeId: proposal.outcomeId, missionId: proposal.missionId,
-          position: proposal.position, revision: proposal.revision, state: proposal.state,
-          responsibility: proposal.responsibility, createdAt: proposal.createdAt,
+          cursor, itemType: 'work_unit', aggregateId: workUnit.id,
+          outcomeId: workUnit.outcomeId, missionId: workUnit.missionId,
+          position: workUnit.position, revision: workUnit.revision, state: workUnit.state,
+          responsibility: workUnit.responsibility, dependencyIds: workUnit.dependencyIds,
+          requiredCapabilities: workUnit.requiredCapabilities, createdAt: workUnit.createdAt,
         }),
       });
       finalCursor = appended.cursor;
@@ -259,16 +281,16 @@ export class OutcomeModule {
       this.projections.publishInCurrentTransaction(input.ownerId, item);
     }
     input.afterProjection?.();
-    return Object.freeze({ outcome, mission, workUnitProposals, finalCursor });
+    return Object.freeze({ outcome, mission, workUnits, finalCursor });
   }
 
   replay(ownerId: string): ResponsibilityReplay {
     const highWaterCursor = this.events.readHighWater(ownerId);
     const outcomes = new Map<string, OutcomeRecord>();
     const missions = new Map<string, MissionRecord>();
-    const proposals = new Map<string, WorkUnitProposalRecord>();
+    const workUnits = new Map<string, WorkUnitRecord>();
     const missionByOutcome = new Set<string>();
-    const proposalCountByOutcome = new Map<string, number>();
+    const workUnitCountByOutcome = new Map<string, number>();
     const items: ResponsibilityProjectionItemV02[] = [];
     let lastCursor = 0;
     let decodedBytes = 0;
@@ -279,7 +301,7 @@ export class OutcomeModule {
                 revision, event_type, payload_json
            FROM owner_domain_events
           WHERE owner_id = ? AND owner_cursor > ?
-            AND aggregate_kind IN ('outcome', 'mission', 'work_unit_proposal')
+            AND aggregate_kind IN ('outcome', 'mission', 'work_unit')
           ORDER BY owner_cursor ASC
           LIMIT ?`,
         ownerId,
@@ -330,22 +352,25 @@ export class OutcomeModule {
             brief: mission.brief, createdAt: mission.createdAt,
           }));
         } else {
-          const proposal = record as WorkUnitProposalRecord;
-          const count = proposalCountByOutcome.get(proposal.outcomeId) ?? 0;
-          const mission = proposal.missionId === null ? null : missions.get(proposal.missionId);
-          if (row.event_type !== 'work_unit_proposal.recorded' ||
-              !outcomes.has(proposal.outcomeId) ||
-              (proposal.missionId !== null && mission?.outcomeId !== proposal.outcomeId) ||
-              count >= 32 || proposal.position !== count) {
-            throw new Error('invalid WorkUnitProposal relationship or transition');
+          const workUnit = record as WorkUnitRecord;
+          const count = workUnitCountByOutcome.get(workUnit.outcomeId) ?? 0;
+          const mission = workUnit.missionId === null ? null : missions.get(workUnit.missionId);
+          if (row.event_type !== 'work_unit.recorded' ||
+              !outcomes.has(workUnit.outcomeId) ||
+              (workUnit.missionId !== null && mission?.outcomeId !== workUnit.outcomeId) ||
+              workUnit.dependencyIds.some((dependencyId) =>
+                workUnits.get(dependencyId)?.outcomeId !== workUnit.outcomeId) ||
+              count >= 32 || workUnit.position !== count) {
+            throw new Error('invalid WorkUnit relationship or transition');
           }
-          proposals.set(proposal.id, proposal);
-          proposalCountByOutcome.set(proposal.outcomeId, count + 1);
+          workUnits.set(workUnit.id, workUnit);
+          workUnitCountByOutcome.set(workUnit.outcomeId, count + 1);
           items.push(responsibilityProjectionItemV02Schema.parse({
-            cursor: row.owner_cursor, itemType: 'work_unit_proposal', aggregateId: proposal.id,
-            outcomeId: proposal.outcomeId, missionId: proposal.missionId,
-            position: proposal.position, revision: proposal.revision, state: proposal.state,
-            responsibility: proposal.responsibility, createdAt: proposal.createdAt,
+            cursor: row.owner_cursor, itemType: 'work_unit', aggregateId: workUnit.id,
+            outcomeId: workUnit.outcomeId, missionId: workUnit.missionId,
+            position: workUnit.position, revision: workUnit.revision, state: workUnit.state,
+            responsibility: workUnit.responsibility, dependencyIds: workUnit.dependencyIds,
+            requiredCapabilities: workUnit.requiredCapabilities, createdAt: workUnit.createdAt,
           }));
         }
         lastCursor = row.owner_cursor;
@@ -356,7 +381,7 @@ export class OutcomeModule {
       ownerId,
       outcomes: Object.freeze([...outcomes.values()]),
       missions: Object.freeze([...missions.values()]),
-      workUnitProposals: Object.freeze([...proposals.values()]),
+      workUnits: Object.freeze([...workUnits.values()]),
       items: Object.freeze(items),
       highWaterCursor,
     });
@@ -369,7 +394,7 @@ export class OutcomeModule {
       `SELECT count(*) AS event_count,
               coalesce(sum(length(CAST(payload_json AS BLOB))), 0) AS decoded_bytes
          FROM owner_domain_events
-        WHERE aggregate_kind IN ('outcome', 'mission', 'work_unit_proposal')`,
+        WHERE aggregate_kind IN ('outcome', 'mission', 'work_unit')`,
     ).one();
     if (current.event_count + records.length > this.replayEventLimit) {
       throw new ResponsibilityCapacityError('event_limit');
@@ -403,17 +428,37 @@ export class OutcomeModule {
          FROM missions WHERE owner_id = ? ORDER BY id LIMIT ?`,
       replay.ownerId, limit,
     ).toArray().map((row) => missionRecordV02Schema.parse(row));
-    const proposals = this.storage.sql.exec<{
+    const workUnits = this.storage.sql.exec<{
       id: string; ownerId: string; outcomeId: string; missionId: string | null;
-      position: number; revision: number; responsibility: string; state: string;
+      position: number; revision: number; responsibility: string;
+      inputsJson: string; dependencyIdsJson: string; expectedEvidenceJson: string;
+      requiredCapabilitiesJson: string; authorityCeilingJson: string; budgetJson: string;
+      isolationJson: string; stopConditionsJson: string; assignee: string | null;
+      sessionIdsJson: string; state: string;
       createdAt: string; updatedAt: string;
     }>(
       `SELECT id, owner_id AS ownerId, outcome_id AS outcomeId, mission_id AS missionId,
-              position, revision, responsibility, state,
+              position, revision, responsibility,
+              inputs_json AS inputsJson, dependency_ids_json AS dependencyIdsJson,
+              expected_evidence_json AS expectedEvidenceJson,
+              required_capabilities_json AS requiredCapabilitiesJson,
+              authority_ceiling_json AS authorityCeilingJson, budget_json AS budgetJson,
+              isolation_json AS isolationJson, stop_conditions_json AS stopConditionsJson,
+              assignee, session_ids_json AS sessionIdsJson, state,
               created_at AS createdAt, updated_at AS updatedAt
-         FROM work_unit_proposals WHERE owner_id = ? ORDER BY id LIMIT ?`,
+         FROM work_units WHERE owner_id = ? ORDER BY id LIMIT ?`,
       replay.ownerId, limit,
-    ).toArray().map((row) => workUnitProposalRecordV02Schema.parse(row));
+    ).toArray().map((row) => workUnitRecordV02Schema.parse({
+      id: row.id, ownerId: row.ownerId, outcomeId: row.outcomeId, missionId: row.missionId,
+      position: row.position, revision: row.revision, responsibility: row.responsibility,
+      inputs: JSON.parse(row.inputsJson), dependencyIds: JSON.parse(row.dependencyIdsJson),
+      expectedEvidence: JSON.parse(row.expectedEvidenceJson),
+      requiredCapabilities: JSON.parse(row.requiredCapabilitiesJson),
+      authorityCeiling: JSON.parse(row.authorityCeilingJson), budget: JSON.parse(row.budgetJson),
+      isolation: JSON.parse(row.isolationJson), stopConditions: JSON.parse(row.stopConditionsJson),
+      assignee: row.assignee, sessionIds: JSON.parse(row.sessionIdsJson), state: row.state,
+      createdAt: row.createdAt, updatedAt: row.updatedAt,
+    }));
     const items = this.storage.sql.exec<{ owner_cursor: number; item_json: string }>(
       `SELECT owner_cursor, item_json FROM responsibility_projection
         WHERE owner_id = ? ORDER BY owner_cursor ASC LIMIT ?`,
@@ -440,11 +485,11 @@ export class OutcomeModule {
     };
     if (!recordsEqual(outcomes, replay.outcomes) ||
         !recordsEqual(missions, replay.missions) ||
-        !recordsEqual(proposals, replay.workUnitProposals) ||
+        !recordsEqual(workUnits, replay.workUnits) ||
         items.length !== replay.items.length ||
         items.some((item, index) => !equal(item, replay.items[index])) ||
         outcomes.length > this.replayEventLimit || missions.length > this.replayEventLimit ||
-        proposals.length > this.replayEventLimit || items.length > this.replayEventLimit) {
+        workUnits.length > this.replayEventLimit || items.length > this.replayEventLimit) {
       throw new Error('responsibility replay materialization mismatch');
     }
   }
@@ -460,7 +505,7 @@ export class OutcomeModule {
       ? outcomeRecordV02Schema.safeParse(value)
       : row.aggregate_kind === 'mission'
         ? missionRecordV02Schema.safeParse(value)
-        : workUnitProposalRecordV02Schema.safeParse(value);
+        : workUnitRecordV02Schema.safeParse(value);
     if (!parsed.success) {
       throw new Error(`invalid ${row.aggregate_kind} event payload`);
     }

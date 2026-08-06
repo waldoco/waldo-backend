@@ -101,7 +101,7 @@
         "mission": {
           "$ref": "#/$defs/__schema3"
         },
-        "workUnitProposals": {
+        "workUnits": {
           "$ref": "#/$defs/__schema4"
         }
       },
@@ -170,12 +170,52 @@
       "properties": {
         "responsibility": {
           "$ref": "#/$defs/__schema2"
+        },
+        "inputs": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "dependencyPositions": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema7"
+          }
+        },
+        "expectedEvidence": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "requiredCapabilities": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "stopConditions": {
+          "$ref": "#/$defs/__schema6"
         }
       },
       "required": [
-        "responsibility"
+        "responsibility",
+        "inputs",
+        "dependencyPositions",
+        "expectedEvidence",
+        "requiredCapabilities",
+        "stopConditions"
       ],
       "additionalProperties": false
+    },
+    "__schema6": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema2"
+      }
+    },
+    "__schema7": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 31
     }
   },
   "$id": "urn:waldo:protocol:responsibility-handshake:0.2:responsibility-capture-trusted-envelope",

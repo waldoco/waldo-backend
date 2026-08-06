@@ -9,9 +9,22 @@
     "mission": {
       "brief": "Prepare a reviewable release."
     },
-    "workUnitProposals": [
+    "workUnits": [
       {
-        "responsibility": "Review the release artifact."
+        "responsibility": "Review the release artifact.",
+        "inputs": [
+          "Prepared release artifact."
+        ],
+        "dependencyPositions": [],
+        "expectedEvidence": [
+          "A review report bound to the artifact digest."
+        ],
+        "requiredCapabilities": [
+          "artifact.read"
+        ],
+        "stopConditions": [
+          "Stop before publication."
+        ]
       }
     ]
   }

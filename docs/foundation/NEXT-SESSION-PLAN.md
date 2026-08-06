@@ -52,7 +52,7 @@ Backend domain/reducer work and the Kennel protocol client begin in parallel as 
 
 “Not a prompt enhancer or agent-session dashboard” does not reject those Kennel capabilities. Kennel must provide prompt/context enhancement, session visibility/control, mission planning UI, supervision, and re-entry presentation beneath the Waldo-powered Outcome Finisher. They are not canonical product truth or sufficient completion conditions. Waldo owns and adjudicates durable Outcome/Mission/WorkUnit state, acceptance criteria, authority, verification, OpenLoop, and re-entry state; Kennel proposes, plans, renders, executes, and owns local process recovery. Paxel-style historical session analysis remains an optional evidence/continuity input, not the main product loop.
 
-The capture tracer bullet records bounded `WorkUnitProposal` objects only. It does not yet implement the fuller canonical WorkUnit contract described by the ownership split above; promotion, authority, execution, evidence, and completion semantics remain separate work.
+The capture tracer bullet records bounded canonical `WorkUnit` objects with dependencies, evidence requirements, required capabilities, stop conditions, and server-owned deny-by-default authority, budget, isolation, assignee, and session fields. It does not authorize or execute them: promotion, non-zero execution budget, leases, provider sessions, evidence, verification, and completion remain separate work.
 
 ## Stable kernel
 

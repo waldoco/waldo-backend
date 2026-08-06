@@ -1,0 +1,17 @@
+{
+  "protocolVersion": "0.1",
+  "ownerId": "owner_server_01",
+  "requestId": "request_capture_v01_compat",
+  "outcome": {
+    "id": "outcome_v01_compat",
+    "ownerId": "owner_server_01",
+    "revision": 1,
+    "userStatement": "Capture this responsibility through released v0.1.",
+    "state": "captured",
+    "createdAt": "2026-08-06T06:00:01.000Z",
+    "updatedAt": "2026-08-06T06:00:01.000Z"
+  },
+  "mission": null,
+  "workUnits": [],
+  "projectionCursor": 1
+}
