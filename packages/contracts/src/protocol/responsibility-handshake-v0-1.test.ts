@@ -11,6 +11,8 @@ import {
   protocolJsonObjectSchema,
   protocolJsonValueSchema,
   responsibilityCaptureRequestSchema,
+  responsibilityCaptureResultV01Schema,
+  responsibilityProjectionPageSchema,
   surfaceCommandRequestSchema,
   trustedCommandEnvelopeSchema,
 } from './responsibility-handshake-v0-1';
@@ -228,6 +230,101 @@ describe('responsibility handshake v0.1', () => {
     expect(
       responsibilityCaptureRequestSchema.safeParse(surfaceRequest).success,
     ).toBe(true);
+  });
+
+  it('accepts optional Mission and bounded WorkUnit proposals without client-owned IDs', () => {
+    expect(
+      responsibilityCaptureRequestSchema.safeParse({
+        ...surfaceRequest,
+        payload: {
+          ...surfaceRequest.payload,
+          mission: { brief: 'Prepare and review the release.' },
+          workUnits: [
+            { responsibility: 'Prepare the release artifact.' },
+            { responsibility: 'Review the release artifact.' },
+          ],
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects owner and relationship corruption in persisted capture results', () => {
+    const result = {
+      duplicate: false,
+      ownerId: 'owner_server_01',
+      requestId: 'request_capture_01',
+      outcome: {
+        id: 'outcome_01', ownerId: 'owner_server_01', revision: 1,
+        userStatement: 'Handle this.', state: 'captured',
+        createdAt: '2026-08-06T06:00:00.000Z', updatedAt: '2026-08-06T06:00:00.000Z',
+      },
+      mission: null,
+      workUnits: [],
+      projectionCursor: 1,
+    };
+    expect(responsibilityCaptureResultV01Schema.safeParse(result).success).toBe(true);
+    expect(responsibilityCaptureResultV01Schema.safeParse({
+      ...result,
+      outcome: { ...result.outcome, ownerId: 'owner_other_01' },
+    }).success).toBe(false);
+  });
+
+  it('defines typed ordered Outcome, Mission, and WorkUnit projection items', () => {
+    const page = {
+        protocolVersion: '0.1',
+        ownerId: 'owner_server_01',
+        projectionName: 'responsibility.summary',
+        snapshotId: 'snapshot_01',
+        snapshotBaseCursor: 0,
+        fromExclusiveCursor: 0,
+        highWaterCursor: 3,
+        nextCursor: 3,
+        items: [
+          {
+            cursor: 1,
+            itemType: 'outcome',
+            aggregateId: 'outcome_01',
+            outcomeId: 'outcome_01',
+            revision: 1,
+            state: 'captured',
+            userStatement: 'Handle this.',
+            createdAt: '2026-08-06T06:00:00.000Z',
+          },
+          {
+            cursor: 2,
+            itemType: 'mission',
+            aggregateId: 'mission_01',
+            outcomeId: 'outcome_01',
+            revision: 1,
+            state: 'proposed',
+            brief: 'Plan the work.',
+            createdAt: '2026-08-06T06:00:00.000Z',
+          },
+          {
+            cursor: 3,
+            itemType: 'work_unit',
+            aggregateId: 'work_unit_01',
+            outcomeId: 'outcome_01',
+            missionId: 'mission_01',
+            position: 0,
+            revision: 1,
+            state: 'proposed',
+            responsibility: 'Do the bounded work.',
+            createdAt: '2026-08-06T06:00:00.000Z',
+          },
+        ],
+        hasMore: false,
+        generatedAt: '2026-08-06T06:00:01.000Z',
+      };
+    expect(responsibilityProjectionPageSchema.safeParse(page).success).toBe(true);
+    expect(
+      responsibilityProjectionPageSchema.safeParse({
+        ...page,
+        nextCursor: 1,
+        hasMore: true,
+        items: [{ ...page.items[0], revision: 0 }],
+      }).success,
+    ).toBe(false);
   });
 
   it.each([

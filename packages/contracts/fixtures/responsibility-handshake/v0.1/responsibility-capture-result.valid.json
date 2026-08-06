@@ -1,0 +1,17 @@
+{
+  "duplicate": false,
+  "ownerId": "owner_server_01",
+  "requestId": "request_capture_01",
+  "outcome": {
+    "id": "outcome_01",
+    "ownerId": "owner_server_01",
+    "revision": 1,
+    "userStatement": "Make sure the reviewed update is handled.",
+    "state": "captured",
+    "createdAt": "2026-08-05T12:00:01Z",
+    "updatedAt": "2026-08-05T12:00:01Z"
+  },
+  "mission": null,
+  "workUnits": [],
+  "projectionCursor": 1
+}

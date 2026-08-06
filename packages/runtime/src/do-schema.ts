@@ -12,17 +12,47 @@ export const DO_PRODUCT_TABLES = [
   'thread_topic_index',
   'drafts',
   'goals',
+  'owner_roots',
+  'outcomes',
+  'missions',
+  'work_units',
+  'outcome_domain_events',
+  'responsibility_commands',
+  'responsibility_projection',
+  'responsibility_projection_state',
 ] as const;
 
 export const DEFERRED_DO_PRODUCT_TABLES = [
-  'runs',
-  'outbox',
-  'schedules',
-  'schedule',
-  'daily_push_budget',
   'memory_edges',
   'commitments',
   'handoff_state',
+] as const;
+
+// These tables are provisioned by the existing RunLoop/Journal substrate, not by the
+// product migration chain. Listing them prevents an implicit second schema manifest.
+export const DO_RUNTIME_SUBSTRATE_TABLES = [
+  'journal',
+  'run_candidates',
+  'loop_governor_runs',
+  'loop_kill_flags',
+  'loop_progress',
+  'loop_progress_params',
+  'loop_observations',
+  'outbox',
+  'class_state',
+  'event_cooldowns',
+  'subkind_state',
+  'exempt_telemetry',
+  'daily_push_budget',
+  'held_candidates',
+  'schedule',
+  'runtime_runs',
+  'runtime_invocation_v2',
+  'runtime_invocation_v2_scribe_audit',
+  'runtime_journal',
+  'runtime_trace',
+  'local_ingress_rate',
+  'runtime_run_scribe_audit',
 ] as const;
 
 export type DoProductTable = (typeof DO_PRODUCT_TABLES)[number];
@@ -313,9 +343,118 @@ export const HEY144_GOALS_SCHEMA_MIGRATION: DoMigration = {
   down: ['DROP TABLE IF EXISTS goals;'],
 };
 
+export const RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION: DoMigration = {
+  version: 3,
+  name: 'responsibility-domain-v0-1',
+  up: [
+    `
+      CREATE TABLE owner_roots (
+        root_key       INTEGER PRIMARY KEY CHECK (root_key = 1),
+        owner_id       TEXT NOT NULL UNIQUE,
+        snapshot_id    TEXT NOT NULL UNIQUE,
+        created_at     TEXT NOT NULL
+      );
+    `,
+    `
+      CREATE TABLE outcomes (
+        id             TEXT PRIMARY KEY,
+        owner_id       TEXT NOT NULL,
+        revision       INTEGER NOT NULL CHECK (revision > 0),
+        user_statement TEXT NOT NULL,
+        state          TEXT NOT NULL CHECK (state IN ('captured')),
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        UNIQUE (owner_id, id)
+      );
+    `,
+    `
+      CREATE TABLE missions (
+        id          TEXT PRIMARY KEY,
+        owner_id    TEXT NOT NULL,
+        outcome_id  TEXT NOT NULL,
+        revision    INTEGER NOT NULL CHECK (revision > 0),
+        brief       TEXT NOT NULL,
+        state       TEXT NOT NULL CHECK (state IN ('proposed')),
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        UNIQUE (owner_id, id),
+        UNIQUE (owner_id, outcome_id)
+      );
+    `,
+    `
+      CREATE TABLE work_units (
+        id              TEXT PRIMARY KEY,
+        owner_id        TEXT NOT NULL,
+        outcome_id      TEXT NOT NULL,
+        mission_id      TEXT,
+        position        INTEGER NOT NULL CHECK (position >= 0),
+        revision        INTEGER NOT NULL CHECK (revision > 0),
+        responsibility  TEXT NOT NULL,
+        state           TEXT NOT NULL CHECK (state IN ('proposed')),
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        UNIQUE (owner_id, id),
+        UNIQUE (owner_id, outcome_id, position)
+      );
+    `,
+    `
+      CREATE TABLE outcome_domain_events (
+        owner_cursor    INTEGER PRIMARY KEY CHECK (owner_cursor > 0),
+        schema_version  TEXT NOT NULL CHECK (schema_version = '0.1'),
+        event_id        TEXT NOT NULL UNIQUE,
+        owner_id        TEXT NOT NULL,
+        aggregate_kind  TEXT NOT NULL CHECK (aggregate_kind IN ('outcome', 'mission', 'work_unit')),
+        aggregate_id    TEXT NOT NULL,
+        revision        INTEGER NOT NULL CHECK (revision > 0),
+        event_type      TEXT NOT NULL,
+        causation_id    TEXT NOT NULL,
+        correlation_id  TEXT NOT NULL,
+        occurred_at     TEXT NOT NULL,
+        payload_json    TEXT NOT NULL,
+        UNIQUE (owner_id, aggregate_kind, aggregate_id, revision)
+      );
+    `,
+    `
+      CREATE TABLE responsibility_commands (
+        request_id      TEXT PRIMARY KEY,
+        owner_id        TEXT NOT NULL,
+        request_digest  TEXT NOT NULL,
+        result_json     TEXT NOT NULL,
+        recorded_at     TEXT NOT NULL,
+        UNIQUE (owner_id, request_id)
+      );
+    `,
+    `
+      CREATE TABLE responsibility_projection (
+        owner_cursor  INTEGER PRIMARY KEY CHECK (owner_cursor > 0),
+        owner_id      TEXT NOT NULL,
+        item_json     TEXT NOT NULL
+      );
+    `,
+    `
+      CREATE TABLE responsibility_projection_state (
+        owner_id          TEXT PRIMARY KEY,
+        high_water_cursor INTEGER NOT NULL CHECK (high_water_cursor >= 0),
+        updated_at        TEXT NOT NULL
+      );
+    `,
+  ],
+  down: [
+    'DROP TABLE IF EXISTS responsibility_projection_state;',
+    'DROP TABLE IF EXISTS responsibility_projection;',
+    'DROP TABLE IF EXISTS responsibility_commands;',
+    'DROP TABLE IF EXISTS outcome_domain_events;',
+    'DROP TABLE IF EXISTS work_units;',
+    'DROP TABLE IF EXISTS missions;',
+    'DROP TABLE IF EXISTS outcomes;',
+    'DROP TABLE IF EXISTS owner_roots;',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
+  RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -450,6 +589,61 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'created_at',
     'updated_at',
   ],
+  owner_roots: ['root_key', 'owner_id', 'snapshot_id', 'created_at'],
+  outcomes: [
+    'id',
+    'owner_id',
+    'revision',
+    'user_statement',
+    'state',
+    'created_at',
+    'updated_at',
+  ],
+  missions: [
+    'id',
+    'owner_id',
+    'outcome_id',
+    'revision',
+    'brief',
+    'state',
+    'created_at',
+    'updated_at',
+  ],
+  work_units: [
+    'id',
+    'owner_id',
+    'outcome_id',
+    'mission_id',
+    'position',
+    'revision',
+    'responsibility',
+    'state',
+    'created_at',
+    'updated_at',
+  ],
+  outcome_domain_events: [
+    'owner_cursor',
+    'schema_version',
+    'event_id',
+    'owner_id',
+    'aggregate_kind',
+    'aggregate_id',
+    'revision',
+    'event_type',
+    'causation_id',
+    'correlation_id',
+    'occurred_at',
+    'payload_json',
+  ],
+  responsibility_commands: [
+    'request_id',
+    'owner_id',
+    'request_digest',
+    'result_json',
+    'recorded_at',
+  ],
+  responsibility_projection: ['owner_cursor', 'owner_id', 'item_json'],
+  responsibility_projection_state: ['owner_id', 'high_water_cursor', 'updated_at'],
 };
 
 export function provisionDoSchema(storage: DurableObjectStorage): DoSchemaAssertResult {

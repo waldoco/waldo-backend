@@ -8,6 +8,7 @@ import {
   DO_PRODUCT_TABLES,
   DoSchemaDriftError,
   HEY10_BASE_SCHEMA_MIGRATION,
+  HEY144_GOALS_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
   getSchemaVersion,
@@ -68,7 +69,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     );
   });
 
-  it('provisions all required product tables and schema metadata at V2', async () => {
+  it('provisions all required product tables and schema metadata at V3', async () => {
     const stub = freshStub();
 
     const result = await runInDurableObject(stub, (_instance, state) => {
@@ -82,7 +83,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(2);
+    expect(result.version).toBe(3);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -99,7 +100,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     }
   });
 
-  it('migrates an existing V1 database to V2 without changing a V1 row', async () => {
+  it('migrates an existing V1 database to V3 without changing a V1 row', async () => {
     const stub = freshStub();
 
     const result = await runInDurableObject(stub, (_instance, state) => {
@@ -151,7 +152,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(2);
+    expect(result.version).toBe(3);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
     expect(result.draft).toEqual({
@@ -162,6 +163,48 @@ describe('HEY-10 DO SQLite schema root', () => {
       recipient_count: 1,
       idempotency_key: 'draft-v1-key',
     });
+  });
+
+  it('migrates V2 to V3 without changing existing product state', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, HEY144_GOALS_SCHEMA_MIGRATION);
+      state.storage.sql.exec(
+        `INSERT INTO goals (id, user_id, description, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        'goal-v2', 'owner-v2', 'Preserve this row.', '2026-08-06T00:00:00Z',
+        '2026-08-06T00:00:00Z',
+      );
+      provisionDoSchema(state.storage);
+      return {
+        version: getSchemaVersion(state.storage.sql),
+        description: state.storage.sql.exec<{ description: string }>(
+          'SELECT description FROM goals WHERE id = ?', 'goal-v2',
+        ).one().description,
+      };
+    });
+    expect(result).toEqual({ version: 3, description: 'Preserve this row.' });
+  });
+
+  it('rolls back V3 metadata and all new tables when a legacy name collision is incompatible', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, HEY144_GOALS_SCHEMA_MIGRATION);
+      state.storage.sql.exec('CREATE TABLE outcomes (id TEXT PRIMARY KEY)');
+      expect(() => provisionDoSchema(state.storage)).toThrow();
+      const tables = listTables(state.storage.sql);
+      return {
+        version: getSchemaVersion(state.storage.sql),
+        v3Tables: tables.filter((table) => [
+          'owner_roots', 'outcomes', 'missions', 'work_units', 'outcome_domain_events',
+          'responsibility_commands', 'responsibility_projection',
+          'responsibility_projection_state',
+        ].includes(table)),
+      };
+    });
+    expect(result).toEqual({ version: 2, v3Tables: ['outcomes'] });
   });
 
   it('keeps the memory-block contract columns needed by Scribe rollback and recall', async () => {
@@ -291,14 +334,14 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
   });
 
-  it('rolls back a failed V2-like migration with its metadata version', async () => {
+  it('rolls back a failed post-V3 migration without disturbing responsibility tables', async () => {
     const stub = freshStub();
 
     const result = await runInDurableObject(stub, (_instance, state) => {
-      applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
+      provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 2,
+        version: 4,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -312,6 +355,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       return {
         beforeVersion,
         afterVersion: getSchemaVersion(state.storage.sql),
+        outcomesPresent: listTables(state.storage.sql).includes('outcomes'),
         probeTables: listTables(state.storage.sql).filter((table) =>
           table.includes('transient_failure_probe'),
         ),
@@ -319,8 +363,9 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 1,
-      afterVersion: 1,
+      beforeVersion: 3,
+      afterVersion: 3,
+      outcomesPresent: true,
       probeTables: [],
     });
   });

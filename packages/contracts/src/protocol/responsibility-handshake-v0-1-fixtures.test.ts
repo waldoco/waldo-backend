@@ -12,6 +12,7 @@ import {
   protocolDigestSchema,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureTrustedEnvelopeSchema,
+  responsibilityProjectionPageSchema,
 } from '../index';
 import { canonicalizeProtocolJson } from './responsibility-handshake-v0-1';
 import {
@@ -64,14 +65,15 @@ function sensitiveFixtureValues(value: unknown): string[] {
 }
 
 describe('responsibility handshake v0.1 golden fixtures', () => {
-  it('exports only canonical protocol admission schemas from the package root', () => {
+  it('exports the canonical protocol admission and responsibility projection schemas', () => {
     expect(publicContracts.surfaceCommandRequestSchema).toBeDefined();
     expect(publicContracts.trustedCommandEnvelopeSchema).toBeDefined();
     expect(publicContracts.domainEventSchema).toBeDefined();
     expect(publicContracts.projectionPageSchema).toBeDefined();
     expect(publicContracts.presenceCapabilityV01Schema).toBeDefined();
     expect(publicContracts.canonicalizeSurfaceCommandRequestForDigest).toBeDefined();
-    expect(publicContracts).not.toHaveProperty('canonicalizeProtocolJson');
+    expect(publicContracts.canonicalizeProtocolJson).toBeDefined();
+    expect(publicContracts.responsibilityProjectionPageSchema).toBeDefined();
     expect(publicContracts).not.toHaveProperty('surfaceCommandRequestEnvelopeSchemaFor');
     expect(publicContracts).not.toHaveProperty('trustedCommandEnvelopeSchemaFor');
     expect(publicContracts).not.toHaveProperty('domainEventEnvelopeSchemaFor');
@@ -86,6 +88,8 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
     'presence-capability-v0.1.schema.json',
     'domain-event.schema.json',
     'projection-page.schema.json',
+    'responsibility-projection-page.schema.json',
+    'responsibility-capture-result.schema.json',
   ])('publishes the machine-readable %s contract', (name) => {
     expect(bundle[name]).toBeDefined();
   });
@@ -201,6 +205,22 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
         valid: projectionCatalog.validPage,
         invalid: { ...projectionCatalog.validPage, unexpected: true },
       },
+      {
+        name: 'responsibility-projection-page.schema.json',
+        valid: fixture<Record<string, unknown>>('responsibility-projection.valid.json'),
+        invalid: {
+          ...fixture<Record<string, unknown>>('responsibility-projection.valid.json'),
+          projectionName: 'unknown.projection',
+        },
+      },
+      {
+        name: 'responsibility-capture-result.schema.json',
+        valid: fixture<Record<string, unknown>>('responsibility-capture-result.valid.json'),
+        invalid: {
+          ...fixture<Record<string, unknown>>('responsibility-capture-result.valid.json'),
+          duplicate: true,
+        },
+      },
     ];
 
     for (const entry of cases) {
@@ -218,6 +238,8 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
       'presence-capability-v0.1.schema.json',
       'domain-event.schema.json',
       'projection-page.schema.json',
+      'responsibility-projection-page.schema.json',
+      'responsibility-capture-result.schema.json',
     ];
     const expectedInvariants: Record<string, Record<string, unknown>> = {
       'surface-command-request.schema.json': {
@@ -247,6 +269,21 @@ describe('responsibility handshake v0.1 golden fixtures', () => {
         cursorOrder:
           'snapshotBaseCursor <= fromExclusiveCursor <= nextCursor <= highWaterCursor',
         hasMore: 'nextCursor < highWaterCursor',
+      },
+      'responsibility-projection-page.schema.json': {
+        maxItemsPerPage: 256,
+        maxPageUtf8Bytes: 262_144,
+        itemCursorOrder: 'strictly ascending and bounded by page cursors',
+        emptyPage: 'must not advance nextCursor',
+        nonEmptyPage: 'nextCursor equals final item cursor',
+        hasMore: 'nextCursor < highWaterCursor',
+        offlineCommands: 'none',
+      },
+      'responsibility-capture-result.schema.json': {
+        ownerBinding: 'all aggregates equal result ownerId',
+        relationships: 'Mission and WorkUnits belong to the admitted Outcome',
+        workUnitOrder: 'position equals array index',
+        idempotency: 'exact retries return the persisted original result',
       },
     };
     const identifiers = new Set<string>();

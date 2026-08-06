@@ -52,6 +52,12 @@
           "properties": {
             "userStatement": {
               "$ref": "#/$defs/__schema1"
+            },
+            "mission": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "workUnits": {
+              "$ref": "#/$defs/__schema3"
             }
           },
           "required": [
@@ -83,6 +89,37 @@
       "minLength": 1,
       "maxLength": 8192,
       "pattern": "\\S"
+    },
+    "__schema2": {
+      "type": "object",
+      "properties": {
+        "brief": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "brief"
+      ],
+      "additionalProperties": false
+    },
+    "__schema3": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema4"
+      }
+    },
+    "__schema4": {
+      "type": "object",
+      "properties": {
+        "responsibility": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "responsibility"
+      ],
+      "additionalProperties": false
     }
   },
   "$id": "urn:waldo:protocol:responsibility-handshake:0.1:surface-command-request",

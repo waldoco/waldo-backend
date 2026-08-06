@@ -22,7 +22,7 @@ Do not treat a planning document as shipped truth. Pin the current `origin/main`
 
 ## Immediate implementation start
 
-Start the backend with the bounded, copy-ready [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md). It creates the responsibility-handshake subset of protocol v0.1 and its golden fixtures in `@waldo/contracts`; it does not yet add runtime ingress, persistence, reducers, connectors, or Kennel code.
+The responsibility-handshake protocol v0.1 and golden fixtures landed on `main` in PR #74. The current Outcome capture tracer-bullet branch adds the owner-domain module inside `RunLoopDO`; until its PR merges, that work is `module_implemented` on the branch, not shipped on `main`. The bounded, copy-ready [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md) starts only after that merge and targets production adapter conformance rather than repeating contract or domain work.
 
 That contract work is the first dependency of one complete responsibility backbone:
 
@@ -37,6 +37,20 @@ That contract work is the first dependency of one complete responsibility backbo
 9. restore the exact surviving OpenLoop/ReEntryPoint the next day.
 
 Backend domain/reducer work and the Kennel protocol client begin in parallel as soon as their exact shared fixtures land. More providers, cloud workspaces, DeepWiki ingestion, capability marketplaces, and dashboard breadth must not substitute for this proof.
+
+## Outcome Finisher ownership split
+
+| Capability | Kennel’s job | Waldo’s job |
+|---|---|---|
+| Mission planning | Interactive planning UI; propose Mission and WorkUnits | Validate and persist canonical Mission/WorkUnits |
+| Prompt enhancement | Present/edit the brief and send it to Codex | Compile governed context from Outcome, decisions, constraints and evidence requirements |
+| Session dashboard | Show running/waiting/blocked/completed sessions | Ensure session status cannot falsely determine Outcome status |
+| Agent control | Start, steer, pause, resume, cancel; recover local processes | Authorize the bounded work and determine whether it remains valid |
+| Evidence | Gather diffs, tests, artifacts and provider reports | Decide what counts as candidate evidence and run independent verification |
+| Re-entry | Show the exact place to return in Kennel | Persist the canonical OpenLoop/ReEntryPoint |
+| Completion | Present acceptance/reopen controls | Own verified state and record the user’s acceptance/reopen decision |
+
+“Not a prompt enhancer or agent-session dashboard” does not reject those Kennel capabilities. Kennel must provide prompt/context enhancement, session visibility/control, mission planning UI, supervision, and re-entry presentation beneath the Waldo-powered Outcome Finisher. They are not canonical product truth or sufficient completion conditions. Waldo owns and adjudicates durable Outcome/Mission/WorkUnit state, acceptance criteria, authority, verification, OpenLoop, and re-entry state; Kennel proposes, plans, renders, executes, and owns local process recovery. Paxel-style historical session analysis remains an optional evidence/continuity input, not the main product loop.
 
 ## Stable kernel
 
