@@ -174,8 +174,9 @@ Verification, Acceptance, OpenLoop, or closure.
   correctly fenced from provider I/O but `prepareProviderEffectInCurrentTransaction` classified
   the terminal request with a plain `Error`. The retry therefore became a content-free HTTP 500
   and `owner_root_failure` instead of an ordinary conflict. The owning module now throws
-  `ResponsibilityPlanningConflictError`; the restart regression asserts both the exact error name
-  and `responsibilityBoundaryStatus(error) === 409` while continuing to prove zero provider calls,
+  `ResponsibilityPlanningConflictError`; the restart regression crosses the public Worker adapter
+  into the actual planning module and asserts the exact internal error name, mapped content-free
+  HTTP 409, and no failure-reporter amplification while continuing to prove zero provider calls,
   synchronized cancellation generations, no candidate plan, and unchanged Outcome state.
 
 ### Unavailable

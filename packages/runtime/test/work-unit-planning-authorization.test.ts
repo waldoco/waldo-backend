@@ -19,6 +19,10 @@ import { WaldoCoordinator, type CoordinatorWriteStage } from '../src/coordinator
 import type { RunLoopDO } from '../src/run-loop/do';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 import { responsibilityBoundaryStatus } from '../src/responsibility/errors';
+import {
+  createResponsibilityWorkerAdapter,
+  type ResponsibilityOwnerRoot,
+} from '../src/responsibility/worker-adapter';
 
 let sequence = 0;
 function freshStub(label: string): DurableObjectStub<RunLoopDO> {
@@ -629,20 +633,72 @@ describe('minimum WorkUnit planning authorization harness', () => {
         executionRequestId: authorization.executionRequest.id,
         expectedCancellationGeneration: 0,
       });
+      const failures: string[] = [];
       let retryError: unknown;
-      try {
-        await instance.__waldoExecutePlanningTurnForTest(admission, authority);
-      } catch (error) {
-        retryError = error;
-      }
+      const ownerRoot = {
+        async capture() { throw new Error('not used'); },
+        async readProjection() { throw new Error('not used'); },
+        async plan(input) {
+          try {
+            return await instance.__waldoExecutePlanningTurnForTest(input, authority);
+          } catch (error) {
+            retryError = error;
+            throw error;
+          }
+        },
+      } satisfies ResponsibilityOwnerRoot;
+      const adapter = createResponsibilityWorkerAdapter({
+        authority: {
+          authenticate: async () => ({
+            ...authority,
+            actor: { kind: 'presence', id: authority.presenceId },
+            authenticatedSessionExpiresAt: '2026-08-08T00:00:00.000Z',
+            authAssurance: 'verified_session',
+          }),
+        },
+        edgeRateLimit: { admit: async () => true },
+        failureReporter: { report: (kind) => { failures.push(kind); } },
+        ownerRootFor: async () => ownerRoot,
+        now: () => '2026-08-07T08:00:06.000Z',
+        newId: (kind) => `${kind}_cancelled_retry`,
+      });
+      const response = await adapter.fetch(new Request(
+        'https://api.heywaldo.com/public/responsibilities/planning-turns',
+        {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer verified-session',
+            accept: 'application/vnd.waldo.responsibility.v0.3+json',
+            'content-type': 'application/vnd.waldo.responsibility.v0.3+json',
+          },
+          body: JSON.stringify(admission.request),
+        },
+      ));
       expect(retryError).toMatchObject({ name: 'ResponsibilityPlanningConflictError' });
       expect(responsibilityBoundaryStatus(retryError)).toBe(409);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        type: 'https://api.heywaldo.com/problems/request-conflict',
+        title: 'Request conflict',
+        status: 409,
+        code: 'request_conflict',
+      });
+      expect(failures).toEqual([]);
       return {
         request: state.storage.sql.exec<{ status: string; cancellation_generation: number }>(
           'SELECT status, cancellation_generation FROM planning_execution_requests',
         ).one(),
+        session: state.storage.sql.exec<{ status: string; cancellation_generation: number }>(
+          'SELECT status, cancellation_generation FROM planning_agent_sessions',
+        ).one(),
         lease: state.storage.sql.exec<{ cancellation_generation: number }>(
           'SELECT cancellation_generation FROM planning_execution_leases',
+        ).one(),
+        candidates: state.storage.sql.exec<{ count: number }>(
+          'SELECT COUNT(*) AS count FROM work_unit_candidate_plans',
+        ).one().count,
+        outcome: state.storage.sql.exec<{ state: string; revision: number }>(
+          'SELECT state, revision FROM outcomes',
         ).one(),
       };
     });
@@ -650,7 +706,10 @@ describe('minimum WorkUnit planning authorization harness', () => {
     expect(providerCalls).toBe(0);
     expect(proof).toEqual({
       request: { status: 'cancelled', cancellation_generation: 1 },
+      session: { status: 'cancelled', cancellation_generation: 1 },
       lease: { cancellation_generation: 1 },
+      candidates: 0,
+      outcome: { state: 'captured', revision: 1 },
     });
   });
 
