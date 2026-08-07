@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { WaldoCoordinator, type CoordinatorWriteStage } from '../src/coordinator/waldo-coordinator';
 import type { RunLoopDO } from '../src/run-loop/do';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
+import { responsibilityBoundaryStatus } from '../src/responsibility/errors';
 
 let sequence = 0;
 function freshStub(label: string): DurableObjectStub<RunLoopDO> {
@@ -628,7 +629,14 @@ describe('minimum WorkUnit planning authorization harness', () => {
         executionRequestId: authorization.executionRequest.id,
         expectedCancellationGeneration: 0,
       });
-      await expect(instance.__waldoExecutePlanningTurnForTest(admission, authority)).rejects.toThrow();
+      let retryError: unknown;
+      try {
+        await instance.__waldoExecutePlanningTurnForTest(admission, authority);
+      } catch (error) {
+        retryError = error;
+      }
+      expect(retryError).toMatchObject({ name: 'ResponsibilityPlanningConflictError' });
+      expect(responsibilityBoundaryStatus(retryError)).toBe(409);
       return {
         request: state.storage.sql.exec<{ status: string; cancellation_generation: number }>(
           'SELECT status, cancellation_generation FROM planning_execution_requests',

@@ -104,13 +104,15 @@ Verification, Acceptance, OpenLoop, or closure.
 
 - The independent clean-room review of commit `48514ee84bbf82ff41d0acea81ee474c8b843985`
   returned **NEEDS WORK** with eleven findings. Findings 1–10 were reproduced or inspected and
-  remediated in the follow-up working tree described below.
+  remediated in commit `e5988cb67d9bff890a6da99824ebbc8ae1daec50`.
 - Finding 11, modeling `work_unit_plan` as a general `TriggerType`, remains an explicit
   behavior-neutral architecture follow-up. This remediation does not add a scheduled trigger,
   inherited capability, connector, tool, external effect, or new provider path.
-- Independent re-review of the pushed remediation commit has not yet run. The PR must not be
-  represented as independently approved or merged until that review is performed against the new
-  head.
+- Independent re-review of `e5988cb67d9bff890a6da99824ebbc8ae1daec50` verified findings
+  1–10 as fixed and Finding 11 as correctly deferred, then found one residual mapped-error defect:
+  a normal retry after cancellation returned HTTP 500. Finding 12 is fixed in the current
+  candidate and locally reverified, but independent re-review of the new head has not yet run.
+  The PR must not be represented as independently approved or merged until that review completes.
 
 ### Failed, then fixed
 
@@ -168,6 +170,13 @@ Verification, Acceptance, OpenLoop, or closure.
   unsupported rehearsal was replaced with a direct invariant over both migration definitions.
   Existing tests continue to prove forward data preservation, transactional collision rollback,
   and fail-closed downgrade after durable V5 state exists.
+- Independent re-review found that a duplicate planning request arriving after cancellation was
+  correctly fenced from provider I/O but `prepareProviderEffectInCurrentTransaction` classified
+  the terminal request with a plain `Error`. The retry therefore became a content-free HTTP 500
+  and `owner_root_failure` instead of an ordinary conflict. The owning module now throws
+  `ResponsibilityPlanningConflictError`; the restart regression asserts both the exact error name
+  and `responsibilityBoundaryStatus(error) === 409` while continuing to prove zero provider calls,
+  synchronized cancellation generations, no candidate plan, and unchanged Outcome state.
 
 ### Unavailable
 

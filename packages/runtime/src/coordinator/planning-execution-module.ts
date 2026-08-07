@@ -343,7 +343,9 @@ export class PlanningExecutionModule {
     if (requestRow === undefined || requestRow.owner_id !== input.ownerId) {
       throw new Error('planning execution not found');
     }
-    if (requestRow.status !== 'pending') throw new Error('planning execution is not claimable');
+    if (requestRow.status !== 'pending') {
+      throw new ResponsibilityPlanningConflictError('planning execution is not claimable');
+    }
     const provider = JSON.parse(requestRow.provider_ref_json) as { modelRef?: unknown };
     if (provider.modelRef !== ROSTER_REFS.primary || input.request.step.model !== ROSTER.primary) {
       throw new Error('planning provider pin mismatch');
