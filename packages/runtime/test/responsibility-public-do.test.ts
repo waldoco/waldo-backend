@@ -1,17 +1,23 @@
 import {
   canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest,
+  ROSTER_REFS,
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
   canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
   canonicalizeSurfaceCommandRequestForDigest,
+  canonicalizeWorkUnitPlanningTurnRequestV03ForDigest,
+  canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureTrustedEnvelopeSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureTrustedEnvelopeV02Schema,
+  workUnitPlanningTurnRequestV03Schema,
+  workUnitPlanningTurnTrustedEnvelopeV03Schema,
 } from '@waldo/contracts';
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { responsibilityOwnerRootName } from '../src/index';
 import {
+  canonicalizePlanningProjectionIngressForDigest,
   canonicalizeResponsibilityProjectionIngressForDigest,
   signResponsibilityIngress,
   type SignedResponsibilityIngressContext,
@@ -82,6 +88,127 @@ describe('production responsibility RunLoopDO RPC', () => {
 
     expect(duplicate).toEqual(first);
     expect(page).toMatchObject({ ownerId, highWaterCursor: 1, nextCursor: 1 });
+  });
+
+  it('executes the authenticated v0.3 planning turn through the owner-derived RunLoopDO', async () => {
+    const ownerId = 'owner_public_planning_rpc_01';
+    const stub = await stubFor(ownerId);
+    const captureRequest = responsibilityCaptureRequestV02Schema.parse({
+      protocolVersion: '0.2', requestId: 'capture_public_planning_rpc_01',
+      commandType: 'responsibility.capture', presenceRegistrationId: 'presence_registration_01',
+      clientIssuedAt: '2026-08-07T08:00:00.000Z',
+      payload: {
+        userStatement: 'Prepare a reviewable product update, but do not publish it.',
+        workUnits: [{ responsibility: 'Prepare its candidate plan.', inputs: [],
+          dependencyPositions: [], expectedEvidence: [], requiredCapabilities: [],
+          stopConditions: ['Do not publish.'] }],
+      },
+    });
+    const captureDigest = `sha256:${await sha256Hex(
+      canonicalizeResponsibilityCaptureRequestV02ForDigest(captureRequest),
+    )}` as const;
+    const captureEnvelope = responsibilityCaptureTrustedEnvelopeV02Schema.parse({
+      protocolVersion: '0.2', commandId: 'command_public_planning_capture_01',
+      commandType: 'responsibility.capture', ownerId,
+      actor: { kind: 'presence', id: 'presence_01' }, presenceId: 'presence_01',
+      authenticatedSessionId: ingress.authenticatedSessionId,
+      ownerPolicyRevision: ingress.ownerPolicyRevision,
+      authAssurance: 'supabase_verified_session', ownerRootRoutingVersion: 2,
+      requestDigest: captureDigest, correlationId: 'correlation_public_planning_capture_01',
+      receivedAt: '2026-08-07T08:00:01.000Z', payload: captureRequest.payload,
+    });
+    const captureInput = { routedOwnerId: ownerId, request: captureRequest, trustedEnvelope: captureEnvelope };
+    const captured = await stub.captureResponsibilityFromWorker(
+      captureInput,
+      await signedCaptureIngress(ownerId, captureInput),
+    );
+    const content = 'Fixture: release notes are review-ready.';
+    const planningRequest = workUnitPlanningTurnRequestV03Schema.parse({
+      protocolVersion: '0.3', requestId: 'planning_public_rpc_01',
+      commandType: 'work_unit.request_planning_turn',
+      presenceRegistrationId: 'presence_registration_01',
+      aggregate: { kind: 'work_unit', id: captured.workUnits[0]!.id, expectedRevision: 1 },
+      clientIssuedAt: '2026-08-07T08:00:02.000Z',
+      payload: { governedInputs: [{
+        ref: 'fixture_public_release', digest: `sha256:${await sha256Hex(content)}`, content,
+      }] },
+    });
+    const manifest = {
+      schemaVersion: '0.3', tools: [], connectors: [], filesystem: 'none', shell: 'none',
+      network: 'none', externalEffects: 'none',
+    } as const;
+    const manifestDigest = `sha256:${await sha256Hex(JSON.stringify(manifest))}`;
+    const planningEnvelope = workUnitPlanningTurnTrustedEnvelopeV03Schema.parse({
+      protocolVersion: '0.3', commandId: 'command_public_planning_01',
+      commandType: 'work_unit.request_planning_turn', ownerId,
+      actor: { kind: 'presence', id: 'presence_01' }, presenceId: 'presence_01',
+      authenticatedSessionId: ingress.authenticatedSessionId,
+      ownerPolicyRevision: ingress.ownerPolicyRevision,
+      authAssurance: 'supabase_verified_session', ownerRootRoutingVersion: 2,
+      aggregate: planningRequest.aggregate,
+      requestDigest: `sha256:${await sha256Hex(
+        canonicalizeWorkUnitPlanningTurnRequestV03ForDigest(planningRequest),
+      )}`,
+      correlationId: 'correlation_public_planning_01', receivedAt: '2026-08-07T08:00:03.000Z',
+      provider: {
+        adapterId: 'runtime_llm_provider', adapterVersion: '1.0.0',
+        modelRef: ROSTER_REFS.primary,
+        capabilityManifest: { id: 'planning_provider_empty_v1', revision: 1, digest: manifestDigest },
+      },
+      executor: {
+        executorId: 'run_loop_planning_executor', executorVersion: '1.0.0',
+        capabilityManifest: { id: 'planning_executor_empty_v1', revision: 1, digest: manifestDigest },
+      },
+      capabilityManifest: manifest,
+      authorityCeiling: {
+        providerPlanningTurns: 1, tools: 'none', connectors: 'none', externalEffects: 'none',
+        outcomeMutation: 'none', evidence: 'none', verification: 'none', acceptance: 'none',
+        closure: 'none',
+      },
+      payload: { governedInputs: planningRequest.payload.governedInputs.map(({ ref, digest }) => ({ ref, digest })) },
+    });
+    const planningInput = { routedOwnerId: ownerId, request: planningRequest, trustedEnvelope: planningEnvelope };
+    const signed = await signedPlanningIngress(ownerId, planningInput);
+    const first = await stub.executePlanningTurnFromWorker(planningInput, signed);
+    const retry = await stub.executePlanningTurnFromWorker(planningInput, signed);
+    expect(retry).toEqual(first);
+    expect(first).toMatchObject({
+      ownerId, workUnitId: captured.workUnits[0]!.id, sessionStatus: 'completed',
+      candidatePlan: { constraints: expect.arrayContaining(['Do not publish or perform any external effect.']) },
+    });
+    const firstPageInput = { routedOwnerId: ownerId, fromExclusiveCursor: 0, limit: 2 };
+    const firstPage = await stub.readPlanningProjectionFromWorker(
+      firstPageInput,
+      await signedPlanningProjectionIngress(ownerId, firstPageInput),
+    );
+    expect(firstPage.items.map((item) => item.itemType)).toEqual([
+      'planning_authorized', 'agent_session_activity',
+    ]);
+    expect(firstPage.hasMore).toBe(true);
+    const secondPageInput = {
+      routedOwnerId: ownerId, fromExclusiveCursor: firstPage.nextCursor,
+      limit: 2, snapshotId: firstPage.snapshotId,
+    };
+    const secondPage = await stub.readPlanningProjectionFromWorker(
+      secondPageInput,
+      await signedPlanningProjectionIngress(ownerId, secondPageInput),
+    );
+    expect(secondPage.items.map((item) => item.itemType)).toEqual([
+      'agent_session_activity', 'work_unit_candidate_plan',
+    ]);
+    expect(secondPage.hasMore).toBe(false);
+    await runInDurableObject(stub, async (instance) => {
+      const staleInput = {
+        routedOwnerId: ownerId, fromExclusiveCursor: firstPage.nextCursor, limit: 2,
+      };
+      await expect(instance.readPlanningProjectionFromWorker(
+        staleInput,
+        await signedPlanningProjectionIngress(ownerId, staleInput),
+      )).rejects.toThrow('snapshot_replaced');
+      await expect(instance.executePlanningTurnFromWorker(
+        { ...planningInput, routedOwnerId: 'owner_substituted' }, signed,
+      )).rejects.toThrow('authority mismatch');
+    });
   });
 
   it('binds the released v0.1 trusted envelope across the signed Worker RPC', async () => {
@@ -455,6 +582,41 @@ async function signedProjectionIngress(
     ).join('')}` as const,
     issuedAt: Date.now(),
     secret: TEST_INGRESS_SECRET,
+  });
+}
+
+async function signedPlanningIngress(
+  ownerId: string,
+  input: Readonly<{ trustedEnvelope: { requestDigest: string } }>,
+): Promise<SignedResponsibilityIngressContext> {
+  return signResponsibilityIngress({
+    context: {
+      ownerId, presenceId: 'presence_01', presenceRegistrationId: 'presence_registration_01',
+      ownerRootRoutingVersion: 2, ...ingress,
+    },
+    operation: 'planning_turn',
+    requestDigest: input.trustedEnvelope.requestDigest as `sha256:${string}`,
+    operationDigest: `sha256:${await sha256Hex(
+      canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest(input.trustedEnvelope),
+    )}`,
+    issuedAt: Date.now(), secret: TEST_INGRESS_SECRET,
+  });
+}
+
+async function signedPlanningProjectionIngress(
+  ownerId: string,
+  input: Readonly<{ fromExclusiveCursor: number; limit: number; snapshotId?: string }>,
+): Promise<SignedResponsibilityIngressContext> {
+  const digest = `sha256:${await sha256Hex(
+    canonicalizePlanningProjectionIngressForDigest(input),
+  )}` as const;
+  return signResponsibilityIngress({
+    context: {
+      ownerId, presenceId: 'presence_01', presenceRegistrationId: 'presence_registration_01',
+      ownerRootRoutingVersion: 2, ...ingress,
+    },
+    operation: 'planning_projection', requestDigest: digest, operationDigest: digest,
+    issuedAt: Date.now(), secret: TEST_INGRESS_SECRET,
   });
 }
 

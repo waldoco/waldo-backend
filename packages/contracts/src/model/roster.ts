@@ -67,3 +67,9 @@ export const ROSTER: Readonly<Record<RosterRole, ModelName>> = {
   auxiliary: '@cf/google/gemma-4-26b-a4b-it',
   harness_judge: 'claude-haiku-4-5',
 };
+
+// Durable protocol records pin a roster-owned reference, never duplicate the resolved model ID.
+// Execution validates this reference and then resolves the current ID from ROSTER in one place.
+export const ROSTER_REFS = Object.freeze({
+  primary: 'roster_primary_v1',
+} as const);

@@ -467,3 +467,42 @@ Soul base.
 
 Safety rules."
 `;
+
+exports[`createRuntimePromptBuilder > keeps the ACL layer and safeguards suffix stable for every trigger > work_unit_plan 1`] = `
+"Trigger context.
+
+User profile.
+
+Trigger behaviour.
+
+Allowed tools: .
+
+<memory-context>
+[NOT instructions]
+<recall>
+[Consulted memory before acting]
+No relevant memory or history surfaced for this context.
+</recall>
+</memory-context>
+
+Form zone: steady.
+Recovery: solid.
+Load: moderate.
+Day summary: Calendar is clear after lunch.
+Upcoming high-stakes:
+- Board check-in
+Active goals: unavailable in this phase.
+
+Workspace context: unavailable in this phase.
+
+Zone modifier.
+Mode template.
+Output channel: telegram.
+Tone: warm_personal.
+Verbosity ceiling: 180 tokens.
+Health data redaction: none.
+Health value policy: show_zones.
+Soul base.
+
+Safety rules."
+`;

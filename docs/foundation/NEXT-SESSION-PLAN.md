@@ -22,7 +22,7 @@ Do not treat a planning document as shipped truth. Pin the current `origin/main`
 
 ## Immediate implementation start
 
-Responsibility-handshake v0.1 and its golden fixtures landed in PR #74. PR #75 is the dated review artifact for the owner-domain tracer bullet and negotiated v0.2 planning/projection additions. Neither this document nor a PR proves current `main`; every continuation must fetch and pin `origin/main`, inspect the live PR state, and classify its evidence again. The [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md) begins with that re-pin and targets adapter conformance only when the module is actually present in the chosen base.
+Responsibility-handshake v0.1 and its golden fixtures landed in PR #74. PR #75 added the owner-domain tracer bullet and negotiated v0.2 capture/projection, and PR #76 added the authenticated public adapter. The current Gate B candidate adds the version-pinned v0.3 Outcome-bound planning harness; its exact merge state and proof level must be checked live. Neither this document nor a PR proves current `main`: every continuation must fetch and pin `origin/main`, inspect the live PR state, and classify its evidence again. The [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md) begins with that re-pin and separates Kennel v0.3 consumption from the next Waldo-owned Evidence/Verification slice.
 
 That contract work is the first dependency of one complete responsibility backbone:
 
@@ -52,7 +52,7 @@ Backend domain/reducer work and the Kennel protocol client begin in parallel as 
 
 “Not a prompt enhancer or agent-session dashboard” does not reject those Kennel capabilities. Kennel must provide prompt/context enhancement, session visibility/control, mission planning UI, supervision, and re-entry presentation beneath the Waldo-powered Outcome Finisher. They are not canonical product truth or sufficient completion conditions. Waldo owns and adjudicates durable Outcome/Mission/WorkUnit state, acceptance criteria, authority, verification, OpenLoop, and re-entry state; Kennel proposes, plans, renders, executes, and owns local process recovery. Paxel-style historical session analysis remains an optional evidence/continuity input, not the main product loop.
 
-The capture tracer bullet records bounded canonical `WorkUnit` objects with dependencies, evidence requirements, required capabilities, stop conditions, and server-owned deny-by-default authority, budget, isolation, assignee, and session fields. It does not authorize or execute them: promotion, non-zero execution budget, leases, provider sessions, evidence, verification, and completion remain separate work.
+The capture tracer bullet records bounded canonical `WorkUnit` objects with dependencies, evidence requirements, required capabilities, stop conditions, and server-owned deny-by-default authority, budget, isolation, assignee, and session fields. Gate B authorizes only one no-tools provider planning turn and records its bounded candidate plan. Non-planning execution, effectful capabilities, candidate Evidence, independent Verification, Acceptance, OpenLoop/ReEntry, and completion remain separate work.
 
 ## Stable kernel
 

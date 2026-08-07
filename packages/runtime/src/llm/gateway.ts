@@ -9,7 +9,12 @@ import {
   type LLMResponse,
   type ModelName,
 } from '@waldo/contracts';
-import type { LLMGatewayAdapter, LLMGatewayRequest } from './provider';
+import type {
+  LLMGatewayAdapter,
+  LLMGatewayRequest,
+  TrustedGatewayAdapterResult,
+  TrustedGatewayExecution,
+} from './provider';
 
 const CLOUDFLARE_AIG_REST_ORIGIN = 'https://api.cloudflare.com';
 const DEFAULT_GATEWAY_TIMEOUT_MS = 20_000;
@@ -82,6 +87,18 @@ export class CloudflareAIGatewayAdapter implements LLMGatewayAdapter {
     return normalized === null
       ? { ok: false, error: 'gateway_invalid_response', code: 'invalid_args' }
       : { ok: true, data: normalized };
+  }
+
+  async executeOrReconcile(input: TrustedGatewayExecution): Promise<TrustedGatewayAdapterResult> {
+    if (input.operation === 'reconcile') {
+      return {
+        ok: false,
+        code: 'transient',
+        error: 'gateway_trusted_receipt_unavailable',
+        receipt_status: 'unavailable',
+      };
+    }
+    return this.complete(input.request);
   }
 
   private chatCompletionsUrl(): string {

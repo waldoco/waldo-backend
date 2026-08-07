@@ -695,6 +695,8 @@ export function loopTypeForTrigger(trigger: TriggerType): LoopType {
     case 'patrol':
     case 'pre_brief_sweep':
       return 'patrol';
+    case 'work_unit_plan':
+      throw new Error('work_unit_plan uses its bounded execution lease, not a scheduled loop');
   }
 }
 

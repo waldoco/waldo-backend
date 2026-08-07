@@ -154,6 +154,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'propose_action',
     'send_message',
   ],
+  // Outcome-bound candidate planning has no inherited capabilities. Provider text can propose
+  // steps, but cannot discover or invoke any tool through this trigger.
+  work_unit_plan: [],
 };
 
 // ADR-0034 lazy discovery: on the verbose triggers the prompt builder loads only the

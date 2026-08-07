@@ -1,6 +1,7 @@
 import type { ResponsibilityIngressContext } from './worker-adapter';
 
-export type ResponsibilityIngressOperation = 'capture' | 'projection';
+export type ResponsibilityIngressOperation =
+  'capture' | 'projection' | 'planning_turn' | 'planning_cancel' | 'planning_projection';
 
 export function canonicalizeResponsibilityProjectionIngressForDigest(input: Readonly<{
   protocolVersion?: '0.1' | '0.2';
@@ -13,6 +14,16 @@ export function canonicalizeResponsibilityProjectionIngressForDigest(input: Read
     input.fromExclusiveCursor,
     input.limit,
     input.snapshotId ?? null,
+  ]);
+}
+
+export function canonicalizePlanningProjectionIngressForDigest(input: Readonly<{
+  fromExclusiveCursor: number;
+  limit: number;
+  snapshotId?: string;
+}>): string {
+  return JSON.stringify([
+    '0.3', input.fromExclusiveCursor, input.limit, input.snapshotId ?? null,
   ]);
 }
 

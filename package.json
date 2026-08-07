@@ -11,7 +11,7 @@
     "test": "pnpm -r test",
     "verify:node": "pnpm --filter @waldo/contracts test",
     "generate:openapi": "node scripts/generate-public-openapi.mjs",
-    "generate:responsibility-handshake": "node scripts/generate-responsibility-handshake-v0-1.mjs && node scripts/generate-responsibility-handshake-v0-2.mjs",
+    "generate:responsibility-handshake": "node scripts/generate-responsibility-handshake-v0-1.mjs && node scripts/generate-responsibility-handshake-v0-2.mjs && node scripts/generate-responsibility-planning-turn-v0-3.mjs",
     "verify:supabase": "node scripts/verify-supabase.mjs",
     "verify:supabase:session-revocation": "pnpm --filter @waldo/runtime test:responsibility-integration",
     "verify:workers": "pnpm --filter @waldo/runtime test",
@@ -19,5 +19,8 @@
     "verify:mutation": "pnpm --filter @waldo/runtime test:mutation",
     "verify:guards": "node scripts/guards/run-all.mjs",
     "verify": "node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:workers && pnpm verify:supabase:session-revocation && pnpm verify:guards"
+  },
+  "devDependencies": {
+    "ajv": "8.17.1"
   }
 }

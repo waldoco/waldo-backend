@@ -38,6 +38,7 @@ import type { V2ReplayArtifactSource } from './trusted-v2';
 export const RUN_LOOP_DELIVERY_TEXT = 'Derived steady-state brief ready for delivery.';
 export const RUN_LOOP_PLAN_SYSTEM_PREFIX = 'run-loop:plan';
 export const RUN_LOOP_OBSERVE_SYSTEM_PREFIX = 'run-loop:observe';
+export const RUN_LOOP_WORK_UNIT_PLAN_SYSTEM_PREFIX = 'run-loop:work-unit-plan:v0.3';
 
 const LOCAL_TRUSTED_BRIEF_SNAPSHOT_REF = 'snp_ffffffffffffffffffffffffffffffff';
 const LOCAL_TRUSTED_BRIEF_SNAPSHOT_AT = Date.parse('2026-07-16T08:00:00.000Z');
@@ -436,12 +437,46 @@ function legacyFakeGatewayResponse(request: LLMGatewayRequest): LLMResponse {
 }
 
 function trustedFakeGatewayResponse(request: LLMGatewayRequest): LLMResponse {
+  if ((request.request.system ?? '').startsWith(RUN_LOOP_WORK_UNIT_PLAN_SYSTEM_PREFIX)) {
+    return fakeWorkUnitCandidatePlanResponse(request);
+  }
   if (!(request.request.system ?? '').startsWith(RUN_LOOP_OBSERVE_SYSTEM_PREFIX)) {
     return fakeGatewayToolPlanResponse(request, 'call-get-crs-first', 1);
   }
   return trustedObserveToolResultCount(request) === 1
     ? fakeGatewayToolPlanResponse(request, 'call-get-crs-second', 2)
     : fakeGatewaySynthesisResponse(request);
+}
+
+function fakeWorkUnitCandidatePlanResponse(request: LLMGatewayRequest): LLMResponse {
+  const input = request.request.messages.map((message) => message.content).join('\n');
+  const personal = input.includes('investor meeting');
+  return {
+    model: request.request.model,
+    text: JSON.stringify(personal ? {
+      summary: 'Prepare a concise investor-meeting brief and a bounded follow-up checklist.',
+      proposedSteps: [
+        'Review the supplied meeting context and identify the three decisions the meeting should advance.',
+        'Draft talking points, likely questions, and concise answers using only supplied context.',
+        'List proposed follow-ups for the user to review and handle after the meeting.',
+      ],
+      openQuestions: ['Which decision is most important to secure in the meeting?'],
+      constraints: ['Use supplied fixture context only.', 'Do not contact attendees or modify a calendar.'],
+    } : {
+      summary: 'Prepare a reviewable product update plan without publishing it.',
+      proposedSteps: [
+        'Review the supplied release context and identify the user-visible changes.',
+        'Draft the update structure with claims tied to reviewable source material.',
+        'Run an internal accuracy review and present the draft for explicit approval.',
+      ],
+      openQuestions: ['Which audience should the final update prioritize?'],
+      constraints: ['Do not publish or perform any external effect.', 'Return a candidate plan only.'],
+    }),
+    input_tokens: 48,
+    output_tokens: 96,
+    cache_read_input_tokens: 0,
+    latency_ms: 1,
+  };
 }
 
 function fakeGatewayToolPlanResponse(

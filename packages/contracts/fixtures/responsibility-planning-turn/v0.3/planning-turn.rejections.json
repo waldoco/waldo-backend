@@ -1,0 +1,138 @@
+{
+  "protocolVersion": "0.3",
+  "cases": [
+    {
+      "name": "client-owned-provider",
+      "value": {
+        "protocolVersion": "0.3",
+        "requestId": "planning_fixture_01",
+        "commandType": "work_unit.request_planning_turn",
+        "presenceRegistrationId": "presence_registration_01",
+        "aggregate": {
+          "kind": "work_unit",
+          "id": "work_unit_01",
+          "expectedRevision": 1
+        },
+        "clientIssuedAt": "2026-08-07T08:00:00.000Z",
+        "payload": {
+          "governedInputs": [
+            {
+              "ref": "fixture_release_notes",
+              "digest": "sha256:2956c3a8c14401f97e413cb734bdd8ce6bd5c57c1705b0aa0975acf44d16ddfb",
+              "content": "Fixture: release notes are ready for review."
+            }
+          ]
+        },
+        "provider": {
+          "modelRef": "attacker"
+        }
+      }
+    },
+    {
+      "name": "stale-revision",
+      "value": {
+        "protocolVersion": "0.3",
+        "requestId": "planning_fixture_01",
+        "commandType": "work_unit.request_planning_turn",
+        "presenceRegistrationId": "presence_registration_01",
+        "aggregate": {
+          "kind": "work_unit",
+          "id": "work_unit_01",
+          "expectedRevision": 2
+        },
+        "clientIssuedAt": "2026-08-07T08:00:00.000Z",
+        "payload": {
+          "governedInputs": [
+            {
+              "ref": "fixture_release_notes",
+              "digest": "sha256:2956c3a8c14401f97e413cb734bdd8ce6bd5c57c1705b0aa0975acf44d16ddfb",
+              "content": "Fixture: release notes are ready for review."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "non-empty-tools",
+      "value": {
+        "protocolVersion": "0.3",
+        "commandId": "command_planning_fixture_01",
+        "commandType": "work_unit.request_planning_turn",
+        "ownerId": "owner_fixture_01",
+        "actor": {
+          "kind": "presence",
+          "id": "presence_01"
+        },
+        "presenceId": "presence_01",
+        "authenticatedSessionId": "authenticated_session_fixture_01",
+        "ownerPolicyRevision": 1,
+        "authAssurance": "verified_session",
+        "ownerRootRoutingVersion": 2,
+        "aggregate": {
+          "kind": "work_unit",
+          "id": "work_unit_01",
+          "expectedRevision": 1
+        },
+        "requestDigest": "sha256:29219b714a53b4caf3d2f615605f265e974a6ba27afaad4383e3aed111f9a6d2",
+        "correlationId": "correlation_planning_fixture_01",
+        "receivedAt": "2026-08-07T08:00:01.000Z",
+        "provider": {
+          "adapterId": "runtime_llm_provider",
+          "adapterVersion": "1.0.0",
+          "modelRef": "roster_primary_v1",
+          "capabilityManifest": {
+            "id": "planning_provider_empty_v1",
+            "revision": 1,
+            "digest": "sha256:525cf6117514b8a014bdbfccdbd2ee33b771e5a93e07eb6327d38a4a36ccfdd6"
+          }
+        },
+        "executor": {
+          "executorId": "run_loop_planning_executor",
+          "executorVersion": "1.0.0",
+          "capabilityManifest": {
+            "id": "planning_executor_empty_v1",
+            "revision": 1,
+            "digest": "sha256:525cf6117514b8a014bdbfccdbd2ee33b771e5a93e07eb6327d38a4a36ccfdd6"
+          }
+        },
+        "capabilityManifest": {
+          "schemaVersion": "0.3",
+          "tools": [
+            "shell"
+          ],
+          "connectors": [],
+          "filesystem": "none",
+          "shell": "none",
+          "network": "none",
+          "externalEffects": "none"
+        },
+        "authorityCeiling": {
+          "providerPlanningTurns": 1,
+          "tools": "none",
+          "connectors": "none",
+          "externalEffects": "none",
+          "outcomeMutation": "none",
+          "evidence": "none",
+          "verification": "none",
+          "acceptance": "none",
+          "closure": "none"
+        },
+        "payload": {
+          "governedInputs": [
+            {
+              "ref": "fixture_release_notes",
+              "digest": "sha256:2956c3a8c14401f97e413cb734bdd8ce6bd5c57c1705b0aa0975acf44d16ddfb"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "schema-invalid-candidate",
+      "value": {
+        "summary": 42,
+        "proposedSteps": []
+      }
+    }
+  ]
+}

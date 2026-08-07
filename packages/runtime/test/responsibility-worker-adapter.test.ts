@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ROSTER_REFS } from '@waldo/contracts';
 import worker, { responsibilityEdgeRateKey } from '../src/index';
 import {
   ResponsibilityAuthorityDeniedError,
@@ -48,6 +49,30 @@ function request(body: string | object, headers: Record<string, string> = {}): R
   });
 }
 
+function planningRequest(body: string | object): Request {
+  return new Request('https://api.heywaldo.com/public/responsibilities/planning-turns', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer session-token',
+      accept: 'application/vnd.waldo.responsibility.v0.3+json',
+      'content-type': 'application/vnd.waldo.responsibility.v0.3+json',
+    },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+}
+
+function planningCancelRequest(body: string | object): Request {
+  return new Request('https://api.heywaldo.com/public/responsibilities/planning-turns/cancel', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer session-token',
+      accept: 'application/vnd.waldo.responsibility.v0.3+json',
+      'content-type': 'application/vnd.waldo.responsibility.v0.3+json',
+    },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+}
+
 function harness(options: {
   authority?: ResponsibilityAuthority;
   ownerRoot?: ResponsibilityOwnerRoot;
@@ -88,6 +113,154 @@ function harness(options: {
 }
 
 describe('responsibility Worker adapter', () => {
+  it('exposes authenticated idempotent planning cancellation without client-owned authority', async () => {
+    const body = {
+      protocolVersion: '0.3', requestId: 'planning_cancel_01',
+      commandType: 'work_unit.cancel_planning_turn',
+      presenceRegistrationId: trustedContext.presenceRegistrationId,
+      executionRequestId: 'execution_request_01', expectedCancellationGeneration: 0,
+      clientIssuedAt: '2026-08-07T08:00:00.000Z',
+    };
+    let admitted: unknown;
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async cancelPlanning(input) {
+        admitted = input;
+        return {
+          protocolVersion: '0.3', ownerId: trustedContext.ownerId,
+          requestId: body.requestId, executionRequestId: body.executionRequestId,
+          status: 'cancelled', cancellationGeneration: 1, projectionCursor: 3,
+          cancelledAt: '2026-08-07T08:00:01.000Z',
+        };
+      },
+    };
+    const { adapter } = harness({ ownerRoot });
+    const response = await adapter.fetch(planningCancelRequest(body));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      ownerId: trustedContext.ownerId, status: 'cancelled', cancellationGeneration: 1,
+    });
+    expect(admitted).toEqual({ routedOwnerId: trustedContext.ownerId, request: body });
+    const smuggled = await adapter.fetch(planningCancelRequest({
+      ...body, ownerId: 'owner_attacker', provider: { modelRef: 'attacker' },
+    }));
+    expect(smuggled.status).toBe(400);
+  });
+
+  it('derives all planning execution authority server-side and returns only a validated v0.3 result', async () => {
+    const governedContent = 'Bounded release fixture.';
+    const contentDigest = await crypto.subtle.digest(
+      'SHA-256', new TextEncoder().encode(governedContent),
+    );
+    const digest = `sha256:${Array.from(new Uint8Array(contentDigest), (byte) =>
+      byte.toString(16).padStart(2, '0')).join('')}`;
+    const body = {
+      protocolVersion: '0.3', requestId: 'planning_request_01',
+      commandType: 'work_unit.request_planning_turn',
+      presenceRegistrationId: trustedContext.presenceRegistrationId,
+      aggregate: { kind: 'work_unit', id: 'work_unit_01', expectedRevision: 1 },
+      clientIssuedAt: '2026-08-06T12:00:00.000Z',
+      payload: { governedInputs: [{ ref: 'fixture_release', digest, content: governedContent }] },
+    };
+    let admitted: any;
+    const result = {
+      protocolVersion: '0.3', ownerId: trustedContext.ownerId,
+      requestId: body.requestId, outcomeId: 'outcome_01', workUnitId: 'work_unit_01',
+      workUnitRevision: 2, workUnitState: 'planning_authorized',
+      executionRequestId: 'execution_request_01', agentSessionId: 'agent_session_01',
+      sessionStatus: 'completed',
+      providerInvocation: {
+        executionRequestId: 'execution_request_01', invocationKey: `sha256:${'c'.repeat(64)}`,
+        provider: {
+          adapterId: 'runtime_llm_provider', adapterVersion: '1.0.0',
+          modelRef: ROSTER_REFS.primary,
+          capabilityManifest: {
+            id: 'planning_provider_empty_v1', revision: 1, digest: `sha256:${'d'.repeat(64)}`,
+          },
+        },
+        status: 'completed', resultDigest: `sha256:${'e'.repeat(64)}`,
+        startedAt: '2026-08-06T12:00:01.000Z', completedAt: '2026-08-06T12:00:02.000Z',
+      },
+      candidatePlan: {
+        summary: 'Prepare a reviewable update plan.', proposedSteps: ['Draft it.'],
+        openQuestions: [], constraints: ['Do not publish.'],
+      },
+      projectionCursor: 4,
+    };
+    let returnedResult: any;
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async plan(input) {
+        admitted = input;
+        returnedResult = {
+          ...result,
+          providerInvocation: {
+            ...result.providerInvocation,
+            provider: (input.trustedEnvelope as any).provider,
+          },
+        };
+        return returnedResult;
+      },
+    };
+    const { adapter } = harness({ ownerRoot });
+    const response = await adapter.fetch(planningRequest(body));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('waldo-protocol-version')).toBe('0.3');
+    expect(await response.json()).toEqual(returnedResult);
+    expect(admitted.trustedEnvelope).toMatchObject({
+      ownerId: trustedContext.ownerId,
+      authenticatedSessionId: trustedContext.authenticatedSessionId,
+      aggregate: body.aggregate,
+      capabilityManifest: { tools: [], connectors: [], externalEffects: 'none' },
+      authorityCeiling: {
+        providerPlanningTurns: 1, tools: 'none', connectors: 'none',
+        externalEffects: 'none', outcomeMutation: 'none', verification: 'none',
+        acceptance: 'none', closure: 'none',
+      },
+      provider: { modelRef: ROSTER_REFS.primary },
+      executor: { executorId: 'run_loop_planning_executor' },
+      payload: { governedInputs: [{ ref: 'fixture_release', digest }] },
+    });
+    expect(JSON.stringify(admitted.trustedEnvelope)).not.toContain(governedContent);
+
+    const smuggled = await adapter.fetch(planningRequest({
+      ...body, provider: { modelRef: 'evil' },
+    }));
+    expect(smuggled.status).toBe(400);
+  });
+
+  it('maps a planning idempotency digest mismatch to a content-free 409', async () => {
+    const governedContent = 'Bounded fixture.';
+    const digestBytes = await crypto.subtle.digest(
+      'SHA-256', new TextEncoder().encode(governedContent),
+    );
+    const body = {
+      protocolVersion: '0.3', requestId: 'planning_digest_conflict_01',
+      commandType: 'work_unit.request_planning_turn',
+      presenceRegistrationId: trustedContext.presenceRegistrationId,
+      aggregate: { kind: 'work_unit', id: 'work_unit_01', expectedRevision: 1 },
+      clientIssuedAt: '2026-08-07T08:00:00.000Z',
+      payload: { governedInputs: [{
+        ref: 'fixture_digest_conflict',
+        digest: `sha256:${Array.from(new Uint8Array(digestBytes), (byte) =>
+          byte.toString(16).padStart(2, '0')).join('')}`,
+        content: governedContent,
+      }] },
+    };
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async plan() { throw new ResponsibilityDigestConflictError(); },
+    };
+    const response = await harness({ ownerRoot }).adapter.fetch(planningRequest(body));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      type: 'https://api.heywaldo.com/problems/request-conflict',
+      title: 'Request conflict', status: 409, code: 'request_conflict',
+    });
+  });
   it('keeps the production route behind an explicit fail-closed deployment switch', async () => {
     const disabled = await worker.fetch(request(captureBody), {} as Cloudflare.Env);
     expect(disabled.status).toBe(404);

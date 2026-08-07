@@ -1,0 +1,61 @@
+{
+  "protocolName": "responsibility-planning-turn",
+  "protocolVersion": "0.3",
+  "mediaType": "application/vnd.waldo.responsibility.v0.3+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "files": [
+    {
+      "path": "planning-cancel-request.schema.json",
+      "sha256": "sha256:1f05cbaa5901f0dfd5ec2a349da3791b1816a31cff4f8b259e24fb600099a32a"
+    },
+    {
+      "path": "planning-cancel-request.valid.json",
+      "sha256": "sha256:1772362b6b395469421c3369b3afa888585c06a92650cd98aa96d254df96cb10"
+    },
+    {
+      "path": "planning-cancel-result.schema.json",
+      "sha256": "sha256:cd41719084166cf6c2bd09dbe227330879d1666c0ba9252262bcbfd6a6bc421f"
+    },
+    {
+      "path": "planning-cancel-result.valid.json",
+      "sha256": "sha256:85bdf468eda39c634af7d6a565925bbff4fd2c485c28b4201753f4e606c5bcbf"
+    },
+    {
+      "path": "planning-projection-page.schema.json",
+      "sha256": "sha256:f765340e47ec1cc968a5c97c7a7195a512e5d45ef87ec53bc52b651f25b7e846"
+    },
+    {
+      "path": "planning-projection-page.valid.json",
+      "sha256": "sha256:6fb2101cf46846019bc3ec18debdfc8891ee3923c226497e94d2afa247d2b4b0"
+    },
+    {
+      "path": "planning-turn-request.schema.json",
+      "sha256": "sha256:33944e23adf28dd3f601db2ac14829375ef44d70d536af3cfbe509f854e447da"
+    },
+    {
+      "path": "planning-turn-request.valid.json",
+      "sha256": "sha256:2bf65ee7ad84909c035fdd6a7ac7f9558669dc4a61d00e38684599d444d67c9f"
+    },
+    {
+      "path": "planning-turn-result.schema.json",
+      "sha256": "sha256:7e7dfa0a6fa3199fa37e46501340d5ca9146d95aa05fcd37640cb1144a59e315"
+    },
+    {
+      "path": "planning-turn-result.valid.json",
+      "sha256": "sha256:a6afdfe84268972f55b031cf27b81f8de355e3b29a57206564cf55d70a7b2981"
+    },
+    {
+      "path": "planning-turn-trusted-envelope.schema.json",
+      "sha256": "sha256:db9ca003ae15a974d4e05adabf94fa2930f4d7078f77bb7562db25d3fa2e232c"
+    },
+    {
+      "path": "planning-turn-trusted-envelope.valid.json",
+      "sha256": "sha256:ba99f2fea315c5202186c3a3650bd3a928f44d7465d2cbfe0ab1c8ea4de6f616"
+    },
+    {
+      "path": "planning-turn.rejections.json",
+      "sha256": "sha256:55a900bec41dfe720bb8b31bf7999fe2f81090fa54c9fc50bba1bbaaea6f0389"
+    }
+  ]
+}

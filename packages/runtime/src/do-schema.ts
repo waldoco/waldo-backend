@@ -23,6 +23,14 @@ export const DO_PRODUCT_TABLES = [
   'responsibility_commands',
   'responsibility_projection',
   'responsibility_projection_state',
+  'planning_execution_requests',
+  'planning_agent_sessions',
+  'planning_execution_leases',
+  'planning_provider_invocations',
+  'work_unit_candidate_plans',
+  'work_unit_planning_commands',
+  'work_unit_planning_controls',
+  'work_unit_planning_projection',
 ] as const;
 
 export const DEFERRED_DO_PRODUCT_TABLES = [
@@ -520,11 +528,183 @@ export const RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+export const RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION: DoMigration = {
+  version: 5,
+  name: 'responsibility-planning-harness-v0-3',
+  up: [
+    'ALTER TABLE work_units RENAME TO work_units_v02;',
+    `CREATE TABLE work_units (
+      id              TEXT PRIMARY KEY,
+      owner_id        TEXT NOT NULL,
+      outcome_id      TEXT NOT NULL,
+      mission_id      TEXT,
+      position        INTEGER NOT NULL CHECK (position >= 0),
+      revision        INTEGER NOT NULL CHECK (revision > 0),
+      responsibility  TEXT NOT NULL,
+      inputs_json              TEXT NOT NULL,
+      dependency_ids_json      TEXT NOT NULL,
+      expected_evidence_json   TEXT NOT NULL,
+      required_capabilities_json TEXT NOT NULL,
+      authority_ceiling_json   TEXT NOT NULL,
+      budget_json              TEXT NOT NULL,
+      isolation_json           TEXT NOT NULL,
+      stop_conditions_json     TEXT NOT NULL,
+      assignee                 TEXT,
+      session_ids_json         TEXT NOT NULL,
+      state           TEXT NOT NULL CHECK (state IN ('planned', 'planning_authorized')),
+      created_at      TEXT NOT NULL,
+      updated_at      TEXT NOT NULL,
+      UNIQUE (owner_id, id),
+      UNIQUE (owner_id, outcome_id, position)
+    );`,
+    `INSERT INTO work_units SELECT * FROM work_units_v02;`,
+    'DROP TABLE work_units_v02;',
+    `CREATE TABLE planning_execution_requests (
+      id                       TEXT PRIMARY KEY,
+      owner_id                 TEXT NOT NULL,
+      outcome_id               TEXT NOT NULL,
+      work_unit_id             TEXT NOT NULL,
+      work_unit_revision       INTEGER NOT NULL CHECK (work_unit_revision >= 2),
+      request_id               TEXT NOT NULL,
+      request_digest           TEXT NOT NULL,
+      governed_inputs_json     TEXT NOT NULL,
+      provider_ref_json        TEXT NOT NULL,
+      executor_ref_json        TEXT NOT NULL,
+      capability_manifest_json TEXT NOT NULL,
+      authority_ceiling_json   TEXT NOT NULL,
+      status                   TEXT NOT NULL CHECK (
+        status IN ('pending', 'leased', 'completed', 'cancelled', 'failed', 'ambiguous')
+      ),
+      cancellation_generation  INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      created_at               TEXT NOT NULL,
+      updated_at               TEXT NOT NULL,
+      UNIQUE (owner_id, request_id),
+      UNIQUE (owner_id, work_unit_id)
+    );`,
+    `CREATE TABLE planning_agent_sessions (
+      id                       TEXT PRIMARY KEY,
+      owner_id                 TEXT NOT NULL,
+      outcome_id               TEXT NOT NULL,
+      work_unit_id             TEXT NOT NULL,
+      execution_request_id     TEXT NOT NULL UNIQUE,
+      status                   TEXT NOT NULL CHECK (
+        status IN ('authorized', 'running', 'completed', 'cancelled', 'failed', 'ambiguous')
+      ),
+      provider_ref_json        TEXT NOT NULL,
+      executor_ref_json        TEXT NOT NULL,
+      capability_manifest_json TEXT NOT NULL,
+      cancellation_generation  INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      created_at               TEXT NOT NULL,
+      updated_at               TEXT NOT NULL
+    );`,
+    `CREATE TABLE planning_execution_leases (
+      execution_request_id    TEXT PRIMARY KEY,
+      owner_id                TEXT NOT NULL,
+      holder_id               TEXT NOT NULL,
+      fence                   INTEGER NOT NULL CHECK (fence > 0),
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      acquired_at             TEXT NOT NULL,
+      expires_at              TEXT NOT NULL
+    );`,
+    `CREATE TABLE planning_provider_invocations (
+      execution_request_id TEXT PRIMARY KEY,
+      owner_id             TEXT NOT NULL,
+      invocation_key       TEXT NOT NULL,
+      effect_ref           TEXT NOT NULL,
+      request_digest       TEXT NOT NULL,
+      execution_json       TEXT NOT NULL,
+      provider_ref_json    TEXT NOT NULL,
+      status               TEXT NOT NULL CHECK (
+        status IN ('pending', 'completed', 'invalid_output', 'ambiguous')
+      ),
+      result_digest        TEXT,
+      started_at           TEXT NOT NULL,
+      completed_at         TEXT,
+      UNIQUE (owner_id, invocation_key)
+    );`,
+    `CREATE TABLE work_unit_candidate_plans (
+      execution_request_id TEXT PRIMARY KEY,
+      owner_id             TEXT NOT NULL,
+      outcome_id           TEXT NOT NULL,
+      work_unit_id         TEXT NOT NULL,
+      agent_session_id     TEXT NOT NULL,
+      result_digest        TEXT NOT NULL,
+      plan_json            TEXT NOT NULL,
+      created_at           TEXT NOT NULL,
+      UNIQUE (owner_id, work_unit_id)
+    );`,
+    `CREATE TABLE work_unit_planning_commands (
+      request_id       TEXT PRIMARY KEY,
+      owner_id         TEXT NOT NULL,
+      request_digest   TEXT NOT NULL,
+      result_json      TEXT NOT NULL,
+      recorded_at      TEXT NOT NULL,
+      UNIQUE (owner_id, request_id)
+    );`,
+    `CREATE TABLE work_unit_planning_controls (
+      request_id       TEXT PRIMARY KEY,
+      owner_id         TEXT NOT NULL,
+      request_digest   TEXT NOT NULL,
+      result_json      TEXT NOT NULL,
+      recorded_at      TEXT NOT NULL,
+      UNIQUE (owner_id, request_id)
+    );`,
+    `CREATE TABLE work_unit_planning_projection (
+      owner_cursor INTEGER PRIMARY KEY CHECK (owner_cursor > 0),
+      owner_id     TEXT NOT NULL,
+      item_json    TEXT NOT NULL
+    );`,
+  ],
+  down: [
+    `CREATE TEMP TABLE planning_harness_rollback_guard (
+      eligible INTEGER NOT NULL CHECK (eligible = 1)
+    );`,
+    `INSERT INTO planning_harness_rollback_guard (eligible)
+     SELECT CASE WHEN
+       NOT EXISTS (SELECT 1 FROM work_units WHERE state = 'planning_authorized') AND
+       NOT EXISTS (SELECT 1 FROM planning_execution_requests) AND
+       NOT EXISTS (SELECT 1 FROM planning_agent_sessions) AND
+       NOT EXISTS (SELECT 1 FROM planning_execution_leases) AND
+       NOT EXISTS (SELECT 1 FROM planning_provider_invocations) AND
+       NOT EXISTS (SELECT 1 FROM work_unit_candidate_plans) AND
+       NOT EXISTS (SELECT 1 FROM work_unit_planning_commands) AND
+       NOT EXISTS (SELECT 1 FROM work_unit_planning_controls) AND
+       NOT EXISTS (SELECT 1 FROM work_unit_planning_projection)
+     THEN 1 ELSE 0 END;`,
+    'DROP TABLE planning_harness_rollback_guard;',
+    'DROP TABLE IF EXISTS work_unit_planning_projection;',
+    'DROP TABLE IF EXISTS work_unit_planning_controls;',
+    'DROP TABLE IF EXISTS work_unit_planning_commands;',
+    'DROP TABLE IF EXISTS work_unit_candidate_plans;',
+    'DROP TABLE IF EXISTS planning_provider_invocations;',
+    'DROP TABLE IF EXISTS planning_execution_leases;',
+    'DROP TABLE IF EXISTS planning_agent_sessions;',
+    'DROP TABLE IF EXISTS planning_execution_requests;',
+    'ALTER TABLE work_units RENAME TO work_units_v03;',
+    `CREATE TABLE work_units (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, outcome_id TEXT NOT NULL,
+      mission_id TEXT, position INTEGER NOT NULL CHECK (position >= 0),
+      revision INTEGER NOT NULL CHECK (revision > 0), responsibility TEXT NOT NULL,
+      inputs_json TEXT NOT NULL, dependency_ids_json TEXT NOT NULL,
+      expected_evidence_json TEXT NOT NULL, required_capabilities_json TEXT NOT NULL,
+      authority_ceiling_json TEXT NOT NULL, budget_json TEXT NOT NULL,
+      isolation_json TEXT NOT NULL, stop_conditions_json TEXT NOT NULL,
+      assignee TEXT, session_ids_json TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('planned')),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (owner_id, id), UNIQUE (owner_id, outcome_id, position)
+    );`,
+    'INSERT INTO work_units SELECT * FROM work_units_v03;',
+    'DROP TABLE work_units_v03;',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
   RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
   RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
+  RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -751,6 +931,37 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
   responsibility_projection_state: [
     'owner_id', 'snapshot_id', 'snapshot_base_cursor', 'updated_at',
   ],
+  planning_execution_requests: [
+    'id', 'owner_id', 'outcome_id', 'work_unit_id', 'work_unit_revision',
+    'request_id', 'request_digest', 'governed_inputs_json', 'provider_ref_json',
+    'executor_ref_json', 'capability_manifest_json', 'authority_ceiling_json',
+    'status', 'cancellation_generation', 'created_at', 'updated_at',
+  ],
+  planning_agent_sessions: [
+    'id', 'owner_id', 'outcome_id', 'work_unit_id', 'execution_request_id',
+    'status', 'provider_ref_json', 'executor_ref_json', 'capability_manifest_json',
+    'cancellation_generation', 'created_at', 'updated_at',
+  ],
+  planning_execution_leases: [
+    'execution_request_id', 'owner_id', 'holder_id', 'fence',
+    'cancellation_generation', 'acquired_at', 'expires_at',
+  ],
+  planning_provider_invocations: [
+    'execution_request_id', 'owner_id', 'invocation_key', 'effect_ref',
+    'request_digest', 'execution_json', 'provider_ref_json',
+    'status', 'result_digest', 'started_at', 'completed_at',
+  ],
+  work_unit_candidate_plans: [
+    'execution_request_id', 'owner_id', 'outcome_id', 'work_unit_id',
+    'agent_session_id', 'result_digest', 'plan_json', 'created_at',
+  ],
+  work_unit_planning_commands: [
+    'request_id', 'owner_id', 'request_digest', 'result_json', 'recorded_at',
+  ],
+  work_unit_planning_controls: [
+    'request_id', 'owner_id', 'request_digest', 'result_json', 'recorded_at',
+  ],
+  work_unit_planning_projection: ['owner_cursor', 'owner_id', 'item_json'],
 };
 
 export function provisionDoSchema(storage: DurableObjectStorage): DoSchemaAssertResult {

@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "requestId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "commandType": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "presenceRegistrationId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "aggregate": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "correlationId": {
+      "$ref": "#/$defs/__schema4"
+    },
+    "clientIssuedAt": {
+      "$ref": "#/$defs/__schema5"
+    },
+    "payload": {
+      "$ref": "#/$defs/__schema6"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "requestId",
+    "commandType",
+    "presenceRegistrationId",
+    "aggregate",
+    "clientIssuedAt",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.3"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "string",
+      "const": "work_unit.request_planning_turn"
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "work_unit"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "expectedRevision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema4": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "__schema5": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema6": {
+      "type": "object",
+      "properties": {
+        "governedInputs": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema7"
+          }
+        }
+      },
+      "required": [
+        "governedInputs"
+      ],
+      "additionalProperties": false
+    },
+    "__schema7": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "\\S"
+        }
+      },
+      "required": [
+        "ref",
+        "digest",
+        "content"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-planning-turn:0.3:request",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}
