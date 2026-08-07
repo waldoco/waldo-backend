@@ -758,7 +758,7 @@ describe('WaldoCoordinator responsibility capture', () => {
       await instance.__waldoCaptureResponsibilityForTest(input);
       state.storage.sql.exec('PRAGMA ignore_check_constraints = ON');
       state.storage.sql.exec(
-        "UPDATE owner_domain_events SET schema_version = '0.3' WHERE aggregate_kind = 'work_unit'",
+        "UPDATE owner_domain_events SET schema_version = '0.4' WHERE aggregate_kind = 'work_unit'",
       );
       state.storage.sql.exec('PRAGMA ignore_check_constraints = OFF');
       expect(() => instance.__waldoReplayResponsibilityForTest(ownerId)).toThrow(

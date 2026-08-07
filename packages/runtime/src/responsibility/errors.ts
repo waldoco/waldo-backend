@@ -41,6 +41,12 @@ export class ResponsibilityProjectionCursorError extends ResponsibilityBoundaryE
   }
 }
 
+export class ResponsibilityPlanningConflictError extends ResponsibilityBoundaryError {
+  constructor(message: string) {
+    super('ResponsibilityPlanningConflictError', message);
+  }
+}
+
 export function responsibilityBoundaryStatus(
   error: unknown,
 ): 401 | 404 | 409 | 429 | null {
@@ -51,6 +57,7 @@ export function responsibilityBoundaryStatus(
     ResponsibilityProjectionMissingError: 404,
     ResponsibilityDigestConflictError: 409,
     ResponsibilityProjectionCursorError: 409,
+    ResponsibilityPlanningConflictError: 409,
     ResponsibilityIngressRateLimitError: 429,
   };
   return statuses[error.name] ?? null;

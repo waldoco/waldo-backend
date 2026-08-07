@@ -78,7 +78,7 @@ describe('toolName', () => {
 });
 
 describe('TOOL_PERMISSIONS', () => {
-  it('covers all 12 triggers and every entry is a canonical tool name', () => {
+  it('covers all 13 triggers and every entry is a canonical tool name', () => {
     expect(Object.keys(TOOL_PERMISSIONS).sort()).toEqual([...triggerTypeSchema.options].sort());
     for (const trigger of triggerTypeSchema.options) {
       expect(z.array(toolNameSchema).safeParse(TOOL_PERMISSIONS[trigger]).success).toBe(true);
@@ -190,6 +190,7 @@ describe('TOOL_PERMISSIONS', () => {
         'propose_action',
         'send_message',
       ],
+      work_unit_plan: [],
     });
   });
 
@@ -241,6 +242,10 @@ describe('TOOL_PERMISSIONS', () => {
     expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('send_message');
     expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('execute_action');
     expect(TOOL_PERMISSIONS.pre_brief_sweep).not.toContain('execute_code');
+  });
+
+  it('keeps the Outcome-bound planning turn on a literal empty ACL', () => {
+    expect(TOOL_PERMISSIONS.work_unit_plan).toEqual([]);
   });
 });
 

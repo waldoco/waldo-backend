@@ -130,6 +130,8 @@ export type {
   ResponsibilityProtocolCapabilitiesV02,
   WorkUnitRecordV02,
 } from './protocol/responsibility-handshake-v0-2';
+export * from './protocol/responsibility-planning-turn-v0-3';
+export * from './protocol/responsibility-planning-turn-v0-3-fixtures';
 export * from './telemetry/engagement';
 export * from './public/dto';
 export * from './public/morning-brief';

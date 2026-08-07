@@ -1,8 +1,11 @@
 import {
+  canonicalWorkUnitRecordV03Schema,
   missionRecordV02Schema,
   outcomeRecordV02Schema,
   responsibilityProjectionItemV02Schema,
+  workUnitPlanningAuthorizedRecordV03Schema,
   workUnitRecordV02Schema,
+  type CanonicalWorkUnitRecordV03,
   type MissionRecordV02,
   type OutcomeRecordV02,
   type ResponsibilityCapturePayloadV02,
@@ -10,11 +13,15 @@ import {
   type WorkUnitRecordV02,
 } from '@waldo/contracts';
 import { OwnerEventLog } from './owner-event-log';
-import { ResponsibilityProjectionMissingError } from '../responsibility/errors';
+import {
+  ResponsibilityPlanningConflictError,
+  ResponsibilityProjectionMissingError,
+} from '../responsibility/errors';
 
 export type OutcomeRecord = OutcomeRecordV02;
 export type MissionRecord = MissionRecordV02;
 export type WorkUnitRecord = WorkUnitRecordV02;
+export type CanonicalWorkUnitRecord = CanonicalWorkUnitRecordV03;
 
 export type CapturedResponsibility = Readonly<{
   outcome: OutcomeRecord;
@@ -27,7 +34,7 @@ export type ResponsibilityReplay = Readonly<{
   ownerId: string;
   outcomes: readonly OutcomeRecord[];
   missions: readonly MissionRecord[];
-  workUnits: readonly WorkUnitRecord[];
+  workUnits: readonly CanonicalWorkUnitRecord[];
   items: readonly ResponsibilityProjectionItemV02[];
   highWaterCursor: number;
 }>;
@@ -39,7 +46,7 @@ export class ResponsibilityCapacityError extends Error {
   }
 }
 
-type DomainRecord = OutcomeRecord | MissionRecord | WorkUnitRecord;
+type DomainRecord = OutcomeRecord | MissionRecord | CanonicalWorkUnitRecord;
 type ResponsibilityAggregateKind = 'outcome' | 'mission' | 'work_unit';
 type StoredEventRow = {
   owner_cursor: number;
@@ -50,6 +57,15 @@ type StoredEventRow = {
   revision: number;
   event_type: string;
   payload_json: string;
+};
+
+type StoredWorkUnitRow = {
+  id: string; ownerId: string; outcomeId: string; missionId: string | null;
+  position: number; revision: number; responsibility: string;
+  inputsJson: string; dependencyIdsJson: string; expectedEvidenceJson: string;
+  requiredCapabilitiesJson: string; authorityCeilingJson: string; budgetJson: string;
+  isolationJson: string; stopConditionsJson: string; assignee: string | null;
+  sessionIdsJson: string; state: string; createdAt: string; updatedAt: string;
 };
 
 const REPLAY_BATCH_SIZE = 256;
@@ -285,11 +301,79 @@ export class OutcomeModule {
     return Object.freeze({ outcome, mission, workUnits, finalCursor });
   }
 
+  authorizePlanningInCurrentTransaction(input: {
+    ownerId: string;
+    workUnitId: string;
+    expectedRevision: number;
+    agentSessionId: string;
+    executorId: string;
+    at: string;
+    commandId: string;
+    correlationId: string;
+    authorityCeiling: unknown;
+    maxDurationMs: number;
+  }): Readonly<{ workUnit: CanonicalWorkUnitRecord; cursor: number }> {
+    const row = this.readWorkUnitRow(input.ownerId, input.workUnitId);
+    if (row === undefined) throw new ResponsibilityProjectionMissingError();
+    const current = canonicalWorkUnitRecordV03Schema.parse(this.decodeWorkUnitRow(row));
+    if (current.ownerId !== input.ownerId || current.revision !== input.expectedRevision) {
+      throw new ResponsibilityPlanningConflictError('stale WorkUnit revision');
+    }
+    if (current.state !== 'planned') {
+      throw new ResponsibilityPlanningConflictError('invalid WorkUnit transition');
+    }
+    if (current.requiredCapabilities.length !== 0) {
+      throw new ResponsibilityPlanningConflictError(
+        'WorkUnit requires capabilities outside the empty planning manifest',
+      );
+    }
+    this.assertDependenciesAreEarlierInOutcome(current);
+    const workUnit = Object.freeze(workUnitPlanningAuthorizedRecordV03Schema.parse({
+      ...current,
+      revision: current.revision + 1,
+      authorityCeiling: input.authorityCeiling,
+      budget: { maxProviderTurns: 1, maxExternalEffects: 0, maxDurationMs: input.maxDurationMs },
+      isolation: {
+        mode: 'provider_planning',
+        egress: 'provider_only',
+        credentials: 'runtime_managed',
+      },
+      assignee: input.executorId,
+      sessionIds: [input.agentSessionId],
+      state: 'planning_authorized',
+      updatedAt: input.at,
+    }));
+    this.storage.sql.exec(
+      `UPDATE work_units
+          SET revision = ?, authority_ceiling_json = ?, budget_json = ?, isolation_json = ?,
+              assignee = ?, session_ids_json = ?, state = ?, updated_at = ?
+        WHERE owner_id = ? AND id = ? AND revision = ? AND state = 'planned'`,
+      workUnit.revision, JSON.stringify(workUnit.authorityCeiling),
+      JSON.stringify(workUnit.budget), JSON.stringify(workUnit.isolation),
+      workUnit.assignee, JSON.stringify(workUnit.sessionIds), workUnit.state,
+      workUnit.updatedAt, input.ownerId, input.workUnitId, input.expectedRevision,
+    );
+    const cursor = this.events.appendInCurrentTransaction({
+      schemaVersion: '0.3',
+      eventId: this.newId('event'),
+      ownerId: input.ownerId,
+      aggregateKind: 'work_unit',
+      aggregateId: workUnit.id,
+      revision: workUnit.revision,
+      eventType: 'work_unit.planning_authorized',
+      causationId: input.commandId,
+      correlationId: input.correlationId,
+      occurredAt: input.at,
+      payloadJson: JSON.stringify(workUnit),
+    });
+    return Object.freeze({ workUnit, cursor });
+  }
+
   replay(ownerId: string): ResponsibilityReplay {
     const highWaterCursor = this.events.readHighWater(ownerId);
     const outcomes = new Map<string, OutcomeRecord>();
     const missions = new Map<string, MissionRecord>();
-    const workUnits = new Map<string, WorkUnitRecord>();
+    const workUnits = new Map<string, CanonicalWorkUnitRecord>();
     const missionByOutcome = new Set<string>();
     const workUnitCountByOutcome = new Map<string, number>();
     const items: ResponsibilityProjectionItemV02[] = [];
@@ -320,10 +404,12 @@ export class OutcomeModule {
         if (row.owner_cursor <= lastCursor || row.owner_id !== ownerId) {
           throw new Error('invalid responsibility event ordering or owner');
         }
-        if (row.schema_version !== '0.2') {
+        if (row.schema_version !== '0.2' && row.schema_version !== '0.3') {
           throw new Error('invalid responsibility event schema version');
         }
-        if (row.revision !== 1) throw new Error('invalid responsibility event revision');
+        if (row.schema_version === '0.2' && row.revision !== 1) {
+          throw new Error('invalid responsibility event revision');
+        }
         const record = this.parseEventRecord(row);
         if (record.id !== row.aggregate_id || record.ownerId !== ownerId) {
           throw new Error('invalid responsibility event aggregate binding');
@@ -352,7 +438,7 @@ export class OutcomeModule {
             outcomeId: mission.outcomeId, revision: mission.revision, state: mission.state,
             brief: mission.brief, createdAt: mission.createdAt,
           }));
-        } else {
+        } else if (row.schema_version === '0.2') {
           const workUnit = record as WorkUnitRecord;
           const count = workUnitCountByOutcome.get(workUnit.outcomeId) ?? 0;
           const mission = workUnit.missionId === null ? null : missions.get(workUnit.missionId);
@@ -373,6 +459,18 @@ export class OutcomeModule {
             responsibility: workUnit.responsibility, dependencyIds: workUnit.dependencyIds,
             requiredCapabilities: workUnit.requiredCapabilities, createdAt: workUnit.createdAt,
           }));
+        } else {
+          const workUnit = workUnitPlanningAuthorizedRecordV03Schema.parse(record);
+          const prior = workUnits.get(workUnit.id);
+          if (row.event_type !== 'work_unit.planning_authorized' ||
+              prior === undefined || prior.state !== 'planned' ||
+              prior.outcomeId !== workUnit.outcomeId || prior.missionId !== workUnit.missionId ||
+              prior.position !== workUnit.position || prior.revision + 1 !== workUnit.revision ||
+              prior.responsibility !== workUnit.responsibility ||
+              JSON.stringify(prior.dependencyIds) !== JSON.stringify(workUnit.dependencyIds)) {
+            throw new Error('invalid WorkUnit planning transition');
+          }
+          workUnits.set(workUnit.id, workUnit);
         }
         lastCursor = row.owner_cursor;
       }
@@ -429,15 +527,7 @@ export class OutcomeModule {
          FROM missions WHERE owner_id = ? ORDER BY id LIMIT ?`,
       replay.ownerId, limit,
     ).toArray().map((row) => missionRecordV02Schema.parse(row));
-    const workUnits = this.storage.sql.exec<{
-      id: string; ownerId: string; outcomeId: string; missionId: string | null;
-      position: number; revision: number; responsibility: string;
-      inputsJson: string; dependencyIdsJson: string; expectedEvidenceJson: string;
-      requiredCapabilitiesJson: string; authorityCeilingJson: string; budgetJson: string;
-      isolationJson: string; stopConditionsJson: string; assignee: string | null;
-      sessionIdsJson: string; state: string;
-      createdAt: string; updatedAt: string;
-    }>(
+    const workUnits = this.storage.sql.exec<StoredWorkUnitRow>(
       `SELECT id, owner_id AS ownerId, outcome_id AS outcomeId, mission_id AS missionId,
               position, revision, responsibility,
               inputs_json AS inputsJson, dependency_ids_json AS dependencyIdsJson,
@@ -449,17 +539,7 @@ export class OutcomeModule {
               created_at AS createdAt, updated_at AS updatedAt
          FROM work_units WHERE owner_id = ? ORDER BY id LIMIT ?`,
       replay.ownerId, limit,
-    ).toArray().map((row) => workUnitRecordV02Schema.parse({
-      id: row.id, ownerId: row.ownerId, outcomeId: row.outcomeId, missionId: row.missionId,
-      position: row.position, revision: row.revision, responsibility: row.responsibility,
-      inputs: JSON.parse(row.inputsJson), dependencyIds: JSON.parse(row.dependencyIdsJson),
-      expectedEvidence: JSON.parse(row.expectedEvidenceJson),
-      requiredCapabilities: JSON.parse(row.requiredCapabilitiesJson),
-      authorityCeiling: JSON.parse(row.authorityCeilingJson), budget: JSON.parse(row.budgetJson),
-      isolation: JSON.parse(row.isolationJson), stopConditions: JSON.parse(row.stopConditionsJson),
-      assignee: row.assignee, sessionIds: JSON.parse(row.sessionIdsJson), state: row.state,
-      createdAt: row.createdAt, updatedAt: row.updatedAt,
-    }));
+    ).toArray().map((row) => canonicalWorkUnitRecordV03Schema.parse(this.decodeWorkUnitRow(row)));
     const items = this.storage.sql.exec<{ owner_cursor: number; item_json: string }>(
       `SELECT owner_cursor, item_json FROM responsibility_projection
         WHERE owner_id = ? ORDER BY owner_cursor ASC LIMIT ?`,
@@ -506,7 +586,9 @@ export class OutcomeModule {
       ? outcomeRecordV02Schema.safeParse(value)
       : row.aggregate_kind === 'mission'
         ? missionRecordV02Schema.safeParse(value)
-        : workUnitRecordV02Schema.safeParse(value);
+        : row.schema_version === '0.3'
+          ? workUnitPlanningAuthorizedRecordV03Schema.safeParse(value)
+          : workUnitRecordV02Schema.safeParse(value);
     if (!parsed.success) {
       throw new Error(`invalid ${row.aggregate_kind} event payload`);
     }
@@ -514,6 +596,47 @@ export class OutcomeModule {
       throw new Error('invalid responsibility event revision');
     }
     return parsed.data;
+  }
+
+  private readWorkUnitRow(ownerId: string, workUnitId: string): StoredWorkUnitRow | undefined {
+    return this.storage.sql.exec<StoredWorkUnitRow>(
+      `SELECT id, owner_id AS ownerId, outcome_id AS outcomeId, mission_id AS missionId,
+              position, revision, responsibility,
+              inputs_json AS inputsJson, dependency_ids_json AS dependencyIdsJson,
+              expected_evidence_json AS expectedEvidenceJson,
+              required_capabilities_json AS requiredCapabilitiesJson,
+              authority_ceiling_json AS authorityCeilingJson, budget_json AS budgetJson,
+              isolation_json AS isolationJson, stop_conditions_json AS stopConditionsJson,
+              assignee, session_ids_json AS sessionIdsJson, state,
+              created_at AS createdAt, updated_at AS updatedAt
+         FROM work_units WHERE owner_id = ? AND id = ?`,
+      ownerId, workUnitId,
+    ).toArray()[0];
+  }
+
+  private decodeWorkUnitRow(row: StoredWorkUnitRow): unknown {
+    return {
+      id: row.id, ownerId: row.ownerId, outcomeId: row.outcomeId, missionId: row.missionId,
+      position: row.position, revision: row.revision, responsibility: row.responsibility,
+      inputs: JSON.parse(row.inputsJson), dependencyIds: JSON.parse(row.dependencyIdsJson),
+      expectedEvidence: JSON.parse(row.expectedEvidenceJson),
+      requiredCapabilities: JSON.parse(row.requiredCapabilitiesJson),
+      authorityCeiling: JSON.parse(row.authorityCeilingJson), budget: JSON.parse(row.budgetJson),
+      isolation: JSON.parse(row.isolationJson), stopConditions: JSON.parse(row.stopConditionsJson),
+      assignee: row.assignee, sessionIds: JSON.parse(row.sessionIdsJson), state: row.state,
+      createdAt: row.createdAt, updatedAt: row.updatedAt,
+    };
+  }
+
+  private assertDependenciesAreEarlierInOutcome(workUnit: WorkUnitRecord): void {
+    if (workUnit.dependencyIds.includes(workUnit.id)) throw new Error('cyclic WorkUnit dependency');
+    for (const dependencyId of workUnit.dependencyIds) {
+      const row = this.readWorkUnitRow(workUnit.ownerId, dependencyId);
+      if (row === undefined || row.outcomeId !== workUnit.outcomeId ||
+          row.position >= workUnit.position) {
+        throw new Error('invalid WorkUnit dependency');
+      }
+    }
   }
 
   private appendChange(input: {

@@ -1,7 +1,7 @@
 import { ResponsibilityOwnerRootMismatchError } from '../responsibility/errors';
 
 export type OwnerDomainEventDraft = Readonly<{
-  schemaVersion: '0.2';
+  schemaVersion: '0.2' | '0.3';
   eventId: string;
   ownerId: string;
   aggregateKind: string;

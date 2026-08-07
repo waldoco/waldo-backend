@@ -1,0 +1,44 @@
+{
+  "protocolVersion": "0.3",
+  "ownerId": "owner_fixture_01",
+  "requestId": "planning_fixture_01",
+  "outcomeId": "outcome_01",
+  "workUnitId": "work_unit_01",
+  "workUnitRevision": 2,
+  "workUnitState": "planning_authorized",
+  "executionRequestId": "execution_request_01",
+  "agentSessionId": "agent_session_01",
+  "sessionStatus": "completed",
+  "providerInvocation": {
+    "executionRequestId": "execution_request_01",
+    "invocationKey": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "provider": {
+      "adapterId": "runtime_llm_provider",
+      "adapterVersion": "1.0.0",
+      "modelRef": "roster_primary_v1",
+      "capabilityManifest": {
+        "id": "planning_provider_empty_v1",
+        "revision": 1,
+        "digest": "sha256:525cf6117514b8a014bdbfccdbd2ee33b771e5a93e07eb6327d38a4a36ccfdd6"
+      }
+    },
+    "status": "completed",
+    "resultDigest": "sha256:924574552a796fafa2bc5e50445ef93e0d33575a7572849443d9469043e9b268",
+    "startedAt": "2026-08-07T08:00:02.000Z",
+    "completedAt": "2026-08-07T08:00:03.000Z"
+  },
+  "candidatePlan": {
+    "summary": "Prepare a reviewable product update plan without publishing it.",
+    "proposedSteps": [
+      "Draft the update from the supplied fixture.",
+      "Present it for review."
+    ],
+    "openQuestions": [
+      "Who is the primary audience?"
+    ],
+    "constraints": [
+      "Do not publish or perform an external effect."
+    ]
+  },
+  "projectionCursor": 6
+}

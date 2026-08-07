@@ -1,0 +1,10 @@
+{
+  "protocolVersion": "0.3",
+  "ownerId": "owner_fixture_01",
+  "requestId": "planning_cancel_fixture_01",
+  "executionRequestId": "execution_request_01",
+  "status": "cancelled",
+  "cancellationGeneration": 1,
+  "projectionCursor": 5,
+  "cancelledAt": "2026-08-07T08:00:04.000Z"
+}

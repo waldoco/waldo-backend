@@ -37,6 +37,45 @@ function request(model = ROSTER.primary): LLMGatewayRequest {
 }
 
 describe('CloudflareAIGatewayAdapter', () => {
+  it('supports one trusted issue and fails closed on receipt-only reconciliation', async () => {
+    let fetches = 0;
+    const adapter = new CloudflareAIGatewayAdapter({
+      accountId: 'account-123', gatewayId: 'waldo-staging', credential: credential(),
+      fetch: async () => {
+        fetches += 1;
+        return new Response(JSON.stringify({
+          model: ROSTER.primary,
+          choices: [{ message: { content: '{"summary":"plan"}' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }), { status: 200 });
+      },
+    });
+    const gatewayRequest = request();
+    const effect = {
+      effect_ref: `effect_${'a'.repeat(32)}`,
+      idempotency_key: `sha256:${'b'.repeat(64)}`,
+      request_digest: 'c'.repeat(64),
+      execution: {
+        step: gatewayRequest.step,
+        context: gatewayRequest.context,
+        fallback_step: gatewayRequest.fallback_step,
+      },
+      operation: 'issue' as const,
+    };
+
+    await expect(adapter.executeOrReconcile({
+      operation: 'issue', request: gatewayRequest, effect,
+    })).resolves.toMatchObject({ ok: true });
+    await expect(adapter.executeOrReconcile({
+      operation: 'reconcile', effect: { ...effect, operation: 'reconcile' },
+      execution_witness: effect.execution,
+    })).resolves.toEqual({
+      ok: false, code: 'transient', error: 'gateway_trusted_receipt_unavailable',
+      receipt_status: 'unavailable',
+    });
+    expect(fetches).toBe(1);
+  });
+
   it.each([ROSTER.reasoning, ROSTER.fallback] as const)(
     'uses the documented Cloudflare Anthropic ID and accepts exact response identities for %s',
     async (model) => {

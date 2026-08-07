@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "0.3",
+  "requestId": "planning_fixture_01",
+  "commandType": "work_unit.request_planning_turn",
+  "presenceRegistrationId": "presence_registration_01",
+  "aggregate": {
+    "kind": "work_unit",
+    "id": "work_unit_01",
+    "expectedRevision": 1
+  },
+  "clientIssuedAt": "2026-08-07T08:00:00.000Z",
+  "payload": {
+    "governedInputs": [
+      {
+        "ref": "fixture_release_notes",
+        "digest": "sha256:2956c3a8c14401f97e413cb734bdd8ce6bd5c57c1705b0aa0975acf44d16ddfb",
+        "content": "Fixture: release notes are ready for review."
+      }
+    ]
+  }
+}

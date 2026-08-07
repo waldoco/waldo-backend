@@ -4,6 +4,8 @@ export const responsibilityHttpMediaTypeV01 =
   'application/vnd.waldo.responsibility.v0.1+json' as const;
 export const responsibilityHttpMediaTypeV02 =
   'application/vnd.waldo.responsibility.v0.2+json' as const;
+export const responsibilityHttpMediaTypeV03 =
+  'application/vnd.waldo.responsibility.v0.3+json' as const;
 
 export const responsibilityHttpCapabilitiesV01Schema = z.strictObject({
   protocolName: z.literal('responsibility-handshake'),

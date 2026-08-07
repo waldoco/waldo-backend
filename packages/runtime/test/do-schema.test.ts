@@ -9,7 +9,9 @@ import {
   DoSchemaDriftError,
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
+  RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
   RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
+  RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
   getSchemaVersion,
@@ -84,7 +86,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(4);
+    expect(result.version).toBe(5);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -153,7 +155,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(4);
+    expect(result.version).toBe(5);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
     expect(result.draft).toEqual({
@@ -185,10 +187,10 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 4, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 5, description: 'Preserve this row.' });
   });
 
-  it('migrates the merged V3 responsibility schema to V4 without changing responsibility state', async () => {
+  it('migrates the merged V3 responsibility schema to current without changing responsibility state', async () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
       const sql = state.storage.sql;
@@ -280,7 +282,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.before.version).toBe(3);
-    expect(result.after).toEqual({ ...result.before, version: 4 });
+    expect(result.after).toEqual({ ...result.before, version: 5 });
     expect(result.authority).toEqual({
       authenticated_subject_ref: null,
       state: null,
@@ -342,6 +344,166 @@ describe('HEY-10 DO SQLite schema root', () => {
       authorityTables: ['presence_registrations'],
       authorityIndexes: [],
     });
+  });
+
+  it('migrates V4 WorkUnits to the planning harness without changing captured responsibility data', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, HEY144_GOALS_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION);
+      const sql = state.storage.sql;
+      sql.exec(
+        'INSERT INTO owner_roots (root_key, owner_id, created_at) VALUES (1, ?, ?)',
+        'owner-v4', '2026-08-07T00:00:00.000Z',
+      );
+      sql.exec(
+        `INSERT INTO outcomes (
+          id, owner_id, revision, user_statement, state, created_at, updated_at
+        ) VALUES ('outcome-v4', 'owner-v4', 1, 'Preserve me.', 'captured', ?, ?)`,
+        '2026-08-07T00:00:00.000Z', '2026-08-07T00:00:00.000Z',
+      );
+      sql.exec(
+        `INSERT INTO work_units (
+          id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+          inputs_json, dependency_ids_json, expected_evidence_json,
+          required_capabilities_json, authority_ceiling_json, budget_json,
+          isolation_json, stop_conditions_json, assignee, session_ids_json,
+          state, created_at, updated_at
+        ) VALUES ('work-unit-v4', 'owner-v4', 'outcome-v4', NULL, 0, 1,
+          'Prepare a plan.', '[]', '[]', '[]', '[]',
+          '{"externalEffects":"none","acceptance":"none","closure":"none"}',
+          '{"maxProviderTurns":0,"maxExternalEffects":0,"maxDurationMs":0}',
+          '{"mode":"unassigned","egress":"deny_all","credentials":"none"}',
+          '[]', NULL, '[]', 'planned', ?, ?)`,
+        '2026-08-07T00:00:00.000Z', '2026-08-07T00:00:00.000Z',
+      );
+
+      const before = sql.exec('SELECT * FROM work_units').one();
+      provisionDoSchema(state.storage);
+      const after = sql.exec('SELECT * FROM work_units').one();
+      sql.exec("UPDATE work_units SET state = 'planning_authorized', revision = 2");
+      return {
+        version: getSchemaVersion(sql),
+        preserved: before,
+        after,
+        newState: sql.exec<{ state: string; revision: number }>(
+          'SELECT state, revision FROM work_units',
+        ).one(),
+      };
+    });
+
+    expect(result.version).toBe(5);
+    expect(result.after).toEqual(result.preserved);
+    expect(result.newState).toEqual({ state: 'planning_authorized', revision: 2 });
+  });
+
+  it('rolls back a failed V5 planning upgrade without replacing the V4 WorkUnit table', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      applyDoMigration(state.storage, HEY10_BASE_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, HEY144_GOALS_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION);
+      state.storage.sql.exec('CREATE TABLE planning_execution_requests (legacy TEXT)');
+      expect(() => provisionDoSchema(state.storage)).toThrow();
+      state.storage.sql.exec('PRAGMA ignore_check_constraints = ON');
+      const workUnitSql = state.storage.sql.exec<{ sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'work_units'",
+      ).one().sql;
+      state.storage.sql.exec('PRAGMA ignore_check_constraints = OFF');
+      return {
+        version: getSchemaVersion(state.storage.sql),
+        workUnitSql,
+        legacyColumns: state.storage.sql.exec<{ name: string }>(
+          'PRAGMA table_info(planning_execution_requests)',
+        ).toArray().map((row) => row.name),
+        leakedV5Tables: listTables(state.storage.sql).filter((table) => [
+          'planning_agent_sessions', 'planning_execution_leases',
+          'planning_provider_invocations', 'work_unit_candidate_plans',
+          'work_unit_planning_commands', 'work_unit_planning_controls',
+          'work_unit_planning_projection',
+        ].includes(table)),
+      };
+    });
+    expect(result.version).toBe(4);
+    expect(result.workUnitSql).toContain("state IN ('planned')");
+    expect(result.workUnitSql).not.toContain('planning_authorized');
+    expect(result.legacyColumns).toEqual(['legacy']);
+    expect(result.leakedV5Tables).toEqual([]);
+  });
+
+  it('refuses an unsafe V5 downgrade after planning authorization and preserves all V5 state', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionDoSchema(state.storage);
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO owner_roots (root_key, owner_id, created_at)
+         VALUES (1, 'owner-v5', '2026-08-07T00:00:00.000Z')`,
+      );
+      sql.exec(
+        `INSERT INTO outcomes (
+          id, owner_id, revision, user_statement, state, created_at, updated_at
+        ) VALUES ('outcome-v5', 'owner-v5', 1, 'Keep this state.', 'captured', ?, ?)`,
+        '2026-08-07T00:00:00.000Z', '2026-08-07T00:00:00.000Z',
+      );
+      sql.exec(
+        `INSERT INTO work_units (
+          id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+          inputs_json, dependency_ids_json, expected_evidence_json,
+          required_capabilities_json, authority_ceiling_json, budget_json,
+          isolation_json, stop_conditions_json, assignee, session_ids_json,
+          state, created_at, updated_at
+        ) VALUES ('work-unit-v5', 'owner-v5', 'outcome-v5', NULL, 0, 2,
+          'Preserve an authorized plan.', '[]', '[]', '[]', '[]',
+          '{"externalEffects":"none","acceptance":"none","closure":"none"}',
+          '{"maxProviderTurns":0,"maxExternalEffects":0,"maxDurationMs":0}',
+          '{"mode":"unassigned","egress":"deny_all","credentials":"none"}',
+          '[]', NULL, '[]', 'planning_authorized', ?, ?)`,
+        '2026-08-07T00:00:00.000Z', '2026-08-07T00:00:00.000Z',
+      );
+
+      expect(() => applyDoMigration(
+        state.storage,
+        RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
+        'down',
+      )).toThrow();
+
+      return {
+        version: getSchemaVersion(sql),
+        workUnit: sql.exec<{ state: string; revision: number }>(
+          "SELECT state, revision FROM work_units WHERE id = 'work-unit-v5'",
+        ).one(),
+        planningTables: listTables(sql).filter((table) => [
+          'planning_execution_requests', 'planning_agent_sessions',
+          'planning_execution_leases', 'planning_provider_invocations',
+          'work_unit_candidate_plans', 'work_unit_planning_commands',
+          'work_unit_planning_controls',
+          'work_unit_planning_projection',
+        ].includes(table)),
+      };
+    });
+
+    expect(result.version).toBe(5);
+    expect(result.workUnit).toEqual({ state: 'planning_authorized', revision: 2 });
+    expect(result.planningTables).toHaveLength(8);
+  });
+
+  it('names every WorkUnit column in both V5 migration copy directions', () => {
+    const copyStatements = [
+      ...RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION.up,
+      ...RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION.down,
+    ].filter((statement) => statement.includes('INSERT INTO work_units'));
+
+    expect(copyStatements).toHaveLength(2);
+    for (const statement of copyStatements) {
+      expect(statement).toContain('INSERT INTO work_units (');
+      expect(statement).not.toMatch(/INSERT INTO work_units\s+SELECT \*/);
+      expect(statement).toContain('id, owner_id, outcome_id, mission_id');
+      expect(statement).toContain('created_at, updated_at');
+    }
   });
 
   it('keeps the memory-block contract columns needed by Scribe rollback and recall', async () => {
@@ -500,8 +662,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 4,
-      afterVersion: 4,
+      beforeVersion: 5,
+      afterVersion: 5,
       outcomesPresent: true,
       probeTables: [],
     });

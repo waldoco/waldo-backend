@@ -179,10 +179,12 @@ describe('ROUTING_TABLE — the §2 pins', () => {
     }
   });
 
-  it('patrol floors on skip, dreaming defers, everything else floors on the template', () => {
+  it('patrol and bounded WorkUnit planning floor on skip, dreaming defers, others use template', () => {
     for (const row of Object.values(ROUTING_TABLE)) {
       const floor =
-        row.trigger === 'patrol' ? 'skip' : row.trigger === 'dreaming_mode' ? 'defer' : 'template';
+        row.trigger === 'patrol' || row.trigger === 'work_unit_plan'
+          ? 'skip'
+          : row.trigger === 'dreaming_mode' ? 'defer' : 'template';
       expect(row.floor).toBe(floor);
     }
   });

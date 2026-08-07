@@ -263,6 +263,7 @@ export const TRIGGER_PUSH_CLASSES: Readonly<Record<TriggerType, readonly PushCla
   user_message: [],
   dreaming_mode: [],
   pre_activity_spot: ['pre_activity_spot', 'adjustment'],
+  work_unit_plan: [],
 };
 
 export function agentReachableExemptHasCap(row: DeliveryPolicyRow): boolean {

@@ -327,6 +327,12 @@ export const ROUTING_TABLE: Readonly<Record<TriggerType, ModelRoute>> = {
     fallback: [],
     floor: 'template',
   },
+  work_unit_plan: {
+    trigger: 'work_unit_plan',
+    primary: step(ROSTER.primary),
+    fallback: [],
+    floor: 'skip',
+  },
 };
 
 // Dreaming P6 + constellation is the structural reasoning route, not a dynamic escalation:

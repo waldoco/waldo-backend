@@ -2,6 +2,8 @@ import { DurableObject } from 'cloudflare:workers';
 import {
   canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest,
   canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
+  canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
+  canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
   responsibilityHttpProblemV01,
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
@@ -9,6 +11,7 @@ import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
 import {
   canonicalizeResponsibilityProjectionIngressForDigest,
+  canonicalizePlanningProjectionIngressForDigest,
   signResponsibilityIngress,
 } from './responsibility/ingress-signature';
 import {
@@ -196,6 +199,42 @@ async function ownerRootFor(
         operationDigest: projectionDigest,
         issuedAt: Date.now(),
         secret: ingressSecret,
+      }));
+    },
+    async plan(input, ingress) {
+      const requestDigest = (input.trustedEnvelope as { requestDigest?: unknown }).requestDigest;
+      if (typeof requestDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(requestDigest)) {
+        throw new Error('planning ingress digest unavailable');
+      }
+      return stub.executePlanningTurnFromWorker(input, await signResponsibilityIngress({
+        context: { ...ingress, ...authorityForIngress(context) },
+        operation: 'planning_turn',
+        requestDigest: requestDigest as `sha256:${string}`,
+        operationDigest: `sha256:${await sha256Hex(
+          canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest(input.trustedEnvelope),
+        )}`,
+        issuedAt: Date.now(),
+        secret: ingressSecret,
+      }));
+    },
+    async cancelPlanning(input, ingress) {
+      const digest = `sha256:${await sha256Hex(
+        canonicalizeWorkUnitPlanningCancelRequestV03ForDigest(input.request),
+      )}` as const;
+      return stub.cancelPlanningTurnFromWorker(input, await signResponsibilityIngress({
+        context: { ...ingress, ...authorityForIngress(context) },
+        operation: 'planning_cancel', requestDigest: digest, operationDigest: digest,
+        issuedAt: Date.now(), secret: ingressSecret,
+      }));
+    },
+    async readPlanningProjection(input, ingress) {
+      const digest = `sha256:${await sha256Hex(
+        canonicalizePlanningProjectionIngressForDigest(input),
+      )}` as const;
+      return stub.readPlanningProjectionFromWorker(input, await signResponsibilityIngress({
+        context: { ...ingress, ...authorityForIngress(context) },
+        operation: 'planning_projection', requestDigest: digest, operationDigest: digest,
+        issuedAt: Date.now(), secret: ingressSecret,
       }));
     },
   };

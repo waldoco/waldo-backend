@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "ownerId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "projectionName": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "snapshotId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "snapshotBaseCursor": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "fromExclusiveCursor": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "highWaterCursor": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "nextCursor": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "items": {
+      "$ref": "#/$defs/__schema4"
+    },
+    "hasMore": {
+      "$ref": "#/$defs/__schema14"
+    },
+    "generatedAt": {
+      "$ref": "#/$defs/__schema6"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "ownerId",
+    "projectionName",
+    "snapshotId",
+    "snapshotBaseCursor",
+    "fromExclusiveCursor",
+    "highWaterCursor",
+    "nextCursor",
+    "items",
+    "hasMore",
+    "generatedAt"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.3"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "string",
+      "const": "work_unit.planning_activity"
+    },
+    "__schema3": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema4": {
+      "maxItems": 256,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema5"
+      }
+    },
+    "__schema5": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "itemType": {
+              "type": "string",
+              "const": "planning_authorized"
+            },
+            "outcomeId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "workUnitId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "workUnitRevision": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 9007199254740991
+            },
+            "executionRequestId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "agentSessionId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/__schema6"
+            }
+          },
+          "required": [
+            "cursor",
+            "itemType",
+            "outcomeId",
+            "workUnitId",
+            "workUnitRevision",
+            "executionRequestId",
+            "agentSessionId",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "itemType": {
+              "type": "string",
+              "const": "agent_session_activity"
+            },
+            "outcomeId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "workUnitId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "executionRequestId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "agentSessionId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "running",
+                "completed",
+                "cancelled",
+                "failed",
+                "ambiguous"
+              ]
+            },
+            "occurredAt": {
+              "$ref": "#/$defs/__schema6"
+            }
+          },
+          "required": [
+            "cursor",
+            "itemType",
+            "outcomeId",
+            "workUnitId",
+            "executionRequestId",
+            "agentSessionId",
+            "status",
+            "occurredAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "itemType": {
+              "type": "string",
+              "const": "work_unit_candidate_plan"
+            },
+            "outcomeId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "workUnitId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "executionRequestId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "agentSessionId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "resultDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "candidatePlan": {
+              "type": "object",
+              "properties": {
+                "summary": {
+                  "$ref": "#/$defs/__schema7"
+                },
+                "proposedSteps": {
+                  "$ref": "#/$defs/__schema8"
+                },
+                "openQuestions": {
+                  "$ref": "#/$defs/__schema10"
+                },
+                "constraints": {
+                  "$ref": "#/$defs/__schema12"
+                }
+              },
+              "required": [
+                "summary",
+                "proposedSteps",
+                "openQuestions",
+                "constraints"
+              ],
+              "additionalProperties": false
+            },
+            "createdAt": {
+              "$ref": "#/$defs/__schema6"
+            }
+          },
+          "required": [
+            "cursor",
+            "itemType",
+            "outcomeId",
+            "workUnitId",
+            "executionRequestId",
+            "agentSessionId",
+            "resultDigest",
+            "candidatePlan",
+            "createdAt"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "__schema6": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema7": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "\\S"
+    },
+    "__schema8": {
+      "minItems": 1,
+      "maxItems": 12,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema9"
+      }
+    },
+    "__schema9": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "\\S"
+    },
+    "__schema10": {
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema11"
+      }
+    },
+    "__schema11": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "\\S"
+    },
+    "__schema12": {
+      "maxItems": 12,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema13"
+      }
+    },
+    "__schema13": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "\\S"
+    },
+    "__schema14": {
+      "type": "boolean"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-planning-turn:0.3:projection-page",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}

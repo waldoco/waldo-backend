@@ -1,4 +1,6 @@
 import {
+  canonicalizeWorkUnitPlanningTurnRequestV03ForDigest,
+  canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
   canonicalizeSurfaceCommandRequestForDigest,
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
   responsibilityCaptureRequestSchema,
@@ -9,11 +11,22 @@ import {
   responsibilityProjectionItemV02Schema,
   responsibilityProjectionPageV01CompatibilitySchema,
   responsibilityProjectionPageV02Schema,
+  workUnitPlanningAuthorizationResultV03Schema,
+  workUnitPlanningCancelRequestV03Schema,
+  workUnitPlanningTurnRequestV03Schema,
+  workUnitPlanningTurnTrustedEnvelopeV03Schema,
   type ResponsibilityCaptureResult as ResponsibilityCaptureResultContract,
   type ResponsibilityCaptureRequestV02,
   type ResponsibilityCaptureTrustedEnvelopeV02,
   type ResponsibilityProjectionPageV01Compatibility,
   type ResponsibilityProjectionPageV02,
+  type WorkUnitPlanningAuthorizationResultV03,
+  type WorkUnitPlanningCommandResultV03,
+  type WorkUnitPlanningCancelResultV03,
+  type WorkUnitPlanningTurnResultV03,
+  type WorkUnitPlanningTurnRequestV03,
+  type WorkUnitPlanningTurnTrustedEnvelopeV03,
+  type WorkUnitPlanningProjectionPageV03,
 } from '@waldo/contracts';
 import {
   IdentityPresenceModule,
@@ -33,6 +46,8 @@ import {
   type ResponsibilityReplay,
   type WorkUnitRecord,
 } from './outcome-module';
+import { PlanningExecutionModule } from './planning-execution-module';
+import type { LLMGatewayRequest, TrustedProviderEffect } from '../llm/provider';
 
 export type {
   MissionRecord,
@@ -57,17 +72,41 @@ export type ResponsibilityProjectionRead = Readonly<{
   snapshotId?: string;
 }>;
 
+export type WorkUnitPlanningAdmission = Readonly<{
+  routedOwnerId: string;
+  request: unknown;
+  trustedEnvelope: unknown;
+}>;
+
+export type WorkUnitPlanningCancelAdmission = Readonly<{
+  routedOwnerId: string;
+  request: unknown;
+}>;
+
+export type WorkUnitPlanningProjectionRead = Readonly<{
+  routedOwnerId: string;
+  fromExclusiveCursor: number;
+  limit: number;
+  snapshotId?: string;
+}>;
+
 export type CoordinatorWriteStage =
   | 'owner_root'
   | 'current_state'
   | 'events'
   | 'projection'
-  | 'idempotency';
+  | 'idempotency'
+  | 'work_unit_authority'
+  | 'execution_request'
+  | 'planning_projection'
+  | 'provider_intent'
+  | 'provider_result';
 
 export type CoordinatorDependencies = Readonly<{
   now: () => string;
   newId: (
-    kind: 'outcome' | 'mission' | 'work_unit' | 'event' | 'snapshot',
+    kind: 'outcome' | 'mission' | 'work_unit' | 'event' | 'snapshot' |
+      'execution_request' | 'agent_session',
   ) => string;
   sha256Hex: (value: string) => Promise<string>;
   afterWrite?: (stage: CoordinatorWriteStage) => void;
@@ -98,6 +137,7 @@ export class WaldoCoordinator {
   readonly #identity: IdentityPresenceModule;
   readonly #events: OwnerEventLog;
   readonly #outcomes: OutcomeModule;
+  readonly #planning: PlanningExecutionModule;
 
   constructor(
     storage: DurableObjectStorage,
@@ -108,6 +148,7 @@ export class WaldoCoordinator {
     this.#identity = new IdentityPresenceModule(storage);
     this.#events = new OwnerEventLog(storage);
     this.#outcomes = new OutcomeModule(storage, dependencies.newId);
+    this.#planning = new PlanningExecutionModule(storage, dependencies.newId);
   }
 
   admitCanonicalAuthority(
@@ -142,6 +183,238 @@ export class WaldoCoordinator {
     canonicalAuthority: ResponsibilityCanonicalAuthority,
   ): Promise<ResponsibilityCaptureResult> {
     return this.#captureResponsibility(admission, canonicalAuthority);
+  }
+
+  async authorizePlanningTurn(
+    admission: WorkUnitPlanningAdmission,
+    canonicalAuthority: ResponsibilityCanonicalAuthority,
+  ): Promise<WorkUnitPlanningAuthorizationResultV03> {
+    const request = workUnitPlanningTurnRequestV03Schema.parse(admission.request);
+    const envelope = workUnitPlanningTurnTrustedEnvelopeV03Schema.parse(
+      admission.trustedEnvelope,
+    );
+    this.#validatePlanningAdmission(admission.routedOwnerId, request, envelope);
+    const requestDigest = `sha256:${await this.#deps.sha256Hex(
+      canonicalizeWorkUnitPlanningTurnRequestV03ForDigest(request),
+    )}`;
+    if (envelope.requestDigest !== requestDigest) throw new ResponsibilityDigestConflictError();
+    for (const governedInput of request.payload.governedInputs) {
+      const contentDigest = `sha256:${await this.#deps.sha256Hex(governedInput.content)}`;
+      if (contentDigest !== governedInput.digest) throw new ResponsibilityDigestConflictError();
+    }
+
+    return this.#storage.transactionSync(() => {
+      this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      this.#assertEnvelopeAuthority(canonicalAuthority, request, envelope);
+      const existing = this.#planning.readIdempotentAuthorization(
+        admission.routedOwnerId,
+        request.requestId,
+        requestDigest,
+      );
+      if (existing !== null) return Object.freeze(
+        workUnitPlanningAuthorizationResultV03Schema.parse(existing),
+      );
+
+      const at = this.#deps.now();
+      const executionRequestId = this.#deps.newId('execution_request');
+      const agentSessionId = this.#deps.newId('agent_session');
+      const authorized = this.#outcomes.authorizePlanningInCurrentTransaction({
+        ownerId: admission.routedOwnerId,
+        workUnitId: request.aggregate.id,
+        expectedRevision: request.aggregate.expectedRevision,
+        agentSessionId,
+        executorId: envelope.executor.executorId,
+        at,
+        commandId: envelope.commandId,
+        correlationId: envelope.correlationId,
+        authorityCeiling: envelope.authorityCeiling,
+        maxDurationMs: 120_000,
+      });
+      this.#deps.afterWrite?.('work_unit_authority');
+      const result = this.#planning.persistAuthorizationInCurrentTransaction({
+        ownerId: admission.routedOwnerId,
+        requestId: request.requestId,
+        requestDigest,
+        outcomeId: authorized.workUnit.outcomeId,
+        workUnitId: authorized.workUnit.id,
+        workUnitRevision: authorized.workUnit.revision,
+        executionRequestId,
+        agentSessionId,
+        cursor: authorized.cursor,
+        at,
+        envelope,
+      });
+      this.#deps.afterWrite?.('execution_request');
+      this.#deps.afterWrite?.('planning_projection');
+      this.#deps.afterWrite?.('idempotency');
+      return result;
+    });
+  }
+
+  async readPlanningCommandResult(
+    ownerId: string,
+    request: WorkUnitPlanningTurnRequestV03,
+  ): Promise<WorkUnitPlanningCommandResultV03 | null> {
+    const requestDigest = `sha256:${await this.#deps.sha256Hex(
+      canonicalizeWorkUnitPlanningTurnRequestV03ForDigest(request),
+    )}`;
+    return this.#planning.readIdempotentResult(ownerId, request.requestId, requestDigest);
+  }
+
+  readPlanningPromptMaterial(ownerId: string, executionRequestId: string) {
+    return this.#planning.readPromptMaterial(ownerId, executionRequestId);
+  }
+
+  readPendingPlanningProviderEffect(
+    ownerId: string,
+    executionRequestId: string,
+  ) {
+    const at = this.#deps.now();
+    const renewedExpiresAt = new Date(Date.parse(at) + 120_000).toISOString();
+    return this.#storage.transactionSync(() =>
+      this.#planning.recoverPendingProviderEffectInCurrentTransaction(
+        ownerId, executionRequestId, at, renewedExpiresAt,
+      ));
+  }
+
+  async preparePlanningProviderEffect(input: {
+    ownerId: string;
+    executionRequestId: string;
+    holderId: string;
+    request: LLMGatewayRequest;
+  }): Promise<Readonly<{
+    effect: TrustedProviderEffect;
+    fence: number;
+    cancellationGeneration: number;
+  }>> {
+    const requestDigest = await this.#deps.sha256Hex(JSON.stringify(input.request));
+    const identityDigest = await this.#deps.sha256Hex(JSON.stringify({
+      executionRequestId: input.executionRequestId,
+      requestDigest,
+      execution: {
+        step: input.request.step,
+        context: input.request.context,
+        fallback_step: input.request.fallback_step,
+      },
+    }));
+    const at = this.#deps.now();
+    const expiresAt = new Date(Date.parse(at) + 120_000).toISOString();
+    return this.#storage.transactionSync(() => {
+      const prepared = this.#planning.prepareProviderEffectInCurrentTransaction({
+        ...input,
+        at,
+        expiresAt,
+        requestDigest,
+        effectRef: `planning_effect_${identityDigest.slice(0, 64)}`,
+        invocationKey: `sha256:${identityDigest}`,
+      });
+      this.#deps.afterWrite?.('provider_intent');
+      return prepared;
+    });
+  }
+
+  async settlePlanningCandidatePlan(input: {
+    ownerId: string;
+    requestId: string;
+    executionRequestId: string;
+    holderId: string;
+    fence: number;
+    cancellationGeneration: number;
+    candidatePlan: unknown;
+  }): Promise<WorkUnitPlanningTurnResultV03> {
+    const resultDigest = `sha256:${await this.#deps.sha256Hex(
+      JSON.stringify(input.candidatePlan),
+    )}`;
+    return this.#storage.transactionSync(() => {
+      const result = this.#planning.settleCandidatePlanInCurrentTransaction({
+        ...input,
+        resultDigest,
+        at: this.#deps.now(),
+      });
+      this.#deps.afterWrite?.('provider_result');
+      return result;
+    });
+  }
+
+  markPlanningProviderAmbiguous(ownerId: string, executionRequestId: string): void {
+    this.#storage.transactionSync(() => {
+      this.#planning.markProviderAmbiguousInCurrentTransaction({
+        ownerId, executionRequestId, at: this.#deps.now(),
+      });
+    });
+  }
+
+  async rejectPlanningProviderOutput(input: {
+    ownerId: string;
+    executionRequestId: string;
+    holderId: string;
+    fence: number;
+    cancellationGeneration: number;
+    providerOutput: string;
+  }): Promise<void> {
+    const resultDigest = `sha256:${await this.#deps.sha256Hex(input.providerOutput)}`;
+    this.#storage.transactionSync(() => {
+      this.#planning.rejectInvalidProviderOutputInCurrentTransaction({
+        ownerId: input.ownerId,
+        executionRequestId: input.executionRequestId,
+        holderId: input.holderId,
+        fence: input.fence,
+        cancellationGeneration: input.cancellationGeneration,
+        resultDigest,
+        at: this.#deps.now(),
+      });
+      this.#deps.afterWrite?.('provider_result');
+    });
+  }
+
+  async cancelAuthorizedPlanningExecution(
+    admission: WorkUnitPlanningCancelAdmission,
+    canonicalAuthority: ResponsibilityCanonicalAuthority,
+  ): Promise<WorkUnitPlanningCancelResultV03> {
+    const request = workUnitPlanningCancelRequestV03Schema.parse(admission.request);
+    if (request.presenceRegistrationId !== canonicalAuthority.presenceRegistrationId) {
+      throw new Error('planning cancellation presence mismatch');
+    }
+    const requestDigest = `sha256:${await this.#deps.sha256Hex(
+      canonicalizeWorkUnitPlanningCancelRequestV03ForDigest(request),
+    )}`;
+    return this.#storage.transactionSync(() => {
+      this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      return this.#planning.cancelInCurrentTransaction({
+        ownerId: admission.routedOwnerId,
+        requestId: request.requestId,
+        requestDigest,
+        executionRequestId: request.executionRequestId,
+        expectedCancellationGeneration: request.expectedCancellationGeneration,
+        at: this.#deps.now(),
+      });
+    });
+  }
+
+  readAuthorizedPlanningProjection(
+    input: WorkUnitPlanningProjectionRead,
+    canonicalAuthority: ResponsibilityCanonicalAuthority,
+  ): WorkUnitPlanningProjectionPageV03 {
+    this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+      canonicalAuthority,
+      this.#deps.now(),
+    );
+    const snapshot = this.#outcomes.projections.readSnapshot(input.routedOwnerId);
+    return this.#planning.readProjection({
+      ownerId: input.routedOwnerId,
+      fromExclusiveCursor: input.fromExclusiveCursor,
+      limit: input.limit,
+      ...(input.snapshotId === undefined ? {} : { snapshotId: input.snapshotId }),
+      currentSnapshotId: snapshot.snapshotId,
+      snapshotBaseCursor: snapshot.snapshotBaseCursor,
+      generatedAt: this.#deps.now(),
+    });
   }
 
   async #captureResponsibility(
@@ -342,6 +615,41 @@ export class WaldoCoordinator {
     }
     if (JSON.stringify(trustedEnvelope.payload) !== JSON.stringify(request.payload)) {
       throw new Error('responsibility capture payload mismatch');
+    }
+  }
+
+  #validatePlanningAdmission(
+    routedOwnerId: string,
+    request: WorkUnitPlanningTurnRequestV03,
+    envelope: WorkUnitPlanningTurnTrustedEnvelopeV03,
+  ): void {
+    if (envelope.ownerId !== routedOwnerId) throw new ResponsibilityOwnerRootMismatchError();
+    if (request.protocolVersion !== envelope.protocolVersion ||
+        request.commandType !== envelope.commandType ||
+        request.aggregate.kind !== envelope.aggregate.kind ||
+        request.aggregate.id !== envelope.aggregate.id ||
+        request.aggregate.expectedRevision !== envelope.aggregate.expectedRevision) {
+      throw new Error('planning protocol or aggregate mismatch');
+    }
+    const admittedRefs = request.payload.governedInputs.map(({ ref, digest }) => ({ ref, digest }));
+    if (JSON.stringify(admittedRefs) !== JSON.stringify(envelope.payload.governedInputs)) {
+      throw new Error('planning governed input reference mismatch');
+    }
+  }
+
+  #assertEnvelopeAuthority(
+    authority: ResponsibilityCanonicalAuthority,
+    request: WorkUnitPlanningTurnRequestV03,
+    envelope: WorkUnitPlanningTurnTrustedEnvelopeV03,
+  ): void {
+    if (authority.ownerId !== envelope.ownerId ||
+        authority.presenceRegistrationId !== request.presenceRegistrationId ||
+        authority.presenceId !== envelope.presenceId ||
+        authority.authenticatedSessionId !== envelope.authenticatedSessionId ||
+        authority.ownerPolicyRevision !== envelope.ownerPolicyRevision ||
+        authority.ownerRootRoutingVersion !== envelope.ownerRootRoutingVersion ||
+        envelope.actor.kind !== 'presence' || envelope.actor.id !== authority.presenceId) {
+      throw new ResponsibilityOwnerRootMismatchError();
     }
   }
 
