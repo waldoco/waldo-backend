@@ -48,7 +48,10 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-`verify` currently runs the package-manager guard, frozen install, workspace typecheck, contract tests, isolated Supabase verification, Workers runtime tests, and static guards.
+`verify` currently runs the package-manager guard, frozen install, workspace and Node-integration
+typechecks, contract tests, isolated Supabase verification, Workers runtime tests, the local
+Auth/REST exact-token revocation integration, and static guards. Start the full local Supabase
+stack, not only its database, before invoking this wall.
 
 Documentation and instruction-only changes:
 

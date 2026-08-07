@@ -246,6 +246,12 @@ export type ResponsibilityCaptureTrustedEnvelope = z.infer<
   typeof responsibilityCaptureTrustedEnvelopeSchema
 >;
 
+export function canonicalizeResponsibilityCaptureTrustedEnvelopeForDigest(
+  value: unknown,
+): string {
+  return canonicalizeProtocolJson(responsibilityCaptureTrustedEnvelopeSchema.parse(value));
+}
+
 export const trustedCommandEnvelopeSchema = z.discriminatedUnion('commandType', [
   responsibilityCaptureTrustedEnvelopeSchema,
 ]);

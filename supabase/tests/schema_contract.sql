@@ -2,7 +2,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(44);
+select plan(53);
 
 select is(
   (select array_agg(table_name::text order by table_name)
@@ -90,9 +90,52 @@ select ok(
   'only authenticated clients can execute app_user_id'
 );
 
+select is(
+  to_regprocedure('public.waldo_responsibility_session_active()')::text,
+  'waldo_responsibility_session_active()'::text,
+  'responsibility authority exposes one zero-argument session predicate'
+);
+
+select ok(
+  (select p.provolatile = 's'
+          and p.prosecdef
+          and not p.proretset
+          and p.pronargs = 0
+          and pg_get_function_result(p.oid) = 'boolean'
+          and p.proconfig = array['search_path=""']::text[]
+          and l.lanname = 'sql'
+   from pg_proc p
+   join pg_namespace n on n.oid = p.pronamespace
+   join pg_language l on l.oid = p.prolang
+   where n.nspname = 'public'
+     and p.proname = 'waldo_responsibility_session_active'),
+  'responsibility authority is a stable scalar SQL definer with an empty search_path'
+);
+
+select ok(
+  has_function_privilege(
+    'authenticated',
+    'public.waldo_responsibility_session_active()',
+    'EXECUTE'
+  )
+  and not has_function_privilege(
+    'anon',
+    'public.waldo_responsibility_session_active()',
+    'EXECUTE'
+  )
+  and not has_function_privilege(
+    'service_role',
+    'public.waldo_responsibility_session_active()',
+    'EXECUTE'
+  ),
+  'only authenticated clients can execute responsibility session authority'
+);
+
 select is_empty(
   $$with expected(grantee, routine_name, privilege_type) as (
-      values ('authenticated', 'app_user_id', 'EXECUTE')
+      values
+        ('authenticated', 'app_user_id', 'EXECUTE'),
+        ('authenticated', 'waldo_responsibility_session_active', 'EXECUTE')
     ), actual as (
       select grantee::text, routine_name::text, privilege_type::text
       from information_schema.routine_privileges
@@ -200,6 +243,81 @@ insert into auth.users (id) values
   ('00000000-0000-0000-0000-0000000000b2'),
   ('00000000-0000-0000-0000-0000000000c3'),
   ('00000000-0000-0000-0000-0000000000d4');
+
+insert into auth.sessions (id, user_id, not_after) values
+  ('40000000-0000-4000-8000-0000000000a1', '00000000-0000-0000-0000-0000000000a1', now() + interval '1 hour'),
+  ('40000000-0000-4000-8000-0000000000b2', '00000000-0000-0000-0000-0000000000a1', now() - interval '1 hour');
+
+set local role authenticated;
+select set_config('request.jwt.claim', '', true);
+select set_config('request.jwt.claim.sub', '', true);
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-0000000000a1","session_id":"40000000-0000-4000-8000-0000000000a1"}',
+  true
+);
+select is(
+  public.waldo_responsibility_session_active(),
+  true,
+  'matching user and active session claims are authorized'
+);
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-0000000000b2","session_id":"40000000-0000-4000-8000-0000000000a1"}',
+  true
+);
+select is(
+  public.waldo_responsibility_session_active(),
+  false,
+  'a session cannot authorize a different user'
+);
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-0000000000a1"}',
+  true
+);
+select is(
+  public.waldo_responsibility_session_active(),
+  false,
+  'a missing session claim is denied'
+);
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-0000000000a1","session_id":"40000000-0000-4000-8000-0000000000c3"}',
+  true
+);
+select is(
+  public.waldo_responsibility_session_active(),
+  false,
+  'an absent session row is denied'
+);
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-0000000000a1","session_id":"40000000-0000-4000-8000-0000000000b2"}',
+  true
+);
+select is(
+  public.waldo_responsibility_session_active(),
+  false,
+  'an expired session row is denied'
+);
+
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"00000000-0000-0000-0000-0000000000a1","session_id":"not-a-uuid"}',
+  true
+);
+select is(
+  public.waldo_responsibility_session_active(),
+  false,
+  'a malformed session claim is denied without an authority error'
+);
+select set_config('request.jwt.claims', '', true);
+reset role;
 
 insert into public.users (id, auth_id, name, email) values
   ('10000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-0000000000a1', 'User A', 'a@example.com'),

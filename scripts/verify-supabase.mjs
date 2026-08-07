@@ -25,4 +25,11 @@ run([
   '--file',
   'supabase/fixtures/assert-canonical-migration-history.sql',
 ]);
+run([
+  'db',
+  'query',
+  '--local',
+  '--file',
+  'supabase/fixtures/assert-responsibility-session-authority-rollback.sql',
+]);
 run(['migration', 'up', '--local']);

@@ -10,6 +10,7 @@ import {
   type WorkUnitRecordV02,
 } from '@waldo/contracts';
 import { OwnerEventLog } from './owner-event-log';
+import { ResponsibilityProjectionMissingError } from '../responsibility/errors';
 
 export type OutcomeRecord = OutcomeRecordV02;
 export type MissionRecord = MissionRecordV02;
@@ -84,7 +85,7 @@ export class ProjectionPublisher {
          FROM responsibility_projection_state WHERE owner_id = ?`,
       ownerId,
     ).toArray()[0];
-    if (row === undefined) throw new Error('responsibility projection snapshot missing');
+    if (row === undefined) throw new ResponsibilityProjectionMissingError();
     return Object.freeze({
       snapshotId: row.snapshot_id,
       snapshotBaseCursor: row.snapshot_base_cursor,

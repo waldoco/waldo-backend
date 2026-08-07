@@ -1141,12 +1141,13 @@ describe('RunLoopDO trusted invocation convergence', () => {
     ]);
   });
 
-  it('exposes only lifecycle and locally guarded controls on the RunLoopDO RPC prototype', async () => {
+  it('exposes only lifecycle, public responsibility, and locally guarded controls on the RunLoopDO RPC prototype', async () => {
     const stub = freshStub();
 
-    // Workerd exposes every prototype method as an RPC. Keep this exact allowlist narrow: internal
-    // mechanics, trusted admission parsing/opening, fake context construction, and effect intent
-    // persistence must stay ECMAScript-private rather than TypeScript-private.
+    // Workerd exposes every prototype method as an RPC. Keep this exact allowlist narrow: only the
+    // Worker-authenticated responsibility bridge is production-facing; internal mechanics,
+    // trusted admission parsing/opening, fake context construction, and effect-intent persistence
+    // must stay ECMAScript-private rather than TypeScript-private.
     await runInDurableObject(stub, (instance) => {
       const prototype = Object.getPrototypeOf(instance);
       expect(Object.getOwnPropertyNames(prototype).sort()).toEqual(
@@ -1163,8 +1164,10 @@ describe('RunLoopDO trusted invocation convergence', () => {
           '__waldoReadResponsibilityProjectionForTest',
           '__waldoReplayResponsibilityForTest',
           'alarm',
+          'captureResponsibilityFromWorker',
           'constructor',
           'fetch',
+          'readResponsibilityProjectionFromWorker',
           'readRunEvidence',
           'readRunProof',
           'readTrustedRunProof',

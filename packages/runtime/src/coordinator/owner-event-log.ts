@@ -1,3 +1,5 @@
+import { ResponsibilityOwnerRootMismatchError } from '../responsibility/errors';
+
 export type OwnerDomainEventDraft = Readonly<{
   schemaVersion: '0.2';
   eventId: string;
@@ -21,7 +23,7 @@ export class OwnerEventLog {
       'SELECT owner_id FROM owner_roots WHERE root_key = 1',
     ).toArray()[0];
     if (root === undefined || root.owner_id !== draft.ownerId) {
-      throw new Error('owner authority root mismatch');
+      throw new ResponsibilityOwnerRootMismatchError();
     }
     const highWater = this.readHighWater(draft.ownerId);
     let cursor: number;
@@ -83,7 +85,7 @@ export class OwnerEventLog {
       if (stream.event_count !== 0) throw new Error('owner event state mismatch');
       return 0;
     }
-    if (row.owner_id !== ownerId) throw new Error('owner authority root mismatch');
+    if (row.owner_id !== ownerId) throw new ResponsibilityOwnerRootMismatchError();
     if (!Number.isSafeInteger(row.high_water_cursor) || row.high_water_cursor < 1) {
       throw new Error('owner event state mismatch');
     }

@@ -36,8 +36,8 @@ jobs:
         with:
           version: 2.109.1
 
-      - name: Start isolated Supabase database
-        run: supabase db start
+      - name: Start isolated Supabase Auth, REST, and database stack
+        run: supabase start > /dev/null
 
       - name: Verify
         run: pnpm verify

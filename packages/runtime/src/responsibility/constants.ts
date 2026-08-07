@@ -1,0 +1,2 @@
+export const RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION = 2 as const;
+
