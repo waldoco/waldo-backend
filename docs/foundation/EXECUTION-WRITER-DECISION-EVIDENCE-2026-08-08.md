@@ -88,7 +88,7 @@ duplicate its hardest invariants.
 The target architecture explicitly draws two separate seams from `RunLoopEngine`:
 `ProviderAdapter` for Codex, Claude, Hermes, Pi, and future providers, and
 `ExecutionEnvironmentAdapter` for Kennel, containers, and Computer preview
-([architecture lines 161-186](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md#4-backend-target-architecture)).
+([architecture lines 161-186](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md#4-target-container-architecture)).
 Kennel is specifically the first local `ExecutionEnvironmentAdapter`
 ([Kennel boundary](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md#111-boundary)).
 
