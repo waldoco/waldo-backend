@@ -314,7 +314,7 @@ export class OutcomeModule {
     maxDurationMs: number;
   }): Readonly<{ workUnit: CanonicalWorkUnitRecord; cursor: number }> {
     const row = this.readWorkUnitRow(input.ownerId, input.workUnitId);
-    if (row === undefined) throw new Error('WorkUnit not found');
+    if (row === undefined) throw new ResponsibilityProjectionMissingError();
     const current = canonicalWorkUnitRecordV03Schema.parse(this.decodeWorkUnitRow(row));
     if (current.ownerId !== input.ownerId || current.revision !== input.expectedRevision) {
       throw new ResponsibilityPlanningConflictError('stale WorkUnit revision');
@@ -323,7 +323,9 @@ export class OutcomeModule {
       throw new ResponsibilityPlanningConflictError('invalid WorkUnit transition');
     }
     if (current.requiredCapabilities.length !== 0) {
-      throw new Error('WorkUnit requires capabilities outside the empty planning manifest');
+      throw new ResponsibilityPlanningConflictError(
+        'WorkUnit requires capabilities outside the empty planning manifest',
+      );
     }
     this.assertDependenciesAreEarlierInOutcome(current);
     const workUnit = Object.freeze(workUnitPlanningAuthorizedRecordV03Schema.parse({

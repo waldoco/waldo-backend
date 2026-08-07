@@ -370,19 +370,6 @@ export class WaldoCoordinator {
     });
   }
 
-  async cancelPlanningExecution(input: {
-    ownerId: string;
-    requestId: string;
-    executionRequestId: string;
-    expectedCancellationGeneration: number;
-  }): Promise<WorkUnitPlanningCancelResultV03> {
-    const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify(input))}`;
-    return this.#storage.transactionSync(() => this.#planning.cancelInCurrentTransaction({
-      ...input, requestDigest,
-      at: this.#deps.now(),
-    }));
-  }
-
   async cancelAuthorizedPlanningExecution(
     admission: WorkUnitPlanningCancelAdmission,
     canonicalAuthority: ResponsibilityCanonicalAuthority,

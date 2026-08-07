@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020.js';
-import { buildResponsibilityPlanningTurnV03Bundle } from './responsibility-planning-turn-v0-3-fixtures';
+import {
+  buildResponsibilityPlanningTurnV03Bundle,
+  responsibilityPlanningTurnRejectionCatalogueV03Schema,
+} from './responsibility-planning-turn-v0-3-fixtures';
 import {
   emptyPlanningCapabilityManifestV03Schema,
   workUnitPlanningAuthorityCeilingV03Schema,
@@ -149,21 +152,43 @@ describe('responsibility planning turn v0.3', () => {
     }).success).toBe(false);
   });
 
-  it('emits a Draft 2020-12 trusted-envelope schema that enforces empty capabilities', () => {
+  it('makes every v0.3 rejection fixture executable at its declared validation layer', () => {
     const bundle = buildResponsibilityPlanningTurnV03Bundle(() => 'a'.repeat(64));
-    const schema = JSON.parse(bundle['planning-turn-trusted-envelope.schema.json']!);
-    const valid = JSON.parse(bundle['planning-turn-trusted-envelope.valid.json']!);
-    const rejections = JSON.parse(bundle['planning-turn.rejections.json']!) as {
-      cases: Array<{ name: string; value: unknown }>;
-    };
-    const nonEmpty = rejections.cases.find((entry) => entry.name === 'non-empty-tools');
-    if (nonEmpty === undefined) throw new Error('non-empty capability rejection fixture missing');
-    const validate = new Ajv2020({ strict: false, allErrors: true }).compile(schema);
+    const catalogue = responsibilityPlanningTurnRejectionCatalogueV03Schema.parse(
+      JSON.parse(bundle['planning-turn.rejections.json']!),
+    );
+    const ajv = new Ajv2020({ strict: true, allErrors: true, validateFormats: false });
+    for (const keyword of [
+      'x-waldo-validation-level',
+      'x-waldo-offline-commands',
+    ]) ajv.addKeyword(keyword);
+    const validators = new Map(
+      [...new Set(catalogue.cases.map((entry) => entry.schema))].map((path) => [
+        path,
+        ajv.compile(JSON.parse(bundle[path]!)),
+      ]),
+    );
+    const validFixtureBySchema = {
+      'planning-turn-request.schema.json': 'planning-turn-request.valid.json',
+      'planning-turn-trusted-envelope.schema.json':
+        'planning-turn-trusted-envelope.valid.json',
+      'work-unit-candidate-plan.schema.json': 'work-unit-candidate-plan.valid.json',
+    } as const;
 
-    expect(validate(valid), JSON.stringify(validate.errors)).toBe(true);
-    expect(validate(nonEmpty.value)).toBe(false);
-    expect(validate.errors).toEqual(expect.arrayContaining([
-      expect.objectContaining({ keyword: 'maxItems' }),
-    ]));
+    for (const [schemaPath, validate] of validators) {
+      const validPath = validFixtureBySchema[schemaPath];
+      expect(
+        validate(JSON.parse(bundle[validPath]!)),
+        `${validPath}: ${JSON.stringify(validate.errors)}`,
+      ).toBe(true);
+    }
+
+    for (const rejection of catalogue.cases) {
+      const validate = validators.get(rejection.schema);
+      if (validate === undefined) throw new Error(`missing validator for ${rejection.schema}`);
+      const accepted = validate(rejection.value);
+      expect(accepted, `${rejection.name}: ${JSON.stringify(validate.errors)}`)
+        .toBe(rejection.layer === 'runtime');
+    }
   });
 });

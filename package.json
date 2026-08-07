@@ -19,8 +19,5 @@
     "verify:mutation": "pnpm --filter @waldo/runtime test:mutation",
     "verify:guards": "node scripts/guards/run-all.mjs",
     "verify": "node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:workers && pnpm verify:supabase:session-revocation && pnpm verify:guards"
-  },
-  "devDependencies": {
-    "ajv": "8.17.1"
   }
 }

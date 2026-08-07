@@ -55,7 +55,15 @@
     },
     {
       "path": "planning-turn.rejections.json",
-      "sha256": "sha256:55a900bec41dfe720bb8b31bf7999fe2f81090fa54c9fc50bba1bbaaea6f0389"
+      "sha256": "sha256:28f8ecc10f7c1c13cc5a758537de6b8cbe73937e666847911013b62380a42ecc"
+    },
+    {
+      "path": "work-unit-candidate-plan.schema.json",
+      "sha256": "sha256:72fc1a3e5bc12d4cd09435a86db425f2cfa67e305ab06eb19da208af40a50850"
+    },
+    {
+      "path": "work-unit-candidate-plan.valid.json",
+      "sha256": "sha256:bda01146a6bf5694b1e766d66322d8ab078837ddc8181ee98476094cb39282f1"
     }
   ]
 }

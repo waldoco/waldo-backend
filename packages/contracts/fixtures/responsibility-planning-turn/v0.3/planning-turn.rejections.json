@@ -3,6 +3,8 @@
   "cases": [
     {
       "name": "client-owned-provider",
+      "schema": "planning-turn-request.schema.json",
+      "layer": "schema",
       "value": {
         "protocolVersion": "0.3",
         "requestId": "planning_fixture_01",
@@ -30,6 +32,8 @@
     },
     {
       "name": "stale-revision",
+      "schema": "planning-turn-request.schema.json",
+      "layer": "runtime",
       "value": {
         "protocolVersion": "0.3",
         "requestId": "planning_fixture_01",
@@ -54,6 +58,8 @@
     },
     {
       "name": "non-empty-tools",
+      "schema": "planning-turn-trusted-envelope.schema.json",
+      "layer": "schema",
       "value": {
         "protocolVersion": "0.3",
         "commandId": "command_planning_fixture_01",
@@ -129,6 +135,8 @@
     },
     {
       "name": "schema-invalid-candidate",
+      "schema": "work-unit-candidate-plan.schema.json",
+      "layer": "schema",
       "value": {
         "summary": 42,
         "proposedSteps": []

@@ -7,6 +7,7 @@ import {
   emptyPlanningCapabilityManifestV03Schema,
   workUnitPlanningAuthorityCeilingV03Schema,
   workUnitPlanningProjectionPageV03Schema,
+  workUnitCandidatePlanV03Schema,
   workUnitPlanningTurnRequestV03Schema,
   workUnitPlanningTurnResultV03Schema,
   workUnitPlanningTurnTrustedEnvelopeV03Schema,
@@ -19,6 +20,25 @@ const schema = (value: z.ZodType, name: string) => ({
   $id: `urn:waldo:protocol:responsibility-planning-turn:0.3:${name}`,
   'x-waldo-validation-level': 'structural-plus-runtime-invariants',
   'x-waldo-offline-commands': 'none',
+});
+
+export const responsibilityPlanningTurnRejectionCatalogueV03Schema = z.strictObject({
+  protocolVersion: z.literal('0.3'),
+  cases: z.array(z.strictObject({
+    name: z.enum([
+      'client-owned-provider',
+      'stale-revision',
+      'non-empty-tools',
+      'schema-invalid-candidate',
+    ]),
+    schema: z.enum([
+      'planning-turn-request.schema.json',
+      'planning-turn-trusted-envelope.schema.json',
+      'work-unit-candidate-plan.schema.json',
+    ]),
+    layer: z.enum(['schema', 'runtime']),
+    value: z.unknown(),
+  })).length(4),
 });
 
 export function buildResponsibilityPlanningTurnV03Bundle(hashHex: HashHex): Record<string, string> {
@@ -122,12 +142,39 @@ export function buildResponsibilityPlanningTurnV03Bundle(hashHex: HashHex): Reco
     'planning-cancel-result.valid.json': file(cancellationResult),
     'planning-projection-page.schema.json': file(schema(workUnitPlanningProjectionPageV03Schema, 'projection-page')),
     'planning-projection-page.valid.json': file(projection),
-    'planning-turn.rejections.json': file({ protocolVersion: '0.3', cases: [
-      { name: 'client-owned-provider', value: { ...request, provider: { modelRef: 'attacker' } } },
-      { name: 'stale-revision', value: { ...request, aggregate: { ...request.aggregate, expectedRevision: 2 } } },
-      { name: 'non-empty-tools', value: { ...trusted, capabilityManifest: { ...manifest, tools: ['shell'] } } },
-      { name: 'schema-invalid-candidate', value: { summary: 42, proposedSteps: [] } },
-    ] }),
+    'work-unit-candidate-plan.schema.json': file(schema(workUnitCandidatePlanV03Schema, 'candidate-plan')),
+    'work-unit-candidate-plan.valid.json': file(candidatePlan),
+    'planning-turn.rejections.json': file(
+      responsibilityPlanningTurnRejectionCatalogueV03Schema.parse({
+        protocolVersion: '0.3',
+        cases: [
+          {
+            name: 'client-owned-provider',
+            schema: 'planning-turn-request.schema.json',
+            layer: 'schema',
+            value: { ...request, provider: { modelRef: 'attacker' } },
+          },
+          {
+            name: 'stale-revision',
+            schema: 'planning-turn-request.schema.json',
+            layer: 'runtime',
+            value: { ...request, aggregate: { ...request.aggregate, expectedRevision: 2 } },
+          },
+          {
+            name: 'non-empty-tools',
+            schema: 'planning-turn-trusted-envelope.schema.json',
+            layer: 'schema',
+            value: { ...trusted, capabilityManifest: { ...manifest, tools: ['shell'] } },
+          },
+          {
+            name: 'schema-invalid-candidate',
+            schema: 'work-unit-candidate-plan.schema.json',
+            layer: 'schema',
+            value: { summary: 42, proposedSteps: [] },
+          },
+        ],
+      }),
+    ),
   };
   return {
     ...files,

@@ -5,7 +5,9 @@ import {
   ResponsibilityAuthorityDeniedError,
   ResponsibilityDigestConflictError,
   ResponsibilityOwnerRootMismatchError,
+  ResponsibilityPlanningConflictError,
   ResponsibilityProjectionCursorError,
+  ResponsibilityProjectionMissingError,
 } from '../src/responsibility/errors';
 import {
   createResponsibilityWorkerAdapter,
@@ -78,6 +80,7 @@ function harness(options: {
   ownerRoot?: ResponsibilityOwnerRoot;
 } = {}) {
   const calls: Array<{ ownerId: string; input: unknown }> = [];
+  const failures: string[] = [];
   let ownerRootCalls = 0;
   const ownerRoot = options.ownerRoot ?? {
     async capture(input) {
@@ -100,7 +103,7 @@ function harness(options: {
   const adapter = createResponsibilityWorkerAdapter({
     authority: options.authority ?? { authenticate: async () => trustedContext },
     edgeRateLimit: { admit: async () => true },
-    failureReporter: { report: () => undefined },
+    failureReporter: { report: (kind) => { failures.push(kind); } },
     ownerRootFor: async (context) => {
       ownerRootCalls += 1;
       expect(context).toEqual(trustedContext);
@@ -109,7 +112,7 @@ function harness(options: {
     now: () => '2026-08-06T12:00:01.000Z',
     newId: (kind) => `${kind}_server_01`,
   });
-  return { adapter, calls, ownerRootCalls: () => ownerRootCalls };
+  return { adapter, calls, failures, ownerRootCalls: () => ownerRootCalls };
 }
 
 describe('responsibility Worker adapter', () => {
@@ -260,6 +263,58 @@ describe('responsibility Worker adapter', () => {
       type: 'https://api.heywaldo.com/problems/request-conflict',
       title: 'Request conflict', status: 409, code: 'request_conflict',
     });
+  });
+
+  it.each([
+    {
+      name: 'unknown WorkUnit', operation: 'plan' as const,
+      error: new ResponsibilityProjectionMissingError(), status: 404,
+    },
+    {
+      name: 'unsupported WorkUnit capabilities', operation: 'plan' as const,
+      error: new ResponsibilityPlanningConflictError('unsupported capabilities'), status: 409,
+    },
+    {
+      name: 'unknown planning execution', operation: 'cancel' as const,
+      error: new ResponsibilityPlanningConflictError('unknown planning execution'), status: 409,
+    },
+  ])('maps $name to a bounded client error without failure amplification', async ({
+    operation, error, status,
+  }) => {
+    const content = 'Bounded fixture.';
+    const digestBytes = await crypto.subtle.digest(
+      'SHA-256', new TextEncoder().encode(content),
+    );
+    const digest = `sha256:${Array.from(new Uint8Array(digestBytes), (byte) =>
+      byte.toString(16).padStart(2, '0')).join('')}`;
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async plan() { throw error; },
+      async cancelPlanning() { throw error; },
+    };
+    const { adapter, failures } = harness({ ownerRoot });
+    const response = await adapter.fetch(operation === 'plan'
+      ? planningRequest({
+        protocolVersion: '0.3', requestId: `planning_${operation}_client_error_01`,
+        commandType: 'work_unit.request_planning_turn',
+        presenceRegistrationId: trustedContext.presenceRegistrationId,
+        aggregate: { kind: 'work_unit', id: 'work_unit_unknown', expectedRevision: 1 },
+        clientIssuedAt: '2026-08-07T08:00:00.000Z',
+        payload: { governedInputs: [{ ref: 'fixture', digest, content }] },
+      })
+      : planningCancelRequest({
+        protocolVersion: '0.3', requestId: `planning_${operation}_client_error_01`,
+        commandType: 'work_unit.cancel_planning_turn',
+        presenceRegistrationId: trustedContext.presenceRegistrationId,
+        executionRequestId: 'execution_request_unknown',
+        expectedCancellationGeneration: 0,
+        clientIssuedAt: '2026-08-07T08:00:00.000Z',
+      }));
+
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ status });
+    expect(failures).toEqual([]);
   });
   it('keeps the production route behind an explicit fail-closed deployment switch', async () => {
     const disabled = await worker.fetch(request(captureBody), {} as Cloudflare.Env);

@@ -557,7 +557,19 @@ export const RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION: DoMigration = {
       UNIQUE (owner_id, id),
       UNIQUE (owner_id, outcome_id, position)
     );`,
-    `INSERT INTO work_units SELECT * FROM work_units_v02;`,
+    `INSERT INTO work_units (
+      id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+      inputs_json, dependency_ids_json, expected_evidence_json,
+      required_capabilities_json, authority_ceiling_json, budget_json,
+      isolation_json, stop_conditions_json, assignee, session_ids_json, state,
+      created_at, updated_at
+    ) SELECT
+      id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+      inputs_json, dependency_ids_json, expected_evidence_json,
+      required_capabilities_json, authority_ceiling_json, budget_json,
+      isolation_json, stop_conditions_json, assignee, session_ids_json, state,
+      created_at, updated_at
+    FROM work_units_v02;`,
     'DROP TABLE work_units_v02;',
     `CREATE TABLE planning_execution_requests (
       id                       TEXT PRIMARY KEY,
@@ -694,7 +706,19 @@ export const RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION: DoMigration = {
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       UNIQUE (owner_id, id), UNIQUE (owner_id, outcome_id, position)
     );`,
-    'INSERT INTO work_units SELECT * FROM work_units_v03;',
+    `INSERT INTO work_units (
+      id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+      inputs_json, dependency_ids_json, expected_evidence_json,
+      required_capabilities_json, authority_ceiling_json, budget_json,
+      isolation_json, stop_conditions_json, assignee, session_ids_json, state,
+      created_at, updated_at
+    ) SELECT
+      id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+      inputs_json, dependency_ids_json, expected_evidence_json,
+      required_capabilities_json, authority_ceiling_json, budget_json,
+      isolation_json, stop_conditions_json, assignee, session_ids_json, state,
+      created_at, updated_at
+    FROM work_units_v03;`,
     'DROP TABLE work_units_v03;',
   ],
 };

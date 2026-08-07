@@ -491,6 +491,21 @@ describe('HEY-10 DO SQLite schema root', () => {
     expect(result.planningTables).toHaveLength(8);
   });
 
+  it('names every WorkUnit column in both V5 migration copy directions', () => {
+    const copyStatements = [
+      ...RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION.up,
+      ...RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION.down,
+    ].filter((statement) => statement.includes('INSERT INTO work_units'));
+
+    expect(copyStatements).toHaveLength(2);
+    for (const statement of copyStatements) {
+      expect(statement).toContain('INSERT INTO work_units (');
+      expect(statement).not.toMatch(/INSERT INTO work_units\s+SELECT \*/);
+      expect(statement).toContain('id, owner_id, outcome_id, mission_id');
+      expect(statement).toContain('created_at, updated_at');
+    }
+  });
+
   it('keeps the memory-block contract columns needed by Scribe rollback and recall', async () => {
     const stub = freshStub();
 

@@ -9,11 +9,7 @@ overrides:
 
 importers:
 
-  .:
-    devDependencies:
-      ajv:
-        specifier: 8.17.1
-        version: 8.17.1
+  .: {}
 
   packages/contracts:
     dependencies:
@@ -21,6 +17,9 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
     devDependencies:
+      ajv:
+        specifier: 8.17.1
+        version: 8.17.1
       typescript:
         specifier: 5.9.3
         version: 5.9.3

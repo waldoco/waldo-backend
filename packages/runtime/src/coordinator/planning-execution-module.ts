@@ -134,20 +134,32 @@ export class PlanningExecutionModule {
       request_digest: string; execution_json: string; status: string;
     }>(
       `SELECT owner_id, effect_ref, invocation_key, request_digest, execution_json, status
-         FROM planning_provider_invocations WHERE execution_request_id = ?`,
-      executionRequestId,
+         FROM planning_provider_invocations
+        WHERE execution_request_id = ? AND owner_id = ?`,
+      executionRequestId, ownerId,
     ).toArray()[0];
     if (row === undefined) return null;
-    if (row.owner_id !== ownerId) throw new Error('planning provider receipt owner mismatch');
     if (row.status === 'invalid_output') throw new Error('planning provider output rejected');
     if (row.status !== 'pending' && row.status !== 'ambiguous') return null;
+    const request = this.storage.sql.exec<{
+      status: string; cancellation_generation: number;
+    }>(
+      `SELECT status, cancellation_generation
+         FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ?`,
+      executionRequestId, ownerId,
+    ).toArray()[0];
+    if (request === undefined || request.status !== 'leased') return null;
     const lease = this.storage.sql.exec<{
       holder_id: string; fence: number; cancellation_generation: number; expires_at: string;
     }>(
       `SELECT holder_id, fence, cancellation_generation, expires_at
-         FROM planning_execution_leases WHERE execution_request_id = ?`,
-      executionRequestId,
-    ).one();
+         FROM planning_execution_leases
+        WHERE execution_request_id = ? AND owner_id = ?`,
+      executionRequestId, ownerId,
+    ).toArray()[0];
+    if (lease === undefined ||
+        request.cancellation_generation !== lease.cancellation_generation) return null;
     let fence = lease.fence;
     if (Date.parse(lease.expires_at) <= Date.parse(at)) {
       fence += 1;
@@ -301,6 +313,9 @@ export class PlanningExecutionModule {
       if (parsed.success) return parsed.data;
       if (items.length === 0) throw parsed.error;
       items.pop();
+      if (items.length === 0) {
+        throw new Error('planning projection item exceeds page byte limit');
+      }
       truncatedByByteLimit = true;
     }
   }
@@ -620,31 +635,35 @@ export class PlanningExecutionModule {
     at: string;
   }): void {
     const request = this.storage.sql.exec<{
-      owner_id: string; outcome_id: string; work_unit_id: string; status: string;
+      outcome_id: string; work_unit_id: string; status: string;
     }>(
-      'SELECT owner_id, outcome_id, work_unit_id, status FROM planning_execution_requests WHERE id = ?',
-      input.executionRequestId,
-    ).one();
-    if (request.owner_id !== input.ownerId || request.status !== 'leased') {
-      throw new Error('planning execution cannot become ambiguous');
-    }
+      `SELECT outcome_id, work_unit_id, status
+         FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ?`,
+      input.executionRequestId, input.ownerId,
+    ).toArray()[0];
+    if (request === undefined || request.status !== 'leased') return;
     const receipt = this.storage.sql.exec<{ status: string }>(
-      'SELECT status FROM planning_provider_invocations WHERE execution_request_id = ?',
-      input.executionRequestId,
+      `SELECT status FROM planning_provider_invocations
+        WHERE execution_request_id = ? AND owner_id = ?`,
+      input.executionRequestId, input.ownerId,
     ).one();
     if (receipt.status === 'completed') return;
     if (receipt.status === 'ambiguous') return;
     this.storage.sql.exec(
-      "UPDATE planning_provider_invocations SET status = 'ambiguous' WHERE execution_request_id = ?",
-      input.executionRequestId,
+      `UPDATE planning_provider_invocations SET status = 'ambiguous'
+        WHERE execution_request_id = ? AND owner_id = ?`,
+      input.executionRequestId, input.ownerId,
     );
     const session = this.storage.sql.exec<{ id: string }>(
-      'SELECT id FROM planning_agent_sessions WHERE execution_request_id = ?',
-      input.executionRequestId,
+      `SELECT id FROM planning_agent_sessions
+        WHERE execution_request_id = ? AND owner_id = ?`,
+      input.executionRequestId, input.ownerId,
     ).one();
     this.storage.sql.exec(
-      "UPDATE planning_agent_sessions SET status = 'ambiguous', updated_at = ? WHERE id = ?",
-      input.at, session.id,
+      `UPDATE planning_agent_sessions SET status = 'ambiguous', updated_at = ?
+        WHERE id = ? AND owner_id = ?`,
+      input.at, session.id, input.ownerId,
     );
     const cursor = this.events.appendInCurrentTransaction({
       schemaVersion: '0.3', eventId: this.newId('event'), ownerId: input.ownerId,
@@ -684,11 +703,13 @@ export class PlanningExecutionModule {
       cancellation_generation: number;
     }>(
       `SELECT owner_id, outcome_id, work_unit_id, status, cancellation_generation
-         FROM planning_execution_requests WHERE id = ?`,
-      input.executionRequestId,
-    ).one();
-    if (request.owner_id !== input.ownerId ||
-        request.cancellation_generation !== input.expectedCancellationGeneration) {
+         FROM planning_execution_requests WHERE id = ? AND owner_id = ?`,
+      input.executionRequestId, input.ownerId,
+    ).toArray()[0];
+    if (request === undefined) {
+      throw new ResponsibilityPlanningConflictError('planning execution not found');
+    }
+    if (request.cancellation_generation !== input.expectedCancellationGeneration) {
       throw new ResponsibilityPlanningConflictError('stale planning cancellation generation');
     }
     if (request.status === 'completed' || request.status === 'cancelled' ||
@@ -699,22 +720,30 @@ export class PlanningExecutionModule {
     this.storage.sql.exec(
       `UPDATE planning_execution_requests
           SET status = 'cancelled', cancellation_generation = ?, updated_at = ?
-        WHERE id = ?`,
-      nextGeneration, input.at, input.executionRequestId,
+        WHERE id = ? AND owner_id = ?`,
+      nextGeneration, input.at, input.executionRequestId, input.ownerId,
     );
     const session = this.storage.sql.exec<{ id: string; status: string }>(
-      'SELECT id, status FROM planning_agent_sessions WHERE execution_request_id = ?',
-      input.executionRequestId,
+      `SELECT id, status FROM planning_agent_sessions
+        WHERE execution_request_id = ? AND owner_id = ?`,
+      input.executionRequestId, input.ownerId,
     ).one();
     this.storage.sql.exec(
       `UPDATE planning_agent_sessions
           SET status = 'cancelled', cancellation_generation = ?, updated_at = ?
-        WHERE id = ?`,
-      nextGeneration, input.at, session.id,
+        WHERE id = ? AND owner_id = ?`,
+      nextGeneration, input.at, session.id, input.ownerId,
     );
     this.storage.sql.exec(
-      "UPDATE planning_provider_invocations SET status = 'ambiguous' WHERE execution_request_id = ? AND status = 'pending'",
-      input.executionRequestId,
+      `UPDATE planning_execution_leases
+          SET cancellation_generation = ?
+        WHERE execution_request_id = ? AND owner_id = ?`,
+      nextGeneration, input.executionRequestId, input.ownerId,
+    );
+    this.storage.sql.exec(
+      `UPDATE planning_provider_invocations SET status = 'ambiguous'
+        WHERE execution_request_id = ? AND owner_id = ? AND status = 'pending'`,
+      input.executionRequestId, input.ownerId,
     );
     const cursor = this.events.appendInCurrentTransaction({
       schemaVersion: '0.3', eventId: this.newId('event'), ownerId: input.ownerId,

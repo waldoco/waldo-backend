@@ -449,20 +449,9 @@ function trustedFakeGatewayResponse(request: LLMGatewayRequest): LLMResponse {
 }
 
 function fakeWorkUnitCandidatePlanResponse(request: LLMGatewayRequest): LLMResponse {
-  const input = request.request.messages.map((message) => message.content).join('\n');
-  const personal = input.includes('investor meeting');
   return {
     model: request.request.model,
-    text: JSON.stringify(personal ? {
-      summary: 'Prepare a concise investor-meeting brief and a bounded follow-up checklist.',
-      proposedSteps: [
-        'Review the supplied meeting context and identify the three decisions the meeting should advance.',
-        'Draft talking points, likely questions, and concise answers using only supplied context.',
-        'List proposed follow-ups for the user to review and handle after the meeting.',
-      ],
-      openQuestions: ['Which decision is most important to secure in the meeting?'],
-      constraints: ['Use supplied fixture context only.', 'Do not contact attendees or modify a calendar.'],
-    } : {
+    text: JSON.stringify({
       summary: 'Prepare a reviewable product update plan without publishing it.',
       proposedSteps: [
         'Review the supplied release context and identify the user-visible changes.',

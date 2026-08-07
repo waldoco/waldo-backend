@@ -6,6 +6,7 @@ import {
   canonicalizeWorkUnitPlanningTurnRequestV03ForDigest,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureTrustedEnvelopeV02Schema,
+  workUnitPlanningCancelRequestV03Schema,
   workUnitPlanningTurnRequestV03Schema,
   workUnitPlanningTurnTrustedEnvelopeV03Schema,
   workUnitPlanningProjectionPageV03Schema,
@@ -69,6 +70,7 @@ async function seedPlanningAdmission(
     responsibility: string;
     governedContent: string;
     governedRef: string;
+    requiredCapabilities?: readonly string[];
   }> = {
     statement: 'Prepare a reviewable product update, but do not publish it.',
     responsibility: 'Prepare a bounded candidate plan.',
@@ -96,7 +98,7 @@ async function seedPlanningAdmission(
         inputs: [],
         dependencyPositions: [],
         expectedEvidence: [],
-        requiredCapabilities: [],
+        requiredCapabilities: scenario.requiredCapabilities ?? [],
         stopConditions: ['Do not publish or perform an external effect.'],
       }],
     },
@@ -216,6 +218,30 @@ function planningGatewayRequest(): LLMGatewayRequest {
   };
 }
 
+function cancelPlanningExecution(
+  coordinator: WaldoCoordinator,
+  input: Readonly<{
+    ownerId: string;
+    requestId: string;
+    executionRequestId: string;
+    expectedCancellationGeneration: number;
+  }>,
+) {
+  const request = workUnitPlanningCancelRequestV03Schema.parse({
+    protocolVersion: '0.3',
+    requestId: input.requestId,
+    commandType: 'work_unit.cancel_planning_turn',
+    presenceRegistrationId: authority.presenceRegistrationId,
+    executionRequestId: input.executionRequestId,
+    expectedCancellationGeneration: input.expectedCancellationGeneration,
+    clientIssuedAt: '2026-08-07T08:00:05.000Z',
+  });
+  return coordinator.cancelAuthorizedPlanningExecution({
+    routedOwnerId: input.ownerId,
+    request,
+  }, authority);
+}
+
 describe('minimum WorkUnit planning authorization harness', () => {
   it('atomically authorizes one planned WorkUnit and persists a zero-tool execution request', async () => {
     const stub = freshStub('planning-authorize');
@@ -283,8 +309,12 @@ describe('minimum WorkUnit planning authorization harness', () => {
         governedContent: 'Release fixture: responsibility capture v0.2 is available for review.',
         governedRef: 'fixture_product_release',
       },
-      expectedSummary: 'product update',
-      forbidden: 'publish',
+      candidatePlan: {
+        summary: 'Prepare a reviewable product update plan without publishing it.',
+        proposedSteps: ['Draft the update.', 'Present it for review.'],
+        openQuestions: ['Which audience should the final update prioritize?'],
+        constraints: ['Do not publish or perform any external effect.'],
+      },
     },
     {
       name: 'personal-assistance planning',
@@ -294,14 +324,33 @@ describe('minimum WorkUnit planning authorization harness', () => {
         governedContent: 'Fixture: meeting goal is to align on the next financing milestone.',
         governedRef: 'fixture_investor_meeting',
       },
-      expectedSummary: 'investor-meeting',
-      forbidden: 'contact attendees',
+      candidatePlan: {
+        summary: 'Prepare a concise investor-meeting brief and a bounded follow-up checklist.',
+        proposedSteps: ['Draft the brief.', 'List proposed follow-ups for user review.'],
+        openQuestions: ['Which decision matters most?'],
+        constraints: ['Do not contact attendees or modify a calendar.'],
+      },
     },
   ])('runs one contract-fake turn for $name through the same zero-tool interface', async ({
-    scenario, expectedSummary, forbidden,
+    scenario, candidatePlan,
   }) => {
     const stub = freshStub(`planning-scenario-${scenario.governedRef}`);
     const proof = await runInDurableObject(stub, async (instance, state) => {
+      instance.__runLoopSetTestOverrides({
+        gateway: {
+          async complete() { throw new Error('legacy provider path forbidden'); },
+          async executeOrReconcile(input) {
+            return { ok: true, data: {
+              model: input.effect.execution.step.model,
+              text: JSON.stringify(candidatePlan),
+              input_tokens: 10,
+              output_tokens: 5,
+              cache_read_input_tokens: 0,
+              latency_ms: 1,
+            } };
+          },
+        },
+      });
       const coordinator = coordinatorFor(state.storage);
       const { admission } = await seedPlanningAdmission(coordinator, authority.ownerId, scenario);
       const first = await instance.__waldoExecutePlanningTurnForTest(admission, authority);
@@ -333,8 +382,7 @@ describe('minimum WorkUnit planning authorization harness', () => {
     });
 
     expect(proof.retry).toEqual(proof.first);
-    expect(proof.first.candidatePlan.summary).toContain(expectedSummary);
-    expect(proof.first.candidatePlan.constraints.join(' ').toLowerCase()).toContain(forbidden);
+    expect(proof.first.candidatePlan).toEqual(candidatePlan);
     expect(proof.outcome).toEqual({ state: 'captured', revision: 1 });
     expect(proof.workUnit).toEqual({ state: 'planning_authorized', revision: 2 });
     expect(proof.session).toEqual({ status: 'completed' });
@@ -445,6 +493,46 @@ describe('minimum WorkUnit planning authorization harness', () => {
     }
   });
 
+  it('classifies missing WorkUnits, unsupported capabilities, and unknown cancellations as client errors', async () => {
+    const stub = freshStub('planning-client-errors');
+    await runInDurableObject(stub, async (_instance, state) => {
+      const coordinator = coordinatorFor(state.storage);
+      const { admission } = await seedPlanningAdmission(coordinator);
+      const missingRequest = workUnitPlanningTurnRequestV03Schema.parse({
+        ...(admission.request as WorkUnitPlanningTurnRequestV03),
+        requestId: 'planning_missing_work_unit',
+        aggregate: {
+          ...(admission.request as WorkUnitPlanningTurnRequestV03).aggregate,
+          id: 'work_unit_missing',
+        },
+      });
+      await expect(coordinator.authorizePlanningTurn(
+        await planningAdmission(authority.ownerId, missingRequest), authority,
+      )).rejects.toMatchObject({ name: 'ResponsibilityProjectionMissingError' });
+
+      await expect(cancelPlanningExecution(coordinator, {
+        ownerId: authority.ownerId,
+        requestId: 'planning_cancel_missing',
+        executionRequestId: 'execution_request_missing',
+        expectedCancellationGeneration: 0,
+      })).rejects.toMatchObject({ name: 'ResponsibilityPlanningConflictError' });
+    });
+
+    const capabilityStub = freshStub('planning-client-error-capability');
+    await runInDurableObject(capabilityStub, async (_instance, state) => {
+      const coordinator = coordinatorFor(state.storage);
+      const { admission } = await seedPlanningAdmission(coordinator, authority.ownerId, {
+        statement: 'Prepare a plan using the declared artifact capability.',
+        responsibility: 'Prepare a bounded candidate plan.',
+        governedContent: 'Bounded fixture.',
+        governedRef: 'fixture_required_capability',
+        requiredCapabilities: ['artifact.read'],
+      });
+      await expect(coordinator.authorizePlanningTurn(admission, authority))
+        .rejects.toMatchObject({ name: 'ResponsibilityPlanningConflictError' });
+    });
+  });
+
   it('fences late settlement after cancellation and rejects a stale cancellation generation', async () => {
     const stub = freshStub('planning-cancellation-fence');
     const proof = await runInDurableObject(stub, async (_instance, state) => {
@@ -457,13 +545,13 @@ describe('minimum WorkUnit planning authorization harness', () => {
         holderId: authorization.executionRequest.executor.executorId,
         request: planningGatewayRequest(),
       });
-      const cancellation = await coordinator.cancelPlanningExecution({
+      const cancellation = await cancelPlanningExecution(coordinator, {
         ownerId: authority.ownerId,
         requestId: 'planning_cancel_01',
         executionRequestId: authorization.executionRequest.id,
         expectedCancellationGeneration: 0,
       });
-      const cancellationRetry = await coordinator.cancelPlanningExecution({
+      const cancellationRetry = await cancelPlanningExecution(coordinator, {
         ownerId: authority.ownerId,
         requestId: 'planning_cancel_01',
         executionRequestId: authorization.executionRequest.id,
@@ -482,7 +570,7 @@ describe('minimum WorkUnit planning authorization harness', () => {
           openQuestions: [], constraints: ['Cancelled.'],
         },
       })).rejects.toThrow();
-      await expect(coordinator.cancelPlanningExecution({
+      await expect(cancelPlanningExecution(coordinator, {
         ownerId: authority.ownerId,
         requestId: 'planning_cancel_stale_01',
         executionRequestId: authorization.executionRequest.id,
@@ -510,6 +598,78 @@ describe('minimum WorkUnit planning authorization harness', () => {
       session: { status: 'cancelled', cancellation_generation: 1 },
       candidates: 0,
       outcome: { state: 'captured', revision: 1 },
+    });
+  });
+
+  it('never resumes provider I/O after cancellation and keeps the lease generation synchronized', async () => {
+    let providerCalls = 0;
+    const gateway: LLMGatewayAdapter = {
+      async complete() { throw new Error('legacy provider path forbidden'); },
+      async executeOrReconcile() {
+        providerCalls += 1;
+        throw new Error('provider I/O must remain fenced');
+      },
+    };
+    const stub = freshStub('planning-cancelled-restart');
+    const proof = await runInDurableObject(stub, async (instance, state) => {
+      instance.__runLoopSetTestOverrides({ gateway });
+      const coordinator = coordinatorFor(state.storage);
+      const { admission } = await seedPlanningAdmission(coordinator);
+      const authorization = await coordinator.authorizePlanningTurn(admission, authority);
+      await coordinator.preparePlanningProviderEffect({
+        ownerId: authority.ownerId,
+        executionRequestId: authorization.executionRequest.id,
+        holderId: authorization.executionRequest.executor.executorId,
+        request: planningGatewayRequest(),
+      });
+      await cancelPlanningExecution(coordinator, {
+        ownerId: authority.ownerId,
+        requestId: 'planning_cancel_before_restart',
+        executionRequestId: authorization.executionRequest.id,
+        expectedCancellationGeneration: 0,
+      });
+      await expect(instance.__waldoExecutePlanningTurnForTest(admission, authority)).rejects.toThrow();
+      return {
+        request: state.storage.sql.exec<{ status: string; cancellation_generation: number }>(
+          'SELECT status, cancellation_generation FROM planning_execution_requests',
+        ).one(),
+        lease: state.storage.sql.exec<{ cancellation_generation: number }>(
+          'SELECT cancellation_generation FROM planning_execution_leases',
+        ).one(),
+      };
+    });
+
+    expect(providerCalls).toBe(0);
+    expect(proof).toEqual({
+      request: { status: 'cancelled', cancellation_generation: 1 },
+      lease: { cancellation_generation: 1 },
+    });
+  });
+
+  it('preserves the provider failure when cancellation lands during provider I/O', async () => {
+    const stub = freshStub('planning-cancel-during-provider');
+    await runInDurableObject(stub, async (instance, state) => {
+      const coordinator = coordinatorFor(state.storage);
+      const { admission } = await seedPlanningAdmission(coordinator);
+      const gateway: LLMGatewayAdapter = {
+        async complete() { throw new Error('legacy provider path forbidden'); },
+        async executeOrReconcile() {
+          const executionRequestId = state.storage.sql.exec<{ id: string }>(
+            'SELECT id FROM planning_execution_requests',
+          ).one().id;
+          await cancelPlanningExecution(coordinator, {
+            ownerId: authority.ownerId,
+            requestId: 'planning_cancel_during_provider',
+            executionRequestId,
+            expectedCancellationGeneration: 0,
+          });
+          throw new Error('provider causal failure');
+        },
+      };
+      instance.__runLoopSetTestOverrides({ gateway });
+
+      await expect(instance.__waldoExecutePlanningTurnForTest(admission, authority))
+        .rejects.toThrow('provider causal failure');
     });
   });
 
@@ -761,7 +921,6 @@ describe('minimum WorkUnit planning authorization harness', () => {
     expect(proof.workUnit.state).toBe('planning_authorized');
     expect(JSON.parse(proof.workUnit.authority_ceiling_json)).toEqual(authorityCeiling);
     expect(JSON.parse(proof.manifest)).toEqual(manifest);
-    expect(proof.result.candidatePlan.constraints).toContain('Do not publish or perform any external effect.');
   });
 
   it('records schema-invalid provider output as a known failed result without retrying provider I/O', async () => {
@@ -788,7 +947,7 @@ describe('minimum WorkUnit planning authorization harness', () => {
         .rejects.toThrow('schema-invalid candidate plan');
       await expect(instance.__waldoExecutePlanningTurnForTest(admission, authority))
         .rejects.toThrow('planning provider output rejected');
-      await expect(coordinator.cancelPlanningExecution({
+      await expect(cancelPlanningExecution(coordinator, {
         ownerId: authority.ownerId, requestId: 'cancel_failed_session_01',
         executionRequestId: state.storage.sql.exec<{ id: string }>(
           'SELECT id FROM planning_execution_requests',

@@ -6,7 +6,8 @@ Gate B implements the minimum Outcome-bound working-agent harness for one author
 planning turn. Against live `origin/main` at `2a01cf242058d1bff460229c25894349b2c2d30e`, the
 current candidate is `architecture_specified`, `contract_defined`, `module_implemented`, and
 `adapter_conformance_passed` for the local public-adapter and deterministic-provider boundary.
-The final verification and independent review wall is recorded below.
+The final local verification wall and the independent re-review status are recorded separately
+below so local remediation is not presented as independent approval.
 
 This is not `cross_surface_acceptance_passed` or `operational_proof_passed`. Kennel has not invoked
 the public adapter, no hosted environment was changed, and no real provider turn was run because an
@@ -54,6 +55,8 @@ deterministic provider fake proves the contract and runtime behavior, not a lite
 - Version-pinned executable fixtures, generator, and freshness guard for the v0.3 public boundary.
 - Additive schema V5 for planning execution state. Upgrade tests preserve V4 responsibility state,
   and failure tests prove a V5 migration collision rolls back without replacing the WorkUnit table.
+  Forward and rollback WorkUnit copies name every column so later schema changes cannot silently
+  reorder persisted responsibility state.
 
 ## Observable behavior proved locally
 
@@ -80,7 +83,7 @@ Verification, Acceptance, OpenLoop, or closure.
 
 - `npx -y pnpm@10.34.4 install --frozen-lockfile`.
 - `@waldo/contracts`: 58 files / 1,475 tests.
-- `@waldo/runtime`: 38 files / 994 tests.
+- `@waldo/runtime`: 38 files / 1,001 tests.
 - Runtime Worker and Node integration TypeScript checks.
 - v0.3 fixture generation and freshness guard.
 - Local Supabase: eight canonical migrations, 53 pgTAP assertions, migration-list/history
@@ -89,10 +92,25 @@ Verification, Acceptance, OpenLoop, or closure.
   sign-out retry through the public responsibility adapter contract.
 - `DOCKER_CONTEXT=desktop-linux npx -y pnpm@10.34.4 verify`: frozen install, all workspace
   typechecks, contracts, Supabase reset/pgTAP, runtime, adapter integrations, and all guards.
-- Independent Standards, Spec, and Security reviews: PASS on the final source.
-- Independent adversarial breaker: PASS after the Draft 2020-12 capability-schema defect below
-  was fixed and reverified with six focused contract tests and 74 focused runtime tests.
+- Local separate Standards and Spec remediation reviews: PASS on the final working tree.
+- Mandatory Codex Security diff scan: complete coverage of all nine changed source/config rows,
+  zero surviving candidates, and a sealed no-findings report. It was parent-executed because the
+  resolved scan preflight selected the documented parent-only path.
+- Local adversarial breaker: PASS after the review findings and the Draft 2020-12
+  capability-schema defect below were fixed and reverified.
 - `git diff --check`.
+
+### Independent review status
+
+- The independent clean-room review of commit `48514ee84bbf82ff41d0acea81ee474c8b843985`
+  returned **NEEDS WORK** with eleven findings. Findings 1–10 were reproduced or inspected and
+  remediated in the follow-up working tree described below.
+- Finding 11, modeling `work_unit_plan` as a general `TriggerType`, remains an explicit
+  behavior-neutral architecture follow-up. This remediation does not add a scheduled trigger,
+  inherited capability, connector, tool, external effect, or new provider path.
+- Independent re-review of the pushed remediation commit has not yet run. The PR must not be
+  represented as independently approved or merged until that review is performed against the new
+  head.
 
 ### Failed, then fixed
 
@@ -125,6 +143,31 @@ Verification, Acceptance, OpenLoop, or closure.
   2020-12 JSON Schema even though runtime validation rejected non-empty arrays. The contract now
   emits `maxItems: 0`; an Ajv 8.17.1 Draft 2020-12 test compiles the generated trusted-envelope
   schema, accepts the pinned valid fixture, and rejects the non-empty-tools case.
+- The clean-room review found that unknown WorkUnits, unsupported captured capabilities, and
+  unknown cancellation targets escaped as HTTP 500 and amplified `owner_root_failure` reporting.
+  The owning modules now use the bounded missing/conflict vocabulary; adapter regressions prove
+  content-free 404/409 responses and no failure-reporter call.
+- The clean-room review found that cancellation made a pending provider invocation eligible for
+  reconciliation and left the lease at the previous cancellation generation. Recovery now requires
+  a still-leased request with matching request/lease generations, and cancellation advances the
+  request, session, and lease generation atomically. A restart after cancellation performs no
+  additional provider call.
+- The clean-room review found that ambiguity marking could replace the causal provider failure.
+  Ambiguity marking now becomes a no-op after a concurrent terminal transition, preserving the
+  original provider error while leaving settlement fenced.
+- The clean-room review found stale/non-executable rejection metadata, a divergent ad-hoc
+  cancellation test digest, root-only Ajv placement with permissive compilation, a scenario-aware
+  fake, a vacuous hostile-input assertion, a theoretical projection skip-forward edge, and a
+  positional migration copy. The fixture catalogue now declares exact schema/runtime layers and
+  validates both positive and negative controls under strict Draft 2020-12 Ajv from the contracts
+  package; tests use the canonical cancellation request/digest; the fake is input-agnostic and
+  scenario variation is injected explicitly; hostile tests assert durable authority invariants;
+  projection trimming refuses an unpageable single item; and both migration directions name every
+  WorkUnit column.
+- A new successful-down-migration rehearsal initially failed with Workerd `SQLITE_AUTH`; the
+  unsupported rehearsal was replaced with a direct invariant over both migration definitions.
+  Existing tests continue to prove forward data preservation, transactional collision rollback,
+  and fail-closed downgrade after durable V5 state exists.
 
 ### Unavailable
 
@@ -143,6 +186,9 @@ Verification, Acceptance, OpenLoop, or closure.
 - Tools, connectors, filesystem, shell, network, email, calendar, publishing, and other effects.
 - Candidate Evidence, independent Verification, Acceptance, OpenLoop, ReEntryPoint, Outcome
   closure, and reopen/release behavior.
+- A behavior-neutral refactor that removes `work_unit_plan` from the general scheduled-trigger
+  vocabulary. No runtime path currently grants scheduled-trigger authority from that modeling
+  choice, so it remains separate from the cancellation and public-boundary remediation.
 
 ## Preserved architecture boundaries
 
