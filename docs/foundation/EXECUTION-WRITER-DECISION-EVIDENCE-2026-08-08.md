@@ -1,9 +1,13 @@
 # Execution writer decision evidence
 
-**Date:** 2026-08-08  
-**Pinned `origin/main`:** `dd434e9bb5dedc4a135e43e30571a141599e8991`  
-**Issue:** [#80](https://github.com/Pin4sf/waldo-backend/issues/80)  
-**Status:** implementation evidence and recommendation, not an accepted ADR  
+**Date:** 2026-08-08
+
+**Pinned `origin/main`:** `dd434e9bb5dedc4a135e43e30571a141599e8991`
+
+**Issue:** [#80](https://github.com/Pin4sf/waldo-backend/issues/80)
+
+**Status:** implementation evidence and recommendation, not an accepted ADR
+
 **Authority:** the [architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) and accepted ADR history remain normative.
 
 ## Verdict
