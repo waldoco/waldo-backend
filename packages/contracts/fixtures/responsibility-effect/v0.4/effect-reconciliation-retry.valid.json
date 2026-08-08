@@ -12,7 +12,7 @@
   "basis": {
     "kind": "authoritative_not_applied",
     "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
-    "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+    "digest": "sha256:a6fb700f6c179fa63dcbe1d6908789f735b04eb1df753579b6460561d56c9723"
   },
   "retryOwner": "effect_engine",
   "nextAttempt": 2,

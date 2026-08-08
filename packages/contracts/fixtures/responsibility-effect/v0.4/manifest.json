@@ -35,11 +35,11 @@
     },
     {
       "path": "effect-reconciliation-retry.valid.json",
-      "sha256": "sha256:cda14eff67f3c91829067988ee0dcdf328dd34496ff661597b46a33e92348390"
+      "sha256": "sha256:d2afaa5d5ed96f18e465918391e80c626a7f7b3c51510e3e86eedc587857878b"
     },
     {
       "path": "effect-reconciliation-terminal-ambiguity.valid.json",
-      "sha256": "sha256:552ca9c67728858e97e7dec571a68b1770cd9ca34d04cf0219dd22056ba102a8"
+      "sha256": "sha256:061fe8d1ecc3a1ebf0438efc1e186d82192874bb78693f28b2b0fc931b85435f"
     },
     {
       "path": "effect-reconciliation-unavailable.valid.json",
@@ -55,7 +55,7 @@
     },
     {
       "path": "responsibility-effect.rejections.json",
-      "sha256": "sha256:578fb2daf46e77470a7a98b049d4c3c8d67da1918be0c0541269418d2437bba5"
+      "sha256": "sha256:09733e7e789e22d328797cb09c976cab7732d0f4a75e8377a3df81a9db5b75ba"
     }
   ]
 }

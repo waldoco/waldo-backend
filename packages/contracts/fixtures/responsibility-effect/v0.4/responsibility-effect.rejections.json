@@ -1255,7 +1255,7 @@
         "basis": {
           "kind": "unknown",
           "reconciliationId": "effect_reconciliation_unknown_fixture_01",
-          "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+          "digest": "sha256:b471e7079f3280d1f0d8fd17be01ce03bfd9d778cc1f35f591da01f1dd643ca1"
         },
         "providerRetry": true
       }
@@ -1341,6 +1341,74 @@
       }
     },
     {
+      "name": "reconciliation-unavailable-as-not-applied",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_unavailable_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "authoritative_not_applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "read_back_unavailable"
+        }
+      }
+    },
+    {
+      "name": "reconciliation-unavailable-as-retry",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_retry_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "retry_admitted",
+        "basis": {
+          "kind": "authoritative_not_applied",
+          "reconciliationId": "effect_reconciliation_unavailable_fixture_01",
+          "digest": "sha256:38c0134b72589329d14e65df672ac94c93a1dda4a557dff43e06b81238635e05"
+        },
+        "retryOwner": "effect_engine",
+        "nextAttempt": 2,
+        "remainingAttempts": 0
+      },
+      "referenced": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_unavailable_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "unavailable",
+        "receiptId": "effect_receipt_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "read_back_unavailable"
+        }
+      }
+    },
+    {
       "name": "reconciliation-unknown-as-not-applied",
       "schema": "effect-reconciliation.schema.json",
       "layer": "schema",
@@ -1383,7 +1451,7 @@
         "basis": {
           "kind": "unknown",
           "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
-          "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+          "digest": "sha256:a6fb700f6c179fa63dcbe1d6908789f735b04eb1df753579b6460561d56c9723"
         },
         "retryOwner": "effect_engine",
         "nextAttempt": 2,
@@ -1409,7 +1477,7 @@
         "basis": {
           "kind": "authoritative_not_applied",
           "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
-          "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+          "digest": "sha256:a6fb700f6c179fa63dcbe1d6908789f735b04eb1df753579b6460561d56c9723"
         },
         "retryOwner": "provider",
         "nextAttempt": 2,
@@ -1435,7 +1503,7 @@
         "basis": {
           "kind": "authoritative_not_applied",
           "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
-          "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+          "digest": "sha256:a6fb700f6c179fa63dcbe1d6908789f735b04eb1df753579b6460561d56c9723"
         },
         "retryOwner": "effect_engine",
         "nextAttempt": 3,
@@ -1461,7 +1529,48 @@
         "basis": {
           "kind": "authoritative_not_applied",
           "reconciliationId": "effect_reconciliation_unknown_fixture_01",
-          "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+          "digest": "sha256:b471e7079f3280d1f0d8fd17be01ce03bfd9d778cc1f35f591da01f1dd643ca1"
+        }
+      }
+    },
+    {
+      "name": "terminal-ambiguity-wrong-referenced-state",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_terminal_ambiguity_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 2,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "terminal_ambiguity",
+        "basis": {
+          "kind": "unknown",
+          "reconciliationId": "effect_reconciliation_unavailable_fixture_01",
+          "digest": "sha256:38c0134b72589329d14e65df672ac94c93a1dda4a557dff43e06b81238635e05"
+        }
+      },
+      "referenced": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_unavailable_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "unavailable",
+        "receiptId": "effect_receipt_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "read_back_unavailable"
         }
       }
     },
