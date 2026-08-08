@@ -1,0 +1,20 @@
+{
+  "protocolVersion": "0.4",
+  "id": "effect_reconciliation_retry_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "intentId": "effect_intent_fixture_01",
+  "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+  "reconciliationKey": "effect_reconciliation_fixture_01",
+  "revision": 1,
+  "attempt": 1,
+  "checkedAt": "2026-08-08T18:11:03.000Z",
+  "state": "retry_admitted",
+  "basis": {
+    "kind": "authoritative_not_applied",
+    "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
+    "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+  },
+  "retryOwner": "effect_engine",
+  "nextAttempt": 2,
+  "remainingAttempts": 0
+}
