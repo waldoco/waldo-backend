@@ -52,7 +52,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 | orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | pending |
 | contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | `dd434e9` | `packages/contracts/**` | active | pending |
 | migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | `dd434e9` | guard/tests/docs required by the guard | active | pending |
-| execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | complete | `a12c6d2`; PR pending |
+| execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
 | credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | active | pending |
 
 ## Planned implementation barriers
@@ -102,6 +102,7 @@ Every worker handoff and PR must report:
 | 2026-08-08 | orchestration | Authorship decision | Codex owns implementation lanes for this sprint. Claude is reserved for later independent PR review. |
 | 2026-08-08 | orchestration | TDD policy | Vertical public-interface RED-GREEN cycles; mocks only at external boundaries; no bulk speculative contract scaffolding. |
 | 2026-08-08 | execution decision | #80 source map complete | `a12c6d2` proves `PlanningExecutionModule` is the only behavioral writer for the current request/session/lease tables. It also corrects #81/#87: provider adapters and execution-environment adapters remain different categories behind one durable engine. |
+| 2026-08-08 | execution decision | Review unit published | Draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) contains evidence only, does not close #80, and awaits independent review/ADR ratification. |
 | 2026-08-08 | orchestration | Worker transport recovery | Contract and migration worker streams disconnected; worktrees were inspected before resumption. Contract had no diff; migration retained one self-test diff. No work was discarded or duplicated. |
 
 ## Honest capability status
