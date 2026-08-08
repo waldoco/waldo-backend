@@ -75,7 +75,14 @@ const REQUIRED_JUDGMENT_AUTHORITY_REJECTIONS_V04 = [
   'binding-artifact-digest-mismatch',
   'binding-validity-mismatch',
   'binding-refusal-option-cannot-grant',
+  'binding-refusal-cannot-select-grant',
+  'binding-answered-request-cannot-authorize',
+  'binding-expired-request-cannot-authorize',
+  'binding-withdrawn-request-cannot-authorize',
+  'binding-superseded-request-cannot-authorize',
   'binding-decision-before-request',
+  'binding-decision-before-request-update',
+  'binding-decision-at-request-expiry',
   'binding-decision-after-request-expiry',
   'binding-grant-created-before-decision',
   'binding-grant-valid-before-created',
@@ -427,6 +434,39 @@ describe('responsibility judgment and authority v0.4', () => {
         answer: { ...binding.answer, clientIssuedAt },
       }).success, clientIssuedAt).toBe(true);
     }
+  });
+
+  it('admits authority only from an open request before its expiry boundary', () => {
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
+    const binding = JSON.parse(bundle['judgment-authority-binding.valid.json']!);
+
+    for (const [state, decisionId] of [
+      ['answered', binding.decision.id],
+      ['expired', null],
+      ['withdrawn', null],
+      ['superseded', null],
+    ] as const) {
+      expect(judgmentAuthorityBindingV04Schema.safeParse({
+        ...binding,
+        request: { ...binding.request, state, decisionId },
+      }).success, state).toBe(false);
+    }
+
+    expect(judgmentAuthorityBindingV04Schema.safeParse({
+      ...binding,
+      decision: { ...binding.decision, decidedAt: binding.request.expiresAt },
+    }).success).toBe(false);
+  });
+
+  it('records refusal only when the owner selected an explicit refusal option', () => {
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
+    const binding = JSON.parse(bundle['judgment-authority-binding.valid.json']!);
+    const { grant: _grant, ...withoutGrant } = binding;
+
+    expect(judgmentAuthorityBindingV04Schema.safeParse({
+      ...withoutGrant,
+      authorityDisposition: 'refused',
+    }).success).toBe(false);
   });
 
   it('publishes Draft 2020-12 schemas that round-trip every valid fixture', () => {

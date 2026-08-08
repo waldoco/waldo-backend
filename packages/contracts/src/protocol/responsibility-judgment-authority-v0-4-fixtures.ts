@@ -59,7 +59,14 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04 = [
   'binding-artifact-digest-mismatch',
   'binding-validity-mismatch',
   'binding-refusal-option-cannot-grant',
+  'binding-refusal-cannot-select-grant',
+  'binding-answered-request-cannot-authorize',
+  'binding-expired-request-cannot-authorize',
+  'binding-withdrawn-request-cannot-authorize',
+  'binding-superseded-request-cannot-authorize',
   'binding-decision-before-request',
+  'binding-decision-before-request-update',
+  'binding-decision-at-request-expiry',
   'binding-decision-after-request-expiry',
   'binding-grant-created-before-decision',
   'binding-grant-valid-before-created',
@@ -656,6 +663,63 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
             },
           },
           {
+            name: 'binding-refusal-cannot-select-grant',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              requestDigest: displayedRequestDigest,
+              request: judgmentRequest,
+              answer: judgmentAnswer,
+              decision: judgmentDecision,
+              authorityDisposition: 'refused',
+            },
+          },
+          {
+            name: 'binding-answered-request-cannot-authorize',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              request: {
+                ...judgmentRequest,
+                state: 'answered',
+                decisionId: judgmentDecision.id,
+              },
+            },
+          },
+          {
+            name: 'binding-expired-request-cannot-authorize',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              request: { ...judgmentRequest, state: 'expired' },
+            },
+          },
+          {
+            name: 'binding-withdrawn-request-cannot-authorize',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              request: { ...judgmentRequest, state: 'withdrawn' },
+            },
+          },
+          {
+            name: 'binding-superseded-request-cannot-authorize',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              request: { ...judgmentRequest, state: 'superseded' },
+            },
+          },
+          {
             name: 'binding-decision-before-request',
             schema: 'judgment-authority-binding.schema.json',
             layer: 'runtime',
@@ -663,6 +727,26 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
             value: {
               ...judgmentAuthorityBinding,
               decision: { ...judgmentDecision, decidedAt: '2026-08-08T18:04:59.999Z' },
+            },
+          },
+          {
+            name: 'binding-decision-before-request-update',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              request: { ...judgmentRequest, updatedAt: '2026-08-08T18:11:00.001Z' },
+            },
+          },
+          {
+            name: 'binding-decision-at-request-expiry',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              decision: { ...judgmentDecision, decidedAt: judgmentRequest.expiresAt },
             },
           },
           {
