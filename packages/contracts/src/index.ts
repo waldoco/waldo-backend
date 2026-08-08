@@ -138,6 +138,8 @@ export * from './protocol/responsibility-judgment-authority-v0-4';
 export * from './protocol/responsibility-judgment-authority-v0-4-fixtures';
 export * from './protocol/responsibility-effect-v0-4';
 export * from './protocol/responsibility-effect-v0-4-fixtures';
+export * from './protocol/responsibility-obligation-context-v0-4';
+export * from './protocol/responsibility-obligation-context-v0-4-fixtures';
 export * from './telemetry/engagement';
 export * from './public/dto';
 export * from './public/morning-brief';

@@ -1,0 +1,14 @@
+{
+  "protocolVersion": "0.4",
+  "id": "obligation_context_declined_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "revision": 1,
+  "outcome": {
+    "id": "outcome_fixture_01",
+    "revision": 3
+  },
+  "acceptanceCriteria": {
+    "state": "declined"
+  },
+  "recordedAt": "2026-08-08T18:00:00.000Z"
+}

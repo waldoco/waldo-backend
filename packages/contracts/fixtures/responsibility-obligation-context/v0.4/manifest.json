@@ -1,0 +1,29 @@
+{
+  "protocolName": "responsibility-obligation-context",
+  "protocolVersion": "0.4",
+  "mediaType": "application/vnd.waldo.responsibility.v0.4+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "files": [
+    {
+      "path": "obligation-context-absent.valid.json",
+      "sha256": "sha256:3327e961d3b8cc3b38f9a7359e2271f40e77cde442cc17aacd0db9c958124e44"
+    },
+    {
+      "path": "obligation-context-declared.valid.json",
+      "sha256": "sha256:73f5bd69c3cf149ccf2c5820eb6f8530bfa127f47ca360c93dd8b316c9e9f535"
+    },
+    {
+      "path": "obligation-context-declined.valid.json",
+      "sha256": "sha256:752c28e0d591d6b3dce080dd868c1d60a2dcc7275f333df87975a7808d786c35"
+    },
+    {
+      "path": "obligation-context.rejections.json",
+      "sha256": "sha256:f7fb743ab4fa9db6bcd3710fa7d64154d4a6a8ea16782c5e4865b29eb09223b9"
+    },
+    {
+      "path": "obligation-context.schema.json",
+      "sha256": "sha256:2fe723a7b04812e5b44434d15b8cc3ed3340b6efdd66b69cd1c6e9ee801cc7b9"
+    }
+  ]
+}

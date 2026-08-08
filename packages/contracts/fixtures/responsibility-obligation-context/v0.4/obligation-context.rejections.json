@@ -1,0 +1,1107 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "owner-mismatch",
+      "schema": "obligation-context.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "expectedError": "obligation context must bind canonical owner and exact Outcome id/revision",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_other",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "outcome-revision-relabeled",
+      "schema": "obligation-context.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "expectedError": "obligation context must bind canonical owner and exact Outcome id/revision",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 4
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "criteria-digest-mismatch",
+      "schema": "obligation-context.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "expectedError": "declared acceptance criteria digest must match canonical criteria bytes",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "criteria-revision-zero",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 0,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "declared-empty-checks",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": []
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "declared-missing-verification-method",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting."
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "declared-semantic-verification-method",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "declared_semantic_check",
+                "capability": "artifact.semantic.verify"
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "declared-too-many-checks",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_02",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_03",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_04",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_05",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_06",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_07",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_08",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_09",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_10",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_11",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_12",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_13",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_14",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_15",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_16",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_fixture_17",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "absent-hidden-criteria",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_absent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "absent",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "declined-hidden-criteria",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_declined_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declined",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "inferred-criteria-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "inferredCriteria": [
+          "provider guess"
+        ]
+      }
+    },
+    {
+      "name": "provider-done-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "providerDone": true
+      }
+    },
+    {
+      "name": "effect-receipt-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "effectReceipt": {
+          "id": "effect_receipt_attacker"
+        }
+      }
+    },
+    {
+      "name": "artifact-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "artifact": {
+          "id": "artifact_attacker"
+        }
+      }
+    },
+    {
+      "name": "evidence-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "evidence": {
+          "id": "evidence_attacker"
+        }
+      }
+    },
+    {
+      "name": "verification-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "verification": "passed"
+      }
+    },
+    {
+      "name": "acceptance-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "name": "closure-field",
+      "schema": "obligation-context.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "The calendar contains the approved investor meeting.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            },
+            {
+              "id": "acceptance_check_artifact_fixture_01",
+              "revision": 1,
+              "criterion": "The owner-reviewed release artifact bytes match exactly.",
+              "verificationMethod": {
+                "kind": "deterministic_artifact_check",
+                "capability": "artifact.digest.read",
+                "artifactRef": "artifact_release_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z",
+        "closure": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "lone-surrogate-criterion",
+      "schema": "obligation-context.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "obligation_context_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "acceptanceCriteria": {
+          "state": "declared",
+          "revision": 2,
+          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "checks": [
+            {
+              "id": "acceptance_check_read_back_fixture_01",
+              "revision": 1,
+              "criterion": "\ud800",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.event.read",
+                "targetRef": "calendar_event_target_fixture_01",
+                "assertion": {
+                  "operator": "digest_equals",
+                  "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }
+              }
+            }
+          ]
+        },
+        "recordedAt": "2026-08-08T18:00:00.000Z"
+      }
+    }
+  ]
+}
