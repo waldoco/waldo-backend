@@ -52,9 +52,9 @@ The live #78 body is a historical planning input, not current sequencing authori
 | orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | pending |
 | contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | active draft | `b28549d`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
 | merge-wall repair | wall-clock-independent planning authority fixture | `codex/planning-authority-test-clock` | `/Users/shivanshfulper/.codex/worktrees/osp-test-clock/waldo-backend` | `dd434e9` | one runtime test fixture | review | `12a014a`; draft PR [#99](https://github.com/Pin4sf/waldo-backend/pull/99) |
-| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | needs work | `e3c1c3e`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
+| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | repaired; re-review pending | `5f7cd8a`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
 | execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
-| credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | needs work | `28f1720`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
+| credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | repaired; re-review pending | `61304a8`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
 
 ## Planned implementation barriers
 
@@ -62,7 +62,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 |---|---|---|
 | B0 preflight | live base pinned; dirty main untouched; worktrees and ownership recorded | passed |
 | B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | needs work in #103: raw-byte freshness and exact byte-boundary regressions; remaining families active |
-| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | needs work: AST parsing and base-aware immutable prefix required in #100 |
+| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | repaired in #100; independent re-review pending |
 | B3 capture continuity | capture transaction creates canonical OpenLoop and exact initial ReEntry | blocked by B1/B2 |
 | B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | blocked by B1/B2 |
 | B5 effects | frozen intent before I/O, single retry owner, reconcile-before-retry, terminal ambiguity | blocked by B4 |
@@ -114,6 +114,8 @@ Every worker handoff and PR must report:
 | 2026-08-08 | contracts | Independent breaker rejected first freshness gate | P1: CRLF-mutated fixture bytes passed after normalization while the manifest digest changed. P2: exact 4,096/4,097-byte boundaries lacked committed assertions. #103 returned to raw-byte comparison and boundary-test repair. |
 | 2026-08-08 | contracts | Freshness repair published | `b28549d` adds raw-byte comparison, a CRLF mutation regression, and exact 4,096/4,097-byte tests. Focused AcceptanceCheck 6/6 and freshness 2/2 pass; independent re-review remains pending. |
 | 2026-08-08 | credential boundary | Independent review rejected first source map | P1: an out-of-runtime service-role boundary is not authorized, and the DO-to-custody redemption permit/TOCTOU protocol is missing. Re-slice as A0 contract/reducer/guard, A1 DO metadata, B needs explicit custody decision, C integration. |
+| 2026-08-08 | migration safety | Guard repair published | `5f7cd8a` uses TypeScript AST parsing and base-aware immutable-prefix comparison. Historical name/SQL rewrites and comment spoof fail; a real suffix append and legal inline comment pass. Full wall and historical-SQL mutation probe pass; independent re-review pending. |
+| 2026-08-08 | credential boundary | Source-map repair published | `61304a8` removes the unauthorized service-role recommendation, records the unresolved permit/revocation/TOCTOU design, unblocks A0, and requires generated sink manifests plus distinct canaries. Independent re-review pending. |
 
 ## Honest capability status
 
