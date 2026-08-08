@@ -7,6 +7,16 @@ import {
   responsibilityAcceptanceCheckRejectionCatalogueV04Schema,
 } from '../index';
 
+function utf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) continue;
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+}
+
 describe('responsibility acceptance check v0.4', () => {
   it('declares a deterministic read-back check against an exact responsibility revision', () => {
     const check = {
@@ -64,6 +74,34 @@ describe('responsibility acceptance check v0.4', () => {
     };
 
     expect(acceptanceCheckV04Schema.safeParse(oversized).success).toBe(false);
+  });
+
+  it('accepts exactly 4,096 UTF-8 bytes and rejects 4,097', () => {
+    const checkWithCriterion = (criterion: string) => ({
+      protocolVersion: '0.4',
+      id: 'acceptance_check_01',
+      ownerId: 'owner_01',
+      revision: 1,
+      subject: { kind: 'outcome', id: 'outcome_01', revision: 3 },
+      criterion,
+      verificationMethod: {
+        kind: 'deterministic_read_back',
+        capability: 'calendar.event.read',
+        targetRef: 'calendar_event_target_01',
+        assertion: {
+          operator: 'digest_equals',
+          expectedDigest: `sha256:${'a'.repeat(64)}`,
+        },
+      },
+      createdAt: '2026-08-08T18:00:00.000Z',
+    });
+    const exact = checkWithCriterion(`${'界'.repeat(1_200)}${'a'.repeat(34)}`);
+    const over = checkWithCriterion(`${'界'.repeat(1_200)}${'a'.repeat(35)}`);
+
+    expect(utf8ByteLength(JSON.stringify(exact))).toBe(4_096);
+    expect(utf8ByteLength(JSON.stringify(over))).toBe(4_097);
+    expect(acceptanceCheckV04Schema.safeParse(exact).success).toBe(true);
+    expect(acceptanceCheckV04Schema.safeParse(over).success).toBe(false);
   });
 
   it('publishes a Draft 2020-12 schema that accepts its valid fixture', () => {
