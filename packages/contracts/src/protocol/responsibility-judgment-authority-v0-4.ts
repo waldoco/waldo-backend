@@ -63,6 +63,7 @@ export const requestedAuthorityV04Schema = z.strictObject({
 
 const judgmentOptionV04Schema = z.strictObject({
   id: protocolIdSchema,
+  authorityDisposition: z.enum(['grant', 'refuse']),
   content: boundedProtocolReferenceV04Schema,
 });
 
@@ -264,14 +265,28 @@ function sameProtocolValue(left: unknown, right: unknown): boolean {
   return canonicalizeProtocolJson(left) === canonicalizeProtocolJson(right);
 }
 
-export const judgmentAuthorityBindingV04Schema = z.strictObject({
+const judgmentAuthorityBindingBaseV04Shape = {
   requestDigest: protocolDigestSchema,
   request: judgmentRequestV04Schema,
   answer: judgmentAnswerRequestV04Schema,
   decision: judgmentDecisionV04Schema,
-  grant: authorityGrantV04Schema,
-}).superRefine((binding, context) => {
-  const { request, answer, decision, grant } = binding;
+} as const;
+
+export const judgmentAuthorityBindingV04Schema = z.discriminatedUnion(
+  'authorityDisposition',
+  [
+    z.strictObject({
+      ...judgmentAuthorityBindingBaseV04Shape,
+      authorityDisposition: z.literal('granted'),
+      grant: authorityGrantV04Schema,
+    }),
+    z.strictObject({
+      ...judgmentAuthorityBindingBaseV04Shape,
+      authorityDisposition: z.literal('refused'),
+    }),
+  ],
+).superRefine((binding, context) => {
+  const { request, answer, decision } = binding;
   const issue = (path: PropertyKey[], message: string) => context.addIssue({
     code: 'custom',
     path,
@@ -303,6 +318,26 @@ export const judgmentAuthorityBindingV04Schema = z.strictObject({
   if (decision.displayedRequestDigest !== binding.requestDigest) {
     issue(['decision', 'displayedRequestDigest'], 'decision must bind the displayed request');
   }
+  const decisionAt = Date.parse(decision.decidedAt);
+  if (decisionAt < Date.parse(request.createdAt) || decisionAt > Date.parse(request.expiresAt)) {
+    issue(
+      ['decision', 'decidedAt'],
+      'decision must occur within the server-owned JudgmentRequest lifetime',
+    );
+  }
+  if (binding.authorityDisposition === 'refused') return;
+
+  const selectedOption = request.options.find(
+    (option) => option.id === decision.selectedOptionId,
+  );
+  if (selectedOption?.authorityDisposition !== 'grant') {
+    issue(
+      ['grant'],
+      'AuthorityGrant requires a selected option that explicitly grants authority',
+    );
+  }
+
+  const { grant } = binding;
   if (grant.ownerId !== request.ownerId || grant.grantor.id !== request.ownerId) {
     issue(['grant', 'ownerId'], 'grant must bind the JudgmentRequest owner');
   }
@@ -339,9 +374,46 @@ export const judgmentAuthorityBindingV04Schema = z.strictObject({
       Date.parse(grant.expiresAt) > Date.parse(requested.validUntil)) {
     issue(['grant', 'expiresAt'], 'grant validity must not outlive its JudgmentRequest authority');
   }
-  if (Date.parse(grant.validFrom) < Date.parse(decision.decidedAt) ||
-      Date.parse(grant.createdAt) < Date.parse(decision.decidedAt)) {
-    issue(['grant', 'validFrom'], 'grant cannot predate its authenticated decision');
+  const grantCreatedAt = Date.parse(grant.createdAt);
+  const grantValidFrom = Date.parse(grant.validFrom);
+  const grantExpiresAt = Date.parse(grant.expiresAt);
+  if (grantCreatedAt < decisionAt) {
+    issue(['grant', 'createdAt'], 'grant creation cannot predate its authenticated decision');
+  }
+  if (grantValidFrom < grantCreatedAt || grantExpiresAt <= grantValidFrom) {
+    issue(
+      ['grant', 'validFrom'],
+      'grant authority must satisfy decision <= createdAt <= validFrom < expiresAt',
+    );
   }
 });
 export type JudgmentAuthorityBindingV04 = z.infer<typeof judgmentAuthorityBindingV04Schema>;
+
+export type JudgmentAuthoritySha256HexV04 = (canonicalUtf8: string) => string;
+
+export class JudgmentAuthorityBindingDigestMismatchError extends Error {
+  constructor() {
+    super('requestDigest must equal SHA-256 of the canonical embedded request');
+    this.name = 'JudgmentAuthorityBindingDigestMismatchError';
+  }
+}
+
+/**
+ * Creates the trusted admission verifier. The supplied implementation must compute lowercase
+ * SHA-256 hex over the canonical UTF-8 request; JSON Schema validation alone is not authority.
+ */
+export function createJudgmentAuthorityBindingVerifierV04(
+  sha256Hex: JudgmentAuthoritySha256HexV04,
+): (value: unknown) => JudgmentAuthorityBindingV04 {
+  return (value) => {
+    const binding = judgmentAuthorityBindingV04Schema.parse(value);
+    const digestHex = sha256Hex(canonicalizeJudgmentRequestV04ForDigest(binding.request));
+    if (!/^[a-f0-9]{64}$/.test(digestHex)) {
+      throw new TypeError('trusted SHA-256 implementation must return 64 lowercase hex characters');
+    }
+    if (binding.requestDigest !== `sha256:${digestHex}`) {
+      throw new JudgmentAuthorityBindingDigestMismatchError();
+    }
+    return binding;
+  };
+}

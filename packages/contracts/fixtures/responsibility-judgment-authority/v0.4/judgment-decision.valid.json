@@ -11,7 +11,7 @@
     "revision": 4
   },
   "selectedOptionId": "option_approve",
-  "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+  "displayedRequestDigest": "sha256:b0fcec3497ebd61f2cb436f02ae734529bd8d86dd0b21c706e4c305cb31b9435",
   "actor": {
     "kind": "owner",
     "id": "owner_fixture_01"

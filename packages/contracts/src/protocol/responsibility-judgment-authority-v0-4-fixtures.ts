@@ -33,6 +33,7 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04 = [
   'inline-question-content',
   'lone-surrogate-reference',
   'reference-byte-ceiling',
+  'option-without-authority-disposition',
   'recommendation-outside-options',
   'open-request-with-decision',
   'unauthenticated-decision',
@@ -57,6 +58,13 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04 = [
   'binding-context-digest-mismatch',
   'binding-artifact-digest-mismatch',
   'binding-validity-mismatch',
+  'binding-refusal-option-cannot-grant',
+  'binding-decision-before-request',
+  'binding-decision-after-request-expiry',
+  'binding-grant-created-before-decision',
+  'binding-grant-valid-before-created',
+  'binding-grant-empty-validity',
+  'binding-coordinated-request-digest-mismatch',
 ] as const;
 
 const rejectionCasesV04Schema = z.array(z.strictObject({
@@ -108,10 +116,12 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
     options: [
       {
         id: 'option_approve',
+        authorityDisposition: 'grant',
         content: { ref: 'option_content_approve', digest: `sha256:${'2'.repeat(64)}` },
       },
       {
         id: 'option_reject',
+        authorityDisposition: 'refuse',
         content: { ref: 'option_content_reject', digest: `sha256:${'3'.repeat(64)}` },
       },
     ],
@@ -219,7 +229,26 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
     request: judgmentRequest,
     answer: judgmentAnswer,
     decision: judgmentDecision,
+    authorityDisposition: 'granted',
     grant: authorityGrant,
+  });
+
+  const refusalAnswer = judgmentAnswerRequestV04Schema.parse({
+    ...judgmentAnswer,
+    requestId: 'answer_judgment_refusal_fixture_01',
+    payload: { ...judgmentAnswer.payload, selectedOptionId: 'option_reject' },
+  });
+  const refusalDecision = judgmentDecisionV04Schema.parse({
+    ...judgmentDecision,
+    id: 'judgment_decision_refusal_fixture_01',
+    selectedOptionId: 'option_reject',
+  });
+  const judgmentAuthorityRefusal = judgmentAuthorityBindingV04Schema.parse({
+    requestDigest: displayedRequestDigest,
+    request: judgmentRequest,
+    answer: refusalAnswer,
+    decision: refusalDecision,
+    authorityDisposition: 'refused',
   });
 
   const { authenticatedSessionId: _session, ...unauthenticatedDecision } = judgmentDecision;
@@ -242,6 +271,7 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
     'judgment-decision.valid.json': file(judgmentDecision),
     'authority-grant.valid.json': file(authorityGrant),
     'judgment-authority-binding.valid.json': file(judgmentAuthorityBinding),
+    'judgment-authority-refusal.valid.json': file(judgmentAuthorityRefusal),
     'judgment-authority.rejections.json': file(
       responsibilityJudgmentAuthorityRejectionCatalogueV04Schema.parse({
         protocolVersion: '0.4',
@@ -374,6 +404,19 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
             value: {
               ...judgmentRequest,
               question: { ...judgmentRequest.question, ref: 'a'.repeat(129) },
+            },
+          },
+          {
+            name: 'option-without-authority-disposition',
+            schema: 'judgment-request.schema.json',
+            layer: 'schema',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentRequest,
+              options: judgmentRequest.options.map((option) => {
+                const { authorityDisposition: _disposition, ...withoutDisposition } = option;
+                return withoutDisposition;
+              }),
             },
           },
           {
@@ -599,6 +642,92 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
             value: {
               ...judgmentAuthorityBinding,
               grant: { ...authorityGrant, expiresAt: '2026-08-08T18:31:00.000Z' },
+            },
+          },
+          {
+            name: 'binding-refusal-option-cannot-grant',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              answer: refusalAnswer,
+              decision: refusalDecision,
+            },
+          },
+          {
+            name: 'binding-decision-before-request',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              decision: { ...judgmentDecision, decidedAt: '2026-08-08T18:04:59.999Z' },
+            },
+          },
+          {
+            name: 'binding-decision-after-request-expiry',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              decision: { ...judgmentDecision, decidedAt: '2026-08-08T18:30:00.001Z' },
+            },
+          },
+          {
+            name: 'binding-grant-created-before-decision',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              grant: { ...authorityGrant, createdAt: '2026-08-08T18:10:59.999Z' },
+            },
+          },
+          {
+            name: 'binding-grant-valid-before-created',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              grant: {
+                ...authorityGrant,
+                createdAt: '2026-08-08T18:11:00.001Z',
+                updatedAt: '2026-08-08T18:11:00.001Z',
+              },
+            },
+          },
+          {
+            name: 'binding-grant-empty-validity',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'reject',
+            value: {
+              ...judgmentAuthorityBinding,
+              grant: { ...authorityGrant, validFrom: authorityGrant.expiresAt },
+            },
+          },
+          {
+            name: 'binding-coordinated-request-digest-mismatch',
+            schema: 'judgment-authority-binding.schema.json',
+            layer: 'runtime',
+            zodOutcome: 'accept',
+            value: {
+              ...judgmentAuthorityBinding,
+              requestDigest: `sha256:${'b'.repeat(64)}`,
+              answer: {
+                ...judgmentAnswer,
+                payload: {
+                  ...judgmentAnswer.payload,
+                  displayedRequestDigest: `sha256:${'b'.repeat(64)}`,
+                },
+              },
+              decision: {
+                ...judgmentDecision,
+                displayedRequestDigest: `sha256:${'b'.repeat(64)}`,
+              },
             },
           },
         ],

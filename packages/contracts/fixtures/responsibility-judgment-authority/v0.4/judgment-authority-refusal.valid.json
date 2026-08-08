@@ -78,7 +78,7 @@
   },
   "answer": {
     "protocolVersion": "0.4",
-    "requestId": "answer_judgment_fixture_01",
+    "requestId": "answer_judgment_refusal_fixture_01",
     "commandType": "judgment.answer",
     "presenceRegistrationId": "presence_registration_fixture_01",
     "aggregate": {
@@ -89,13 +89,13 @@
     "correlationId": "correlation_judgment_fixture_01",
     "clientIssuedAt": "2026-08-08T18:10:00.000Z",
     "payload": {
-      "selectedOptionId": "option_approve",
+      "selectedOptionId": "option_reject",
       "displayedRequestDigest": "sha256:b0fcec3497ebd61f2cb436f02ae734529bd8d86dd0b21c706e4c305cb31b9435"
     }
   },
   "decision": {
     "protocolVersion": "0.4",
-    "id": "judgment_decision_fixture_01",
+    "id": "judgment_decision_refusal_fixture_01",
     "ownerId": "owner_fixture_01",
     "revision": 1,
     "judgmentRequestId": "judgment_request_fixture_01",
@@ -105,7 +105,7 @@
       "id": "work_unit_fixture_01",
       "revision": 4
     },
-    "selectedOptionId": "option_approve",
+    "selectedOptionId": "option_reject",
     "displayedRequestDigest": "sha256:b0fcec3497ebd61f2cb436f02ae734529bd8d86dd0b21c706e4c305cb31b9435",
     "actor": {
       "kind": "owner",
@@ -118,53 +118,5 @@
     "state": "recorded",
     "decidedAt": "2026-08-08T18:11:00.000Z"
   },
-  "authorityDisposition": "granted",
-  "grant": {
-    "protocolVersion": "0.4",
-    "id": "authority_grant_fixture_01",
-    "ownerId": "owner_fixture_01",
-    "revision": 1,
-    "judgmentRequestId": "judgment_request_fixture_01",
-    "judgmentRequestRevision": 2,
-    "judgmentDecisionId": "judgment_decision_fixture_01",
-    "grantor": {
-      "kind": "owner",
-      "id": "owner_fixture_01"
-    },
-    "grantee": {
-      "kind": "service",
-      "id": "effect_engine"
-    },
-    "subject": {
-      "kind": "work_unit",
-      "id": "work_unit_fixture_01",
-      "revision": 4
-    },
-    "purpose": "calendar.follow_up.schedule",
-    "effectFamily": "calendar.event.create",
-    "resources": [
-      {
-        "kind": "calendar",
-        "ref": "calendar_primary"
-      }
-    ],
-    "scopes": [
-      "calendar.event.create"
-    ],
-    "audiences": [
-      "calendar.account"
-    ],
-    "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
-    "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-    "artifactDigest": null,
-    "useLimit": 1,
-    "usesConsumed": 0,
-    "nextUseIndex": 1,
-    "validFrom": "2026-08-08T18:11:00.000Z",
-    "expiresAt": "2026-08-08T18:30:00.000Z",
-    "revocationGeneration": 0,
-    "state": "active",
-    "createdAt": "2026-08-08T18:11:00.000Z",
-    "updatedAt": "2026-08-08T18:11:00.000Z"
-  }
+  "authorityDisposition": "refused"
 }

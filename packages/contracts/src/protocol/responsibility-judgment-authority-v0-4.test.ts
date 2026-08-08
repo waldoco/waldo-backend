@@ -1,3 +1,5 @@
+// @ts-expect-error TS2307 -- Node types are intentionally absent from the portable package
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020.js';
 import {
@@ -7,11 +9,11 @@ import {
   canonicalizeJudgmentAnswerRequestV04ForDigest,
   canonicalizeJudgmentDecisionV04ForDigest,
   canonicalizeJudgmentRequestV04ForDigest,
+  createJudgmentAuthorityBindingVerifierV04,
   judgmentAnswerRequestV04Schema,
   judgmentAuthorityBindingV04Schema,
   judgmentDecisionV04Schema,
   judgmentRequestV04Schema,
-  RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04,
   responsibilityJudgmentAuthorityRejectionCatalogueV04Schema,
 } from '../index';
 
@@ -30,6 +32,56 @@ const validFixtureForSchema = {
   'authority-grant.schema.json': 'authority-grant.valid.json',
   'judgment-authority-binding.schema.json': 'judgment-authority-binding.valid.json',
 } as const;
+
+// Test-owned and deliberately independent from the fixture builder/exported catalogue enum.
+// Deleting a builder case together with its production name therefore still fails this test.
+const REQUIRED_JUDGMENT_AUTHORITY_REJECTIONS_V04 = [
+  'client-owned-owner',
+  'client-owned-grant',
+  'client-owned-grant-fields',
+  'client-provider-selector',
+  'client-model-selector',
+  'client-executor-selector',
+  'client-sensitive-context',
+  'stale-answer-revision',
+  'stale-displayed-request-digest',
+  'unknown-selected-option',
+  'inline-question-content',
+  'lone-surrogate-reference',
+  'reference-byte-ceiling',
+  'option-without-authority-disposition',
+  'recommendation-outside-options',
+  'open-request-with-decision',
+  'unauthenticated-decision',
+  'grant-without-revocation-generation',
+  'grant-credential-injection',
+  'grant-counter-drift',
+  'grant-max-safe-consumed',
+  'grant-max-safe-next-index',
+  'grant-invalid-validity',
+  'grant-duplicate-scope',
+  'binding-owner-mismatch',
+  'binding-request-mismatch',
+  'binding-subject-mismatch',
+  'binding-option-mismatch',
+  'binding-request-digest-mismatch',
+  'binding-purpose-mismatch',
+  'binding-effect-family-mismatch',
+  'binding-resource-mismatch',
+  'binding-scope-mismatch',
+  'binding-audience-mismatch',
+  'binding-argument-digest-mismatch',
+  'binding-context-digest-mismatch',
+  'binding-artifact-digest-mismatch',
+  'binding-validity-mismatch',
+  'binding-refusal-option-cannot-grant',
+  'binding-decision-before-request',
+  'binding-decision-after-request-expiry',
+  'binding-grant-created-before-decision',
+  'binding-grant-valid-before-created',
+  'binding-grant-empty-validity',
+  'binding-coordinated-request-digest-mismatch',
+] as const;
 
 function fixtureAjv(): Ajv2020 {
   const ajv = new Ajv2020({ strict: true, allErrors: true, validateFormats: false });
@@ -88,8 +140,16 @@ describe('responsibility judgment and authority v0.4', () => {
       subject: { kind: 'work_unit', id: 'work_unit_01', revision: 4 },
       question: { ref: 'judgment_question_01', digest: `sha256:${'1'.repeat(64)}` },
       options: [
-        { id: 'option_approve', content: { ref: 'option_content_approve', digest: `sha256:${'2'.repeat(64)}` } },
-        { id: 'option_reject', content: { ref: 'option_content_reject', digest: `sha256:${'3'.repeat(64)}` } },
+        {
+          id: 'option_approve',
+          authorityDisposition: 'grant',
+          content: { ref: 'option_content_approve', digest: `sha256:${'2'.repeat(64)}` },
+        },
+        {
+          id: 'option_reject',
+          authorityDisposition: 'refuse',
+          content: { ref: 'option_content_reject', digest: `sha256:${'3'.repeat(64)}` },
+        },
       ],
       recommendation: 'option_approve',
       evidence: [{ ref: 'evidence_summary_01', digest: `sha256:${'4'.repeat(64)}` }],
@@ -255,6 +315,120 @@ describe('responsibility judgment and authority v0.4', () => {
     }).success).toBe(false);
   });
 
+  it('records a coordinated refusal without permitting the refusal option to yield authority', () => {
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
+    const granted = JSON.parse(bundle['judgment-authority-binding.valid.json']!);
+    const { grant, ...bindingWithoutGrant } = granted;
+    const refusal = {
+      ...bindingWithoutGrant,
+      authorityDisposition: 'refused',
+      answer: {
+        ...bindingWithoutGrant.answer,
+        payload: {
+          ...bindingWithoutGrant.answer.payload,
+          selectedOptionId: 'option_reject',
+        },
+      },
+      decision: {
+        ...bindingWithoutGrant.decision,
+        selectedOptionId: 'option_reject',
+      },
+    };
+
+    expect(judgmentAuthorityBindingV04Schema.parse(refusal)).toEqual(refusal);
+    expect(judgmentAuthorityBindingV04Schema.safeParse({
+      ...refusal,
+      authorityDisposition: 'granted',
+      grant,
+    }).success).toBe(false);
+  });
+
+  it('recomputes SHA-256 over the canonical embedded request at the trusted binding boundary', () => {
+    const sha256Hex = (value: string) => createHash('sha256').update(value).digest('hex');
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(sha256Hex);
+    const binding = JSON.parse(bundle['judgment-authority-binding.valid.json']!);
+    const verifyBinding = createJudgmentAuthorityBindingVerifierV04(sha256Hex);
+
+    expect(verifyBinding(binding)).toEqual(binding);
+
+    const coordinatedFalseDigest = `sha256:${'b'.repeat(64)}`;
+    expect(judgmentAuthorityBindingV04Schema.safeParse({
+      ...binding,
+      requestDigest: coordinatedFalseDigest,
+      answer: {
+        ...binding.answer,
+        payload: {
+          ...binding.answer.payload,
+          displayedRequestDigest: coordinatedFalseDigest,
+        },
+      },
+      decision: {
+        ...binding.decision,
+        displayedRequestDigest: coordinatedFalseDigest,
+      },
+    }).success).toBe(true);
+    expect(() => verifyBinding({
+      ...binding,
+      requestDigest: coordinatedFalseDigest,
+      answer: {
+        ...binding.answer,
+        payload: {
+          ...binding.answer.payload,
+          displayedRequestDigest: coordinatedFalseDigest,
+        },
+      },
+      decision: {
+        ...binding.decision,
+        displayedRequestDigest: coordinatedFalseDigest,
+      },
+    })).toThrow('requestDigest must equal SHA-256 of the canonical embedded request');
+  });
+
+  it('uses only server timestamps for request-decision-grant authority ordering', () => {
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
+    const binding = JSON.parse(bundle['judgment-authority-binding.valid.json']!);
+
+    for (const [name, mutation] of [
+      ['decision before request', {
+        decision: { ...binding.decision, decidedAt: '2026-08-08T18:04:59.999Z' },
+      }],
+      ['decision after request expiry', {
+        decision: { ...binding.decision, decidedAt: '2026-08-08T18:30:00.001Z' },
+      }],
+      ['grant created before decision', {
+        grant: { ...binding.grant, createdAt: '2026-08-08T18:10:59.999Z' },
+      }],
+      ['grant validity starts before creation', {
+        grant: {
+          ...binding.grant,
+          createdAt: '2026-08-08T18:11:00.001Z',
+          validFrom: '2026-08-08T18:11:00.000Z',
+        },
+      }],
+      ['grant has an empty validity interval', {
+        grant: {
+          ...binding.grant,
+          validFrom: binding.grant.expiresAt,
+        },
+      }],
+    ] as const) {
+      expect(
+        judgmentAuthorityBindingV04Schema.safeParse({ ...binding, ...mutation }).success,
+        name,
+      ).toBe(false);
+    }
+
+    for (const clientIssuedAt of [
+      '2000-01-01T00:00:00.000Z',
+      '2099-01-01T00:00:00.000Z',
+    ]) {
+      expect(judgmentAuthorityBindingV04Schema.safeParse({
+        ...binding,
+        answer: { ...binding.answer, clientIssuedAt },
+      }).success, clientIssuedAt).toBe(true);
+    }
+  });
+
   it('publishes Draft 2020-12 schemas that round-trip every valid fixture', () => {
     const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
 
@@ -290,6 +464,9 @@ describe('responsibility judgment and authority v0.4', () => {
     );
     const grant = authorityGrantV04Schema.parse(
       JSON.parse(bundle['authority-grant.valid.json']!),
+    );
+    const refusal = judgmentAuthorityBindingV04Schema.parse(
+      JSON.parse(bundle['judgment-authority-refusal.valid.json']!),
     );
     const canonicalRequest = canonicalizeJudgmentRequestV04ForDigest(request);
     const requestDigest = `sha256:${'c'.repeat(64)}`;
@@ -327,6 +504,13 @@ describe('responsibility judgment and authority v0.4', () => {
       artifactDigest: request.requestedAuthority?.artifactDigest,
       useLimit: request.requestedAuthority?.useLimit,
     });
+    expect(refusal).toMatchObject({
+      authorityDisposition: 'refused',
+      request,
+      answer: { payload: { selectedOptionId: 'option_reject' } },
+      decision: { selectedOptionId: 'option_reject' },
+    });
+    expect('grant' in refusal).toBe(false);
     for (const field of [
       'purpose',
       'effectFamily',
@@ -357,9 +541,12 @@ describe('responsibility judgment and authority v0.4', () => {
         fixtureAjv().compile(JSON.parse(bundle[schemaPath]!)),
       ]),
     );
+    const verifyBinding = createJudgmentAuthorityBindingVerifierV04(
+      () => 'a'.repeat(64),
+    );
 
     const names = catalogue.cases.map((entry) => entry.name);
-    expect(names).toEqual([...RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04]);
+    expect(names).toEqual([...REQUIRED_JUDGMENT_AUTHORITY_REJECTIONS_V04]);
     expect(new Set(names).size).toBe(names.length);
 
     for (const rejection of catalogue.cases) {
@@ -372,6 +559,11 @@ describe('responsibility judgment and authority v0.4', () => {
         fixtureSchemas[rejection.schema].safeParse(rejection.value).success,
         rejection.name,
       ).toBe(rejection.zodOutcome === 'accept');
+      if (rejection.name === 'binding-coordinated-request-digest-mismatch') {
+        expect(() => verifyBinding(rejection.value)).toThrow(
+          'requestDigest must equal SHA-256 of the canonical embedded request',
+        );
+      }
     }
   });
 
