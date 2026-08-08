@@ -24,6 +24,10 @@ export const RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04 = [
   'declared-missing-verification-method',
   'declared-semantic-verification-method',
   'declared-too-many-checks',
+  'criterion-provider-done-field',
+  'read-back-method-provider-done-field',
+  'artifact-method-provider-done-field',
+  'criterion-length-2049',
   'absent-hidden-criteria',
   'declined-hidden-criteria',
   'inferred-criteria-field',
@@ -129,9 +133,10 @@ export function buildResponsibilityObligationContextV04Bundle(
     throw new Error('default obligation context must retain declared criteria');
   }
   const declaredCriteria = declared.acceptanceCriteria;
-  const [readBackCheck] = declaredCriteria.checks;
-  if (readBackCheck === undefined) {
-    throw new Error('default obligation context must retain a read-back criterion');
+  const [readBackCheck, artifactCheck] = declaredCriteria.checks;
+  if (readBackCheck?.verificationMethod.kind !== 'deterministic_read_back' ||
+      artifactCheck?.verificationMethod.kind !== 'deterministic_artifact_check') {
+    throw new Error('default obligation context must retain deterministic criteria methods');
   }
   const { verificationMethod: _method, ...checkWithoutMethod } = readBackCheck;
 
@@ -257,6 +262,70 @@ export function buildResponsibilityObligationContextV04Bundle(
             value: {
               ...declared,
               acceptanceCriteria: { ...declaredCriteria, checks: tooManyChecks },
+            },
+          },
+          {
+            name: 'criterion-provider-done-field',
+            schema: 'obligation-context.schema.json',
+            layer: 'schema',
+            zodOutcome: 'reject',
+            value: {
+              ...declared,
+              acceptanceCriteria: {
+                ...declaredCriteria,
+                checks: [{ ...readBackCheck, providerDone: true }],
+              },
+            },
+          },
+          {
+            name: 'read-back-method-provider-done-field',
+            schema: 'obligation-context.schema.json',
+            layer: 'schema',
+            zodOutcome: 'reject',
+            value: {
+              ...declared,
+              acceptanceCriteria: {
+                ...declaredCriteria,
+                checks: [{
+                  ...readBackCheck,
+                  verificationMethod: {
+                    ...readBackCheck.verificationMethod,
+                    providerDone: true,
+                  },
+                }],
+              },
+            },
+          },
+          {
+            name: 'artifact-method-provider-done-field',
+            schema: 'obligation-context.schema.json',
+            layer: 'schema',
+            zodOutcome: 'reject',
+            value: {
+              ...declared,
+              acceptanceCriteria: {
+                ...declaredCriteria,
+                checks: [{
+                  ...artifactCheck,
+                  verificationMethod: {
+                    ...artifactCheck.verificationMethod,
+                    providerDone: true,
+                  },
+                }],
+              },
+            },
+          },
+          {
+            name: 'criterion-length-2049',
+            schema: 'obligation-context.schema.json',
+            layer: 'schema',
+            zodOutcome: 'reject',
+            value: {
+              ...declared,
+              acceptanceCriteria: {
+                ...declaredCriteria,
+                checks: [{ ...readBackCheck, criterion: 'a'.repeat(2_049) }],
+              },
             },
           },
           {
