@@ -60,6 +60,7 @@ const REQUIRED_EFFECT_REJECTIONS_V04 = [
   'reconciliation-artifact-field',
   'reconciliation-acceptance-field',
   'reconciliation-unavailable-as-not-applied',
+  'reconciliation-retry-unavailable-basis-kind',
   'reconciliation-unavailable-as-retry',
   'reconciliation-unknown-as-not-applied',
   'reconciliation-unknown-effect-retry',
@@ -465,6 +466,20 @@ describe('responsibility effect v0.4', () => {
     expect(
       () => verifier.verifyReconciliationBinding(intent, unavailableAsRetry, states[3]),
     ).toThrow('retry requires the referenced authoritative_not_applied reconciliation record');
+    const unavailableRetryBasis = effectReconciliationV04Schema.safeParse({
+      ...retry,
+      basis: { ...retry.basis, kind: 'unavailable' },
+    });
+    expect(unavailableRetryBasis.success).toBe(false);
+    if (unavailableRetryBasis.success) {
+      throw new Error('retry must reject an unavailable basis kind');
+    }
+    expect(unavailableRetryBasis.error.issues).toEqual([{
+      code: 'invalid_value',
+      values: ['authoritative_not_applied'],
+      path: ['basis', 'kind'],
+      message: 'Invalid input: expected "authoritative_not_applied"',
+    }]);
     for (const basisMutation of [
       { reconciliationId: 'effect_reconciliation_other' },
       { digest: `sha256:${'f'.repeat(64)}` },

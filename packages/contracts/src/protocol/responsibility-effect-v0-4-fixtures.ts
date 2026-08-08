@@ -51,6 +51,7 @@ export const RESPONSIBILITY_EFFECT_REJECTION_NAMES_V04 = [
   'reconciliation-artifact-field',
   'reconciliation-acceptance-field',
   'reconciliation-unavailable-as-not-applied',
+  'reconciliation-retry-unavailable-basis-kind',
   'reconciliation-unavailable-as-retry',
   'reconciliation-unknown-as-not-applied',
   'reconciliation-unknown-effect-retry',
@@ -299,6 +300,7 @@ export function buildResponsibilityEffectV04Bundle(hashHex: HashHex): Record<str
           { name: 'reconciliation-artifact-field', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...applied, artifact: { id: 'artifact_attacker' } } },
           { name: 'reconciliation-acceptance-field', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...applied, acceptance: 'accepted' } },
           { name: 'reconciliation-unavailable-as-not-applied', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...unavailable, state: 'authoritative_not_applied' } },
+          { name: 'reconciliation-retry-unavailable-basis-kind', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...retry, basis: { ...retry.basis, kind: 'unavailable' } } },
           {
             name: 'reconciliation-unavailable-as-retry',
             schema: 'effect-reconciliation.schema.json',
