@@ -318,18 +318,34 @@ export const judgmentAuthorityBindingV04Schema = z.discriminatedUnion(
   if (decision.displayedRequestDigest !== binding.requestDigest) {
     issue(['decision', 'displayedRequestDigest'], 'decision must bind the displayed request');
   }
-  const decisionAt = Date.parse(decision.decidedAt);
-  if (decisionAt < Date.parse(request.createdAt) || decisionAt > Date.parse(request.expiresAt)) {
+  if (request.state !== 'open' || request.decisionId !== null) {
     issue(
-      ['decision', 'decidedAt'],
-      'decision must occur within the server-owned JudgmentRequest lifetime',
+      ['request', 'state'],
+      'authority decisions require the exact open, unanswered JudgmentRequest snapshot',
     );
   }
-  if (binding.authorityDisposition === 'refused') return;
-
+  const decisionAt = Date.parse(decision.decidedAt);
+  if (decisionAt < Date.parse(request.createdAt) ||
+      decisionAt < Date.parse(request.updatedAt) ||
+      decisionAt >= Date.parse(request.expiresAt)) {
+    issue(
+      ['decision', 'decidedAt'],
+      'decision must occur after the current request snapshot and before its expiry',
+    );
+  }
   const selectedOption = request.options.find(
     (option) => option.id === decision.selectedOptionId,
   );
+  if (binding.authorityDisposition === 'refused') {
+    if (selectedOption?.authorityDisposition !== 'refuse') {
+      issue(
+        ['authorityDisposition'],
+        'refusal requires a selected option that explicitly refuses authority',
+      );
+    }
+    return;
+  }
+
   if (selectedOption?.authorityDisposition !== 'grant') {
     issue(
       ['grant'],
