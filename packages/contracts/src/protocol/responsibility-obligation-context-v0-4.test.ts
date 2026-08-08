@@ -21,6 +21,10 @@ const REQUIRED_OBLIGATION_CONTEXT_REJECTIONS_V04 = [
   'declared-missing-verification-method',
   'declared-semantic-verification-method',
   'declared-too-many-checks',
+  'criterion-provider-done-field',
+  'read-back-method-provider-done-field',
+  'artifact-method-provider-done-field',
+  'criterion-length-2049',
   'absent-hidden-criteria',
   'declined-hidden-criteria',
   'inferred-criteria-field',
@@ -200,6 +204,110 @@ describe('responsibility obligation context v0.4', () => {
     )).toEqual(artifactContext);
   });
 
+  it('rejects prohibited nested fields at criterion and deterministic method boundaries', () => {
+    const context = declaredContext();
+    if (context.acceptanceCriteria.state !== 'declared') {
+      throw new Error('declared fixture must retain declared criteria');
+    }
+    const [check] = context.acceptanceCriteria.checks;
+    if (check === undefined || check.verificationMethod.kind !== 'deterministic_read_back') {
+      throw new Error('declared fixture must retain a deterministic read-back criterion');
+    }
+    const candidates = [
+      {
+        name: 'criterion',
+        value: {
+          ...context,
+          acceptanceCriteria: {
+            ...context.acceptanceCriteria,
+            checks: [{ ...check, providerDone: true }],
+          },
+        },
+        path: ['acceptanceCriteria', 'checks', 0],
+      },
+      {
+        name: 'read-back method',
+        value: {
+          ...context,
+          acceptanceCriteria: {
+            ...context.acceptanceCriteria,
+            checks: [{
+              ...check,
+              verificationMethod: { ...check.verificationMethod, providerDone: true },
+            }],
+          },
+        },
+        path: ['acceptanceCriteria', 'checks', 0, 'verificationMethod'],
+      },
+      {
+        name: 'artifact method',
+        value: {
+          ...context,
+          acceptanceCriteria: {
+            ...context.acceptanceCriteria,
+            checks: [{
+              ...check,
+              verificationMethod: {
+                kind: 'deterministic_artifact_check',
+                capability: 'artifact.digest.read',
+                artifactRef: 'artifact_release_01',
+                assertion: {
+                  operator: 'digest_equals',
+                  expectedDigest: `sha256:${'b'.repeat(64)}`,
+                },
+                providerDone: true,
+              },
+            }],
+          },
+        },
+        path: ['acceptanceCriteria', 'checks', 0, 'verificationMethod'],
+      },
+    ] as const;
+    for (const candidate of candidates) {
+      const result = outcomeObligationContextV04Schema.safeParse(candidate.value);
+      expect(result.success, candidate.name).toBe(false);
+      if (result.success) throw new Error('nested provider field must be rejected');
+      expect(result.error.issues).toEqual([{
+        code: 'unrecognized_keys',
+        keys: ['providerDone'],
+        path: candidate.path,
+        message: 'Unrecognized key: "providerDone"',
+      }]);
+    }
+  });
+
+  it('accepts a 2,048-character criterion and rejects 2,049 at the exact field', () => {
+    const context = declaredContext();
+    if (context.acceptanceCriteria.state !== 'declared') {
+      throw new Error('declared fixture must retain declared criteria');
+    }
+    const [check] = context.acceptanceCriteria.checks;
+    if (check === undefined) throw new Error('declared fixture must retain one criterion');
+    const withCriterion = (criterion: string) => ({
+      ...context,
+      acceptanceCriteria: {
+        ...context.acceptanceCriteria,
+        checks: [{ ...check, criterion }],
+      },
+    });
+    expect(outcomeObligationContextV04Schema.safeParse(
+      withCriterion('a'.repeat(2_048)),
+    ).success).toBe(true);
+    const over = outcomeObligationContextV04Schema.safeParse(
+      withCriterion('a'.repeat(2_049)),
+    );
+    expect(over.success).toBe(false);
+    if (over.success) throw new Error('criterion above 2,048 characters must be rejected');
+    expect(over.error.issues).toEqual([{
+      origin: 'string',
+      code: 'too_big',
+      maximum: 2_048,
+      inclusive: true,
+      path: ['acceptanceCriteria', 'checks', 0, 'criterion'],
+      message: 'Too big: expected string to have <=2048 characters',
+    }]);
+  });
+
   it('canonicalizes field order but never omits exact Outcome revision', () => {
     const context = declaredContext();
     const reordered = {
@@ -228,6 +336,30 @@ describe('responsibility obligation context v0.4', () => {
       ...context,
       acceptanceCriteria: { ...context.acceptanceCriteria, revision: 3 },
     })).not.toBe(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(context));
+  });
+
+  it('pins independent canonical digests for canonical owner and Outcome binding fields', () => {
+    const context = declaredContext();
+    const cases = [
+      ['base', context],
+      ['ownerId', { ...context, ownerId: 'owner_02' }],
+      ['outcome.id', { ...context, outcome: { ...context.outcome, id: 'outcome_02' } }],
+      ['outcome.revision', {
+        ...context,
+        outcome: { ...context.outcome, revision: 4 },
+      }],
+    ] as const;
+    expect(cases.map(([field, value]) => [
+      field,
+      `sha256:${sha256Hex(
+        canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(value),
+      )}`,
+    ])).toEqual([
+      ['base', 'sha256:20102bafc1b06829d5c335235c83ad148dec699b89b904dc1d90577c74b51729'],
+      ['ownerId', 'sha256:b4049c2ee999ad8f901f9be060b5606d534b85d40d7288b21a4a034ff66e1db0'],
+      ['outcome.id', 'sha256:ab0c866fe58a9325d10093341388b2b93e2b7bc79b8b47f232a727d05565b642'],
+      ['outcome.revision', 'sha256:8cd30d751791ebb56d0e2aca173e5ec201302e89afdffe06fc570f49fe5827e7'],
+    ]);
   });
 
   it('publishes strict declared, absent, and declined fixtures plus hostile oracles', () => {
