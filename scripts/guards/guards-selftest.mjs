@@ -130,7 +130,10 @@ function withVersionedDoMigrationFixture(baseSource, baseReservations, source, r
     const baseRef = runFixtureGit(root, ['rev-parse', 'HEAD']);
     writeFileSync(sourcePath, source);
     writeFileSync(reservationPath, `${JSON.stringify(reservations, null, 2)}\n`);
-    return fn(root, baseRef);
+    runFixtureGit(root, ['add', '.']);
+    runFixtureGit(root, ['commit', '--quiet', '--allow-empty', '-m', 'current']);
+    const headRef = runFixtureGit(root, ['rev-parse', 'HEAD']);
+    return fn(root, baseRef, headRef);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -200,6 +203,129 @@ if (
   failures += 1;
 }
 
+const historicalExternalSqlRewrite = withVersionedDoMigrationFixture(
+  `const CREATE_FIRST = 'CREATE TABLE first (id TEXT PRIMARY KEY);';
+const FIRST_UP_BASE = [CREATE_FIRST] as const;
+const FIRST_UP = FIRST_UP_BASE;
+const FIRST_DOWN = ['DROP TABLE first;'] as const;
+export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: [...FIRST_UP],
+  down: FIRST_DOWN,
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `const CREATE_FIRST = 'CREATE TABLE rewritten (id TEXT PRIMARY KEY);';
+const FIRST_UP_BASE = [CREATE_FIRST] as const;
+const FIRST_UP = FIRST_UP_BASE;
+const FIRST_DOWN = ['DROP TABLE first;'] as const;
+export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: [...FIRST_UP],
+  down: FIRST_DOWN,
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (
+  historicalExternalSqlRewrite.status === 0 ||
+  !historicalExternalSqlRewrite.stderr.includes('historical migration 1 changed')
+) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage MISSED external SQL rewrite\n',
+  );
+  failures += 1;
+}
+
+const historicalExternalDownSqlRewrite = withVersionedDoMigrationFixture(
+  `const FIRST_DOWN_SQL = 'DROP TABLE first;';
+const FIRST_DOWN = [FIRST_DOWN_SQL] as const;
+export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: ['CREATE TABLE first (id TEXT PRIMARY KEY);'],
+  down: FIRST_DOWN,
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `const FIRST_DOWN_SQL = 'DROP TABLE rewritten;';
+const FIRST_DOWN = [FIRST_DOWN_SQL] as const;
+export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: ['CREATE TABLE first (id TEXT PRIMARY KEY);'],
+  down: FIRST_DOWN,
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (
+  historicalExternalDownSqlRewrite.status === 0 ||
+  !historicalExternalDownSqlRewrite.stderr.includes('historical migration 1 changed')
+) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage MISSED external down SQL rewrite\n',
+  );
+  failures += 1;
+}
+
+const historicalSqlOrderRewrite = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: ['CREATE TABLE first (id TEXT PRIMARY KEY);', 'CREATE INDEX first_id ON first(id);'],
+  down: ['DROP INDEX first_id;', 'DROP TABLE first;'],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: ['CREATE INDEX first_id ON first(id);', 'CREATE TABLE first (id TEXT PRIMARY KEY);'],
+  down: ['DROP INDEX first_id;', 'DROP TABLE first;'],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (
+  historicalSqlOrderRewrite.status === 0 ||
+  !historicalSqlOrderRewrite.stderr.includes('historical migration 1 changed')
+) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage MISSED SQL statement reorder\n',
+  );
+  failures += 1;
+}
+
 const historicalAppend = withVersionedDoMigrationFixture(
   `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
 export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
@@ -241,7 +367,7 @@ export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
   version: 1, // comments and formatting are not executable lineage
   name: 'first',
   up: [],
-  down: []
+  down: [], // trailing commas are also non-executable trivia
 };
 export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
 `,
@@ -306,6 +432,64 @@ if (
   !unavailableHistoricalBase.stderr.includes('migration base ref "missing-base-ref" is unavailable')
 ) {
   process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED missing base ref\n');
+  failures += 1;
+}
+
+const currentHeadHistoricalBase = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, _baseRef, headRef) => runDoMigrationGuardOn(root, headRef),
+);
+if (
+  currentHeadHistoricalBase.status === 0 ||
+  !currentHeadHistoricalBase.stderr.includes('must be a strict ancestor of HEAD')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED current HEAD as base\n');
+  failures += 1;
+}
+
+const nonAncestorHistoricalBase = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef, headRef) => {
+    runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+    writeFileSync(join(root, 'sibling-marker.txt'), 'sibling\n');
+    runFixtureGit(root, ['add', '.']);
+    runFixtureGit(root, ['commit', '--quiet', '-m', 'sibling']);
+    const siblingRef = runFixtureGit(root, ['rev-parse', 'HEAD']);
+    runFixtureGit(root, ['checkout', '--quiet', headRef]);
+    return runDoMigrationGuardOn(root, siblingRef);
+  },
+);
+if (
+  nonAncestorHistoricalBase.status === 0 ||
+  !nonAncestorHistoricalBase.stderr.includes('must be a strict ancestor of HEAD')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED non-ancestor base\n');
   failures += 1;
 }
 
@@ -528,6 +712,35 @@ if (!reportsClean(inlineCommentDoMigration)) {
   process.stderr.write(
     'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on inline comment:\n' +
       inlineCommentDoMigration.stderr,
+  );
+  failures += 1;
+}
+
+const nonliteralSqlDependency = withDoMigrationFixture(
+  `declare function loadSql(): readonly string[];
+const FIRST_UP = loadSql();
+export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: FIRST_UP,
+  down: [],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  nonliteralSqlDependency.status === 0 ||
+  !nonliteralSqlDependency.stderr.includes(
+    'FIRST.up must resolve to an array literal through top-level const dependencies',
+  )
+) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage ACCEPTED nonliteral SQL dependency\n',
   );
   failures += 1;
 }

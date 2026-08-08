@@ -58,9 +58,23 @@ function requireGitRef(root, ref) {
   return resolved;
 }
 
+function requireStrictHistoricalBase(root, baseRef) {
+  const head = requireGitRef(root, 'HEAD');
+  const ancestor = runGit(root, ['merge-base', '--is-ancestor', baseRef, head]);
+  if (baseRef === head || ancestor.status !== 0) {
+    process.stderr.write(
+      `${NAME}: migration base ${JSON.stringify(baseRef)} must be a strict ancestor of HEAD\n`,
+    );
+    process.exit(1);
+  }
+  return baseRef;
+}
+
 function resolveBaseRef(root, argv) {
   const explicit = parseBaseRef(argv) ?? process.env.WALDO_DO_MIGRATION_BASE_REF;
-  if (explicit) return requireGitRef(root, explicit);
+  if (explicit) {
+    return requireStrictHistoricalBase(root, requireGitRef(root, explicit));
+  }
 
   const githubBase = process.env.GITHUB_BASE_REF;
   if (githubBase) {
@@ -72,7 +86,7 @@ function resolveBaseRef(root, argv) {
       );
       process.exit(1);
     }
-    return remoteRef ?? localRef;
+    return requireStrictHistoricalBase(root, remoteRef ?? localRef);
   }
 
   const repository = runGit(root, ['rev-parse', '--show-toplevel']);
@@ -86,14 +100,21 @@ function resolveBaseRef(root, argv) {
     );
     process.exit(1);
   }
-  if (head === main) return resolveGitRef(root, 'HEAD^') ?? head;
+  if (head === main) {
+    const parent = resolveGitRef(root, 'HEAD^');
+    if (!parent) {
+      process.stderr.write(`${NAME}: HEAD has no strict historical migration base\n`);
+      process.exit(1);
+    }
+    return requireStrictHistoricalBase(root, parent);
+  }
 
   const mergeBase = runGit(root, ['merge-base', head, main]);
   if (mergeBase.status !== 0 || !mergeBase.stdout.trim()) {
     process.stderr.write(`${NAME}: cannot resolve migration merge-base against origin/main\n`);
     process.exit(1);
   }
-  return mergeBase.stdout.trim();
+  return requireStrictHistoricalBase(root, mergeBase.stdout.trim());
 }
 
 function readRequired(root, path) {
@@ -135,11 +156,16 @@ function unwrapExpression(expression) {
   return current;
 }
 
-function isExportedConst(statement) {
+function isConst(statement) {
   return (
     ts.isVariableStatement(statement) &&
-    (statement.modifiers ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) &&
     (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
+  );
+}
+
+function isExported(statement) {
+  return (statement.modifiers ?? []).some(
+    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
   );
 }
 
@@ -160,21 +186,108 @@ function propertyName(property) {
   return undefined;
 }
 
-function initializerFingerprint(initializer, sourceFile) {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    true,
-    ts.LanguageVariant.Standard,
-    initializer.getText(sourceFile),
-  );
-  const tokens = [];
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    tokens.push(`${token}:${scanner.getTokenText()}`);
+function resolveConstInitializer(identifier, declarations, findings, path, stack) {
+  const declaration = declarations.get(identifier.text);
+  if (!declaration?.initializer) {
+    findings.push(
+      `${SOURCE_PATH}: ${path} references unsupported or nonliteral dependency ${JSON.stringify(identifier.text)}`,
+    );
+    return undefined;
   }
-  return tokens.join('\u0000');
+  if (stack.has(identifier.text)) {
+    findings.push(
+      `${SOURCE_PATH}: ${path} contains a cyclic SQL dependency through ${JSON.stringify(identifier.text)}`,
+    );
+    return undefined;
+  }
+  return {
+    expression: declaration.initializer,
+    stack: new Set([...stack, identifier.text]),
+  };
 }
 
-function parseMigrationDeclaration(symbol, declaration, sourceFile, findings) {
+function resolveSqlString(expression, declarations, findings, path, stack = new Set()) {
+  const current = unwrapExpression(expression);
+  if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current)) {
+    return current.text;
+  }
+  if (ts.isIdentifier(current)) {
+    const resolved = resolveConstInitializer(current, declarations, findings, path, stack);
+    if (!resolved) return undefined;
+    return resolveSqlString(
+      resolved.expression,
+      declarations,
+      findings,
+      path,
+      resolved.stack,
+    );
+  }
+  findings.push(
+    `${SOURCE_PATH}: ${path} SQL statements must resolve to string literals through top-level const dependencies`,
+  );
+  return undefined;
+}
+
+function resolveSqlArray(expression, declarations, findings, path, stack = new Set()) {
+  const current = unwrapExpression(expression);
+  if (ts.isIdentifier(current)) {
+    const resolved = resolveConstInitializer(current, declarations, findings, path, stack);
+    if (!resolved) return undefined;
+    return resolveSqlArray(
+      resolved.expression,
+      declarations,
+      findings,
+      path,
+      resolved.stack,
+    );
+  }
+  if (!ts.isArrayLiteralExpression(current)) {
+    findings.push(
+      `${SOURCE_PATH}: ${path} must resolve to an array literal through top-level const dependencies`,
+    );
+    return undefined;
+  }
+
+  const statements = [];
+  let valid = true;
+  for (const [index, element] of current.elements.entries()) {
+    if (ts.isSpreadElement(element)) {
+      const spread = resolveSqlArray(
+        element.expression,
+        declarations,
+        findings,
+        `${path}[${index}]`,
+        stack,
+      );
+      if (!spread) {
+        valid = false;
+      } else {
+        statements.push(...spread);
+      }
+      continue;
+    }
+    if (ts.isOmittedExpression(element)) {
+      findings.push(`${SOURCE_PATH}: ${path}[${index}] cannot be omitted`);
+      valid = false;
+      continue;
+    }
+    const statement = resolveSqlString(
+      element,
+      declarations,
+      findings,
+      `${path}[${index}]`,
+      stack,
+    );
+    if (statement === undefined) {
+      valid = false;
+    } else {
+      statements.push(statement);
+    }
+  }
+  return valid ? statements : undefined;
+}
+
+function parseMigrationDeclaration(symbol, declaration, declarations, findings) {
   if (!declaration.initializer) {
     findings.push(`${SOURCE_PATH}: ${symbol} has no migration initializer`);
     return undefined;
@@ -186,9 +299,15 @@ function parseMigrationDeclaration(symbol, declaration, sourceFile, findings) {
   }
   const properties = new Map();
   for (const property of initializer.properties) {
-    if (!ts.isPropertyAssignment(property)) continue;
+    if (!ts.isPropertyAssignment(property)) {
+      findings.push(`${SOURCE_PATH}: ${symbol} migration properties must be explicit assignments`);
+      continue;
+    }
     const name = propertyName(property);
-    if (!name) continue;
+    if (!name) {
+      findings.push(`${SOURCE_PATH}: ${symbol} migration property names must be static`);
+      continue;
+    }
     if (properties.has(name)) {
       findings.push(
         `${SOURCE_PATH}: ${symbol} migration property ${JSON.stringify(name)} is duplicated`,
@@ -199,6 +318,8 @@ function parseMigrationDeclaration(symbol, declaration, sourceFile, findings) {
   }
   const versionNode = properties.get('version');
   const nameNode = properties.get('name');
+  const upNode = properties.get('up');
+  const downNode = properties.get('down');
   if (!versionNode || !ts.isNumericLiteral(versionNode)) {
     findings.push(`${SOURCE_PATH}: ${symbol} migration version must be an integer literal`);
     return undefined;
@@ -212,10 +333,22 @@ function parseMigrationDeclaration(symbol, declaration, sourceFile, findings) {
     findings.push(`${SOURCE_PATH}: ${symbol} migration version must be a safe integer`);
     return undefined;
   }
+  for (const name of properties.keys()) {
+    if (!['version', 'name', 'up', 'down'].includes(name)) {
+      findings.push(`${SOURCE_PATH}: ${symbol} has unsupported migration property ${JSON.stringify(name)}`);
+    }
+  }
+  if (!upNode || !downNode) {
+    findings.push(`${SOURCE_PATH}: ${symbol} migration must declare literal-resolvable up and down SQL`);
+    return undefined;
+  }
+  const up = resolveSqlArray(upNode, declarations, findings, `${symbol}.up`);
+  const down = resolveSqlArray(downNode, declarations, findings, `${symbol}.down`);
+  if (!up || !down) return undefined;
   return {
     version,
     name: nameNode.text,
-    initializerFingerprint: initializerFingerprint(initializer, sourceFile),
+    semanticFingerprint: JSON.stringify({ version, name: nameNode.text, up, down }),
   };
 }
 
@@ -233,9 +366,11 @@ function parseSource(source, findings) {
   }
 
   const declarations = new Map();
+  const exportedSymbols = new Set();
   const typedMigrationSymbols = new Set();
   for (const statement of sourceFile.statements) {
-    if (!isExportedConst(statement)) continue;
+    if (!isConst(statement)) continue;
+    const exported = isExported(statement);
     for (const declaration of statement.declarationList.declarations) {
       if (!ts.isIdentifier(declaration.name)) continue;
       const symbol = declaration.name.text;
@@ -244,12 +379,13 @@ function parseSource(source, findings) {
         continue;
       }
       declarations.set(symbol, declaration);
-      if (isDoMigrationType(declaration.type)) typedMigrationSymbols.add(symbol);
+      if (exported) exportedSymbols.add(symbol);
+      if (exported && isDoMigrationType(declaration.type)) typedMigrationSymbols.add(symbol);
     }
   }
 
   const chainDeclaration = declarations.get('DO_SCHEMA_MIGRATIONS');
-  if (!chainDeclaration?.initializer) {
+  if (!chainDeclaration?.initializer || !exportedSymbols.has('DO_SCHEMA_MIGRATIONS')) {
     findings.push(`${SOURCE_PATH}: cannot parse DO_SCHEMA_MIGRATIONS`);
     return [];
   }
@@ -277,11 +413,11 @@ function parseSource(source, findings) {
     }
     seenSymbols.add(symbol);
     const declaration = declarations.get(symbol);
-    if (!declaration) {
+    if (!declaration || !exportedSymbols.has(symbol)) {
       findings.push(`${SOURCE_PATH}: ${symbol} has no exported migration declaration`);
       continue;
     }
-    const migration = parseMigrationDeclaration(symbol, declaration, sourceFile, findings);
+    const migration = parseMigrationDeclaration(symbol, declaration, declarations, findings);
     if (!migration) continue;
     migrations.push(migration);
   }
@@ -387,7 +523,7 @@ function compareHistoricalPrefix(baseMigrations, migrations, findings) {
       !migration ||
       migration.version !== baseMigration.version ||
       migration.name !== baseMigration.name ||
-      migration.initializerFingerprint !== baseMigration.initializerFingerprint
+      migration.semanticFingerprint !== baseMigration.semanticFingerprint
     ) {
       findings.push(`${SOURCE_PATH}: historical migration ${baseMigration.version} changed`);
     }
