@@ -1,0 +1,45 @@
+{
+  "protocolName": "responsibility-judgment-authority",
+  "protocolVersion": "0.4",
+  "mediaType": "application/vnd.waldo.responsibility.v0.4+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "files": [
+    {
+      "path": "authority-grant.schema.json",
+      "sha256": "sha256:77cfa9b0567dedb7cc9fd68a1eb991ca2c93fe7a1ddfc5b6e9d79a8e7e13a6b7"
+    },
+    {
+      "path": "authority-grant.valid.json",
+      "sha256": "sha256:a9fe34a5a49c888e5821a0f2076f2357f7a0db6e2ab5d921f07ddb61e1872fce"
+    },
+    {
+      "path": "judgment-answer.schema.json",
+      "sha256": "sha256:b525493ad1706e10631b957209cc668cd1932689b74f1d8d35edbb41d6df915c"
+    },
+    {
+      "path": "judgment-answer.valid.json",
+      "sha256": "sha256:e0306ed2865a5df40e59fec42f674d250f41505a325dd9090872a90ca2e5d200"
+    },
+    {
+      "path": "judgment-authority.rejections.json",
+      "sha256": "sha256:dffa4800e2df3ea6a30d5e022e5bf056173294eaf2ef19100c4eefa015262064"
+    },
+    {
+      "path": "judgment-decision.schema.json",
+      "sha256": "sha256:ed1f56a0a441c706ec6f3e46ff49d4afe6cf1d811470850de3765da4dfcddd2b"
+    },
+    {
+      "path": "judgment-decision.valid.json",
+      "sha256": "sha256:0adcde92b194b499d31ab77972e501aacf6c0bed988471bcb6be892a3271a60d"
+    },
+    {
+      "path": "judgment-request.schema.json",
+      "sha256": "sha256:72dfe4d33c31ab3379b61e5d3db0eca8cf6c025da1b081f69a42a76b2cf12623"
+    },
+    {
+      "path": "judgment-request.valid.json",
+      "sha256": "sha256:abff2afbb0508fae8f2922a1ac1d2265bd6feaef7292dd6531b73959ac74152e"
+    }
+  ]
+}

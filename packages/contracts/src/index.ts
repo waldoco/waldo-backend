@@ -134,6 +134,8 @@ export * from './protocol/responsibility-planning-turn-v0-3';
 export * from './protocol/responsibility-planning-turn-v0-3-fixtures';
 export * from './protocol/responsibility-acceptance-check-v0-4';
 export * from './protocol/responsibility-acceptance-check-v0-4-fixtures';
+export * from './protocol/responsibility-judgment-authority-v0-4';
+export * from './protocol/responsibility-judgment-authority-v0-4-fixtures';
 export * from './telemetry/engagement';
 export * from './public/dto';
 export * from './public/morning-brief';
