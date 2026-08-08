@@ -451,11 +451,48 @@ describe('responsibility judgment and authority v0.4', () => {
         request: { ...binding.request, state, decisionId },
       }).success, state).toBe(false);
     }
+  });
 
-    expect(judgmentAuthorityBindingV04Schema.safeParse({
-      ...binding,
-      decision: { ...binding.decision, decidedAt: binding.request.expiresAt },
-    }).success).toBe(false);
+  it('rejects a refused decision exactly at request expiry for the intended boundary', () => {
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
+    const granted = JSON.parse(bundle['judgment-authority-binding.valid.json']!);
+    const { grant: _grant, ...bindingWithoutGrant } = granted;
+    const refusedBinding = {
+      ...bindingWithoutGrant,
+      authorityDisposition: 'refused',
+      answer: {
+        ...bindingWithoutGrant.answer,
+        payload: {
+          ...bindingWithoutGrant.answer.payload,
+          selectedOptionId: 'option_reject',
+        },
+      },
+      decision: {
+        ...bindingWithoutGrant.decision,
+        selectedOptionId: 'option_reject',
+      },
+    };
+    const justBeforeExpiry = {
+      ...refusedBinding,
+      decision: {
+        ...refusedBinding.decision,
+        decidedAt: new Date(Date.parse(refusedBinding.request.expiresAt) - 1).toISOString(),
+      },
+    };
+
+    expect(judgmentAuthorityBindingV04Schema.parse(justBeforeExpiry)).toEqual(justBeforeExpiry);
+
+    const result = judgmentAuthorityBindingV04Schema.safeParse({
+      ...refusedBinding,
+      decision: { ...refusedBinding.decision, decidedAt: refusedBinding.request.expiresAt },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('exact-expiry refusal unexpectedly passed');
+    expect(result.error.issues.map(({ path, message }) => ({ path, message }))).toEqual([{
+      path: ['decision', 'decidedAt'],
+      message: 'decision must occur after the current request snapshot and before its expiry',
+    }]);
   });
 
   it('records refusal only when the owner selected an explicit refusal option', () => {

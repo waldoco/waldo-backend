@@ -415,8 +415,10 @@ export class JudgmentAuthorityBindingDigestMismatchError extends Error {
 }
 
 /**
- * Creates the trusted admission verifier. The supplied implementation must compute lowercase
- * SHA-256 hex over the canonical UTF-8 request; JSON Schema validation alone is not authority.
+ * Creates a snapshot-integrity and binding verifier. The supplied implementation must compute
+ * lowercase SHA-256 hex over the canonical UTF-8 request. This is insufficient for final live
+ * authority admission; JudgmentAuthorityModule must supply authoritative current-state and clock
+ * checks at admission time.
  */
 export function createJudgmentAuthorityBindingVerifierV04(
   sha256Hex: JudgmentAuthoritySha256HexV04,
