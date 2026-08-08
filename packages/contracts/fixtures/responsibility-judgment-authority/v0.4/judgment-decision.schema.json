@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "id": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "ownerId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "revision": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "judgmentRequestId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "judgmentRequestRevision": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "subject": {
+      "$ref": "#/$defs/__schema4"
+    },
+    "selectedOptionId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "displayedRequestDigest": {
+      "$ref": "#/$defs/__schema5"
+    },
+    "actor": {
+      "$ref": "#/$defs/__schema6"
+    },
+    "presenceId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "authenticatedSessionId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "ownerPolicyRevision": {
+      "$ref": "#/$defs/__schema7"
+    },
+    "authAssurance": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "state": {
+      "$ref": "#/$defs/__schema8"
+    },
+    "decidedAt": {
+      "$ref": "#/$defs/__schema9"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "id",
+    "ownerId",
+    "revision",
+    "judgmentRequestId",
+    "judgmentRequestRevision",
+    "subject",
+    "selectedOptionId",
+    "displayedRequestDigest",
+    "actor",
+    "presenceId",
+    "authenticatedSessionId",
+    "ownerPolicyRevision",
+    "authAssurance",
+    "state",
+    "decidedAt"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema3": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema4": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "outcome",
+            "work_unit"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema5": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "__schema6": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "owner"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "__schema7": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema8": {
+      "type": "string",
+      "const": "recorded"
+    },
+    "__schema9": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-judgment-authority:0.4:judgment-decision",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}
