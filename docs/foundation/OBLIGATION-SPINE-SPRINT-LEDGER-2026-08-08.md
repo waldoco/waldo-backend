@@ -50,11 +50,11 @@ The live #78 body is a historical planning input, not current sequencing authori
 | Lane | Issue / purpose | Branch | Worktree | Base / dependency | Allowed writes | State | Head / PR |
 |---|---|---|---|---|---|---|---|
 | orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | pending |
-| contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | active draft | `578fc49`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
+| contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | active draft | `b28549d`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
 | merge-wall repair | wall-clock-independent planning authority fixture | `codex/planning-authority-test-clock` | `/Users/shivanshfulper/.codex/worktrees/osp-test-clock/waldo-backend` | `dd434e9` | one runtime test fixture | review | `12a014a`; draft PR [#99](https://github.com/Pin4sf/waldo-backend/pull/99) |
 | migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | needs work | `e3c1c3e`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
 | execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
-| credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | review | `28f1720`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
+| credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | needs work | `28f1720`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
 
 ## Planned implementation barriers
 
@@ -112,6 +112,8 @@ Every worker handoff and PR must report:
 | 2026-08-08 | merge-wall repair | Independent breaker pass | PR #99 has no blocking Codex findings. The reviewer reproduced RED on main and 24/24 focused planning/identity plus 1,001 runtime tests on the fix. Claude review remains pending. |
 | 2026-08-08 | migration safety | Independent breaker rejected first guard | P1: paired source/ledger rewrites and historical SQL changes passed; a block-comment declaration spoof also passed. #100 returned to implementation for TypeScript AST parsing and base-aware immutable-prefix enforcement. |
 | 2026-08-08 | contracts | Independent breaker rejected first freshness gate | P1: CRLF-mutated fixture bytes passed after normalization while the manifest digest changed. P2: exact 4,096/4,097-byte boundaries lacked committed assertions. #103 returned to raw-byte comparison and boundary-test repair. |
+| 2026-08-08 | contracts | Freshness repair published | `b28549d` adds raw-byte comparison, a CRLF mutation regression, and exact 4,096/4,097-byte tests. Focused AcceptanceCheck 6/6 and freshness 2/2 pass; independent re-review remains pending. |
+| 2026-08-08 | credential boundary | Independent review rejected first source map | P1: an out-of-runtime service-role boundary is not authorized, and the DO-to-custody redemption permit/TOCTOU protocol is missing. Re-slice as A0 contract/reducer/guard, A1 DO metadata, B needs explicit custody decision, C integration. |
 
 ## Honest capability status
 
