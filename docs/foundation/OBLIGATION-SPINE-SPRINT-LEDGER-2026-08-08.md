@@ -52,7 +52,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 | orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | pending |
 | contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | active draft | `b28549d`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
 | merge-wall repair | wall-clock-independent planning authority fixture | `codex/planning-authority-test-clock` | `/Users/shivanshfulper/.codex/worktrees/osp-test-clock/waldo-backend` | `dd434e9` | one runtime test fixture | review | `12a014a`; draft PR [#99](https://github.com/Pin4sf/waldo-backend/pull/99) |
-| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | repaired; re-review pending | `5f7cd8a`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
+| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | needs work after second breaker | `5f7cd8a`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
 | execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
 | credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | evidence review-clear; implementation decisions remain | `61304a8`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
 
@@ -62,7 +62,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 |---|---|---|
 | B0 preflight | live base pinned; dirty main untouched; worktrees and ownership recorded | passed |
 | B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | needs work in #103: raw-byte freshness and exact byte-boundary regressions; remaining families active |
-| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | repaired in #100; independent re-review pending |
+| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | needs work: transitive SQL semantics and strict historical-base validation |
 | B3 capture continuity | capture transaction creates canonical OpenLoop and exact initial ReEntry | blocked by B1/B2 |
 | B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | blocked by B1/B2 |
 | B5 effects | frozen intent before I/O, single retry owner, reconcile-before-retry, terminal ambiguity | blocked by B4 |
@@ -118,6 +118,9 @@ Every worker handoff and PR must report:
 | 2026-08-08 | credential boundary | Source-map repair published | `61304a8` removes the unauthorized service-role recommendation, records the unresolved permit/revocation/TOCTOU design, unblocks A0, and requires generated sink manifests plus distinct canaries. Independent re-review pending. |
 | 2026-08-08 | contracts | AcceptanceCheck repair re-review | Independent review reproduced the CRLF and byte-ceiling mutations against `b28549d`; both tests fail when the defects return. AcceptanceCheck is review-clear at contract/fixture proof only. |
 | 2026-08-08 | credential boundary | Source-map repair re-review | Independent review passed all prior P1/P2 closures at `61304a8`; all 32 repository references resolve. Package B remains decision-blocked and no implementation claim is made. |
+| 2026-08-08 | migration safety | Second breaker rejected repair | P1: SQL referenced through an external constant can change outside the fingerprint; `--base-ref HEAD` makes comparison vacuous. P2: punctuation-only formatting is treated as lineage. #100 returned to semantic up/down resolution and strict-ancestor validation. |
+| 2026-08-08 | contracts | Judgment/Authority pre-push review rejected | Unpushed `93bcf53` uses a displayed digest unrelated to the canonical request, does not prove request-to-grant no-widening, asserts only 8/15 rejection names, and leaves use limit outside requested authority. Repair required before push. |
+| 2026-08-08 | delivery | #86 source-backed preflight blocked implementation | Bot API has no documented idempotency/reconciliation key; MTProto has `random_id` and update recovery but does not fit the synchronous receipt-free `DeliverySink`. Issue relabeled blocked pending effect contract and MTProto feasibility proof; fixed V10 rejected. |
 
 ## Honest capability status
 
