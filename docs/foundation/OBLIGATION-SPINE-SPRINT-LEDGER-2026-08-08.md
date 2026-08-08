@@ -47,11 +47,48 @@ The live #78 body is a historical planning input, not current sequencing authori
 | `waldo-coordinator.ts`, `run-loop/do.ts`, `runtime/src/index.ts` | #88 integration lane | Module PRs expose transaction-scoped seams and do not self-wire. |
 | This ledger | root orchestration lane | Workers return evidence packets; only root updates rows. |
 
+## Worktree-task orchestration
+
+The run uses a hierarchical supervisor pattern for context isolation. The root task owns trajectory, dependency decisions, the merge queue, and this ledger; durable implementation happens in dedicated Codex worktree tasks created from reviewed dependency commits. A worktree task may use bounded subagents for read-only workflow mapping, test design, or mutation probes. It may not create a second concurrent writer for its owned files, and its author/subagents cannot independently clear their own implementation.
+
+### Active-task cap and phase rotation
+
+Keep no more than four live Codex contexts. Rotate the same slots instead of accumulating one task per ticket.
+
+| Phase | Context 1 | Context 2 | Context 3 | Context 4 |
+|---|---|---|---|---|
+| contract gates | root orchestration | contracts writer | independent contract breaker | independent migration breaker |
+| module wave | root orchestration | contracts writer | obligation runtime worktree | admission/identity runtime worktree |
+| integration wave | root orchestration | remaining module worktree | RunLoop/integration worktree | independent breaker/security worktree |
+
+### Worktree-task start packet
+
+Every implementation task starts from a packet containing:
+
+- objective and stable acceptance-criterion IDs;
+- exact dependency/base SHA and source PR;
+- worktree, branch, allowed writes, and forbidden hotspots;
+- architecture/issue source paths rather than paraphrased conclusions;
+- required first failing public-interface test and mutation candidate;
+- expected evidence packet and halt/escalation conditions.
+
+The task reload order is this ledger, the architecture lock, the owning issue/PR, then the pinned dependency diff. Full conversation history is not a dependency.
+
+### Handoff and validation protocol
+
+1. The worktree task records RED, GREEN, focused verification, mutation/non-vacuity evidence, changed files, head SHA, and residual uncertainty in the evidence-packet schema below.
+2. The root spot-checks repository state and source evidence, then updates this ledger; workers never edit the ledger.
+3. No consumer task starts from an unreviewed local diff. It pins a published commit that has passed the required contract or module gate.
+4. Independent review runs in a fresh context/worktree and reproduces named failure modes. Author and author-spawned subagents cannot issue clearance.
+5. Rejected work returns to the same owning worktree. After three failures on the same boundary, decompose or defer rather than adding reviewers.
+6. Coordinator/run-loop/index and `do-schema.ts` remain serial merge-captain surfaces even while module work runs in parallel.
+7. Pull-request comments hold full reviewer evidence; this ledger holds the concise state and direct link, avoiding lossy supervisor paraphrase.
+
 ## Worktree ledger
 
 | Lane | Issue / purpose | Branch | Worktree | Base / dependency | Allowed writes | State | Head / PR |
 |---|---|---|---|---|---|---|---|
-| orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | pending |
+| orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | draft PR [#102](https://github.com/Pin4sf/waldo-backend/pull/102) |
 | contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | repaired judgment/authority slice under independent pre-push review | local `52ea175`, published `b28549d`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
 | merge-wall repair | wall-clock-independent planning authority fixture | `codex/planning-authority-test-clock` | `/Users/shivanshfulper/.codex/worktrees/osp-test-clock/waldo-backend` | `dd434e9` | one runtime test fixture | review | `12a014a`; draft PR [#99](https://github.com/Pin4sf/waldo-backend/pull/99) |
 | migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | second repair published; third independent review active | `a59d042`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
