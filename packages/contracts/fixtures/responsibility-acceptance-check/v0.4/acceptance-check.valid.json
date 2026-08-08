@@ -1,0 +1,22 @@
+{
+  "protocolVersion": "0.4",
+  "id": "acceptance_check_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "revision": 1,
+  "subject": {
+    "kind": "outcome",
+    "id": "outcome_fixture_01",
+    "revision": 3
+  },
+  "criterion": "The calendar contains the approved investor meeting.",
+  "verificationMethod": {
+    "kind": "deterministic_read_back",
+    "capability": "calendar.event.read",
+    "targetRef": "calendar_event_target_fixture_01",
+    "assertion": {
+      "operator": "digest_equals",
+      "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "createdAt": "2026-08-08T18:00:00.000Z"
+}

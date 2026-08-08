@@ -1,0 +1,21 @@
+{
+  "protocolName": "responsibility-acceptance-check",
+  "protocolVersion": "0.4",
+  "mediaType": "application/vnd.waldo.responsibility.v0.4+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "files": [
+    {
+      "path": "acceptance-check.rejections.json",
+      "sha256": "sha256:865f26aadbf25c9ea3412323029b448c46d71dd2218b15903a7f6b80dfe2caf4"
+    },
+    {
+      "path": "acceptance-check.schema.json",
+      "sha256": "sha256:67de26d3cc0ac143d1b1898c39b87dd88b7e8f544136b5ef8120ee028378db8a"
+    },
+    {
+      "path": "acceptance-check.valid.json",
+      "sha256": "sha256:063c09745452a35d3db494af54a886f5aa3b9928a7ad62a60f7219079fdb0fa8"
+    }
+  ]
+}
