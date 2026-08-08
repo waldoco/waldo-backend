@@ -10,7 +10,6 @@ import {
 import { protocolVersionV04Schema } from './responsibility-acceptance-check-v0-4';
 
 const unique = <Value>(values: readonly Value[]): boolean => new Set(values).size === values.length;
-const MAX_AUTHORITY_USES = Number.MAX_SAFE_INTEGER - 1;
 
 export const boundedProtocolReferenceV04Schema = z.strictObject({
   ref: protocolIdSchema,
@@ -58,6 +57,8 @@ export const requestedAuthorityV04Schema = z.strictObject({
   argumentDigest: protocolDigestSchema,
   contextDigest: protocolDigestSchema,
   artifactDigest: protocolDigestSchema.nullable(),
+  useLimit: z.literal(1),
+  validUntil: iso8601Schema,
 });
 
 const judgmentOptionV04Schema = z.strictObject({
@@ -114,6 +115,16 @@ export const judgmentRequestV04Schema = z.strictObject({
       path: ['expiresAt'],
       message: 'JudgmentRequest timestamps are inconsistent',
     });
+  }
+  if (request.requestedAuthority !== null) {
+    const validUntil = Date.parse(request.requestedAuthority.validUntil);
+    if (validUntil <= createdAt || validUntil > Date.parse(request.expiresAt)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['requestedAuthority', 'validUntil'],
+        message: 'requested authority validity must fit within its JudgmentRequest',
+      });
+    }
   }
 });
 export type JudgmentRequestV04 = z.infer<typeof judgmentRequestV04Schema>;
@@ -177,9 +188,9 @@ export const authorityGrantV04Schema = z.strictObject({
   argumentDigest: protocolDigestSchema,
   contextDigest: protocolDigestSchema,
   artifactDigest: protocolDigestSchema.nullable(),
-  useLimit: z.int().positive().max(MAX_AUTHORITY_USES),
-  usesConsumed: z.int().nonnegative().max(MAX_AUTHORITY_USES),
-  nextUseIndex: z.int().positive().max(Number.MAX_SAFE_INTEGER),
+  useLimit: z.literal(1),
+  usesConsumed: z.int().min(0).max(1),
+  nextUseIndex: z.int().min(1).max(2),
   validFrom: iso8601Schema,
   expiresAt: iso8601Schema,
   revocationGeneration: protocolRevisionSchema,
@@ -248,3 +259,89 @@ export type JudgmentAnswerRequestV04 = z.infer<typeof judgmentAnswerRequestV04Sc
 export function canonicalizeJudgmentAnswerRequestV04ForDigest(value: unknown): string {
   return canonicalizeProtocolJson(judgmentAnswerRequestV04Schema.parse(value));
 }
+
+function sameProtocolValue(left: unknown, right: unknown): boolean {
+  return canonicalizeProtocolJson(left) === canonicalizeProtocolJson(right);
+}
+
+export const judgmentAuthorityBindingV04Schema = z.strictObject({
+  requestDigest: protocolDigestSchema,
+  request: judgmentRequestV04Schema,
+  answer: judgmentAnswerRequestV04Schema,
+  decision: judgmentDecisionV04Schema,
+  grant: authorityGrantV04Schema,
+}).superRefine((binding, context) => {
+  const { request, answer, decision, grant } = binding;
+  const issue = (path: PropertyKey[], message: string) => context.addIssue({
+    code: 'custom',
+    path,
+    message,
+  });
+
+  if (answer.aggregate.id !== request.id || answer.aggregate.expectedRevision !== request.revision) {
+    issue(['answer', 'aggregate'], 'answer must bind the exact JudgmentRequest revision');
+  }
+  if (!request.options.some((option) => option.id === answer.payload.selectedOptionId)) {
+    issue(['answer', 'payload', 'selectedOptionId'], 'answer must select a displayed option');
+  }
+  if (answer.payload.displayedRequestDigest !== binding.requestDigest) {
+    issue(['answer', 'payload', 'displayedRequestDigest'], 'answer must bind the displayed request');
+  }
+  if (decision.ownerId !== request.ownerId || decision.actor.id !== request.ownerId) {
+    issue(['decision', 'ownerId'], 'decision must bind the JudgmentRequest owner');
+  }
+  if (decision.judgmentRequestId !== request.id ||
+      decision.judgmentRequestRevision !== request.revision) {
+    issue(['decision', 'judgmentRequestId'], 'decision must bind the exact JudgmentRequest revision');
+  }
+  if (!sameProtocolValue(decision.subject, request.subject)) {
+    issue(['decision', 'subject'], 'decision must bind the JudgmentRequest subject');
+  }
+  if (decision.selectedOptionId !== answer.payload.selectedOptionId) {
+    issue(['decision', 'selectedOptionId'], 'decision must record the authenticated answer');
+  }
+  if (decision.displayedRequestDigest !== binding.requestDigest) {
+    issue(['decision', 'displayedRequestDigest'], 'decision must bind the displayed request');
+  }
+  if (grant.ownerId !== request.ownerId || grant.grantor.id !== request.ownerId) {
+    issue(['grant', 'ownerId'], 'grant must bind the JudgmentRequest owner');
+  }
+  if (grant.judgmentRequestId !== request.id ||
+      grant.judgmentRequestRevision !== request.revision ||
+      grant.judgmentDecisionId !== decision.id) {
+    issue(['grant', 'judgmentRequestId'], 'grant must bind the exact request and decision');
+  }
+  if (!sameProtocolValue(grant.subject, request.subject)) {
+    issue(['grant', 'subject'], 'grant must bind the JudgmentRequest work unit');
+  }
+
+  const requested = request.requestedAuthority;
+  if (requested === null) {
+    issue(['grant'], 'a grant requires requested authority');
+    return;
+  }
+  for (const field of [
+    'purpose',
+    'effectFamily',
+    'resources',
+    'scopes',
+    'audiences',
+    'argumentDigest',
+    'contextDigest',
+    'artifactDigest',
+    'useLimit',
+  ] as const) {
+    if (!sameProtocolValue(grant[field], requested[field])) {
+      issue(['grant', field], `grant ${field} must not widen or replace requested authority`);
+    }
+  }
+  if (Date.parse(grant.expiresAt) > Date.parse(request.expiresAt) ||
+      Date.parse(grant.expiresAt) > Date.parse(requested.validUntil)) {
+    issue(['grant', 'expiresAt'], 'grant validity must not outlive its JudgmentRequest authority');
+  }
+  if (Date.parse(grant.validFrom) < Date.parse(decision.decidedAt) ||
+      Date.parse(grant.createdAt) < Date.parse(decision.decidedAt)) {
+    issue(['grant', 'validFrom'], 'grant cannot predate its authenticated decision');
+  }
+});
+export type JudgmentAuthorityBindingV04 = z.infer<typeof judgmentAuthorityBindingV04Schema>;

@@ -8,8 +8,10 @@ import {
   canonicalizeJudgmentDecisionV04ForDigest,
   canonicalizeJudgmentRequestV04ForDigest,
   judgmentAnswerRequestV04Schema,
+  judgmentAuthorityBindingV04Schema,
   judgmentDecisionV04Schema,
   judgmentRequestV04Schema,
+  RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04,
   responsibilityJudgmentAuthorityRejectionCatalogueV04Schema,
 } from '../index';
 
@@ -18,6 +20,7 @@ const fixtureSchemas = {
   'judgment-request.schema.json': judgmentRequestV04Schema,
   'judgment-decision.schema.json': judgmentDecisionV04Schema,
   'authority-grant.schema.json': authorityGrantV04Schema,
+  'judgment-authority-binding.schema.json': judgmentAuthorityBindingV04Schema,
 } as const;
 
 const validFixtureForSchema = {
@@ -25,6 +28,7 @@ const validFixtureForSchema = {
   'judgment-request.schema.json': 'judgment-request.valid.json',
   'judgment-decision.schema.json': 'judgment-decision.valid.json',
   'authority-grant.schema.json': 'authority-grant.valid.json',
+  'judgment-authority-binding.schema.json': 'judgment-authority-binding.valid.json',
 } as const;
 
 function fixtureAjv(): Ajv2020 {
@@ -101,6 +105,8 @@ describe('responsibility judgment and authority v0.4', () => {
         argumentDigest: `sha256:${'8'.repeat(64)}`,
         contextDigest: `sha256:${'9'.repeat(64)}`,
         artifactDigest: null,
+        useLimit: 1,
+        validUntil: '2026-08-08T18:30:00.000Z',
       },
       reEntryPointId: 'reentry_01',
       expiresAt: '2026-08-08T18:30:00.000Z',
@@ -122,6 +128,17 @@ describe('responsibility judgment and authority v0.4', () => {
     expect(judgmentRequestV04Schema.safeParse({
       ...request,
       recommendation: 'option_not_displayed',
+    }).success).toBe(false);
+    expect(judgmentRequestV04Schema.safeParse({
+      ...request,
+      requestedAuthority: { ...request.requestedAuthority, useLimit: 2 },
+    }).success).toBe(false);
+    expect(judgmentRequestV04Schema.safeParse({
+      ...request,
+      requestedAuthority: {
+        ...request.requestedAuthority,
+        validUntil: '2026-08-08T18:31:00.000Z',
+      },
     }).success).toBe(false);
   });
 
@@ -213,6 +230,19 @@ describe('responsibility judgment and authority v0.4', () => {
       nextUseIndex: 2,
       state: 'exhausted',
     }).nextUseIndex).toBe(2);
+    for (const invalidCounters of [
+      { useLimit: 2 },
+      { usesConsumed: Number.MAX_SAFE_INTEGER },
+      { nextUseIndex: Number.MAX_SAFE_INTEGER },
+      { usesConsumed: 1, nextUseIndex: 2, state: 'active' },
+      { usesConsumed: 0, nextUseIndex: 1, state: 'exhausted' },
+      { usesConsumed: 0, nextUseIndex: 0, state: 'active' },
+    ]) {
+      expect(authorityGrantV04Schema.safeParse({
+        ...grant,
+        ...invalidCounters,
+      }).success, JSON.stringify(invalidCounters)).toBe(false);
+    }
     const { revocationGeneration: _missing, ...withoutRevocationGeneration } = grant;
     expect(authorityGrantV04Schema.safeParse(withoutRevocationGeneration).success).toBe(false);
     expect(authorityGrantV04Schema.safeParse({
@@ -225,7 +255,7 @@ describe('responsibility judgment and authority v0.4', () => {
     }).success).toBe(false);
   });
 
-  it('publishes four Draft 2020-12 schemas that round-trip every valid fixture', () => {
+  it('publishes Draft 2020-12 schemas that round-trip every valid fixture', () => {
     const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
 
     for (const [schemaPath, zodSchema] of Object.entries(fixtureSchemas)) {
@@ -243,6 +273,79 @@ describe('responsibility judgment and authority v0.4', () => {
     }
   });
 
+  it('binds the valid family to the real canonical request digest and requested authority', () => {
+    const hashedInputs: string[] = [];
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle((value) => {
+      hashedInputs.push(value);
+      return 'c'.repeat(64);
+    });
+    const request = judgmentRequestV04Schema.parse(
+      JSON.parse(bundle['judgment-request.valid.json']!),
+    );
+    const answer = judgmentAnswerRequestV04Schema.parse(
+      JSON.parse(bundle['judgment-answer.valid.json']!),
+    );
+    const decision = judgmentDecisionV04Schema.parse(
+      JSON.parse(bundle['judgment-decision.valid.json']!),
+    );
+    const grant = authorityGrantV04Schema.parse(
+      JSON.parse(bundle['authority-grant.valid.json']!),
+    );
+    const canonicalRequest = canonicalizeJudgmentRequestV04ForDigest(request);
+    const requestDigest = `sha256:${'c'.repeat(64)}`;
+
+    expect(hashedInputs[0]).toBe(canonicalRequest);
+    expect(answer.aggregate).toEqual({
+      kind: 'judgment_request',
+      id: request.id,
+      expectedRevision: request.revision,
+    });
+    expect(answer.payload.displayedRequestDigest).toBe(requestDigest);
+    expect(request.options.map((option) => option.id)).toContain(answer.payload.selectedOptionId);
+    expect(decision).toMatchObject({
+      ownerId: request.ownerId,
+      judgmentRequestId: request.id,
+      judgmentRequestRevision: request.revision,
+      subject: request.subject,
+      selectedOptionId: answer.payload.selectedOptionId,
+      displayedRequestDigest: requestDigest,
+    });
+    expect(grant).toMatchObject({
+      ownerId: request.ownerId,
+      judgmentRequestId: request.id,
+      judgmentRequestRevision: request.revision,
+      judgmentDecisionId: decision.id,
+      grantor: { kind: 'owner', id: request.ownerId },
+      subject: request.subject,
+      purpose: request.requestedAuthority?.purpose,
+      effectFamily: request.requestedAuthority?.effectFamily,
+      resources: request.requestedAuthority?.resources,
+      scopes: request.requestedAuthority?.scopes,
+      audiences: request.requestedAuthority?.audiences,
+      argumentDigest: request.requestedAuthority?.argumentDigest,
+      contextDigest: request.requestedAuthority?.contextDigest,
+      artifactDigest: request.requestedAuthority?.artifactDigest,
+      useLimit: request.requestedAuthority?.useLimit,
+    });
+    for (const field of [
+      'purpose',
+      'effectFamily',
+      'resources',
+      'scopes',
+      'audiences',
+      'argumentDigest',
+      'contextDigest',
+      'artifactDigest',
+      'useLimit',
+    ] as const) {
+      expect(grant[field], field).toEqual(request.requestedAuthority![field]);
+    }
+    expect(Date.parse(grant.expiresAt)).toBeLessThanOrEqual(Date.parse(request.expiresAt));
+    expect(Date.parse(grant.expiresAt)).toBeLessThanOrEqual(
+      Date.parse(request.requestedAuthority!.validUntil),
+    );
+  });
+
   it('asserts every rejection at its declared schema or runtime layer', () => {
     const bundle = buildResponsibilityJudgmentAuthorityV04Bundle(() => 'a'.repeat(64));
     const catalogue = responsibilityJudgmentAuthorityRejectionCatalogueV04Schema.parse(
@@ -255,16 +358,9 @@ describe('responsibility judgment and authority v0.4', () => {
       ]),
     );
 
-    expect(catalogue.cases.map((entry) => entry.name)).toEqual(expect.arrayContaining([
-      'client-owned-owner',
-      'client-owned-grant',
-      'client-owned-grant-fields',
-      'stale-answer-revision',
-      'stale-displayed-request-digest',
-      'unknown-selected-option',
-      'grant-without-revocation-generation',
-      'grant-credential-injection',
-    ]));
+    const names = catalogue.cases.map((entry) => entry.name);
+    expect(names).toEqual([...RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04]);
+    expect(new Set(names).size).toBe(names.length);
 
     for (const rejection of catalogue.cases) {
       const validate = validators[rejection.schema]!;

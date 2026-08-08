@@ -20,7 +20,7 @@
         "clientIssuedAt": "2026-08-08T18:10:00.000Z",
         "payload": {
           "selectedOptionId": "option_approve",
-          "displayedRequestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
         },
         "ownerId": "owner_attacker"
       }
@@ -44,7 +44,7 @@
         "clientIssuedAt": "2026-08-08T18:10:00.000Z",
         "payload": {
           "selectedOptionId": "option_approve",
-          "displayedRequestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
         },
         "authorityGrant": {
           "protocolVersion": "0.4",
@@ -115,13 +115,109 @@
         "clientIssuedAt": "2026-08-08T18:10:00.000Z",
         "payload": {
           "selectedOptionId": "option_approve",
-          "displayedRequestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
           "scopes": [
             "calendar.admin"
           ],
           "useLimit": 99,
           "expiresAt": "2099-01-01T00:00:00.000Z",
           "revocationGeneration": 0
+        }
+      }
+    },
+    {
+      "name": "client-provider-selector",
+      "schema": "judgment-answer.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "answer_judgment_fixture_01",
+        "commandType": "judgment.answer",
+        "presenceRegistrationId": "presence_registration_fixture_01",
+        "aggregate": {
+          "kind": "judgment_request",
+          "id": "judgment_request_fixture_01",
+          "expectedRevision": 2
+        },
+        "correlationId": "correlation_judgment_fixture_01",
+        "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+        "payload": {
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "providerId": "provider_attacker"
+        }
+      }
+    },
+    {
+      "name": "client-model-selector",
+      "schema": "judgment-answer.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "answer_judgment_fixture_01",
+        "commandType": "judgment.answer",
+        "presenceRegistrationId": "presence_registration_fixture_01",
+        "aggregate": {
+          "kind": "judgment_request",
+          "id": "judgment_request_fixture_01",
+          "expectedRevision": 2
+        },
+        "correlationId": "correlation_judgment_fixture_01",
+        "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+        "payload": {
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "modelId": "model_attacker"
+        }
+      }
+    },
+    {
+      "name": "client-executor-selector",
+      "schema": "judgment-answer.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "answer_judgment_fixture_01",
+        "commandType": "judgment.answer",
+        "presenceRegistrationId": "presence_registration_fixture_01",
+        "aggregate": {
+          "kind": "judgment_request",
+          "id": "judgment_request_fixture_01",
+          "expectedRevision": 2
+        },
+        "correlationId": "correlation_judgment_fixture_01",
+        "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+        "payload": {
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "executorRef": "executor_attacker"
+        }
+      }
+    },
+    {
+      "name": "client-sensitive-context",
+      "schema": "judgment-answer.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "answer_judgment_fixture_01",
+        "commandType": "judgment.answer",
+        "presenceRegistrationId": "presence_registration_fixture_01",
+        "aggregate": {
+          "kind": "judgment_request",
+          "id": "judgment_request_fixture_01",
+          "expectedRevision": 2
+        },
+        "correlationId": "correlation_judgment_fixture_01",
+        "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+        "payload": {
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "sensitiveContextRef": "context_attacker"
         }
       }
     },
@@ -144,7 +240,7 @@
         "clientIssuedAt": "2026-08-08T18:10:00.000Z",
         "payload": {
           "selectedOptionId": "option_approve",
-          "displayedRequestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
         }
       }
     },
@@ -190,7 +286,7 @@
         "clientIssuedAt": "2026-08-08T18:10:00.000Z",
         "payload": {
           "selectedOptionId": "option_not_displayed",
-          "displayedRequestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
         }
       }
     },
@@ -263,7 +359,169 @@
           ],
           "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
           "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-          "artifactDigest": null
+          "artifactDigest": null,
+          "useLimit": 1,
+          "validUntil": "2026-08-08T18:30:00.000Z"
+        },
+        "reEntryPointId": "reentry_fixture_01",
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "decisionId": null,
+        "state": "open",
+        "createdAt": "2026-08-08T18:05:00.000Z",
+        "updatedAt": "2026-08-08T18:05:00.000Z"
+      }
+    },
+    {
+      "name": "lone-surrogate-reference",
+      "schema": "judgment-request.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "judgment_request_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 2,
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "question": {
+          "ref": "\ud800",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "options": [
+          {
+            "id": "option_approve",
+            "content": {
+              "ref": "option_content_approve",
+              "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            }
+          },
+          {
+            "id": "option_reject",
+            "content": {
+              "ref": "option_content_reject",
+              "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            }
+          }
+        ],
+        "recommendation": "option_approve",
+        "evidence": [
+          {
+            "ref": "evidence_summary_fixture_01",
+            "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "risk": {
+          "ref": "risk_summary_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "reversibility": {
+          "ref": "reversibility_summary_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+        },
+        "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+        "requestedAuthority": {
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "validUntil": "2026-08-08T18:30:00.000Z"
+        },
+        "reEntryPointId": "reentry_fixture_01",
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "decisionId": null,
+        "state": "open",
+        "createdAt": "2026-08-08T18:05:00.000Z",
+        "updatedAt": "2026-08-08T18:05:00.000Z"
+      }
+    },
+    {
+      "name": "reference-byte-ceiling",
+      "schema": "judgment-request.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "judgment_request_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 2,
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "question": {
+          "ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "options": [
+          {
+            "id": "option_approve",
+            "content": {
+              "ref": "option_content_approve",
+              "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+            }
+          },
+          {
+            "id": "option_reject",
+            "content": {
+              "ref": "option_content_reject",
+              "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+            }
+          }
+        ],
+        "recommendation": "option_approve",
+        "evidence": [
+          {
+            "ref": "evidence_summary_fixture_01",
+            "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+          }
+        ],
+        "risk": {
+          "ref": "risk_summary_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "reversibility": {
+          "ref": "reversibility_summary_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+        },
+        "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+        "requestedAuthority": {
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "validUntil": "2026-08-08T18:30:00.000Z"
         },
         "reEntryPointId": "reentry_fixture_01",
         "expiresAt": "2026-08-08T18:30:00.000Z",
@@ -341,7 +599,9 @@
           ],
           "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
           "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-          "artifactDigest": null
+          "artifactDigest": null,
+          "useLimit": 1,
+          "validUntil": "2026-08-08T18:30:00.000Z"
         },
         "reEntryPointId": "reentry_fixture_01",
         "expiresAt": "2026-08-08T18:30:00.000Z",
@@ -419,7 +679,9 @@
           ],
           "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
           "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-          "artifactDigest": null
+          "artifactDigest": null,
+          "useLimit": 1,
+          "validUntil": "2026-08-08T18:30:00.000Z"
         },
         "reEntryPointId": "reentry_fixture_01",
         "expiresAt": "2026-08-08T18:30:00.000Z",
@@ -447,7 +709,7 @@
           "revision": 4
         },
         "selectedOptionId": "option_approve",
-        "displayedRequestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
         "actor": {
           "kind": "owner",
           "id": "owner_fixture_01"
@@ -622,6 +884,114 @@
       }
     },
     {
+      "name": "grant-max-safe-consumed",
+      "schema": "authority-grant.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "authority_grant_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "judgmentRequestId": "judgment_request_fixture_01",
+        "judgmentRequestRevision": 2,
+        "judgmentDecisionId": "judgment_decision_fixture_01",
+        "grantor": {
+          "kind": "owner",
+          "id": "owner_fixture_01"
+        },
+        "grantee": {
+          "kind": "service",
+          "id": "effect_engine"
+        },
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "resources": [
+          {
+            "kind": "calendar",
+            "ref": "calendar_primary"
+          }
+        ],
+        "scopes": [
+          "calendar.event.create"
+        ],
+        "audiences": [
+          "calendar.account"
+        ],
+        "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "artifactDigest": null,
+        "useLimit": 1,
+        "usesConsumed": 9007199254740991,
+        "nextUseIndex": 1,
+        "validFrom": "2026-08-08T18:11:00.000Z",
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "revocationGeneration": 0,
+        "state": "active",
+        "createdAt": "2026-08-08T18:11:00.000Z",
+        "updatedAt": "2026-08-08T18:11:00.000Z"
+      }
+    },
+    {
+      "name": "grant-max-safe-next-index",
+      "schema": "authority-grant.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "authority_grant_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "judgmentRequestId": "judgment_request_fixture_01",
+        "judgmentRequestRevision": 2,
+        "judgmentDecisionId": "judgment_decision_fixture_01",
+        "grantor": {
+          "kind": "owner",
+          "id": "owner_fixture_01"
+        },
+        "grantee": {
+          "kind": "service",
+          "id": "effect_engine"
+        },
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "resources": [
+          {
+            "kind": "calendar",
+            "ref": "calendar_primary"
+          }
+        ],
+        "scopes": [
+          "calendar.event.create"
+        ],
+        "audiences": [
+          "calendar.account"
+        ],
+        "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+        "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "artifactDigest": null,
+        "useLimit": 1,
+        "usesConsumed": 0,
+        "nextUseIndex": 9007199254740991,
+        "validFrom": "2026-08-08T18:11:00.000Z",
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "revocationGeneration": 0,
+        "state": "active",
+        "createdAt": "2026-08-08T18:11:00.000Z",
+        "updatedAt": "2026-08-08T18:11:00.000Z"
+      }
+    },
+    {
       "name": "grant-invalid-validity",
       "schema": "authority-grant.schema.json",
       "layer": "runtime",
@@ -728,6 +1098,2428 @@
         "state": "active",
         "createdAt": "2026-08-08T18:11:00.000Z",
         "updatedAt": "2026-08-08T18:11:00.000Z"
+      }
+    },
+    {
+      "name": "binding-owner-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_other",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-request-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_other",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-subject-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "outcome",
+            "id": "outcome_other",
+            "revision": 1
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-option-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_reject",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-request-digest-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-purpose-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.unrequested",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-effect-family-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.delete",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-resource-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_other"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-scope-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.admin"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-audience-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.other_account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-argument-digest-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-context-digest-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-artifact-digest-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "binding-validity-mismatch",
+      "schema": "judgment-authority-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "requestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+        "request": {
+          "protocolVersion": "0.4",
+          "id": "judgment_request_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "question": {
+            "ref": "judgment_question_fixture_01",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+          },
+          "options": [
+            {
+              "id": "option_approve",
+              "content": {
+                "ref": "option_content_approve",
+                "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+              }
+            },
+            {
+              "id": "option_reject",
+              "content": {
+                "ref": "option_content_reject",
+                "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+              }
+            }
+          ],
+          "recommendation": "option_approve",
+          "evidence": [
+            {
+              "ref": "evidence_summary_fixture_01",
+              "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+            }
+          ],
+          "risk": {
+            "ref": "risk_summary_fixture_01",
+            "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+          },
+          "reversibility": {
+            "ref": "reversibility_summary_fixture_01",
+            "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+          },
+          "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+          "requestedAuthority": {
+            "purpose": "calendar.follow_up.schedule",
+            "effectFamily": "calendar.event.create",
+            "resources": [
+              {
+                "kind": "calendar",
+                "ref": "calendar_primary"
+              }
+            ],
+            "scopes": [
+              "calendar.event.create"
+            ],
+            "audiences": [
+              "calendar.account"
+            ],
+            "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+            "artifactDigest": null,
+            "useLimit": 1,
+            "validUntil": "2026-08-08T18:30:00.000Z"
+          },
+          "reEntryPointId": "reentry_fixture_01",
+          "expiresAt": "2026-08-08T18:30:00.000Z",
+          "decisionId": null,
+          "state": "open",
+          "createdAt": "2026-08-08T18:05:00.000Z",
+          "updatedAt": "2026-08-08T18:05:00.000Z"
+        },
+        "answer": {
+          "protocolVersion": "0.4",
+          "requestId": "answer_judgment_fixture_01",
+          "commandType": "judgment.answer",
+          "presenceRegistrationId": "presence_registration_fixture_01",
+          "aggregate": {
+            "kind": "judgment_request",
+            "id": "judgment_request_fixture_01",
+            "expectedRevision": 2
+          },
+          "correlationId": "correlation_judgment_fixture_01",
+          "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+          "payload": {
+            "selectedOptionId": "option_approve",
+            "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5"
+          }
+        },
+        "decision": {
+          "protocolVersion": "0.4",
+          "id": "judgment_decision_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "selectedOptionId": "option_approve",
+          "displayedRequestDigest": "sha256:abed518aac316497ed1f7cf519e8f2ec8c4458d90634f8b446b9908c4e7e66a5",
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "presenceId": "presence_fixture_01",
+          "authenticatedSessionId": "authenticated_session_fixture_01",
+          "ownerPolicyRevision": 7,
+          "authAssurance": "verified_session",
+          "state": "recorded",
+          "decidedAt": "2026-08-08T18:11:00.000Z"
+        },
+        "grant": {
+          "protocolVersion": "0.4",
+          "id": "authority_grant_fixture_01",
+          "ownerId": "owner_fixture_01",
+          "revision": 1,
+          "judgmentRequestId": "judgment_request_fixture_01",
+          "judgmentRequestRevision": 2,
+          "judgmentDecisionId": "judgment_decision_fixture_01",
+          "grantor": {
+            "kind": "owner",
+            "id": "owner_fixture_01"
+          },
+          "grantee": {
+            "kind": "service",
+            "id": "effect_engine"
+          },
+          "subject": {
+            "kind": "work_unit",
+            "id": "work_unit_fixture_01",
+            "revision": 4
+          },
+          "purpose": "calendar.follow_up.schedule",
+          "effectFamily": "calendar.event.create",
+          "resources": [
+            {
+              "kind": "calendar",
+              "ref": "calendar_primary"
+            }
+          ],
+          "scopes": [
+            "calendar.event.create"
+          ],
+          "audiences": [
+            "calendar.account"
+          ],
+          "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+          "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "artifactDigest": null,
+          "useLimit": 1,
+          "usesConsumed": 0,
+          "nextUseIndex": 1,
+          "validFrom": "2026-08-08T18:11:00.000Z",
+          "expiresAt": "2026-08-08T18:31:00.000Z",
+          "revocationGeneration": 0,
+          "state": "active",
+          "createdAt": "2026-08-08T18:11:00.000Z",
+          "updatedAt": "2026-08-08T18:11:00.000Z"
+        }
       }
     }
   ]
