@@ -12,6 +12,19 @@ For every migration-bearing change:
 4. If another migration lands first, rebase and renumber before review.
 5. Let one merge captain serialize migration-bearing changes.
 
-`guard-do-migration-lineage.mjs` blocks duplicate, skipped, reordered, unreserved, or mismatched
-version/name entries. The reservation record does not authorize a migration or prove that its SQL is
-safe; migration tests and review remain required.
+`guard-do-migration-lineage.mjs` parses the executable TypeScript chain and blocks duplicate,
+skipped, reordered, unreserved, or mismatched version/name entries. It also compares every existing
+migration initializer's executable tokens and reservation entry with the Git merge-base, so an
+already-based migration cannot be rewritten while a contiguous suffix can be appended. Comments and
+formatting are not executable lineage.
+
+Pull-request CI resolves the actual GitHub base branch. Local checks compare with the merge-base of
+`origin/main` by default. A stacked branch must name its immediate base explicitly:
+
+```bash
+WALDO_DO_MIGRATION_BASE_REF=origin/<stack-base> npx -y pnpm@10.34.4 verify:guards
+```
+
+An unavailable explicit or GitHub base fails closed. Renaming a TypeScript constant without changing
+its migration initializer is allowed. The reservation record does not authorize new SQL or prove
+that a new migration is safe; migration tests and review remain required.

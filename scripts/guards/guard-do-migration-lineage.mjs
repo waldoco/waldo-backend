@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+const requireRuntimeDependency = createRequire(
+  new URL('../../packages/runtime/package.json', import.meta.url),
+);
+const ts = requireRuntimeDependency('typescript');
 
 export const DISPOSITION = 'block';
 
@@ -22,6 +29,73 @@ function parseRoot(argv) {
   return resolve(value);
 }
 
+function parseBaseRef(argv) {
+  const index = argv.indexOf('--base-ref');
+  if (index === -1) return undefined;
+  const value = argv[index + 1];
+  if (!value) {
+    process.stderr.write(`${NAME}: --base-ref requires a git revision argument\n`);
+    process.exit(2);
+  }
+  return value;
+}
+
+function runGit(root, args) {
+  return spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+}
+
+function resolveGitRef(root, ref) {
+  const result = runGit(root, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
+function requireGitRef(root, ref) {
+  const resolved = resolveGitRef(root, ref);
+  if (!resolved) {
+    process.stderr.write(`${NAME}: migration base ref ${JSON.stringify(ref)} is unavailable\n`);
+    process.exit(1);
+  }
+  return resolved;
+}
+
+function resolveBaseRef(root, argv) {
+  const explicit = parseBaseRef(argv) ?? process.env.WALDO_DO_MIGRATION_BASE_REF;
+  if (explicit) return requireGitRef(root, explicit);
+
+  const githubBase = process.env.GITHUB_BASE_REF;
+  if (githubBase) {
+    const remoteRef = resolveGitRef(root, `origin/${githubBase}`);
+    const localRef = resolveGitRef(root, githubBase);
+    if (!remoteRef && !localRef) {
+      process.stderr.write(
+        `${NAME}: GitHub base ${JSON.stringify(githubBase)} is unavailable; fetch full history\n`,
+      );
+      process.exit(1);
+    }
+    return remoteRef ?? localRef;
+  }
+
+  const repository = runGit(root, ['rev-parse', '--show-toplevel']);
+  if (repository.status !== 0) return undefined;
+
+  const head = requireGitRef(root, 'HEAD');
+  const main = resolveGitRef(root, 'origin/main');
+  if (!main) {
+    process.stderr.write(
+      `${NAME}: set WALDO_DO_MIGRATION_BASE_REF when origin/main is unavailable\n`,
+    );
+    process.exit(1);
+  }
+  if (head === main) return resolveGitRef(root, 'HEAD^') ?? head;
+
+  const mergeBase = runGit(root, ['merge-base', head, main]);
+  if (mergeBase.status !== 0 || !mergeBase.stdout.trim()) {
+    process.stderr.write(`${NAME}: cannot resolve migration merge-base against origin/main\n`);
+    process.exit(1);
+  }
+  return mergeBase.stdout.trim();
+}
+
 function readRequired(root, path) {
   const absolutePath = resolve(root, path);
   try {
@@ -35,28 +109,164 @@ function readRequired(root, path) {
   }
 }
 
-function parseSource(source, findings) {
-  const declarations = new Map();
-  const declarationPattern =
-    /export const\s+([A-Z0-9_]+)\s*:\s*DoMigration\s*=\s*\{\s*version:\s*(\d+)\s*,\s*name:\s*'([^']+)'\s*,/g;
-
-  for (const match of source.matchAll(declarationPattern)) {
-    const [, symbol, versionText, name] = match;
-    declarations.set(symbol, { version: Number(versionText), name });
+function readAtRef(root, ref, path) {
+  const result = runGit(root, ['show', `${ref}:${path}`]);
+  if (result.status !== 0) {
+    process.stderr.write(`${path}: cannot read historical migration input at ${ref}\n`);
+    process.exit(1);
   }
+  return result.stdout;
+}
 
-  const chainMatch =
-    /export const DO_SCHEMA_MIGRATIONS\s*=\s*\[([\s\S]*?)\]\s*as const;/.exec(source);
-  if (!chainMatch) {
-    findings.push(`${SOURCE_PATH}: cannot parse DO_SCHEMA_MIGRATIONS`);
+function readOptionalAtRef(root, ref, path) {
+  const result = runGit(root, ['show', `${ref}:${path}`]);
+  return result.status === 0 ? result.stdout : undefined;
+}
+
+function unwrapExpression(expression) {
+  let current = expression;
+  while (
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isParenthesizedExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isExportedConst(statement) {
+  return (
+    ts.isVariableStatement(statement) &&
+    (statement.modifiers ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) &&
+    (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
+  );
+}
+
+function isDoMigrationType(type) {
+  return (
+    type &&
+    ts.isTypeReferenceNode(type) &&
+    ts.isIdentifier(type.typeName) &&
+    type.typeName.text === 'DoMigration'
+  );
+}
+
+function propertyName(property) {
+  if (!property.name) return undefined;
+  if (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) {
+    return property.name.text;
+  }
+  return undefined;
+}
+
+function initializerFingerprint(initializer, sourceFile) {
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    true,
+    ts.LanguageVariant.Standard,
+    initializer.getText(sourceFile),
+  );
+  const tokens = [];
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    tokens.push(`${token}:${scanner.getTokenText()}`);
+  }
+  return tokens.join('\u0000');
+}
+
+function parseMigrationDeclaration(symbol, declaration, sourceFile, findings) {
+  if (!declaration.initializer) {
+    findings.push(`${SOURCE_PATH}: ${symbol} has no migration initializer`);
+    return undefined;
+  }
+  const initializer = unwrapExpression(declaration.initializer);
+  if (!ts.isObjectLiteralExpression(initializer)) {
+    findings.push(`${SOURCE_PATH}: ${symbol} migration initializer must be an object literal`);
+    return undefined;
+  }
+  const properties = new Map();
+  for (const property of initializer.properties) {
+    if (!ts.isPropertyAssignment(property)) continue;
+    const name = propertyName(property);
+    if (!name) continue;
+    if (properties.has(name)) {
+      findings.push(
+        `${SOURCE_PATH}: ${symbol} migration property ${JSON.stringify(name)} is duplicated`,
+      );
+      continue;
+    }
+    properties.set(name, property.initializer);
+  }
+  const versionNode = properties.get('version');
+  const nameNode = properties.get('name');
+  if (!versionNode || !ts.isNumericLiteral(versionNode)) {
+    findings.push(`${SOURCE_PATH}: ${symbol} migration version must be an integer literal`);
+    return undefined;
+  }
+  if (!nameNode || !ts.isStringLiteral(nameNode)) {
+    findings.push(`${SOURCE_PATH}: ${symbol} migration name must be a string literal`);
+    return undefined;
+  }
+  const version = Number(versionNode.text);
+  if (!Number.isSafeInteger(version)) {
+    findings.push(`${SOURCE_PATH}: ${symbol} migration version must be a safe integer`);
+    return undefined;
+  }
+  return {
+    version,
+    name: nameNode.text,
+    initializerFingerprint: initializerFingerprint(initializer, sourceFile),
+  };
+}
+
+function parseSource(source, findings) {
+  const sourceFile = ts.createSourceFile(
+    SOURCE_PATH,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  if (sourceFile.parseDiagnostics.length > 0) {
+    findings.push(`${SOURCE_PATH}: TypeScript parse failed`);
     return [];
   }
 
-  const symbols = chainMatch[1]
-    .replace(/\/\/.*$/gm, '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const declarations = new Map();
+  const typedMigrationSymbols = new Set();
+  for (const statement of sourceFile.statements) {
+    if (!isExportedConst(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name)) continue;
+      const symbol = declaration.name.text;
+      if (declarations.has(symbol)) {
+        findings.push(`${SOURCE_PATH}: exported const ${symbol} is duplicated`);
+        continue;
+      }
+      declarations.set(symbol, declaration);
+      if (isDoMigrationType(declaration.type)) typedMigrationSymbols.add(symbol);
+    }
+  }
+
+  const chainDeclaration = declarations.get('DO_SCHEMA_MIGRATIONS');
+  if (!chainDeclaration?.initializer) {
+    findings.push(`${SOURCE_PATH}: cannot parse DO_SCHEMA_MIGRATIONS`);
+    return [];
+  }
+  const chainInitializer = unwrapExpression(chainDeclaration.initializer);
+  if (!ts.isArrayLiteralExpression(chainInitializer)) {
+    findings.push(`${SOURCE_PATH}: DO_SCHEMA_MIGRATIONS must be an array literal`);
+    return [];
+  }
+
+  const symbols = [];
+  for (const element of chainInitializer.elements) {
+    if (!ts.isIdentifier(element)) {
+      findings.push(`${SOURCE_PATH}: DO_SCHEMA_MIGRATIONS entries must be migration constants`);
+      continue;
+    }
+    symbols.push(element.text);
+  }
   const seenSymbols = new Set();
   const migrations = [];
 
@@ -66,15 +276,17 @@ function parseSource(source, findings) {
       continue;
     }
     seenSymbols.add(symbol);
-    const migration = declarations.get(symbol);
-    if (!migration) {
-      findings.push(`${SOURCE_PATH}: ${symbol} has no parseable DoMigration declaration`);
+    const declaration = declarations.get(symbol);
+    if (!declaration) {
+      findings.push(`${SOURCE_PATH}: ${symbol} has no exported migration declaration`);
       continue;
     }
+    const migration = parseMigrationDeclaration(symbol, declaration, sourceFile, findings);
+    if (!migration) continue;
     migrations.push(migration);
   }
 
-  for (const symbol of declarations.keys()) {
+  for (const symbol of typedMigrationSymbols) {
     if (!seenSymbols.has(symbol)) {
       findings.push(`${SOURCE_PATH}: ${symbol} is declared but absent from DO_SCHEMA_MIGRATIONS`);
     }
@@ -168,8 +380,39 @@ function compareReservations(sourceMigrations, reservations, findings) {
   }
 }
 
+function compareHistoricalPrefix(baseMigrations, migrations, findings) {
+  for (const [index, baseMigration] of baseMigrations.entries()) {
+    const migration = migrations[index];
+    if (
+      !migration ||
+      migration.version !== baseMigration.version ||
+      migration.name !== baseMigration.name ||
+      migration.initializerFingerprint !== baseMigration.initializerFingerprint
+    ) {
+      findings.push(`${SOURCE_PATH}: historical migration ${baseMigration.version} changed`);
+    }
+  }
+}
+
+function compareHistoricalReservations(baseReservations, reservations, findings) {
+  for (const [index, baseReservation] of baseReservations.entries()) {
+    const reservation = reservations[index];
+    if (
+      !reservation ||
+      reservation.version !== baseReservation.version ||
+      reservation.name !== baseReservation.name
+    ) {
+      findings.push(
+        `${RESERVATION_PATH}: historical reservation ${baseReservation.version} changed`,
+      );
+    }
+  }
+}
+
 function main() {
-  const root = parseRoot(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const root = parseRoot(argv);
+  const baseRef = resolveBaseRef(root, argv);
   const findings = [];
   const sourceMigrations = parseSource(readRequired(root, SOURCE_PATH), findings);
   const reservations = parseReservations(readRequired(root, RESERVATION_PATH), findings);
@@ -177,6 +420,21 @@ function main() {
   validateSequence(sourceMigrations, SOURCE_PATH, findings);
   validateSequence(reservations, RESERVATION_PATH, findings);
   compareReservations(sourceMigrations, reservations, findings);
+
+  if (baseRef) {
+    const baseMigrations = parseSource(readAtRef(root, baseRef, SOURCE_PATH), findings);
+    const baseReservationsRaw = readOptionalAtRef(root, baseRef, RESERVATION_PATH);
+    const baseReservations = baseReservationsRaw
+      ? parseReservations(baseReservationsRaw, findings)
+      : baseMigrations.map(({ version, name }) => ({ version, name }));
+    validateSequence(baseMigrations, `${baseRef}:${SOURCE_PATH}`, findings);
+    validateSequence(baseReservations, `${baseRef}:${RESERVATION_PATH}`, findings);
+    if (baseReservationsRaw) {
+      compareReservations(baseMigrations, baseReservations, findings);
+    }
+    compareHistoricalPrefix(baseMigrations, sourceMigrations, findings);
+    compareHistoricalReservations(baseReservations, reservations, findings);
+  }
 
   if (findings.length > 0) {
     process.stderr.write(`${[...new Set(findings)].sort().join('\n')}\n`);
