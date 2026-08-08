@@ -1,0 +1,1544 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "intent-credential-field",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "credential": "secret"
+      }
+    },
+    {
+      "name": "intent-oauth-token-field",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "oauthToken": "secret"
+      }
+    },
+    {
+      "name": "intent-mcp-field",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "mcpServer": "ambient"
+      }
+    },
+    {
+      "name": "intent-provider-done-field",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "providerDone": true
+      }
+    },
+    {
+      "name": "intent-evidence-field",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "evidence": {
+          "id": "evidence_attacker"
+        }
+      }
+    },
+    {
+      "name": "intent-acceptance-field",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "name": "intent-closure-field",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "closure": "closed"
+      }
+    },
+    {
+      "name": "intent-invalid-revision",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 2,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+      }
+    },
+    {
+      "name": "intent-invalid-use-index",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 2,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+      }
+    },
+    {
+      "name": "intent-non-frozen-state",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "issued",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+      }
+    },
+    {
+      "name": "intent-expiry-before-freeze",
+      "schema": "effect-intent.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:11:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+      }
+    },
+    {
+      "name": "intent-malformed-argument-digest",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:not-a-digest",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+      }
+    },
+    {
+      "name": "intent-lone-surrogate-id",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "\ud800",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+      }
+    },
+    {
+      "name": "intent-id-byte-ceiling",
+      "schema": "effect-intent.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+      }
+    },
+    {
+      "name": "intent-digest-mismatch",
+      "schema": "effect-intent.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_intent_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "workUnit": {
+          "id": "work_unit_fixture_01",
+          "revision": 4
+        },
+        "judgment": {
+          "requestId": "judgment_request_fixture_01",
+          "requestRevision": 2,
+          "decisionId": "judgment_decision_fixture_01",
+          "decisionRevision": 1
+        },
+        "authority": {
+          "grantId": "authority_grant_fixture_01",
+          "grantRevision": 1,
+          "useIndex": 1,
+          "revocationGeneration": 0
+        },
+        "purpose": "calendar.follow_up.schedule",
+        "effectFamily": "calendar.event.create",
+        "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "artifactDigest": null,
+        "capability": {
+          "id": "capability_calendar_event_create_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "eligibilityRevision": 1
+        },
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "lease": {
+          "id": "execution_lease_fixture_01",
+          "fencingGeneration": 1
+        },
+        "cancellationGeneration": 0,
+        "expiresAt": "2026-08-08T18:30:00.000Z",
+        "frozenAt": "2026-08-08T18:11:00.000Z",
+        "state": "frozen",
+        "intentDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    },
+    {
+      "name": "receipt-raw-response-field",
+      "schema": "effect-receipt.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed",
+        "rawResponse": {
+          "private": true
+        }
+      }
+    },
+    {
+      "name": "receipt-provider-done-field",
+      "schema": "effect-receipt.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed",
+        "providerDone": true
+      }
+    },
+    {
+      "name": "receipt-artifact-field",
+      "schema": "effect-receipt.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed",
+        "artifact": {
+          "id": "artifact_attacker"
+        }
+      }
+    },
+    {
+      "name": "receipt-acceptance-field",
+      "schema": "effect-receipt.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed",
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "name": "receipt-third-attempt",
+      "schema": "effect-receipt.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 3,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "receipt-applied-without-external-ref",
+      "schema": "effect-receipt.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": null,
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "receipt-observation-before-issue",
+      "schema": "effect-receipt.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:00.999Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "receipt-issued-before-frozen-intent",
+      "schema": "effect-receipt.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:10:59.999Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "receipt-owner-mismatch",
+      "schema": "effect-receipt.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_other",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "receipt-intent-digest-mismatch",
+      "schema": "effect-receipt.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "receipt-reconciliation-key-mismatch",
+      "schema": "effect-receipt.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_other",
+        "adapter": {
+          "id": "effect_adapter_fixture_01",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "receipt-adapter-mismatch",
+      "schema": "effect-receipt.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_receipt_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "adapter": {
+          "id": "effect_adapter_other",
+          "version": "1.0.0",
+          "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "attempt": 1,
+        "adapterOutcome": "reported_applied",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "adapter_observation_fixture_01",
+          "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "issuedAt": "2026-08-08T18:11:01.000Z",
+        "observedAt": "2026-08-08T18:11:02.000Z",
+        "state": "observed"
+      }
+    },
+    {
+      "name": "reconciliation-provider-retry-field",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_terminal_ambiguity_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 2,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "terminal_ambiguity",
+        "basis": {
+          "kind": "unknown",
+          "reconciliationId": "effect_reconciliation_unknown_fixture_01",
+          "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+        },
+        "providerRetry": true
+      }
+    },
+    {
+      "name": "reconciliation-provider-done-field",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_applied_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "applied_found"
+        },
+        "providerDone": true
+      }
+    },
+    {
+      "name": "reconciliation-artifact-field",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_applied_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "applied_found"
+        },
+        "artifact": {
+          "id": "artifact_attacker"
+        }
+      }
+    },
+    {
+      "name": "reconciliation-acceptance-field",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_applied_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "applied_found"
+        },
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "name": "reconciliation-unknown-as-not-applied",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_unknown_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "authoritative_not_applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "application_unknown"
+        }
+      }
+    },
+    {
+      "name": "reconciliation-unknown-effect-retry",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_retry_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "retry_admitted",
+        "basis": {
+          "kind": "unknown",
+          "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
+          "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+        },
+        "retryOwner": "effect_engine",
+        "nextAttempt": 2,
+        "remainingAttempts": 0
+      }
+    },
+    {
+      "name": "reconciliation-provider-retry-owner",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_retry_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "retry_admitted",
+        "basis": {
+          "kind": "authoritative_not_applied",
+          "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
+          "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+        },
+        "retryOwner": "provider",
+        "nextAttempt": 2,
+        "remainingAttempts": 0
+      }
+    },
+    {
+      "name": "reconciliation-third-effect-retry",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_retry_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "retry_admitted",
+        "basis": {
+          "kind": "authoritative_not_applied",
+          "reconciliationId": "effect_reconciliation_not_applied_fixture_01",
+          "digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+        },
+        "retryOwner": "effect_engine",
+        "nextAttempt": 3,
+        "remainingAttempts": 0
+      }
+    },
+    {
+      "name": "terminal-ambiguity-not-applied-basis",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "schema",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_terminal_ambiguity_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 2,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "terminal_ambiguity",
+        "basis": {
+          "kind": "authoritative_not_applied",
+          "reconciliationId": "effect_reconciliation_unknown_fixture_01",
+          "digest": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+        }
+      }
+    },
+    {
+      "name": "reconciliation-owner-mismatch",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_applied_fixture_01",
+        "ownerId": "owner_other",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "applied_found"
+        }
+      }
+    },
+    {
+      "name": "reconciliation-intent-digest-mismatch",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_applied_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reconciliationKey": "effect_reconciliation_fixture_01",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "applied_found"
+        }
+      }
+    },
+    {
+      "name": "reconciliation-key-mismatch",
+      "schema": "effect-reconciliation.schema.json",
+      "layer": "binding",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "effect_reconciliation_applied_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "intentId": "effect_intent_fixture_01",
+        "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+        "reconciliationKey": "effect_reconciliation_other",
+        "revision": 1,
+        "attempt": 1,
+        "checkedAt": "2026-08-08T18:11:03.000Z",
+        "state": "applied",
+        "receiptId": "effect_receipt_fixture_01",
+        "externalEffectRef": "external_effect_fixture_01",
+        "observation": {
+          "ref": "reconciliation_observation_fixture_01",
+          "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+          "kind": "applied_found"
+        }
+      }
+    }
+  ]
+}
