@@ -42,10 +42,10 @@
       "$ref": "#/$defs/__schema10"
     },
     "reEntryPointId": {
-      "$ref": "#/$defs/__schema12"
+      "$ref": "#/$defs/__schema13"
     },
     "expiresAt": {
-      "$ref": "#/$defs/__schema13"
+      "$ref": "#/$defs/__schema12"
     },
     "decisionId": {
       "$ref": "#/$defs/__schema14"
@@ -54,10 +54,10 @@
       "$ref": "#/$defs/__schema15"
     },
     "createdAt": {
-      "$ref": "#/$defs/__schema13"
+      "$ref": "#/$defs/__schema12"
     },
     "updatedAt": {
-      "$ref": "#/$defs/__schema13"
+      "$ref": "#/$defs/__schema12"
     }
   },
   "required": [
@@ -235,6 +235,13 @@
                   "type": "null"
                 }
               ]
+            },
+            "useLimit": {
+              "type": "number",
+              "const": 1
+            },
+            "validUntil": {
+              "$ref": "#/$defs/__schema12"
             }
           },
           "required": [
@@ -245,7 +252,9 @@
             "audiences",
             "argumentDigest",
             "contextDigest",
-            "artifactDigest"
+            "artifactDigest",
+            "useLimit",
+            "validUntil"
           ],
           "additionalProperties": false
         },
@@ -271,6 +280,11 @@
       "additionalProperties": false
     },
     "__schema12": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema13": {
       "anyOf": [
         {
           "$ref": "#/$defs/__schema1"
@@ -279,11 +293,6 @@
           "type": "null"
         }
       ]
-    },
-    "__schema13": {
-      "type": "string",
-      "format": "date-time",
-      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
     },
     "__schema14": {
       "anyOf": [

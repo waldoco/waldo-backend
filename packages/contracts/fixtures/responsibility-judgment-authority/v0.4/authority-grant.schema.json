@@ -251,19 +251,18 @@
       ]
     },
     "__schema13": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740990
+      "type": "number",
+      "const": 1
     },
     "__schema14": {
       "type": "integer",
       "minimum": 0,
-      "maximum": 9007199254740990
+      "maximum": 1
     },
     "__schema15": {
       "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
+      "minimum": 1,
+      "maximum": 2
     },
     "__schema16": {
       "type": "string",

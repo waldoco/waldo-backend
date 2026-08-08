@@ -61,7 +61,9 @@
     ],
     "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
     "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-    "artifactDigest": null
+    "artifactDigest": null,
+    "useLimit": 1,
+    "validUntil": "2026-08-08T18:30:00.000Z"
   },
   "reEntryPointId": "reentry_fixture_01",
   "expiresAt": "2026-08-08T18:30:00.000Z",
