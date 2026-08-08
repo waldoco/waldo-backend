@@ -1,0 +1,173 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "client-owned-authority",
+      "schema": "acceptance-check.schema.json",
+      "layer": "schema",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_check_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "subject": {
+          "kind": "outcome",
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "criterion": "The calendar contains the approved investor meeting.",
+        "verificationMethod": {
+          "kind": "deterministic_read_back",
+          "capability": "calendar.event.read",
+          "targetRef": "calendar_event_target_fixture_01",
+          "assertion": {
+            "operator": "digest_equals",
+            "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "createdAt": "2026-08-08T18:00:00.000Z",
+        "authorityGrant": {
+          "id": "grant_attacker"
+        }
+      }
+    },
+    {
+      "name": "inline-read-back-payload",
+      "schema": "acceptance-check.schema.json",
+      "layer": "schema",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_check_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "subject": {
+          "kind": "outcome",
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "criterion": "The calendar contains the approved investor meeting.",
+        "verificationMethod": {
+          "kind": "deterministic_read_back",
+          "capability": "calendar.event.read",
+          "targetRef": "calendar_event_target_fixture_01",
+          "assertion": {
+            "operator": "digest_equals",
+            "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "readBackPayload": {
+            "title": "private inline content"
+          }
+        },
+        "createdAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "unbound-subject-revision",
+      "schema": "acceptance-check.schema.json",
+      "layer": "schema",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_check_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "subject": {
+          "kind": "outcome",
+          "id": "outcome_fixture_01",
+          "revision": 0
+        },
+        "criterion": "The calendar contains the approved investor meeting.",
+        "verificationMethod": {
+          "kind": "deterministic_read_back",
+          "capability": "calendar.event.read",
+          "targetRef": "calendar_event_target_fixture_01",
+          "assertion": {
+            "operator": "digest_equals",
+            "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "createdAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "malformed-expected-digest",
+      "schema": "acceptance-check.schema.json",
+      "layer": "schema",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_check_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "subject": {
+          "kind": "outcome",
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "criterion": "The calendar contains the approved investor meeting.",
+        "verificationMethod": {
+          "kind": "deterministic_read_back",
+          "capability": "calendar.event.read",
+          "targetRef": "calendar_event_target_fixture_01",
+          "assertion": {
+            "operator": "digest_equals",
+            "expectedDigest": "approved"
+          }
+        },
+        "createdAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "lone-surrogate-criterion",
+      "schema": "acceptance-check.schema.json",
+      "layer": "runtime",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_check_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "subject": {
+          "kind": "outcome",
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "criterion": "\ud800",
+        "verificationMethod": {
+          "kind": "deterministic_read_back",
+          "capability": "calendar.event.read",
+          "targetRef": "calendar_event_target_fixture_01",
+          "assertion": {
+            "operator": "digest_equals",
+            "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "createdAt": "2026-08-08T18:00:00.000Z"
+      }
+    },
+    {
+      "name": "criterion-byte-ceiling",
+      "schema": "acceptance-check.schema.json",
+      "layer": "runtime",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_check_fixture_01",
+        "ownerId": "owner_fixture_01",
+        "revision": 1,
+        "subject": {
+          "kind": "outcome",
+          "id": "outcome_fixture_01",
+          "revision": 3
+        },
+        "criterion": "界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界",
+        "verificationMethod": {
+          "kind": "deterministic_read_back",
+          "capability": "calendar.event.read",
+          "targetRef": "calendar_event_target_fixture_01",
+          "assertion": {
+            "operator": "digest_equals",
+            "expectedDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        "createdAt": "2026-08-08T18:00:00.000Z"
+      }
+    }
+  ]
+}
