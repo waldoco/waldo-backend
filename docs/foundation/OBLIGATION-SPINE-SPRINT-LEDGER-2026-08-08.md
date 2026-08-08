@@ -61,7 +61,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 | Barrier | Required evidence | State |
 |---|---|---|
 | B0 preflight | live base pinned; dirty main untouched; worktrees and ownership recorded | passed |
-| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | AcceptanceCheck slice passed; remaining families active in #103 |
+| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | needs work in #103: raw-byte freshness and exact byte-boundary regressions; remaining families active |
 | B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | needs work: AST parsing and base-aware immutable prefix required in #100 |
 | B3 capture continuity | capture transaction creates canonical OpenLoop and exact initial ReEntry | blocked by B1/B2 |
 | B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | blocked by B1/B2 |
@@ -111,6 +111,7 @@ Every worker handoff and PR must report:
 | 2026-08-08 | contracts | AcceptanceCheck v0.4 published for review | `578fc49` defines deterministic read-back against an exact responsibility revision. Focused 5/5, contracts 59/1,480, runtime 38/1,001, pgTAP 53, integration 5, full wall, guards, and mutation proof pass on #99. Draft PR #103 remains active for the rest of #81. |
 | 2026-08-08 | merge-wall repair | Independent breaker pass | PR #99 has no blocking Codex findings. The reviewer reproduced RED on main and 24/24 focused planning/identity plus 1,001 runtime tests on the fix. Claude review remains pending. |
 | 2026-08-08 | migration safety | Independent breaker rejected first guard | P1: paired source/ledger rewrites and historical SQL changes passed; a block-comment declaration spoof also passed. #100 returned to implementation for TypeScript AST parsing and base-aware immutable-prefix enforcement. |
+| 2026-08-08 | contracts | Independent breaker rejected first freshness gate | P1: CRLF-mutated fixture bytes passed after normalization while the manifest digest changed. P2: exact 4,096/4,097-byte boundaries lacked committed assertions. #103 returned to raw-byte comparison and boundary-test repair. |
 
 ## Honest capability status
 
