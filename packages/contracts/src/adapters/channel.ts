@@ -93,7 +93,7 @@ export const CHANNEL_PERSONAS: Readonly<Partial<Record<ChannelName, ChannelPerso
   slack: SLACK_PERSONA,
 };
 
-function personaForChannel(channel: ChannelName): ChannelPersona | undefined {
+export function personaForChannel(channel: ChannelName): ChannelPersona | undefined {
   return channel === 'in_app' ? IOS_PERSONA : CHANNEL_PERSONAS[channel];
 }
 
