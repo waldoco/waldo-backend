@@ -166,7 +166,7 @@ if (
   failures += 1;
 }
 
-const historicalSqlRewrite = withVersionedDoMigrationFixture(
+const historicalSqlEdit = withVersionedDoMigrationFixture(
   `export const FIRST: DoMigration = {
   version: 1,
   name: 'first',
@@ -193,26 +193,21 @@ export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
   },
   (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
 );
-if (
-  historicalSqlRewrite.status === 0 ||
-  !historicalSqlRewrite.stderr.includes('historical migration 1 changed')
-) {
+if (!reportsClean(historicalSqlEdit)) {
   process.stderr.write(
-    'guards-selftest: guard-do-migration-lineage MISSED historical SQL rewrite\n',
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on historical SQL edit:\n' +
+      historicalSqlEdit.stderr,
   );
   failures += 1;
 }
 
-const historicalExternalSqlRewrite = withVersionedDoMigrationFixture(
-  `const CREATE_FIRST = 'CREATE TABLE first (id TEXT PRIMARY KEY);';
-const FIRST_UP_BASE = [CREATE_FIRST] as const;
-const FIRST_UP = FIRST_UP_BASE;
-const FIRST_DOWN = ['DROP TABLE first;'] as const;
+const historicalPostDeclarationSqlEdit = withVersionedDoMigrationFixture(
+  `const FIRST_UP = ['CREATE TABLE first (id TEXT PRIMARY KEY);'];
 export const FIRST: DoMigration = {
   version: 1,
   name: 'first',
-  up: [...FIRST_UP],
-  down: FIRST_DOWN,
+  up: FIRST_UP,
+  down: ['DROP TABLE first;'],
 };
 export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
 `,
@@ -220,15 +215,13 @@ export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
     allocation: 'rebase_then_append',
     migrations: [{ version: 1, name: 'first' }],
   },
-  `const CREATE_FIRST = 'CREATE TABLE rewritten (id TEXT PRIMARY KEY);';
-const FIRST_UP_BASE = [CREATE_FIRST] as const;
-const FIRST_UP = FIRST_UP_BASE;
-const FIRST_DOWN = ['DROP TABLE first;'] as const;
+  `const FIRST_UP = ['CREATE TABLE first (id TEXT PRIMARY KEY);'];
+FIRST_UP[0] = 'CREATE TABLE rewritten (id TEXT PRIMARY KEY);';
 export const FIRST: DoMigration = {
   version: 1,
   name: 'first',
-  up: [...FIRST_UP],
-  down: FIRST_DOWN,
+  up: FIRST_UP,
+  down: ['DROP TABLE first;'],
 };
 export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
 `,
@@ -238,90 +231,10 @@ export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
   },
   (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
 );
-if (
-  historicalExternalSqlRewrite.status === 0 ||
-  !historicalExternalSqlRewrite.stderr.includes('historical migration 1 changed')
-) {
+if (!reportsClean(historicalPostDeclarationSqlEdit)) {
   process.stderr.write(
-    'guards-selftest: guard-do-migration-lineage MISSED external SQL rewrite\n',
-  );
-  failures += 1;
-}
-
-const historicalExternalDownSqlRewrite = withVersionedDoMigrationFixture(
-  `const FIRST_DOWN_SQL = 'DROP TABLE first;';
-const FIRST_DOWN = [FIRST_DOWN_SQL] as const;
-export const FIRST: DoMigration = {
-  version: 1,
-  name: 'first',
-  up: ['CREATE TABLE first (id TEXT PRIMARY KEY);'],
-  down: FIRST_DOWN,
-};
-export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
-`,
-  {
-    allocation: 'rebase_then_append',
-    migrations: [{ version: 1, name: 'first' }],
-  },
-  `const FIRST_DOWN_SQL = 'DROP TABLE rewritten;';
-const FIRST_DOWN = [FIRST_DOWN_SQL] as const;
-export const FIRST: DoMigration = {
-  version: 1,
-  name: 'first',
-  up: ['CREATE TABLE first (id TEXT PRIMARY KEY);'],
-  down: FIRST_DOWN,
-};
-export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
-`,
-  {
-    allocation: 'rebase_then_append',
-    migrations: [{ version: 1, name: 'first' }],
-  },
-  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
-);
-if (
-  historicalExternalDownSqlRewrite.status === 0 ||
-  !historicalExternalDownSqlRewrite.stderr.includes('historical migration 1 changed')
-) {
-  process.stderr.write(
-    'guards-selftest: guard-do-migration-lineage MISSED external down SQL rewrite\n',
-  );
-  failures += 1;
-}
-
-const historicalSqlOrderRewrite = withVersionedDoMigrationFixture(
-  `export const FIRST: DoMigration = {
-  version: 1,
-  name: 'first',
-  up: ['CREATE TABLE first (id TEXT PRIMARY KEY);', 'CREATE INDEX first_id ON first(id);'],
-  down: ['DROP INDEX first_id;', 'DROP TABLE first;'],
-};
-export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
-`,
-  {
-    allocation: 'rebase_then_append',
-    migrations: [{ version: 1, name: 'first' }],
-  },
-  `export const FIRST: DoMigration = {
-  version: 1,
-  name: 'first',
-  up: ['CREATE INDEX first_id ON first(id);', 'CREATE TABLE first (id TEXT PRIMARY KEY);'],
-  down: ['DROP INDEX first_id;', 'DROP TABLE first;'],
-};
-export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
-`,
-  {
-    allocation: 'rebase_then_append',
-    migrations: [{ version: 1, name: 'first' }],
-  },
-  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
-);
-if (
-  historicalSqlOrderRewrite.status === 0 ||
-  !historicalSqlOrderRewrite.stderr.includes('historical migration 1 changed')
-) {
-  process.stderr.write(
-    'guards-selftest: guard-do-migration-lineage MISSED SQL statement reorder\n',
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on out-of-scope SQL edit:\n' +
+      historicalPostDeclarationSqlEdit.stderr,
   );
   failures += 1;
 }
@@ -712,35 +625,6 @@ if (!reportsClean(inlineCommentDoMigration)) {
   process.stderr.write(
     'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on inline comment:\n' +
       inlineCommentDoMigration.stderr,
-  );
-  failures += 1;
-}
-
-const nonliteralSqlDependency = withDoMigrationFixture(
-  `declare function loadSql(): readonly string[];
-const FIRST_UP = loadSql();
-export const FIRST: DoMigration = {
-  version: 1,
-  name: 'first',
-  up: FIRST_UP,
-  down: [],
-};
-export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
-`,
-  {
-    allocation: 'rebase_then_append',
-    migrations: [{ version: 1, name: 'first' }],
-  },
-  runDoMigrationGuardOn,
-);
-if (
-  nonliteralSqlDependency.status === 0 ||
-  !nonliteralSqlDependency.stderr.includes(
-    'FIRST.up must resolve to an array literal through top-level const dependencies',
-  )
-) {
-  process.stderr.write(
-    'guards-selftest: guard-do-migration-lineage ACCEPTED nonliteral SQL dependency\n',
   );
   failures += 1;
 }

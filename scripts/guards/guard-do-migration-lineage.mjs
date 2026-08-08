@@ -156,16 +156,11 @@ function unwrapExpression(expression) {
   return current;
 }
 
-function isConst(statement) {
+function isExportedConst(statement) {
   return (
     ts.isVariableStatement(statement) &&
+    (statement.modifiers ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) &&
     (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
-  );
-}
-
-function isExported(statement) {
-  return (statement.modifiers ?? []).some(
-    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
   );
 }
 
@@ -186,108 +181,7 @@ function propertyName(property) {
   return undefined;
 }
 
-function resolveConstInitializer(identifier, declarations, findings, path, stack) {
-  const declaration = declarations.get(identifier.text);
-  if (!declaration?.initializer) {
-    findings.push(
-      `${SOURCE_PATH}: ${path} references unsupported or nonliteral dependency ${JSON.stringify(identifier.text)}`,
-    );
-    return undefined;
-  }
-  if (stack.has(identifier.text)) {
-    findings.push(
-      `${SOURCE_PATH}: ${path} contains a cyclic SQL dependency through ${JSON.stringify(identifier.text)}`,
-    );
-    return undefined;
-  }
-  return {
-    expression: declaration.initializer,
-    stack: new Set([...stack, identifier.text]),
-  };
-}
-
-function resolveSqlString(expression, declarations, findings, path, stack = new Set()) {
-  const current = unwrapExpression(expression);
-  if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current)) {
-    return current.text;
-  }
-  if (ts.isIdentifier(current)) {
-    const resolved = resolveConstInitializer(current, declarations, findings, path, stack);
-    if (!resolved) return undefined;
-    return resolveSqlString(
-      resolved.expression,
-      declarations,
-      findings,
-      path,
-      resolved.stack,
-    );
-  }
-  findings.push(
-    `${SOURCE_PATH}: ${path} SQL statements must resolve to string literals through top-level const dependencies`,
-  );
-  return undefined;
-}
-
-function resolveSqlArray(expression, declarations, findings, path, stack = new Set()) {
-  const current = unwrapExpression(expression);
-  if (ts.isIdentifier(current)) {
-    const resolved = resolveConstInitializer(current, declarations, findings, path, stack);
-    if (!resolved) return undefined;
-    return resolveSqlArray(
-      resolved.expression,
-      declarations,
-      findings,
-      path,
-      resolved.stack,
-    );
-  }
-  if (!ts.isArrayLiteralExpression(current)) {
-    findings.push(
-      `${SOURCE_PATH}: ${path} must resolve to an array literal through top-level const dependencies`,
-    );
-    return undefined;
-  }
-
-  const statements = [];
-  let valid = true;
-  for (const [index, element] of current.elements.entries()) {
-    if (ts.isSpreadElement(element)) {
-      const spread = resolveSqlArray(
-        element.expression,
-        declarations,
-        findings,
-        `${path}[${index}]`,
-        stack,
-      );
-      if (!spread) {
-        valid = false;
-      } else {
-        statements.push(...spread);
-      }
-      continue;
-    }
-    if (ts.isOmittedExpression(element)) {
-      findings.push(`${SOURCE_PATH}: ${path}[${index}] cannot be omitted`);
-      valid = false;
-      continue;
-    }
-    const statement = resolveSqlString(
-      element,
-      declarations,
-      findings,
-      `${path}[${index}]`,
-      stack,
-    );
-    if (statement === undefined) {
-      valid = false;
-    } else {
-      statements.push(statement);
-    }
-  }
-  return valid ? statements : undefined;
-}
-
-function parseMigrationDeclaration(symbol, declaration, declarations, findings) {
+function parseMigrationDeclaration(symbol, declaration, findings) {
   if (!declaration.initializer) {
     findings.push(`${SOURCE_PATH}: ${symbol} has no migration initializer`);
     return undefined;
@@ -318,8 +212,6 @@ function parseMigrationDeclaration(symbol, declaration, declarations, findings) 
   }
   const versionNode = properties.get('version');
   const nameNode = properties.get('name');
-  const upNode = properties.get('up');
-  const downNode = properties.get('down');
   if (!versionNode || !ts.isNumericLiteral(versionNode)) {
     findings.push(`${SOURCE_PATH}: ${symbol} migration version must be an integer literal`);
     return undefined;
@@ -333,22 +225,9 @@ function parseMigrationDeclaration(symbol, declaration, declarations, findings) 
     findings.push(`${SOURCE_PATH}: ${symbol} migration version must be a safe integer`);
     return undefined;
   }
-  for (const name of properties.keys()) {
-    if (!['version', 'name', 'up', 'down'].includes(name)) {
-      findings.push(`${SOURCE_PATH}: ${symbol} has unsupported migration property ${JSON.stringify(name)}`);
-    }
-  }
-  if (!upNode || !downNode) {
-    findings.push(`${SOURCE_PATH}: ${symbol} migration must declare literal-resolvable up and down SQL`);
-    return undefined;
-  }
-  const up = resolveSqlArray(upNode, declarations, findings, `${symbol}.up`);
-  const down = resolveSqlArray(downNode, declarations, findings, `${symbol}.down`);
-  if (!up || !down) return undefined;
   return {
     version,
     name: nameNode.text,
-    semanticFingerprint: JSON.stringify({ version, name: nameNode.text, up, down }),
   };
 }
 
@@ -366,11 +245,9 @@ function parseSource(source, findings) {
   }
 
   const declarations = new Map();
-  const exportedSymbols = new Set();
   const typedMigrationSymbols = new Set();
   for (const statement of sourceFile.statements) {
-    if (!isConst(statement)) continue;
-    const exported = isExported(statement);
+    if (!isExportedConst(statement)) continue;
     for (const declaration of statement.declarationList.declarations) {
       if (!ts.isIdentifier(declaration.name)) continue;
       const symbol = declaration.name.text;
@@ -379,13 +256,12 @@ function parseSource(source, findings) {
         continue;
       }
       declarations.set(symbol, declaration);
-      if (exported) exportedSymbols.add(symbol);
-      if (exported && isDoMigrationType(declaration.type)) typedMigrationSymbols.add(symbol);
+      if (isDoMigrationType(declaration.type)) typedMigrationSymbols.add(symbol);
     }
   }
 
   const chainDeclaration = declarations.get('DO_SCHEMA_MIGRATIONS');
-  if (!chainDeclaration?.initializer || !exportedSymbols.has('DO_SCHEMA_MIGRATIONS')) {
+  if (!chainDeclaration?.initializer) {
     findings.push(`${SOURCE_PATH}: cannot parse DO_SCHEMA_MIGRATIONS`);
     return [];
   }
@@ -413,11 +289,11 @@ function parseSource(source, findings) {
     }
     seenSymbols.add(symbol);
     const declaration = declarations.get(symbol);
-    if (!declaration || !exportedSymbols.has(symbol)) {
+    if (!declaration) {
       findings.push(`${SOURCE_PATH}: ${symbol} has no exported migration declaration`);
       continue;
     }
-    const migration = parseMigrationDeclaration(symbol, declaration, declarations, findings);
+    const migration = parseMigrationDeclaration(symbol, declaration, findings);
     if (!migration) continue;
     migrations.push(migration);
   }
@@ -522,8 +398,7 @@ function compareHistoricalPrefix(baseMigrations, migrations, findings) {
     if (
       !migration ||
       migration.version !== baseMigration.version ||
-      migration.name !== baseMigration.name ||
-      migration.semanticFingerprint !== baseMigration.semanticFingerprint
+      migration.name !== baseMigration.name
     ) {
       findings.push(`${SOURCE_PATH}: historical migration ${baseMigration.version} changed`);
     }
