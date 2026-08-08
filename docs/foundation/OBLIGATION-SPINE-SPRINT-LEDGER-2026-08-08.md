@@ -33,6 +33,8 @@ The live #78 body is a historical planning input, not current sequencing authori
 6. #86 is not on the critical path until Telegram terminal-ambiguity/idempotency semantics satisfy the delivery contract or the contract is deliberately changed.
 7. Migration numbers are allocated at rebase/integration time from the live schema head. Issue-time V6-V10 assignments are invalid.
 8. #92 and #93 are outside this sprint. Existing governed context and provider seams may be consumed, but their full promotion is not required for the obligation-spine proof.
+9. #90 is split. A narrow CapabilityRegistry A0 for the existing planning provider/executor path gates #83 and #87: immutable manifest admission, registry-owned assessment, owner-local disposition, and trusted pre-enqueue plus pre-I/O eligibility checks. Tool, MCP, connector, model, presence, signed-manifest trust roots, and global kill-switch coverage remain in the umbrella.
+10. Capability eligibility is enforced by trusted callers outside adapters. A manifest is a claim; an adapter cannot certify itself, and no eligibility decision may be cached across the pre-I/O boundary.
 
 ## Single-writer and integration reservations
 
@@ -50,9 +52,9 @@ The live #78 body is a historical planning input, not current sequencing authori
 | Lane | Issue / purpose | Branch | Worktree | Base / dependency | Allowed writes | State | Head / PR |
 |---|---|---|---|---|---|---|---|
 | orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | pending |
-| contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | active draft | `b28549d`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
+| contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | repaired judgment/authority slice under independent pre-push review | local `52ea175`, published `b28549d`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
 | merge-wall repair | wall-clock-independent planning authority fixture | `codex/planning-authority-test-clock` | `/Users/shivanshfulper/.codex/worktrees/osp-test-clock/waldo-backend` | `dd434e9` | one runtime test fixture | review | `12a014a`; draft PR [#99](https://github.com/Pin4sf/waldo-backend/pull/99) |
-| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | needs work after second breaker | `5f7cd8a`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
+| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | second repair published; third independent review active | `a59d042`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
 | execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
 | credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | evidence review-clear; implementation decisions remain | `61304a8`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
 
@@ -61,13 +63,13 @@ The live #78 body is a historical planning input, not current sequencing authori
 | Barrier | Required evidence | State |
 |---|---|---|
 | B0 preflight | live base pinned; dirty main untouched; worktrees and ownership recorded | passed |
-| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | needs work in #103: raw-byte freshness and exact byte-boundary regressions; remaining families active |
-| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | needs work: transitive SQL semantics and strict historical-base validation |
+| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | AcceptanceCheck review-clear; repaired Judgment/Authority slice is under independent pre-push review; remaining families pending |
+| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | semantic transitive SQL and strict-ancestor repair published; third independent review active |
 | B3 capture continuity | capture transaction creates canonical OpenLoop and exact initial ReEntry | blocked by B1/B2 |
 | B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | blocked by B1/B2 |
 | B5 effects | frozen intent before I/O, single retry owner, reconcile-before-retry, terminal ambiguity | blocked by B4 |
 | B6 evidence and acceptance | candidate evidence separated from independent verification and human acceptance | blocked by B1/B2 |
-| B7 capability/identity admission | version-pinned capability admission and model-invisible credential broker seam | blocked by B1/B2 |
+| B7 capability/identity admission | planning-path CapabilityRegistry A0 plus model-invisible credential broker A0/A1 seam | CapabilityRegistry source map complete; contracts blocked by B1 ownership, runtime blocked by B1/B2; credential custody package B remains decision-blocked |
 | B8 execution seam | one writer plus fake Kennel executor conformance and cancellation/fencing | blocked by #80/B1 |
 | B9 fake-backed whole spine | nine-step public path, restart/replay, breaker and mutation probes | blocked by B3-B8 |
 | B10 real reversible effect | real connector, frozen key, independent read-back, ambiguity drill | blocked by B5/B7/B9 |
@@ -121,6 +123,9 @@ Every worker handoff and PR must report:
 | 2026-08-08 | migration safety | Second breaker rejected repair | P1: SQL referenced through an external constant can change outside the fingerprint; `--base-ref HEAD` makes comparison vacuous. P2: punctuation-only formatting is treated as lineage. #100 returned to semantic up/down resolution and strict-ancestor validation. |
 | 2026-08-08 | contracts | Judgment/Authority pre-push review rejected | Unpushed `93bcf53` uses a displayed digest unrelated to the canonical request, does not prove request-to-grant no-widening, asserts only 8/15 rejection names, and leaves use limit outside requested authority. Repair required before push. |
 | 2026-08-08 | delivery | #86 source-backed preflight blocked implementation | Bot API has no documented idempotency/reconciliation key; MTProto has `random_id` and update recovery but does not fit the synchronous receipt-free `DeliverySink`. Issue relabeled blocked pending effect contract and MTProto feasibility proof; fixed V10 rejected. |
+| 2026-08-08 | migration safety | Second guard repair published | `a59d042` fingerprints resolved ordered `up`/`down` SQL through top-level const aliases and array spreads, rejects unsafe/nonliteral shapes, and requires a strict ancestor base distinct from HEAD. Focused regressions, mutation probes, and full wall pass; third independent review active. |
+| 2026-08-08 | contracts | Judgment/Authority repair committed locally | `52ea175` binds request, answer, decision, and grant to the real canonical request digest; makes requested authority executable; expands the exact rejection catalogue and counter/byte/hostility boundaries; and kills five recorded mutations. Full wall passes; independent review is active before any push. |
+| 2026-08-08 | capability admission | #90 corrected and re-sliced | CapabilityRegistry A0 covers only existing planning-provider/planning-executor admission. Trusted callers enforce fresh pre-enqueue and pre-I/O checks; publisher claims are separated from registry-owned assessment. #83 and #87 depend on this interface; broad tool/MCP/connector/signed/global coverage remains in #90. |
 
 ## Honest capability status
 
@@ -135,4 +140,5 @@ Until later rows contain their required proof, every capability remains independ
 | OpenLoop and ReEntry | yes | no | no | no | no | no |
 | Kennel executor | yes | no | no | no | no | no |
 | credential broker | yes | no | no | no | no | no |
+| planning capability admission | yes | no | no | no | no | no |
 | reversible connector | yes | no | no | no | no | no |
