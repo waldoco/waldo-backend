@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { protocolVersionV04Schema } from './responsibility-acceptance-check-v0-4';
 import {
   canonicalizeEffectIntentV04ForDigest,
+  canonicalizeEffectReconciliationV04ForDigest,
   effectIntentV04Schema,
   effectReceiptV04Schema,
   effectReconciliationV04Schema,
@@ -49,11 +50,14 @@ export const RESPONSIBILITY_EFFECT_REJECTION_NAMES_V04 = [
   'reconciliation-provider-done-field',
   'reconciliation-artifact-field',
   'reconciliation-acceptance-field',
+  'reconciliation-unavailable-as-not-applied',
+  'reconciliation-unavailable-as-retry',
   'reconciliation-unknown-as-not-applied',
   'reconciliation-unknown-effect-retry',
   'reconciliation-provider-retry-owner',
   'reconciliation-third-effect-retry',
   'terminal-ambiguity-not-applied-basis',
+  'terminal-ambiguity-wrong-referenced-state',
   'reconciliation-owner-mismatch',
   'reconciliation-intent-digest-mismatch',
   'reconciliation-key-mismatch',
@@ -69,6 +73,7 @@ const responsibilityEffectRejectionCasesV04Schema = z.array(z.strictObject({
   layer: z.enum(['schema', 'runtime', 'binding']),
   zodOutcome: z.enum(['accept', 'reject']),
   value: z.unknown(),
+  referenced: z.unknown().optional(),
 })).length(RESPONSIBILITY_EFFECT_REJECTION_NAMES_V04.length)
   .superRefine((cases, context) => {
     const names = cases.map((entry) => entry.name);
@@ -218,7 +223,7 @@ export function buildResponsibilityEffectV04Bundle(hashHex: HashHex): Record<str
     basis: {
       kind: 'authoritative_not_applied',
       reconciliationId: notApplied.id,
-      digest: `sha256:${'7'.repeat(64)}`,
+      digest: `sha256:${hashHex(canonicalizeEffectReconciliationV04ForDigest(notApplied))}`,
     },
     retryOwner: 'effect_engine',
     nextAttempt: 2,
@@ -232,7 +237,7 @@ export function buildResponsibilityEffectV04Bundle(hashHex: HashHex): Record<str
     basis: {
       kind: 'unknown',
       reconciliationId: unknown.id,
-      digest: `sha256:${'8'.repeat(64)}`,
+      digest: `sha256:${hashHex(canonicalizeEffectReconciliationV04ForDigest(unknown))}`,
     },
   });
   if (retry.state !== 'retry_admitted' || terminalAmbiguity.state !== 'terminal_ambiguity') {
@@ -293,11 +298,46 @@ export function buildResponsibilityEffectV04Bundle(hashHex: HashHex): Record<str
           { name: 'reconciliation-provider-done-field', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...applied, providerDone: true } },
           { name: 'reconciliation-artifact-field', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...applied, artifact: { id: 'artifact_attacker' } } },
           { name: 'reconciliation-acceptance-field', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...applied, acceptance: 'accepted' } },
+          { name: 'reconciliation-unavailable-as-not-applied', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...unavailable, state: 'authoritative_not_applied' } },
+          {
+            name: 'reconciliation-unavailable-as-retry',
+            schema: 'effect-reconciliation.schema.json',
+            layer: 'binding',
+            zodOutcome: 'accept',
+            value: {
+              ...retry,
+              basis: {
+                ...retry.basis,
+                reconciliationId: unavailable.id,
+                digest: `sha256:${hashHex(
+                  canonicalizeEffectReconciliationV04ForDigest(unavailable),
+                )}`,
+              },
+            },
+            referenced: unavailable,
+          },
           { name: 'reconciliation-unknown-as-not-applied', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...unknown, state: 'authoritative_not_applied' } },
           { name: 'reconciliation-unknown-effect-retry', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...retry, basis: { ...retry.basis, kind: 'unknown' } } },
           { name: 'reconciliation-provider-retry-owner', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...retry, retryOwner: 'provider' } },
           { name: 'reconciliation-third-effect-retry', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...retry, nextAttempt: 3 } },
           { name: 'terminal-ambiguity-not-applied-basis', schema: 'effect-reconciliation.schema.json', layer: 'schema', zodOutcome: 'reject', value: { ...terminalAmbiguity, basis: { ...terminalAmbiguity.basis, kind: 'authoritative_not_applied' } } },
+          {
+            name: 'terminal-ambiguity-wrong-referenced-state',
+            schema: 'effect-reconciliation.schema.json',
+            layer: 'binding',
+            zodOutcome: 'accept',
+            value: {
+              ...terminalAmbiguity,
+              basis: {
+                ...terminalAmbiguity.basis,
+                reconciliationId: unavailable.id,
+                digest: `sha256:${hashHex(
+                  canonicalizeEffectReconciliationV04ForDigest(unavailable),
+                )}`,
+              },
+            },
+            referenced: unavailable,
+          },
           { name: 'reconciliation-owner-mismatch', schema: 'effect-reconciliation.schema.json', layer: 'binding', zodOutcome: 'accept', value: { ...applied, ownerId: 'owner_other' } },
           { name: 'reconciliation-intent-digest-mismatch', schema: 'effect-reconciliation.schema.json', layer: 'binding', zodOutcome: 'accept', value: { ...applied, intentDigest: `sha256:${'b'.repeat(64)}` } },
           { name: 'reconciliation-key-mismatch', schema: 'effect-reconciliation.schema.json', layer: 'binding', zodOutcome: 'accept', value: { ...applied, reconciliationKey: 'effect_reconciliation_other' } },

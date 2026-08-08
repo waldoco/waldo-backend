@@ -209,6 +209,10 @@ export const effectReconciliationV04Schema = z.discriminatedUnion('state', [
 ]);
 export type EffectReconciliationV04 = z.infer<typeof effectReconciliationV04Schema>;
 
+export function canonicalizeEffectReconciliationV04ForDigest(value: unknown): string {
+  return canonicalizeProtocolJson(effectReconciliationV04Schema.parse(value));
+}
+
 export type ResponsibilityEffectSha256HexV04 = (canonicalUtf8: string) => string;
 
 export class EffectIntentDigestMismatchError extends Error {
@@ -239,6 +243,11 @@ export class EffectReconciliationBindingMismatchError extends Error {
   }
 }
 
+/**
+ * Verifies snapshot integrity and cross-record binding only. EffectEngine must still revalidate
+ * authoritative live authority, lease, fence, cancellation, capability eligibility, and clock
+ * state when admitting an operation.
+ */
 export function createResponsibilityEffectBindingVerifierV04(
   sha256Hex: ResponsibilityEffectSha256HexV04,
 ) {
@@ -313,7 +322,7 @@ export function createResponsibilityEffectBindingVerifierV04(
     return receipt;
   };
 
-  const verifyReconciliationBinding = (
+  const verifyReconciliationIntentBinding = (
     intentValue: unknown,
     reconciliationValue: unknown,
   ): EffectReconciliationV04 => {
@@ -333,6 +342,49 @@ export function createResponsibilityEffectBindingVerifierV04(
     if (reconciliation.reconciliationKey !== intent.reconciliationKey) {
       throw new EffectReconciliationBindingMismatchError(
         'effect reconciliation key must match its EffectIntent',
+      );
+    }
+    return reconciliation;
+  };
+
+  const verifyReconciliationBinding = (
+    intentValue: unknown,
+    reconciliationValue: unknown,
+    referencedValue?: unknown,
+  ): EffectReconciliationV04 => {
+    const reconciliation = verifyReconciliationIntentBinding(
+      intentValue,
+      reconciliationValue,
+    );
+    if (reconciliation.state !== 'retry_admitted' &&
+        reconciliation.state !== 'terminal_ambiguity') {
+      return reconciliation;
+    }
+    if (referencedValue === undefined) {
+      throw new EffectReconciliationBindingMismatchError(
+        'reconciliation transition requires its referenced prior record',
+      );
+    }
+    const referenced = verifyReconciliationIntentBinding(intentValue, referencedValue);
+    const referencedDigest = `sha256:${sha256Hex(
+      canonicalizeEffectReconciliationV04ForDigest(referenced),
+    )}`;
+    if (reconciliation.basis.reconciliationId !== referenced.id ||
+        reconciliation.basis.digest !== referencedDigest) {
+      throw new EffectReconciliationBindingMismatchError(
+        'reconciliation basis must bind the exact referenced record ID and digest',
+      );
+    }
+    if (reconciliation.state === 'retry_admitted' &&
+        referenced.state !== 'authoritative_not_applied') {
+      throw new EffectReconciliationBindingMismatchError(
+        'retry requires the referenced authoritative_not_applied reconciliation record',
+      );
+    }
+    if (reconciliation.state === 'terminal_ambiguity' &&
+        referenced.state !== reconciliation.basis.kind) {
+      throw new EffectReconciliationBindingMismatchError(
+        'terminal ambiguity basis must match the referenced unavailable or unknown record',
       );
     }
     return reconciliation;
