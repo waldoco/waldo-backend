@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 const GUARD = 'scripts/guards/guard-health-leak.mjs';
 const FAKE_CALLBACK_GUARD = 'scripts/guards/guard-fake-callbacks.mjs';
 const DO_ONLY_RUNTIME_GUARD = 'scripts/guards/guard-do-only-runtime.mjs';
+const DO_MIGRATION_GUARD = 'scripts/guards/guard-do-migration-lineage.mjs';
 
 const LEAK_CASES = [
   { name: 'same-line assignment', code: 'const hrv = 42;\n' },
@@ -43,6 +44,10 @@ function runDoOnlyRuntimeGuardOn(root) {
   return spawnSync('node', [DO_ONLY_RUNTIME_GUARD, '--root', root], { encoding: 'utf8' });
 }
 
+function runDoMigrationGuardOn(root) {
+  return spawnSync('node', [DO_MIGRATION_GUARD, '--root', root], { encoding: 'utf8' });
+}
+
 function reportsOnlyPath(result, path) {
   return result.status !== 0 && result.stderr.trim() === path && result.stdout.trim() === '';
 }
@@ -63,7 +68,99 @@ function withFixture(fileName, code, fn) {
   }
 }
 
+function withDoMigrationFixture(source, reservations, fn) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    const sourcePath = join(root, 'packages/runtime/src/do-schema.ts');
+    const reservationPath = join(root, 'packages/runtime/do-migration-reservations.json');
+    mkdirSync(dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, source);
+    writeFileSync(reservationPath, `${JSON.stringify(reservations, null, 2)}\n`);
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 let failures = 0;
+
+const duplicateDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 1, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 1, name: 'second' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  duplicateDoMigration.status === 0 ||
+  !duplicateDoMigration.stderr.includes('migration version 1 is duplicated')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED duplicate version\n');
+  failures += 1;
+}
+
+const gappedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, THIRD] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 3, name: 'third' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (gappedDoMigration.status === 0 || !gappedDoMigration.stderr.includes('reserve version 2')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED version gap\n');
+  failures += 1;
+}
+
+const unreservedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  runDoMigrationGuardOn,
+);
+if (unreservedDoMigration.status === 0 || !unreservedDoMigration.stderr.includes('unreserved')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED unreserved migration\n');
+  failures += 1;
+}
+
+const cleanDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 2, name: 'second' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (!reportsClean(cleanDoMigration)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-migration-lineage FALSE POSITIVE on a clean chain:\n${cleanDoMigration.stderr}`,
+  );
+  failures += 1;
+}
 
 for (const c of LEAK_CASES) {
   const res = withFixture('leak.ts', c.code, runGuardOn);
