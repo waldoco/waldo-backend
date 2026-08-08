@@ -52,7 +52,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 | orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | pending |
 | contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | active draft | `578fc49`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
 | merge-wall repair | wall-clock-independent planning authority fixture | `codex/planning-authority-test-clock` | `/Users/shivanshfulper/.codex/worktrees/osp-test-clock/waldo-backend` | `dd434e9` | one runtime test fixture | review | `12a014a`; draft PR [#99](https://github.com/Pin4sf/waldo-backend/pull/99) |
-| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | review | `e3c1c3e`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
+| migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | needs work | `e3c1c3e`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
 | execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
 | credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | review | `28f1720`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
 
@@ -62,7 +62,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 |---|---|---|
 | B0 preflight | live base pinned; dirty main untouched; worktrees and ownership recorded | passed |
 | B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | AcceptanceCheck slice passed; remaining families active in #103 |
-| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | review in #100; merge blocked by #99/review |
+| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | needs work: AST parsing and base-aware immutable prefix required in #100 |
 | B3 capture continuity | capture transaction creates canonical OpenLoop and exact initial ReEntry | blocked by B1/B2 |
 | B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | blocked by B1/B2 |
 | B5 effects | frozen intent before I/O, single retry owner, reconcile-before-retry, terminal ambiguity | blocked by B4 |
@@ -110,6 +110,7 @@ Every worker handoff and PR must report:
 | 2026-08-08 | credential boundary | #91 source map published | Draft PR #101 splits handle metadata, isolated Vault/egress custody, and full canary integration. Existing `*_enc` columns are not claimed as Vault implementation. |
 | 2026-08-08 | contracts | AcceptanceCheck v0.4 published for review | `578fc49` defines deterministic read-back against an exact responsibility revision. Focused 5/5, contracts 59/1,480, runtime 38/1,001, pgTAP 53, integration 5, full wall, guards, and mutation proof pass on #99. Draft PR #103 remains active for the rest of #81. |
 | 2026-08-08 | merge-wall repair | Independent breaker pass | PR #99 has no blocking Codex findings. The reviewer reproduced RED on main and 24/24 focused planning/identity plus 1,001 runtime tests on the fix. Claude review remains pending. |
+| 2026-08-08 | migration safety | Independent breaker rejected first guard | P1: paired source/ledger rewrites and historical SQL changes passed; a block-comment declaration spoof also passed. #100 returned to implementation for TypeScript AST parsing and base-aware immutable-prefix enforcement. |
 
 ## Honest capability status
 
