@@ -14,21 +14,45 @@ const schema = (value: z.ZodType, name: string) => ({
   'x-waldo-offline-commands': 'none',
 });
 
-export const responsibilityAcceptanceCheckRejectionCatalogueV04Schema = z.strictObject({
-  protocolVersion: protocolVersionV04Schema,
-  cases: z.array(z.strictObject({
-    name: z.enum([
-      'client-owned-authority',
-      'inline-read-back-payload',
-      'unbound-subject-revision',
-      'malformed-expected-digest',
-      'lone-surrogate-criterion',
-      'criterion-byte-ceiling',
-    ]),
+export const RESPONSIBILITY_ACCEPTANCE_CHECK_REJECTION_NAMES_V04 = [
+  'client-owned-authority',
+  'inline-read-back-payload',
+  'unbound-subject-revision',
+  'malformed-expected-digest',
+  'lone-surrogate-criterion',
+  'criterion-byte-ceiling',
+  'artifact-check-readback-field',
+  'semantic-check-missing-model-version',
+  'semantic-check-missing-harness-version',
+  'semantic-check-missing-grader-version',
+  'semantic-check-missing-evidence-version',
+  'semantic-check-missing-independence-disclosure',
+  'nullable-negotiation-field',
+] as const;
+
+const acceptanceCheckRejectionCasesV04Schema = z.array(z.strictObject({
+    name: z.enum(RESPONSIBILITY_ACCEPTANCE_CHECK_REJECTION_NAMES_V04),
     schema: z.literal('acceptance-check.schema.json'),
     layer: z.enum(['schema', 'runtime']),
     value: z.unknown(),
-  })).length(6),
+  }))
+  .length(RESPONSIBILITY_ACCEPTANCE_CHECK_REJECTION_NAMES_V04.length)
+  .superRefine((cases, context) => {
+    const names = cases.map((entry) => entry.name);
+    for (const [index, expected] of RESPONSIBILITY_ACCEPTANCE_CHECK_REJECTION_NAMES_V04.entries()) {
+      if (names[index] !== expected) {
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'name'],
+          message: `rejection case ${index + 1} must be ${expected}`,
+        });
+      }
+    }
+  });
+
+export const responsibilityAcceptanceCheckRejectionCatalogueV04Schema = z.strictObject({
+  protocolVersion: protocolVersionV04Schema,
+  cases: acceptanceCheckRejectionCasesV04Schema,
 });
 
 export function buildResponsibilityAcceptanceCheckV04Bundle(
@@ -52,10 +76,69 @@ export function buildResponsibilityAcceptanceCheckV04Bundle(
     },
     createdAt: '2026-08-08T18:00:00.000Z',
   });
+  if (acceptanceCheck.verificationMethod.kind !== 'deterministic_read_back') {
+    throw new Error('default acceptance fixture must retain deterministic read-back');
+  }
+  const readBackMethod = acceptanceCheck.verificationMethod;
+
+  const artifactAcceptanceCheck = acceptanceCheckV04Schema.parse({
+    ...acceptanceCheck,
+    id: 'acceptance_check_artifact_fixture_01',
+    criterion: 'The approved artifact bytes match the owner-reviewed release.',
+    verificationMethod: {
+      kind: 'deterministic_artifact_check',
+      capability: 'artifact.digest.read',
+      artifactRef: 'artifact_release_fixture_01',
+      assertion: {
+        operator: 'digest_equals',
+        expectedDigest: `sha256:${'b'.repeat(64)}`,
+      },
+    },
+  });
+
+  const semanticAcceptanceCheck = acceptanceCheckV04Schema.parse({
+    ...acceptanceCheck,
+    id: 'acceptance_check_semantic_fixture_01',
+    criterion: 'The release note communicates the approved decision and remaining limitation.',
+    verificationMethod: {
+      kind: 'declared_semantic_check',
+      capability: 'artifact.semantic.verify',
+      targetRef: 'artifact_release_fixture_01',
+      model: { id: 'semantic_model_fixture_01', version: '2026-08-08' },
+      harness: { id: 'semantic_harness_fixture_01', version: '0.4.0' },
+      grader: { id: 'release_grader_fixture_01', version: '1.0.0' },
+      evidence: {
+        ref: 'evidence_bundle_fixture_01',
+        version: '1.0.0',
+        digest: `sha256:${'c'.repeat(64)}`,
+      },
+      independenceDisclosure: {
+        independentFromProducer: true,
+        disclosure: {
+          ref: 'independence_disclosure_fixture_01',
+          digest: `sha256:${'d'.repeat(64)}`,
+        },
+      },
+    },
+  });
+  if (semanticAcceptanceCheck.verificationMethod.kind !== 'declared_semantic_check') {
+    throw new Error('semantic acceptance fixture must retain its declared method');
+  }
+  const semanticMethod = semanticAcceptanceCheck.verificationMethod;
+  const { version: _modelVersion, ...modelWithoutVersion } = semanticMethod.model;
+  const { version: _harnessVersion, ...harnessWithoutVersion } = semanticMethod.harness;
+  const { version: _graderVersion, ...graderWithoutVersion } = semanticMethod.grader;
+  const { version: _evidenceVersion, ...evidenceWithoutVersion } = semanticMethod.evidence;
+  const {
+    independenceDisclosure: _independenceDisclosure,
+    ...semanticWithoutIndependenceDisclosure
+  } = semanticMethod;
 
   const files: Record<string, string> = {
     'acceptance-check.schema.json': file(schema(acceptanceCheckV04Schema, 'acceptance-check')),
     'acceptance-check.valid.json': file(acceptanceCheck),
+    'acceptance-check-artifact.valid.json': file(artifactAcceptanceCheck),
+    'acceptance-check-semantic.valid.json': file(semanticAcceptanceCheck),
     'acceptance-check.rejections.json': file(
       responsibilityAcceptanceCheckRejectionCatalogueV04Schema.parse({
         protocolVersion: '0.4',
@@ -73,7 +156,7 @@ export function buildResponsibilityAcceptanceCheckV04Bundle(
             value: {
               ...acceptanceCheck,
               verificationMethod: {
-                ...acceptanceCheck.verificationMethod,
+                ...readBackMethod,
                 readBackPayload: { title: 'private inline content' },
               },
             },
@@ -91,9 +174,9 @@ export function buildResponsibilityAcceptanceCheckV04Bundle(
             value: {
               ...acceptanceCheck,
               verificationMethod: {
-                ...acceptanceCheck.verificationMethod,
+                ...readBackMethod,
                 assertion: {
-                  ...acceptanceCheck.verificationMethod.assertion,
+                  ...readBackMethod.assertion,
                   expectedDigest: 'approved',
                 },
               },
@@ -110,6 +193,69 @@ export function buildResponsibilityAcceptanceCheckV04Bundle(
             schema: 'acceptance-check.schema.json',
             layer: 'runtime',
             value: { ...acceptanceCheck, criterion: '界'.repeat(2_048) },
+          },
+          {
+            name: 'artifact-check-readback-field',
+            schema: 'acceptance-check.schema.json',
+            layer: 'schema',
+            value: {
+              ...artifactAcceptanceCheck,
+              verificationMethod: {
+                ...artifactAcceptanceCheck.verificationMethod,
+                targetRef: 'read_back_target_not_allowed',
+              },
+            },
+          },
+          {
+            name: 'semantic-check-missing-model-version',
+            schema: 'acceptance-check.schema.json',
+            layer: 'schema',
+            value: {
+              ...semanticAcceptanceCheck,
+              verificationMethod: { ...semanticMethod, model: modelWithoutVersion },
+            },
+          },
+          {
+            name: 'semantic-check-missing-harness-version',
+            schema: 'acceptance-check.schema.json',
+            layer: 'schema',
+            value: {
+              ...semanticAcceptanceCheck,
+              verificationMethod: { ...semanticMethod, harness: harnessWithoutVersion },
+            },
+          },
+          {
+            name: 'semantic-check-missing-grader-version',
+            schema: 'acceptance-check.schema.json',
+            layer: 'schema',
+            value: {
+              ...semanticAcceptanceCheck,
+              verificationMethod: { ...semanticMethod, grader: graderWithoutVersion },
+            },
+          },
+          {
+            name: 'semantic-check-missing-evidence-version',
+            schema: 'acceptance-check.schema.json',
+            layer: 'schema',
+            value: {
+              ...semanticAcceptanceCheck,
+              verificationMethod: { ...semanticMethod, evidence: evidenceWithoutVersion },
+            },
+          },
+          {
+            name: 'semantic-check-missing-independence-disclosure',
+            schema: 'acceptance-check.schema.json',
+            layer: 'schema',
+            value: {
+              ...semanticAcceptanceCheck,
+              verificationMethod: semanticWithoutIndependenceDisclosure,
+            },
+          },
+          {
+            name: 'nullable-negotiation-field',
+            schema: 'acceptance-check.schema.json',
+            layer: 'schema',
+            value: { ...acceptanceCheck, negotiation: null },
           },
         ],
       }),

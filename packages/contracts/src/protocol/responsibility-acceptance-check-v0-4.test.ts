@@ -17,6 +17,23 @@ function utf8ByteLength(value: string): number {
   return bytes;
 }
 
+// Test-owned so deleting a fixture-builder case together with its production enum still fails.
+const REQUIRED_ACCEPTANCE_CHECK_REJECTIONS_V04 = [
+  'client-owned-authority',
+  'inline-read-back-payload',
+  'unbound-subject-revision',
+  'malformed-expected-digest',
+  'lone-surrogate-criterion',
+  'criterion-byte-ceiling',
+  'artifact-check-readback-field',
+  'semantic-check-missing-model-version',
+  'semantic-check-missing-harness-version',
+  'semantic-check-missing-grader-version',
+  'semantic-check-missing-evidence-version',
+  'semantic-check-missing-independence-disclosure',
+  'nullable-negotiation-field',
+] as const;
+
 describe('responsibility acceptance check v0.4', () => {
   it('declares a deterministic read-back check against an exact responsibility revision', () => {
     const check = {
@@ -51,6 +68,69 @@ describe('responsibility acceptance check v0.4', () => {
         kind: check.subject.kind,
       },
     })).toBe(canonicalizeAcceptanceCheckV04ForDigest(check));
+  });
+
+  it('supports strict executable artifact and declared semantic verification methods', () => {
+    const base = {
+      protocolVersion: '0.4',
+      id: 'acceptance_check_01',
+      ownerId: 'owner_01',
+      revision: 1,
+      subject: { kind: 'outcome', id: 'outcome_01', revision: 3 },
+      criterion: 'The approved artifact communicates the agreed launch decision.',
+      createdAt: '2026-08-08T18:00:00.000Z',
+    } as const;
+    const artifactCheck = {
+      ...base,
+      verificationMethod: {
+        kind: 'deterministic_artifact_check',
+        capability: 'artifact.digest.read',
+        artifactRef: 'artifact_launch_01',
+        assertion: {
+          operator: 'digest_equals',
+          expectedDigest: `sha256:${'b'.repeat(64)}`,
+        },
+      },
+    } as const;
+    const semanticCheck = {
+      ...base,
+      verificationMethod: {
+        kind: 'declared_semantic_check',
+        capability: 'artifact.semantic.verify',
+        targetRef: 'artifact_launch_01',
+        model: { id: 'semantic_model_01', version: '2026-08-08' },
+        harness: { id: 'semantic_harness_01', version: '0.4.0' },
+        grader: { id: 'launch_grader_01', version: '1.0.0' },
+        evidence: {
+          ref: 'evidence_bundle_01',
+          version: '1.0.0',
+          digest: `sha256:${'c'.repeat(64)}`,
+        },
+        independenceDisclosure: {
+          independentFromProducer: true,
+          disclosure: {
+            ref: 'independence_disclosure_01',
+            digest: `sha256:${'d'.repeat(64)}`,
+          },
+        },
+      },
+    } as const;
+
+    expect(acceptanceCheckV04Schema.parse(artifactCheck)).toEqual(artifactCheck);
+    expect(acceptanceCheckV04Schema.parse(semanticCheck)).toEqual(semanticCheck);
+    expect(acceptanceCheckV04Schema.safeParse({
+      ...artifactCheck,
+      verificationMethod: {
+        ...artifactCheck.verificationMethod,
+        targetRef: 'read_back_target_not_allowed',
+      },
+    }).success).toBe(false);
+    const { independenceDisclosure: _missing, ...semanticWithoutDisclosure } =
+      semanticCheck.verificationMethod;
+    expect(acceptanceCheckV04Schema.safeParse({
+      ...semanticCheck,
+      verificationMethod: semanticWithoutDisclosure,
+    }).success).toBe(false);
   });
 
   it('rejects a structurally bounded criterion above the contract byte ceiling', () => {
@@ -106,9 +186,6 @@ describe('responsibility acceptance check v0.4', () => {
 
   it('publishes a Draft 2020-12 schema that accepts its valid fixture', () => {
     const bundle = buildResponsibilityAcceptanceCheckV04Bundle(() => 'a'.repeat(64));
-    const valid = JSON.parse(bundle['acceptance-check.valid.json']!);
-    expect(acceptanceCheckV04Schema.parse(valid)).toEqual(valid);
-
     const jsonSchema = JSON.parse(bundle['acceptance-check.schema.json']!);
     expect(jsonSchema).toMatchObject({
       'x-waldo-validation-level': 'structural-plus-runtime-invariants',
@@ -120,7 +197,15 @@ describe('responsibility acceptance check v0.4', () => {
       'x-waldo-offline-commands',
     ]) ajv.addKeyword(keyword);
     const validate = ajv.compile(jsonSchema);
-    expect(validate(valid), JSON.stringify(validate.errors)).toBe(true);
+    for (const fixturePath of [
+      'acceptance-check.valid.json',
+      'acceptance-check-artifact.valid.json',
+      'acceptance-check-semantic.valid.json',
+    ]) {
+      const valid = JSON.parse(bundle[fixturePath]!);
+      expect(acceptanceCheckV04Schema.parse(valid), fixturePath).toEqual(valid);
+      expect(validate(valid), `${fixturePath}: ${JSON.stringify(validate.errors)}`).toBe(true);
+    }
   });
 
   it('rejects every catalogued hostile or unbound check at its declared layer', () => {
@@ -135,10 +220,9 @@ describe('responsibility acceptance check v0.4', () => {
     ]) ajv.addKeyword(keyword);
     const validate = ajv.compile(JSON.parse(bundle['acceptance-check.schema.json']!));
 
-    expect(catalogue.cases.map((entry) => entry.name)).toEqual(expect.arrayContaining([
-      'lone-surrogate-criterion',
-      'criterion-byte-ceiling',
-    ]));
+    expect(catalogue.cases.map((entry) => entry.name)).toEqual(
+      [...REQUIRED_ACCEPTANCE_CHECK_REJECTIONS_V04],
+    );
 
     for (const rejection of catalogue.cases) {
       expect(

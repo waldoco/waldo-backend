@@ -158,12 +158,20 @@
         "id": {
           "$ref": "#/$defs/__schema1"
         },
+        "authorityDisposition": {
+          "type": "string",
+          "enum": [
+            "grant",
+            "refuse"
+          ]
+        },
         "content": {
           "$ref": "#/$defs/__schema4"
         }
       },
       "required": [
         "id",
+        "authorityDisposition",
         "content"
       ],
       "additionalProperties": false

@@ -37,14 +37,58 @@ export const deterministicReadBackVerificationMethodV04Schema = z.strictObject({
   }),
 });
 
+export const deterministicArtifactVerificationMethodV04Schema = z.strictObject({
+  kind: z.literal('deterministic_artifact_check'),
+  capability: protocolNameSchema,
+  artifactRef: protocolIdSchema,
+  assertion: z.strictObject({
+    operator: z.literal('digest_equals'),
+    expectedDigest: protocolDigestSchema,
+  }),
+});
+
+const versionedVerificationComponentV04Schema = z.strictObject({
+  id: protocolIdSchema,
+  version: protocolNameSchema,
+});
+
+export const declaredSemanticVerificationMethodV04Schema = z.strictObject({
+  kind: z.literal('declared_semantic_check'),
+  capability: protocolNameSchema,
+  targetRef: protocolIdSchema,
+  model: versionedVerificationComponentV04Schema,
+  harness: versionedVerificationComponentV04Schema,
+  grader: versionedVerificationComponentV04Schema,
+  evidence: z.strictObject({
+    ref: protocolIdSchema,
+    version: protocolNameSchema,
+    digest: protocolDigestSchema,
+  }),
+  independenceDisclosure: z.strictObject({
+    independentFromProducer: z.boolean(),
+    disclosure: z.strictObject({
+      ref: protocolIdSchema,
+      digest: protocolDigestSchema,
+    }),
+  }),
+});
+
+export const acceptanceVerificationMethodV04Schema = z.discriminatedUnion('kind', [
+  deterministicReadBackVerificationMethodV04Schema,
+  deterministicArtifactVerificationMethodV04Schema,
+  declaredSemanticVerificationMethodV04Schema,
+]);
+
 export const acceptanceCheckV04Schema = z.strictObject({
   protocolVersion: protocolVersionV04Schema,
   id: protocolIdSchema,
   ownerId: protocolIdSchema,
   revision: z.int().positive().max(Number.MAX_SAFE_INTEGER),
   subject: acceptanceCheckSubjectV04Schema,
+  /** Owner-readable meaning: the condition the owner recognizes as satisfied. */
   criterion: responsibilityCaptureTextV02Schema.max(2_048),
-  verificationMethod: deterministicReadBackVerificationMethodV04Schema,
+  /** Executable method: the exact procedure used to gather and judge verification evidence. */
+  verificationMethod: acceptanceVerificationMethodV04Schema,
   createdAt: iso8601Schema,
 }).refine(
   (value) => utf8ByteLength(JSON.stringify(value)) <= MAX_ACCEPTANCE_CHECK_BYTES,

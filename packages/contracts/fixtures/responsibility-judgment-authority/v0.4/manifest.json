@@ -19,19 +19,23 @@
     },
     {
       "path": "judgment-answer.valid.json",
-      "sha256": "sha256:c526fd7765b92892a74f8ad582e54e0e6d1b0d2b2938c7e554cb82eedc3212da"
+      "sha256": "sha256:acd8beaa916a7c964ba3783fe2ef1363e9d064ac3ff8ed3a0b7d046cc396d61e"
     },
     {
       "path": "judgment-authority-binding.schema.json",
-      "sha256": "sha256:98fa3991f348b863b342c5b96b3f7dfcd2427969481de088210b9ba40bbb1be3"
+      "sha256": "sha256:33c50ad1885cc654b4c566cce1abdb870b711e816dfe3ee85c1c540ac4ca761d"
     },
     {
       "path": "judgment-authority-binding.valid.json",
-      "sha256": "sha256:96edd1415e5ca052e1c4669e0c29b12059a664b9adeaf9662e66b7b851ab1297"
+      "sha256": "sha256:031affd1253ef12a9c67cfbccf5795f5b5fe4447e13d8ccce76ed72a9eff8177"
+    },
+    {
+      "path": "judgment-authority-refusal.valid.json",
+      "sha256": "sha256:a84b7d27966e206c5031850eaf80376dc3440734bc75bcd6afe28f4a92382225"
     },
     {
       "path": "judgment-authority.rejections.json",
-      "sha256": "sha256:3770a76c774597aa5ce394d15bc2a78cc3f0a49cd9cef462e4f40083bb4dcbf2"
+      "sha256": "sha256:ae9bbdf2c05d3e763d214a9397be553ff22f5e5f6d98d6749f55edf36c67f3da"
     },
     {
       "path": "judgment-decision.schema.json",
@@ -39,15 +43,15 @@
     },
     {
       "path": "judgment-decision.valid.json",
-      "sha256": "sha256:f41b84bad01445219ecac845b71ab71039bd66c8a6bfe7b40724ace40e9e4efd"
+      "sha256": "sha256:dbf17af36ca5fd2d4d39b296ac59f7ef01680cc10db72eebbf90141467845686"
     },
     {
       "path": "judgment-request.schema.json",
-      "sha256": "sha256:549cf6edaae410d5b33d3a058bfed274a345fe8e77d0681e861c75146231ab8b"
+      "sha256": "sha256:e54945ce998a049abaf8d1bc463ca3dc642fe3121781a8335d723d6fb14d0e5a"
     },
     {
       "path": "judgment-request.valid.json",
-      "sha256": "sha256:ad152deb0a15a76f726280af8545d5d6bef754352a3d9dec62843d030bbbe0e3"
+      "sha256": "sha256:a53e488d8f14868f9e016bcabef93eae8ac4cc7665ab76f285970aeae73cc473"
     }
   ]
 }
