@@ -32,7 +32,7 @@ The live #78 body is a historical planning input, not current sequencing authori
 5. #89 depends on #83, #90, and #91. It does not depend on its own later integration barrier.
 6. #86 is not on the critical path until Telegram terminal-ambiguity/idempotency semantics satisfy the delivery contract or the contract is deliberately changed.
 7. Migration numbers are allocated at rebase/integration time from the live schema head. Issue-time V6-V10 assignments are invalid.
-8. #92 and #93 are outside this sprint. Existing governed context and provider seams may be consumed, but their full promotion is not required for the obligation-spine proof.
+8. #92 and #93 are outside this sprint. Existing governed context and provider seams may be consumed, but their full promotion is not required for the obligation-spine proof. The independent #104 Waldo-Daily track may run in disjoint worktrees without becoming a spine dependency or touching reserved integration files.
 9. #90 is split. A narrow CapabilityRegistry A0 for the existing planning provider/executor path gates #83 and #87: immutable manifest admission, registry-owned assessment, owner-local disposition, and trusted pre-enqueue plus pre-I/O eligibility checks. Tool, MCP, connector, model, presence, signed-manifest trust roots, and global kill-switch coverage remain in the umbrella.
 10. Capability eligibility is enforced by trusted callers outside adapters. A manifest is a claim; an adapter cannot certify itself, and no eligibility decision may be cached across the pre-I/O boundary.
 
@@ -94,14 +94,15 @@ The task reload order is this ledger, the architecture lock, the owning issue/PR
 | migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | second repair published; third independent review active | `a59d042`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
 | execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
 | credential boundary | #91 secret-flow map and safe first slice | `codex/obligation-credential-map` | `/Users/shivanshfulper/.codex/worktrees/osp-credential/waldo-backend` | `dd434e9` | disjoint port/guard or evidence artifact | evidence review-clear; implementation decisions remain | `61304a8`; draft PR [#101](https://github.com/Pin4sf/waldo-backend/pull/101) |
+| Waldo-Daily review | #104 WD-1 PersonaFormatter / PR #105 | review task from `claude/wd-1-persona-formatter` | `/Users/shivanshfulper/.codex/worktrees/c5ea/waldo-backend` | live PR #105 head | review-only; no writes | independent worktree review active | Codex task `019fe02b-1412-7722-bf1b-02fdb1d4588e` |
 
 ## Planned implementation barriers
 
 | Barrier | Required evidence | State |
 |---|---|---|
 | B0 preflight | live base pinned; dirty main untouched; worktrees and ownership recorded | passed |
-| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | AcceptanceCheck review-clear; repaired Judgment/Authority slice is under independent pre-push review; remaining families pending |
-| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | semantic transitive SQL and strict-ancestor repair published; third independent review active |
+| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | blocked: local Judgment/Authority repair has two P0 binding failures, causal-order and independent-oracle gaps; AcceptanceCheck needs the complete declared verification-method union |
+| B2 migration safety | collision/reservation guard is non-vacuous and feature migrations remain unallocated | third semantic-immutability review rejected; decomposing to reservation/uniqueness/contiguity/strict-base scope under the three-failure halt rule |
 | B3 capture continuity | capture transaction creates canonical OpenLoop and exact initial ReEntry | blocked by B1/B2 |
 | B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | blocked by B1/B2 |
 | B5 effects | frozen intent before I/O, single retry owner, reconcile-before-retry, terminal ambiguity | blocked by B4 |
@@ -163,6 +164,9 @@ Every worker handoff and PR must report:
 | 2026-08-08 | migration safety | Second guard repair published | `a59d042` fingerprints resolved ordered `up`/`down` SQL through top-level const aliases and array spreads, rejects unsafe/nonliteral shapes, and requires a strict ancestor base distinct from HEAD. Focused regressions, mutation probes, and full wall pass; third independent review active. |
 | 2026-08-08 | contracts | Judgment/Authority repair committed locally | `52ea175` binds request, answer, decision, and grant to the real canonical request digest; makes requested authority executable; expands the exact rejection catalogue and counter/byte/hostility boundaries; and kills five recorded mutations. Full wall passes; independent review is active before any push. |
 | 2026-08-08 | capability admission | #90 corrected and re-sliced | CapabilityRegistry A0 covers only existing planning-provider/planning-executor admission. Trusted callers enforce fresh pre-enqueue and pre-I/O checks; publisher claims are separated from registry-owned assessment. #83 and #87 depend on this interface; broad tool/MCP/connector/signed/global coverage remains in #90. |
+| 2026-08-08 | contracts | Judgment/Authority repair rejected before push | Independent mutations proved that `option_reject` can still yield the unchanged grant and an arbitrary asserted digest can replace the canonical request hash. Causal time ordering and the rejection catalogue oracle are also incomplete. AcceptanceCheck requires deterministic read-back, deterministic artifact, and disclosed semantic method variants; absence/decline stays outside a confirmed check. Repair returned to the sole contracts writer. |
+| 2026-08-08 | migration safety | Third semantic guard review rejected and halted | Executable element assignment, array mutation, and direct migration-property assignment change compiled historical SQL while `a59d042` passes. After three failures on this boundary, #100 is being decomposed to its original parallel-version safety scope; semantic SQL immutability moves to a follow-up representation-level design. |
+| 2026-08-08 | Waldo-Daily | Parallel side lane admitted | Live #104 drops the redundant generic ReadPort because typed calendar/email/doc/sheet contracts already exist. PersonaFormatter PR #105 entered an independent Codex worktree review; the first read-only `CalendarProvider` implementation follows separately and remains off the spine critical path. |
 
 ## Honest capability status
 
