@@ -89,7 +89,7 @@ The task reload order is this ledger, the architecture lock, the owning issue/PR
 | Lane | Issue / purpose | Branch | Worktree | Base / dependency | Allowed writes | State | Head / PR |
 |---|---|---|---|---|---|---|---|
 | orchestration | #78 evidence and barriers | `codex/obligation-spine-ledger` | `/Users/shivanshfulper/.codex/worktrees/osp-orchestrator/waldo-backend` | `dd434e9` | this ledger only | active | draft PR [#102](https://github.com/Pin4sf/waldo-backend/pull/102) |
-| contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | behavior repaired; exact-expiry proof rejected as vacuous and requires an isolated refusal-fixture test before push | local `9149d19`, published `b28549d`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
+| contracts | #81 protocol v0.4 vertical slices | `codex/obligation-contracts` | `/Users/shivanshfulper/.codex/worktrees/osp-contracts/waldo-backend` | stacked on `12a014a` | `packages/contracts/**` plus its generator/guard registration | Judgment/Authority contract family and exact-expiry proof independently review-clear; remaining #81 families continue serially under this writer | published `b41bd287`; draft PR [#103](https://github.com/Pin4sf/waldo-backend/pull/103) |
 | merge-wall repair | wall-clock-independent planning authority fixture | `codex/planning-authority-test-clock` | `/Users/shivanshfulper/.codex/worktrees/osp-test-clock/waldo-backend` | `dd434e9` | one runtime test fixture | review | `12a014a`; draft PR [#99](https://github.com/Pin4sf/waldo-backend/pull/99) |
 | migration safety | parallel migration collision guard | `codex/obligation-migration-guard` | `/Users/shivanshfulper/.codex/worktrees/osp-migration/waldo-backend` | stacked on `12a014a` | guard/tests/docs required by the guard | paused outside the working-Waldo critical path after reduced guard review failed | `01a6296`; draft PR [#100](https://github.com/Pin4sf/waldo-backend/pull/100) |
 | execution decision | #80 writer map and safe refactor plan | `codex/obligation-execution-map` | `/Users/shivanshfulper/.codex/worktrees/osp-execution/waldo-backend` | `dd434e9` | bounded decision artifact only | review | `a12c6d2`; draft PR [#98](https://github.com/Pin4sf/waldo-backend/pull/98) |
@@ -101,12 +101,12 @@ The task reload order is this ledger, the architecture lock, the owning issue/PR
 | Barrier | Required evidence | State |
 |---|---|---|
 | B0 preflight | live base pinned; dirty main untouched; worktrees and ownership recorded | passed |
-| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | behavior repaired locally at `9149d19`; exact-expiry mutation survives because the granted fixture also fails grant chronology; replace with refusal fixture plus `expiry - 1 ms` control and re-review before push |
+| B1 contract kernel | strict schemas, exports, valid and rejection fixtures; contract tests; downstream handoff commit | Judgment/Authority slice passed independent exact-expiry mutation review and was published at `b41bd287`; downstream runtime admission may pin this commit while the contracts writer continues later #81 families |
 | B2 migration allocation | feature migrations remain unallocated until their integration branch rebases and takes `max(existing)+1` | guard PR #100 is paused; serial merge-captain allocation is sufficient for the one-lane working-Waldo milestone |
 | B3 capture continuity | capture transaction creates canonical OpenLoop and exact initial ReEntry | blocked by B1/B2 |
-| B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | blocked by B1/B2 |
-| B5 effects | frozen intent before I/O, single retry owner, reconcile-before-retry, terminal ambiguity | blocked by B4 |
-| B6 evidence and acceptance | candidate evidence separated from independent verification and human acceptance | blocked by B1/B2 |
+| B4 judgment and authority | exact grant, revision/digest binding, expiry/revocation, atomic consume | contract dependency released at `b41bd287`; runtime module wave ready, with migration allocation deferred to serial integration |
+| B5 effects | frozen intent before I/O, single retry owner, reconcile-before-retry, terminal ambiguity | contract/module wave ready under the sole contracts writer and a disjoint runtime writer; integration still depends on B4 |
+| B6 evidence and acceptance | candidate evidence separated from independent verification and human acceptance | contract/module wave ready under the sole contracts writer and a disjoint runtime writer; integration remains gated by reviewed module barriers |
 | B7 capability/identity admission | planning-path CapabilityRegistry A0 plus model-invisible credential broker A0/A1 seam | CapabilityRegistry source map complete; contracts blocked by B1 ownership, runtime blocked by B1/B2; credential custody package B remains decision-blocked |
 | B8 execution seam | one writer plus fake Kennel executor conformance and cancellation/fencing | blocked by #80/B1 |
 | B9 fake-backed whole spine | nine-step public path, restart/replay, breaker and mutation probes | blocked by B3-B8 |
@@ -175,6 +175,7 @@ Every worker handoff and PR must report:
 | 2026-08-08 | contracts | Third Judgment/Authority lifecycle repair committed | `9149d19` requires the exact open unanswered request snapshot, half-open expiry, update-before-decision ordering, and matching grant/refuse option disposition. Contracts 60/1,495, runtime 38/1,001, pgTAP 53, integration 5, all guards, and `git diff --check` pass. Fresh independent review is active before push. |
 | 2026-08-08 | migration safety | Reduced guard rejected and paused | Independent review bypassed version/name lineage with valid post-declaration TypeScript mutation. PR #100 is not merge-ready and no longer gates the single integration lane; migration numbers are assigned serially at rebase. |
 | 2026-08-08 | contracts | Third repair review rejected on proof quality | `9149d19` rejects every previously reproduced lifecycle input, but changing `>= expiresAt` back to `> expiresAt` leaves focused tests green because the granted exact-expiry fixture also fails grant chronology. Repair with the grant-free refusal binding, add an `expiry - 1 ms` pass control and issue-path/message assertion, and document the exported verifier as snapshot-integrity rather than final live admission. |
+| 2026-08-08 | contracts | Exact-expiry proof repaired, independently cleared, and published | `b41bd287` builds the expiry negative from a grant-free refusal, proves `expiry - 1 ms`, and asserts the sole `decision.decidedAt` issue and message. A fresh breaker killed the `>=` to `>` mutation with exactly the named test failing. The full author wall passed: contracts 60/1,496; runtime 38/1,001; pgTAP 53; integration 5; all guards and diff check. PR #103 remains draft and unmerged. |
 
 ## Honest capability status
 
@@ -183,7 +184,7 @@ Until later rows contain their required proof, every capability remains independ
 | Capability | Architecture specified | Contract defined | Module implemented | Adapter conformance | Cross-surface acceptance | Operational proof |
 |---|---:|---:|---:|---:|---:|---:|
 | obligation spine v0.4 | yes | no | no | no | no | no |
-| exact judgment and authority | yes | no | no | no | no | no |
+| exact judgment and authority | yes | yes | no | no | no | no |
 | governed external effect | yes | no | no | no | no | no |
 | evidence, verification, acceptance | yes | no | no | no | no | no |
 | OpenLoop and ReEntry | yes | no | no | no | no | no |
