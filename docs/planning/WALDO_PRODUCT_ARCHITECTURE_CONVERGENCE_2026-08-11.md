@@ -53,7 +53,7 @@ This synthesis plus its three linked audits is the durable resumption artifact f
 
 | Repository | Evidence pin used | Lineage warning |
 | --- | --- | --- |
-| `waldo-backend` | product-code evidence `dd434e9`; documentation convergence `origin/main@51da2d1` checked 2026-08-13 | The later SHA changes documentation/governance, not the product-code boundary described here. No live deployment inference follows. Re-pin before implementation claims. |
+| `waldo-backend` | product-boundary evidence `dd434e9`; B0 implementation `c37956a`; current post-isolation baseline `origin/main@182a775` checked 2026-08-13 | The later SHAs prove fixtures, migration allocation lineage, route/OpenAPI parity, the full local verification baseline, and test-harness alarm isolation. They do not add general execution, closure, live integration, deployment, or production proof. Re-pin before later implementation claims. |
 | `waldo-brain` | active local `main@d778402` | Remote `main` was `9f280abe` when checked. The local research commits and untracked convergence ledger were read-only evidence, not silently promoted to remote canonical truth. |
 | `kennel` | canonical Electron `main@367c484` | A read-only `ls-remote` confirmed the remote pin. Per founder direction, Electron is the only implementation lineage used for product and build decisions. |
 | `waldo-app` | active local `main@d9578e6`; remote `main@ed255869` as a separate evidence pin | A read-only `ls-remote` confirmed `main@ed255869`. Active HEAD is a source-empty scaffold and 66 commits behind its recorded remote. The richer Expo audit describes remote `main`, not the active checkout. Canonical implementation revision is **[Unknown]**. |

@@ -1,5 +1,7 @@
 # Product Architecture Convergence and Launch Surfaces Handoff
 
+> Historical handoff. Its B0-next instructions and unavailable-baseline findings were superseded by the [B0 baseline closure handoff](./2026-08-13-b0-baseline-closure.md) after PR #119 landed at `main@c37956a` and test-only PR #121 hardened verification isolation at `main@182a775`. The product/architecture decisions remain retained evidence.
+
 ## Identity
 
 - **Date:** 2026-08-13

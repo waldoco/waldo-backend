@@ -13,18 +13,23 @@ This file is the repository's single persistent run contract. GitHub issues carr
 
 ## Current
 
-At current `origin/main@51da2d1`, the newest product-code pin is `dd434e9`:
+At current `origin/main@182a775`, B0 baseline convergence and its test-isolation follow-up are landed:
 
 - implemented: authenticated owner-routed responsibility ingress; v0.1/v0.2 capture/projection contracts; v0.3 planning turn; `IdentityPresenceModule`, `WaldoCoordinator`, `OutcomeModule`, `PlanningExecutionModule`; one owner/presence path; events/projections; one leased/fenced/cancellable zero-tool planning turn;
 - separate foundations: trusted RunLoop, journal/outbox, leases/fences/cancellation, ContextComposer, DeliveryGate, scheduler, governor/safety, provider gateway, contract adapters and fakes;
+- baseline additions: deterministic active-session fixtures, collision-only Durable Object migration allocation/history guard, one exact five-route responsibility manifest shared by exhaustive Worker dispatch and generated OpenAPI, truthful default-disabled/public contract documentation, and non-vacuous manifest mutation proof;
+- verification follow-up: the inspection-only tracer test cancels the real alarm it creates, preventing delayed wake-up leakage into later module-global sink assertions;
 - missing or unproved: general WorkUnit execution, canonical Judgment/Evidence/Verification/Acceptance/OpenLoop/ReEntry, multi-presence Home and channel gateway, service-first Connections, real effects, governed context/routines/cloud execution, Kennel/mobile/Telegram/Discord acceptance, staging, and production.
 
-Fresh baseline observed 2026-08-13:
+Fresh landed-main baseline observed 2026-08-13 in a detached clean checkout:
 
-- contracts: 58 files, 1,475 tests passed;
-- guards: passed, including self-tests;
-- runtime: 37 files passed, 1 failed; 994 tests passed, 7 failed because two authority fixtures use `authenticatedSessionExpiresAt: 2026-08-08T00:00:00.000Z`;
-- Docker/Supabase: unavailable at the local OrbStack socket, so the full repository wall and Supabase integration are not proved.
+- complete `pnpm verify`: passed at `c37956a`;
+- contracts: 58 files, 1,476 tests passed;
+- Supabase: eight migrations from zero plus reset, 53 pgTAP assertions, and canonical-history checks passed;
+- runtime: 38 files, 1,001 tests passed;
+- exact-token/session-revocation integration: 2 files, 5 tests passed;
+- guards and generated artifacts: passed, including self-tests;
+- GitHub Actions: unavailable for this user; Supabase Preview: skipped. Neither is green evidence. No staging, deployment, live consumer, or production inference follows.
 
 ## Ideal
 
@@ -32,7 +37,7 @@ The backend is complete when one owner-authenticated path carries responsibility
 
 ## Stable criteria
 
-- [ ] **ISC-1 — Baseline truth:** current main has reproducible contracts, runtime, Supabase integration, guards, OpenAPI/route parity, and classified failures. **Falsifier:** expired fixtures, unavailable prerequisites, or stale generated routes are called green.
+- [x] **ISC-1 — Baseline truth:** current main has reproducible contracts, runtime, Supabase integration, guards, OpenAPI/route parity, and classified failures. Landed proof: implementation `main@c37956a`, fresh detached checkout, merged PR #119; test-isolation follow-up #121 at `main@182a775`. **Falsifier:** expired fixtures, unavailable prerequisites, stale generated routes, or cross-test alarm leakage are called green.
 - [ ] **ISC-2 — One execution writer:** one durable writer owns ExecutionRequest/Attempt/Session/Lease across provider and execution-environment adapters. **Falsifier:** two writers or adapter-local truth.
 - [ ] **ISC-3 — Closure truth:** provider/session/effect completion cannot imply Verification, Acceptance, Outcome completion, or OpenLoop closure. **Falsifier:** any external `done` changes product truth without the named reducers.
 - [ ] **ISC-4 — One Waldo across launch presences:** enrolled Mobile, Kennel, Telegram, Discord, and test presences receive capability-appropriate views of the same ordered owner truth with link/revoke/gap/account-switch/cross-owner proof. **Falsifier:** a surface becomes a writer, a channel payload becomes owner authority, or state crosses owner boundaries.
@@ -48,7 +53,7 @@ The backend is complete when one owner-authenticated path carries responsibility
 
 | Gate | Outcome | Issues | Gate completion |
 |---|---|---|---|
-| **B0** | trustworthy baseline | [#107](https://github.com/Pin4sf/waldo-backend/issues/107); review/land PRs #99 and #100 | ISC-1 passes at one fresh SHA |
+| **B0** | trustworthy baseline | completed [#107](https://github.com/Pin4sf/waldo-backend/issues/107); merged PR #119; test-only follow-up [#120](https://github.com/Pin4sf/waldo-backend/issues/120)/#121; #99/#100/#117 closed superseded | complete: ISC-1 passed at `c37956a`; verification harness hardened at `182a775` |
 | **B1** | shared command primitives and WorkUnit to one trusted execution writer | [#81](https://github.com/Pin4sf/waldo-backend/issues/81) → [#80](https://github.com/Pin4sf/waldo-backend/issues/80) + [#87](https://github.com/Pin4sf/waldo-backend/issues/87) → [#88](https://github.com/Pin4sf/waldo-backend/issues/88) | ISC-2 and execution half of ISC-3 pass with fake execution adapters; #86 specializes the shared command primitives into the channel envelope at B3 |
 | **B2** | Judgment, Evidence, Verification, Acceptance, OpenLoop/ReEntry | [#82](https://github.com/Pin4sf/waldo-backend/issues/82), [#84](https://github.com/Pin4sf/waldo-backend/issues/84), [#85](https://github.com/Pin4sf/waldo-backend/issues/85) | ISC-3 passes through public commands/projections |
 | **B3** | daily interaction and ordered desktop/mobile/messaging presences | [#95](https://github.com/Pin4sf/waldo-backend/issues/95), [#104](https://github.com/Pin4sf/waldo-backend/issues/104), [#108](https://github.com/Pin4sf/waldo-backend/issues/108), [#86](https://github.com/Pin4sf/waldo-backend/issues/86) | ISC-4–ISC-6 pass with Kennel/mobile/fake-channel presences and both health states |
@@ -80,8 +85,10 @@ Surface teams may work in parallel only against released contracts and golden fi
 
 | PR | Current role | Required action |
 |---|---|---|
-| #99 | B0 time-relative fixture candidate | review against current main; land only with complete B0 evidence |
-| #100 | B0 migration-lineage guard candidate | re-pin live lineage, rebase, then review |
+| #99 | closed B0 fixture source evidence | superseded by merged #119; do not reopen or merge its stale branch |
+| #100 | closed B0 migration-guard source evidence | superseded by merged #119; intermediate SQL-immutability claims remain rejected |
+| #117 | closed governance publication | superseded by merged #118; do not merge or revive as current authority |
+| #121 | merged B0 test-isolation follow-up | prevents an inspection-only tracer alarm from leaking into later tests; no production behavior change |
 | #98 | B1 single-writer decision evidence | preserve as design evidence; implementation belongs to #80/#88 |
 | #103 | B1/B2 contract draft | split/review against #81 release order; effect contracts must not block closure contracts |
 | #105 | B3 delivery persona/privacy hardening | review under #104 and B3 security acceptance |
@@ -105,14 +112,14 @@ No open PR is launch authority by itself. Closing, rebasing, merging, or superse
 
 ## Next session
 
-Start only B0:
+Start only B1 contract release #81:
 
-1. read #116, register `SESSION START` on #107, create a clean worktree from fresh `origin/main`, and preserve every unrelated dirty checkout;
-2. inspect PR #99 (expiry fixture), PR #100 (migration-lineage guard), and issue #107 (OpenAPI/route/full-wall parity);
-3. use `/waldo-isa-run-contract`, planner/workflow mapping, `/diagnose` or `/tdd`, `/check-contract`, breaker, Standards/Spec review, and security review where triggered;
-4. close B0 only when the complete evidence is reproducible at one SHA;
-5. post `SESSION HANDOFF` with commits, PR, classified evidence, next owner, and worktree disposition;
-6. then promote #81, and only #81, into active B1 work.
+1. read #116, #78, #81, and the latest ledger handoff; fetch fresh `origin/main`, create a clean worktree, and preserve every unrelated dirty checkout;
+2. register `SESSION START` on #81 with exact contract/generator ownership, downstream consumers, privacy/authority impact, acceptance, falsifier, verification, and rollback;
+3. use `/waldo-isa-run-contract`, planner/domain modeling, `/tdd`, `/check-contract`, breaker, Standards/Spec review, and security review where triggered;
+4. publish additive version-pinned fixtures in #81's release order without starting #80/#87/#88 runtime writers or B2-B6;
+5. run contract, negative, freshness, property/adversarial, guard, and full-wall proof at one SHA;
+6. post `SESSION HANDOFF` with the released fixture SHA before promoting the next named dependency.
 
 ## Verification wall
 

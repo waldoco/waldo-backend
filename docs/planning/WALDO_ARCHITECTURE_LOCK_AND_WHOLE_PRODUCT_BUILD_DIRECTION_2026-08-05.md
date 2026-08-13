@@ -41,7 +41,7 @@ Architecture exists to preserve that relationship. A module, contract, provider,
 
 **[Not yet proved]** No product WorkUnit enters that general trusted execution path. Evidence/Verification/Acceptance/OpenLoop/ReEntry reducers, multi-presence/Home/channel synchronization, service-first Connections, real Calendar/inbox product effects, Telegram/Discord adapters, reviewed routine promotion, persistent cloud execution, Electron Kennel consumption, mobile acceptance, staging, and production proof remain missing or unproved. The capability matrix carries the row-level status; this lock must not be cited as implementation proof.
 
-**[Observed 2026-08-13]** Repository documentation is current at `origin/main@51da2d1`; the product-code evidence above remains pinned to `dd434e9`. Contracts and guards pass locally. Runtime verification currently fails seven cases because two test sessions expired on 2026-08-08; Docker/Supabase proof is unavailable locally. B0 must restore and record the complete baseline before B1 begins.
+**[Observed 2026-08-13 B0 closure]** Baseline convergence landed at `origin/main@c37956a` through PR #119; test-only PR #121 then hardened tracer alarm isolation at `origin/main@182a775`. A fresh detached checkout passed contracts (1,476), runtime (1,001), eight Supabase migrations from zero, 53 pgTAP assertions, five exact-token/session-revocation integration tests, and every guard/generated-artifact check. This proves ISC-1 only: the broader implementation boundary above remains unchanged, no Worker route is thereby deployed/enabled, and B1 begins with additive contract fixtures in #81 rather than a claim of execution or closure capability.
 
 ## 2. Whole-product thesis checksum
 
