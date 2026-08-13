@@ -77,4 +77,5 @@ Use severity, disposition, owner, and dependency for each known issue. Never era
 
 ## Current ledger
 
+- [2026-08-13 — B0 baseline closure and B1 contract frontier](../ledger/2026-08-13-b0-baseline-closure.md)
 - [2026-08-13 — product architecture convergence, launch surfaces, and GitHub workflow](../ledger/2026-08-13-product-architecture-convergence.md)
