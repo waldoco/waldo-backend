@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { responsibilityHttpRouteManifestV01 } from '../protocol/responsibility-http-adapter-v0-1';
 import { buildPublicOpenApiDocument } from './openapi';
 
 const forbiddenFragments = [
@@ -19,120 +20,74 @@ const forbiddenFragments = [
 ];
 
 describe('public OpenAPI artifact', () => {
-  it('publishes the authenticated current morning-Brief read contract', () => {
+  it('publishes exactly the guarded responsibility route inventory', () => {
     const generated = buildPublicOpenApiDocument();
-    const paths = generated.paths as Record<string, { get: MorningBriefOperation }>;
-    const operation = paths['/public/v1/briefs/morning/current']!.get;
-
-    expect(generated.paths).toHaveProperty('/public/v1/briefs/morning/current');
-    expect(operation.security).toEqual([{ bearerAuth: [] }]);
-    expect(operation).not.toHaveProperty('requestBody');
-    expect(Object.keys(operation.responses).sort()).toEqual([
-      '200',
-      '304',
-      '401',
-      '403',
-      '406',
-      '429',
-      '500',
-      '503',
-    ]);
-    expect(operation.responses['304']).not.toHaveProperty('content');
-    for (const status of ['200', '304']) {
-      expect(operation.responses[status]!.headers).toEqual(
-        expect.objectContaining({
-          'Cache-Control': expect.objectContaining({ schema: { const: 'private, no-cache' } }),
-          Vary: expect.objectContaining({ schema: { const: 'Authorization, Accept' } }),
-        }),
-      );
-    }
-    expect(operation.responses['200']!.content).toHaveProperty(
-      'application/vnd.waldo.morning-brief.v1+json',
+    const paths = generated.paths as Record<string, Record<string, PublicOperation>>;
+    expect(Object.keys(paths).sort()).toEqual(
+      [...new Set(responsibilityHttpRouteManifestV01.map((route) => route.path))].sort(),
     );
-    const problemSchemas = {
-      '401': 'WaldoUnauthorizedProblemV1',
-      '403': 'WaldoForbiddenProblemV1',
-      '406': 'WaldoNotAcceptableProblemV1',
-      '429': 'WaldoRateLimitedProblemV1',
-      '500': 'WaldoInternalErrorProblemV1',
-      '503': 'WaldoTemporarilyUnavailableProblemV1',
-    } as const;
-    for (const [status, schema] of Object.entries(problemSchemas)) {
-      expect(operation.responses[status]!.content).toEqual({
-        'application/problem+json': {
-          schema: { $ref: `#/components/schemas/${schema}` },
-        },
+    expect(paths).not.toHaveProperty('/public/v1/briefs/morning/current');
+    expect(paths).not.toHaveProperty('/v1/engagement-events');
+
+    for (const route of responsibilityHttpRouteManifestV01) {
+      const operation = paths[route.path]![route.method.toLowerCase()]!;
+      expect(operation).toBeDefined();
+      expect(operation.security).toEqual([{ bearerAuth: [] }]);
+      expect(operation['x-waldo-feature-gate']).toEqual({
+        environmentVariable: 'RESPONSIBILITY_PUBLIC_API_ENABLED',
+        enabledValue: 'true',
+        default: 'disabled',
       });
+      expect(operation['x-waldo-protocol-versions']).toEqual(route.protocolVersions);
+      expect(operation.responses).toHaveProperty(route.id === 'capture' ? '201' : '200');
+      for (const status of ['400', '401', '404', '406', '409', '429', '500', '503']) {
+        expect(operation.responses[status]!.content).toEqual(expect.objectContaining({
+          'application/problem+json': {
+            schema: { $ref: `#/components/schemas/ResponsibilityHttpProblem${status}V01` },
+          },
+        }));
+        expect(operation.responses[status]!.headers).toEqual(expect.objectContaining({
+          'Cache-Control': expect.objectContaining({ schema: { const: 'no-store' } }),
+          Vary: expect.objectContaining({ schema: { const: 'Authorization, Accept' } }),
+        }));
+      }
+      expect(operation.responses['429']!.headers).toHaveProperty('Retry-After');
+      expect(operation.responses['404']!.content).toHaveProperty('text/plain');
     }
-    for (const status of ['429', '503']) {
-      expect(operation.responses[status]!.headers).toHaveProperty('Retry-After');
-    }
-    expect(generated.components).toEqual(
-      expect.objectContaining({
-        securitySchemes: expect.objectContaining({
-          bearerAuth: expect.objectContaining({ type: 'http', scheme: 'bearer' }),
-        }),
-      }),
-    );
-
-    const components = generated.components as { schemas: Record<string, unknown> };
-    const readySchema = components.schemas.PublicMorningBriefReady as {
-      properties: Record<string, { pattern?: string }>;
-      'x-waldo-invariants': string[];
-    };
-    for (const timestamp of ['generated_at', 'source_updated_at', 'stale_at', 'as_of']) {
-      expect(readySchema.properties[timestamp]!.pattern).toContain('Z');
-    }
-    expect(readySchema['x-waldo-invariants']).toEqual(
-      expect.arrayContaining([
-        'source_updated_at <= generated_at',
-        'generated_at <= as_of',
-        'generated_at < stale_at',
-      ]),
-    );
-    const morningSurface = JSON.stringify({
-      operation,
-      response: components.schemas.PublicMorningBriefResponse,
-      problem: components.schemas.WaldoProblemV1,
-    });
-    for (const forbidden of [
-      'user_id',
-      'userId',
-      'tenant',
-      'durable_object',
-      'run_id',
-      'journal',
-      'outbox',
-      'provider',
-      'model',
-      'raw_health',
-      'notification_log',
-      'read_state',
-    ]) {
-      expect(morningSurface).not.toContain(forbidden);
-    }
-    expect(morningSurface).not.toContain('"null"');
   });
 
-  it('emits the public engagement endpoint from independent public DTOs', () => {
+  it('pins request and response representations to the existing protocol schemas', () => {
     const generated = buildPublicOpenApiDocument();
-    expect(generated.paths).toHaveProperty('/v1/engagement-events');
-    expect(generated.components).toEqual(
-      expect.objectContaining({
-        schemas: expect.objectContaining({
-          PublicEngagementEventRequest: expect.any(Object),
-          PublicEngagementEventResponse: expect.any(Object),
-          PublicError: expect.any(Object),
-        }),
-      }),
-    );
+    const paths = generated.paths as Record<string, Record<string, PublicOperation>>;
+    const capture = paths['/public/responsibilities']!.post!;
+    expect(Object.keys(capture.requestBody!.content).sort()).toEqual([
+      'application/vnd.waldo.responsibility.v0.1+json',
+      'application/vnd.waldo.responsibility.v0.2+json',
+    ]);
+    expect(Object.keys(capture.responses['201']!.content!).sort()).toEqual([
+      'application/vnd.waldo.responsibility.v0.1+json',
+      'application/vnd.waldo.responsibility.v0.2+json',
+    ]);
+
+    for (const path of [
+      '/public/responsibilities/planning-turns',
+      '/public/responsibilities/planning-turns/cancel',
+    ]) {
+      expect(Object.keys(paths[path]!.post!.requestBody!.content)).toEqual([
+        'application/vnd.waldo.responsibility.v0.3+json',
+      ]);
+    }
+    expect(paths['/public/responsibilities/projection']!.get).not.toHaveProperty('requestBody');
+    expect(paths['/public/responsibilities/planning-turns/projection']!.get)
+      .not.toHaveProperty('requestBody');
+    const components = generated.components as { schemas: Record<string, Record<string, unknown>> };
+    expect(components.schemas.WorkUnitPlanningTurnResultV03!['x-waldo-presentation'])
+      .toBe('inspectable-provenance');
   });
 
   it('does not leak internal-only contract names or sensitive label fragments', () => {
     const artifact = JSON.stringify(buildPublicOpenApiDocument());
-    for (const fragment of forbiddenFragments) {
-      expect(artifact).not.toContain(fragment);
-    }
+    for (const fragment of forbiddenFragments) expect(artifact).not.toContain(fragment);
   });
 
   it('generates byte-identically across repeated builds', () => {
@@ -142,10 +97,13 @@ describe('public OpenAPI artifact', () => {
   });
 });
 
-type MorningBriefOperation = {
+type PublicOperation = {
   security: Array<Record<string, unknown>>;
+  requestBody?: { content: Record<string, unknown> };
   responses: Record<
     string,
     { content?: Record<string, unknown>; headers?: Record<string, unknown> }
   >;
+  'x-waldo-feature-gate': Record<string, unknown>;
+  'x-waldo-protocol-versions': readonly string[];
 };

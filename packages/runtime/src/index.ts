@@ -99,7 +99,14 @@ export class RuntimeProbeDO extends DurableObject<Env> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (env.RESPONSIBILITY_PUBLIC_API_ENABLED !== 'true') {
-      return new Response('not found', { status: 404 });
+      return new Response('not found', {
+        status: 404,
+        headers: {
+          'cache-control': 'no-store',
+          'content-type': 'text/plain; charset=utf-8',
+          'vary': 'Authorization, Accept',
+        },
+      });
     }
     try {
       return await createResponsibilityPublicHandler(env).fetch(request);
@@ -110,6 +117,7 @@ export default {
         headers: {
           'cache-control': 'no-store',
           'content-type': 'application/problem+json; charset=utf-8',
+          'vary': 'Authorization, Accept',
         },
       });
     }

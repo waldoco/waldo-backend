@@ -7,6 +7,51 @@ export const responsibilityHttpMediaTypeV02 =
 export const responsibilityHttpMediaTypeV03 =
   'application/vnd.waldo.responsibility.v0.3+json' as const;
 
+export const responsibilityHttpRouteManifestV01 = Object.freeze([
+  Object.freeze({
+    id: 'capture',
+    method: 'POST',
+    path: '/public/responsibilities',
+    protocolVersions: Object.freeze(['0.1', '0.2'] as const),
+  }),
+  Object.freeze({
+    id: 'projection',
+    method: 'GET',
+    path: '/public/responsibilities/projection',
+    protocolVersions: Object.freeze(['0.1', '0.2'] as const),
+  }),
+  Object.freeze({
+    id: 'planning_turn',
+    method: 'POST',
+    path: '/public/responsibilities/planning-turns',
+    protocolVersions: Object.freeze(['0.3'] as const),
+  }),
+  Object.freeze({
+    id: 'planning_cancel',
+    method: 'POST',
+    path: '/public/responsibilities/planning-turns/cancel',
+    protocolVersions: Object.freeze(['0.3'] as const),
+  }),
+  Object.freeze({
+    id: 'planning_projection',
+    method: 'GET',
+    path: '/public/responsibilities/planning-turns/projection',
+    protocolVersions: Object.freeze(['0.3'] as const),
+  }),
+] as const);
+
+export type ResponsibilityHttpRouteV01 =
+  (typeof responsibilityHttpRouteManifestV01)[number];
+
+export function matchResponsibilityHttpRouteV01(
+  method: string,
+  path: string,
+): ResponsibilityHttpRouteV01 | null {
+  return responsibilityHttpRouteManifestV01.find(
+    (route) => route.method === method && route.path === path,
+  ) ?? null;
+}
+
 export const responsibilityHttpCapabilitiesV01Schema = z.strictObject({
   protocolName: z.literal('responsibility-handshake'),
   supportedVersions: z.tuple([z.literal('0.1'), z.literal('0.2')]),
@@ -46,15 +91,26 @@ function problemSchema<Status extends keyof typeof responsibilityHttpProblemsV01
   return contentFreeProblem(status, descriptor.code, descriptor.kind, descriptor.title);
 }
 
+export const responsibilityHttpProblemSchemasV01 = Object.freeze({
+  400: problemSchema(400),
+  401: problemSchema(401),
+  404: problemSchema(404),
+  406: problemSchema(406),
+  409: problemSchema(409),
+  429: problemSchema(429),
+  500: problemSchema(500),
+  503: problemSchema(503),
+});
+
 export const responsibilityHttpProblemV01Schema = z.discriminatedUnion('status', [
-  problemSchema(400),
-  problemSchema(401),
-  problemSchema(404),
-  problemSchema(406),
-  problemSchema(409),
-  problemSchema(429),
-  problemSchema(500),
-  problemSchema(503),
+  responsibilityHttpProblemSchemasV01[400],
+  responsibilityHttpProblemSchemasV01[401],
+  responsibilityHttpProblemSchemasV01[404],
+  responsibilityHttpProblemSchemasV01[406],
+  responsibilityHttpProblemSchemasV01[409],
+  responsibilityHttpProblemSchemasV01[429],
+  responsibilityHttpProblemSchemasV01[500],
+  responsibilityHttpProblemSchemasV01[503],
 ]);
 
 export type ResponsibilityHttpProblemV01 = z.infer<

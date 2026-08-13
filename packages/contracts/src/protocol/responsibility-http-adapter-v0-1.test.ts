@@ -14,8 +14,11 @@ import {
 import {
   responsibilityHttpCapabilitiesV01Schema,
   responsibilityHttpFixtureManifestV01Schema,
+  responsibilityHttpRouteManifestV01,
   responsibilityHttpMediaTypeV01,
   responsibilityHttpMediaTypeV02,
+  responsibilityHttpMediaTypeV03,
+  matchResponsibilityHttpRouteV01,
   responsibilityHttpProjectionFixturesV01Schema,
   responsibilityHttpProblemV01Schema,
   responsibilityHttpProblemV01,
@@ -23,12 +26,55 @@ import {
 } from './responsibility-http-adapter-v0-1';
 
 describe('responsibility HTTP adapter v0.1', () => {
+  it('pins the complete guarded route and protocol-version surface', () => {
+    expect(responsibilityHttpRouteManifestV01).toEqual([
+      {
+        id: 'capture',
+        method: 'POST',
+        path: '/public/responsibilities',
+        protocolVersions: ['0.1', '0.2'],
+      },
+      {
+        id: 'projection',
+        method: 'GET',
+        path: '/public/responsibilities/projection',
+        protocolVersions: ['0.1', '0.2'],
+      },
+      {
+        id: 'planning_turn',
+        method: 'POST',
+        path: '/public/responsibilities/planning-turns',
+        protocolVersions: ['0.3'],
+      },
+      {
+        id: 'planning_cancel',
+        method: 'POST',
+        path: '/public/responsibilities/planning-turns/cancel',
+        protocolVersions: ['0.3'],
+      },
+      {
+        id: 'planning_projection',
+        method: 'GET',
+        path: '/public/responsibilities/planning-turns/projection',
+        protocolVersions: ['0.3'],
+      },
+    ]);
+    for (const route of responsibilityHttpRouteManifestV01) {
+      expect(matchResponsibilityHttpRouteV01(route.method, route.path)).toBe(route);
+    }
+    expect(matchResponsibilityHttpRouteV01('DELETE', '/public/responsibilities')).toBeNull();
+    expect(matchResponsibilityHttpRouteV01('POST', '/public/responsibilities/unknown')).toBeNull();
+  });
+
   it('pins released representations and online-only negotiation', () => {
     expect(responsibilityHttpMediaTypeV01).toBe(
       'application/vnd.waldo.responsibility.v0.1+json',
     );
     expect(responsibilityHttpMediaTypeV02).toBe(
       'application/vnd.waldo.responsibility.v0.2+json',
+    );
+    expect(responsibilityHttpMediaTypeV03).toBe(
+      'application/vnd.waldo.responsibility.v0.3+json',
     );
     expect(responsibilityHttpCapabilitiesV01Schema.parse({
       protocolName: 'responsibility-handshake',

@@ -5,6 +5,7 @@ import {
   responsibilityHttpMediaTypeV02,
   responsibilityHttpMediaTypeV03,
   responsibilityHttpProblemV01,
+  matchResponsibilityHttpRouteV01,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureResultV01CompatibilitySchema,
@@ -92,11 +93,6 @@ export type ResponsibilityWorkerAdapterDependencies = Readonly<{
   newId(kind: 'command' | 'correlation'): string;
 }>;
 
-const CAPTURE_PATH = '/public/responsibilities';
-const PROJECTION_PATH = '/public/responsibilities/projection';
-const PLANNING_TURN_PATH = '/public/responsibilities/planning-turns';
-const PLANNING_CANCEL_PATH = '/public/responsibilities/planning-turns/cancel';
-const PLANNING_PROJECTION_PATH = '/public/responsibilities/planning-turns/projection';
 const MEDIA_TYPES: Readonly<Record<ResponsibilityProtocolVersion, string>> = Object.freeze({
   '0.1': responsibilityHttpMediaTypeV01,
   '0.2': responsibilityHttpMediaTypeV02,
@@ -109,19 +105,17 @@ export function createResponsibilityWorkerAdapter(
   return {
     async fetch(request: Request): Promise<Response> {
       const url = new URL(request.url);
-      const capture = request.method === 'POST' && url.pathname === CAPTURE_PATH;
-      const planningTurn = request.method === 'POST' && url.pathname === PLANNING_TURN_PATH;
-      const planningCancel = request.method === 'POST' && url.pathname === PLANNING_CANCEL_PATH;
-      const projection = request.method === 'GET' && url.pathname === PROJECTION_PATH;
-      const planningProjection = request.method === 'GET' && url.pathname === PLANNING_PROJECTION_PATH;
-      if (!capture && !planningTurn && !planningCancel && !projection && !planningProjection) {
-        return problem(404);
-      }
+      const route = matchResponsibilityHttpRouteV01(request.method, url.pathname);
+      if (route === null) return problem(404);
+      const capture = route.id === 'capture';
+      const planningTurn = route.id === 'planning_turn';
+      const planningCancel = route.id === 'planning_cancel';
+      const projection = route.id === 'projection';
+      const planningProjection = route.id === 'planning_projection';
 
       const version = selectedVersion(request.headers.get('accept'));
       if (version === null) return problem(406);
-      if ((capture && version === '0.3') || ((planningTurn || planningCancel) && version !== '0.3') ||
-          (projection && version === '0.3') || (planningProjection && version !== '0.3')) {
+      if (!route.protocolVersions.some((supported) => supported === version)) {
         return problem(406);
       }
       const writesBody = capture || planningTurn || planningCancel;
