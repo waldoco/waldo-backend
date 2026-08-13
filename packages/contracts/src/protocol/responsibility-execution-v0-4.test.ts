@@ -1,6 +1,7 @@
 import Ajv2020 from 'ajv/dist/2020';
 import { describe, expect, it } from 'vitest';
 import { channelAdapterRefV04Schema, presenceRefV04Schema } from './responsibility-presence-channel-v0-4';
+import { buildResponsibilityExecutionV04Bundle } from './responsibility-execution-v0-4-fixtures';
 import { executionAttemptV04Schema, executionEnvironmentRefV04Schema, executionRequestV04Schema,
   executorObservationV04Schema, observationMatchesExecutionAttemptV04, providerRefV04Schema } from './responsibility-execution-v0-4';
 
@@ -48,5 +49,21 @@ describe('responsibility execution v0.4', () => {
   it('treats executor ended as activity only', () => {
     expect(executorObservationV04Schema.parse(observation).kind).toBe('ended');
     expect(executionAttemptV04Schema.safeParse({ ...attempt, state: 'completed' }).success).toBe(false);
+  });
+
+  it('rejects every catalogued execution attack at its structural or freshness boundary', () => {
+    const bundle = buildResponsibilityExecutionV04Bundle(() => 'b'.repeat(64));
+    const catalogue = JSON.parse(bundle['execution.rejections.json']!) as {
+      cases: Array<{ name: string; value: unknown }>;
+    };
+    expect(catalogue.cases.map(({ name }) => name)).toEqual([
+      'provider-environment-confusion',
+      'stale-fence-observation',
+      'executor-done-closes-outcome',
+    ]);
+    expect(executionRequestV04Schema.safeParse(catalogue.cases[0]!.value).success).toBe(false);
+    const stale = executorObservationV04Schema.parse(catalogue.cases[1]!.value);
+    expect(observationMatchesExecutionAttemptV04(attempt, stale)).toBe(false);
+    expect(executorObservationV04Schema.safeParse(catalogue.cases[2]!.value).success).toBe(false);
   });
 });

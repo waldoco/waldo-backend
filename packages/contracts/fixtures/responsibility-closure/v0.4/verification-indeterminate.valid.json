@@ -23,6 +23,7 @@
   "verifier": {
     "id": "verifier_fixture",
     "version": "1.0.0",
+    "availability": "unavailable",
     "independentFromProducer": true,
     "disclosureRef": "disclosure_fixture"
   },

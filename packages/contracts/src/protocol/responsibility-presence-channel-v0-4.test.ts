@@ -1,5 +1,6 @@
 import Ajv2020 from 'ajv/dist/2020';
 import { describe, expect, it } from 'vitest';
+import { buildResponsibilityPresenceChannelV04Bundle } from './responsibility-presence-channel-v0-4-fixtures';
 import {
   channelAdapterRefV04Schema, conversationCommandRequestV04Schema, deliverySettlementV04Schema,
   normalizedInboundEnvelopeV04Schema, presenceRefV04Schema, responsibilityCaptureCommandRequestV04Schema,
@@ -49,5 +50,21 @@ describe('responsibility presence/channel v0.4', () => {
     const base = { protocolVersion: '0.4', requestId: 'request', presenceRegistrationId: 'presence', clientIssuedAt: '2026-08-13T12:00:00.000Z' };
     expect(conversationCommandRequestV04Schema.safeParse({ ...base, commandType: 'conversation.send', payload: { content: 'hello', contentDigest: digest }, ownerId: 'owner' }).success).toBe(false);
     expect(responsibilityCaptureCommandRequestV04Schema.parse({ ...base, commandType: 'responsibility.capture', payload: { userStatement: 'Handle this', statementDigest: digest } }).commandType).toBe('responsibility.capture');
+  });
+
+  it('rejects every catalogued presence/channel attack at its declared boundary', () => {
+    const bundle = buildResponsibilityPresenceChannelV04Bundle(() => 'a'.repeat(64));
+    const catalogue = JSON.parse(bundle['presence-channel.rejections.json']!) as {
+      cases: Array<{ name: string; value: unknown }>;
+    };
+    expect(catalogue.cases.map(({ name }) => name)).toEqual([
+      'client-owned-authority',
+      'transport-done-closes-outcome',
+      'channel-as-presence',
+    ]);
+    const validators = [normalizedInboundEnvelopeV04Schema, deliverySettlementV04Schema, presenceRefV04Schema];
+    catalogue.cases.forEach(({ name, value }, index) => {
+      expect(validators[index]!.safeParse(value).success, name).toBe(false);
+    });
   });
 });

@@ -1,5 +1,6 @@
 import Ajv2020 from 'ajv/dist/2020';
 import { describe, expect, it } from 'vitest';
+import { buildResponsibilityClosureV04Bundle } from './responsibility-closure-v0-4-fixtures';
 import { candidateEvidenceSubmissionV04Schema, verificationV04Schema, acceptanceCommandRequestV04Schema } from './responsibility-closure-v0-4';
 
 const digest = `sha256:${'c'.repeat(64)}`;
@@ -9,7 +10,7 @@ const candidate = { protocolVersion: '0.4', submissionId: 'submission', source: 
 const verification = { protocolVersion: '0.4', id: 'verification', ownerId: 'owner', revision: 1,
   outcome: { id: 'outcome', revision: 1 }, acceptanceCheck: { id: 'check', revision: 1, digest },
   evidence: [{ id: 'evidence', revision: 1, digest }], evidenceSetDigest: digest,
-  verifier: { id: 'verifier', version: '1.0.0', independentFromProducer: true, disclosureRef: 'disclosure' },
+  verifier: { id: 'verifier', version: '1.0.0', availability: 'unavailable', independentFromProducer: true, disclosureRef: 'disclosure' },
   methodVersion: '1.0.0', state: 'indeterminate', findingsRef: null, findingsDigest: null,
   verifiedAt: '2026-08-13T12:01:00.000Z' };
 
@@ -23,6 +24,13 @@ describe('responsibility closure v0.4', () => {
   it('represents unavailable verification only as indeterminate', () => {
     expect(verificationV04Schema.parse(verification).state).toBe('indeterminate');
     expect(verificationV04Schema.safeParse({ ...verification, state: 'unavailable' }).success).toBe(false);
+    expect(verificationV04Schema.safeParse({ ...verification, state: 'passed' }).success).toBe(false);
+    expect(verificationV04Schema.safeParse({ ...verification, state: 'failed' }).success).toBe(false);
+    expect(verificationV04Schema.safeParse({
+      ...verification,
+      verifier: { ...verification.verifier, availability: 'available' },
+      state: 'passed',
+    }).success).toBe(true);
   });
   it('requires acceptance to be an explicit separate command', () => {
     const request = { protocolVersion: '0.4', requestId: 'request', commandType: 'acceptance.record', presenceRegistrationId: 'presence',
@@ -33,5 +41,20 @@ describe('responsibility closure v0.4', () => {
   });
   it('compiles verification JSON Schema', () => {
     expect(new Ajv2020({ strict: false }).compile(verificationV04Schema.toJSONSchema())(verification)).toBe(true);
+  });
+
+  it('rejects every catalogued closure shortcut', () => {
+    const bundle = buildResponsibilityClosureV04Bundle(() => 'c'.repeat(64));
+    const catalogue = JSON.parse(bundle['closure.rejections.json']!) as {
+      cases: Array<{ name: string; value: unknown }>;
+    };
+    expect(catalogue.cases.map(({ name }) => name)).toEqual([
+      'provider-self-acceptance',
+      'unavailable-as-passed',
+      'inline-evidence',
+    ]);
+    expect(candidateEvidenceSubmissionV04Schema.safeParse(catalogue.cases[0]!.value).success).toBe(false);
+    expect(verificationV04Schema.safeParse(catalogue.cases[1]!.value).success).toBe(false);
+    expect(candidateEvidenceSubmissionV04Schema.safeParse(catalogue.cases[2]!.value).success).toBe(false);
   });
 });

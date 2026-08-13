@@ -1,5 +1,6 @@
 import Ajv2020 from 'ajv/dist/2020';
 import { describe, expect, it } from 'vitest';
+import { buildResponsibilityContinuityV04Bundle } from './responsibility-continuity-v0-4-fixtures';
 import { openLoopDispositionCommandV04Schema, openLoopV04Schema, reEntryPointV04Schema } from './responsibility-continuity-v0-4';
 const digest = `sha256:${'d'.repeat(64)}`;
 const reentry = { protocolVersion: '0.4', id: 'reentry', ownerId: 'owner', revision: 1, subject: { kind: 'outcome', id: 'outcome', revision: 2 },
@@ -27,5 +28,17 @@ describe('responsibility continuity v0.4', () => {
     const ajv = new Ajv2020({ strict: false });
     expect(ajv.compile(openLoopV04Schema.toJSONSchema())(loop)).toBe(true);
     expect(ajv.compile(reEntryPointV04Schema.toJSONSchema())(reentry)).toBe(true);
+  });
+  it('rejects every catalogued continuity shortcut', () => {
+    const bundle = buildResponsibilityContinuityV04Bundle(() => 'd'.repeat(64));
+    const catalogue = JSON.parse(bundle['continuity.rejections.json']!) as {
+      cases: Array<{ name: string; value: unknown }>;
+    };
+    expect(catalogue.cases.map(({ name }) => name)).toEqual([
+      'provider-done-closes-loop',
+      'inline-context',
+    ]);
+    expect(openLoopV04Schema.safeParse(catalogue.cases[0]!.value).success).toBe(false);
+    expect(reEntryPointV04Schema.safeParse(catalogue.cases[1]!.value).success).toBe(false);
   });
 });

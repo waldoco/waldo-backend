@@ -155,6 +155,14 @@
         "version": {
           "$ref": "#/$defs/__schema1"
         },
+        "availability": {
+          "type": "string",
+          "enum": [
+            "available",
+            "unavailable",
+            "unsupported"
+          ]
+        },
         "independentFromProducer": {
           "type": "boolean"
         },
@@ -165,6 +173,7 @@
       "required": [
         "id",
         "version",
+        "availability",
         "independentFromProducer",
         "disclosureRef"
       ],

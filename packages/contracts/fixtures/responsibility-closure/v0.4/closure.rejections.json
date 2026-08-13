@@ -53,7 +53,8 @@
         "verifier": {
           "id": "verifier_fixture",
           "version": "1.0.0",
-          "independentFromProducer": false,
+          "availability": "unavailable",
+          "independentFromProducer": true,
           "disclosureRef": "disclosure_fixture"
         },
         "methodVersion": "1.0.0",

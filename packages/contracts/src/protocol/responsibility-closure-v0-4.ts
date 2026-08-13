@@ -27,12 +27,21 @@ export const verificationV04Schema = z.strictObject({
   revision: exactRevisionV04Schema, outcome: z.strictObject({ id: protocolIdSchema, revision: exactRevisionV04Schema }),
   acceptanceCheck: z.strictObject({ id: protocolIdSchema, revision: exactRevisionV04Schema, digest: protocolDigestSchema }),
   evidence: z.array(evidenceRefV04Schema).min(1).max(64), evidenceSetDigest: protocolDigestSchema,
-  verifier: z.strictObject({ id: protocolIdSchema, version: protocolNameSchema, independentFromProducer: z.boolean(), disclosureRef: protocolIdSchema }),
+  verifier: z.strictObject({
+    id: protocolIdSchema,
+    version: protocolNameSchema,
+    availability: z.enum(['available', 'unavailable', 'unsupported']),
+    independentFromProducer: z.boolean(),
+    disclosureRef: protocolIdSchema,
+  }),
   methodVersion: protocolNameSchema, state: z.enum(['pending', 'passed', 'failed', 'indeterminate', 'stale']),
   findingsRef: protocolIdSchema.nullable(), findingsDigest: protocolDigestSchema.nullable(), verifiedAt: iso8601Schema.nullable(),
 }).superRefine((value, context) => {
   if ((value.findingsRef === null) !== (value.findingsDigest === null)) context.addIssue({ code: 'custom', path: ['findingsRef'], message: 'findings ref and digest must appear together' });
   if (value.state === 'pending' && value.verifiedAt !== null) context.addIssue({ code: 'custom', path: ['verifiedAt'], message: 'pending verification is not terminal' });
+  if (value.verifier.availability !== 'available' && value.state !== 'indeterminate') {
+    context.addIssue({ code: 'custom', path: ['state'], message: 'unavailable or unsupported verification must remain indeterminate' });
+  }
 });
 export const acceptanceCommandRequestV04Schema = z.strictObject({
   protocolVersion: protocolVersionV04Schema, requestId: protocolIdSchema, commandType: z.literal('acceptance.record'),
