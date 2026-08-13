@@ -45,6 +45,11 @@ const authority = Object.freeze({
   ownerRootRoutingVersion: 2,
 });
 
+// These integration cases exercise planning behavior, not session expiry. Keep the
+// admitted test authority valid independently of the wall clock running the suite;
+// expiry behavior has dedicated boundary tests elsewhere.
+const ACTIVE_TEST_SESSION_EXPIRES_AT = '9999-12-31T23:59:59.999Z';
+
 const manifest = Object.freeze({
   schemaVersion: '0.3' as const,
   tools: [] as [],
@@ -86,7 +91,7 @@ async function seedPlanningAdmission(
   coordinator.admitCanonicalAuthority({
     ...authority,
     ownerId,
-    authenticatedSessionExpiresAt: '2026-08-08T00:00:00.000Z',
+    authenticatedSessionExpiresAt: ACTIVE_TEST_SESSION_EXPIRES_AT,
     presenceState: 'active',
     at: '2026-08-07T08:00:00.000Z',
   });
@@ -652,7 +657,7 @@ describe('minimum WorkUnit planning authorization harness', () => {
           authenticate: async () => ({
             ...authority,
             actor: { kind: 'presence', id: authority.presenceId },
-            authenticatedSessionExpiresAt: '2026-08-08T00:00:00.000Z',
+            authenticatedSessionExpiresAt: ACTIVE_TEST_SESSION_EXPIRES_AT,
             authAssurance: 'verified_session',
           }),
         },

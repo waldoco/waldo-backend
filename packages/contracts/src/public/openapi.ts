@@ -1,43 +1,93 @@
 import { z } from 'zod';
 import {
-  publicEngagementEventRequestSchema,
-  publicEngagementEventResponseSchema,
-  publicErrorSchema,
-} from './dto';
+  responsibilityCaptureRequestSchema,
+} from '../protocol/responsibility-handshake-v0-1';
 import {
-  publicMorningBriefEmptySchema,
-  publicMorningBriefPendingSchema,
-  publicMorningBriefReadySchema,
-  publicMorningBriefResponseSchema,
-  waldoForbiddenProblemV1Schema,
-  waldoInternalErrorProblemV1Schema,
-  waldoNotAcceptableProblemV1Schema,
-  waldoNotFoundProblemV1Schema,
-  waldoProblemV1Schema,
-  waldoRateLimitedProblemV1Schema,
-  waldoTemporarilyUnavailableProblemV1Schema,
-  waldoUnauthorizedProblemV1Schema,
-} from './morning-brief';
+  responsibilityCaptureRequestV02Schema,
+  responsibilityCaptureResultV01CompatibilitySchema,
+  responsibilityCaptureResultV02Schema,
+  responsibilityProjectionPageV01CompatibilitySchema,
+  responsibilityProjectionPageV02Schema,
+} from '../protocol/responsibility-handshake-v0-2';
+import {
+  responsibilityHttpMediaTypeV01,
+  responsibilityHttpMediaTypeV02,
+  responsibilityHttpMediaTypeV03,
+  responsibilityHttpProblemSchemasV01,
+  responsibilityHttpRouteManifestV01,
+  type ResponsibilityHttpRouteV01,
+} from '../protocol/responsibility-http-adapter-v0-1';
+import {
+  workUnitPlanningCancelRequestV03Schema,
+  workUnitPlanningCancelResultV03Schema,
+  workUnitPlanningProjectionPageV03Schema,
+  workUnitPlanningTurnRequestV03Schema,
+  workUnitPlanningTurnResultV03Schema,
+} from '../protocol/responsibility-planning-turn-v0-3';
 
 type JsonRecord = Record<string, unknown>;
+type ProtocolVersion = '0.1' | '0.2' | '0.3';
+
+const mediaTypes: Readonly<Record<ProtocolVersion, string>> = Object.freeze({
+  '0.1': responsibilityHttpMediaTypeV01,
+  '0.2': responsibilityHttpMediaTypeV02,
+  '0.3': responsibilityHttpMediaTypeV03,
+});
+
+const operationMetadata = Object.freeze({
+  capture: {
+    operationId: 'captureResponsibility',
+    summary: 'Capture one owner-bound responsibility',
+    successStatus: '201',
+    requestSchemas: {
+      '0.1': 'ResponsibilityCaptureRequestV01',
+      '0.2': 'ResponsibilityCaptureRequestV02',
+    },
+    responseSchemas: {
+      '0.1': 'ResponsibilityCaptureResultV01',
+      '0.2': 'ResponsibilityCaptureResultV02',
+    },
+  },
+  projection: {
+    operationId: 'readResponsibilityProjection',
+    summary: 'Read the owner-bound responsibility projection',
+    successStatus: '200',
+    responseSchemas: {
+      '0.1': 'ResponsibilityProjectionPageV01',
+      '0.2': 'ResponsibilityProjectionPageV02',
+    },
+  },
+  planning_turn: {
+    operationId: 'requestWorkUnitPlanningTurn',
+    summary: 'Request one zero-effect WorkUnit planning turn',
+    successStatus: '200',
+    requestSchemas: { '0.3': 'WorkUnitPlanningTurnRequestV03' },
+    responseSchemas: { '0.3': 'WorkUnitPlanningTurnResultV03' },
+  },
+  planning_cancel: {
+    operationId: 'cancelWorkUnitPlanningTurn',
+    summary: 'Cancel one WorkUnit planning turn',
+    successStatus: '200',
+    requestSchemas: { '0.3': 'WorkUnitPlanningCancelRequestV03' },
+    responseSchemas: { '0.3': 'WorkUnitPlanningCancelResultV03' },
+  },
+  planning_projection: {
+    operationId: 'readWorkUnitPlanningProjection',
+    summary: 'Read the owner-bound WorkUnit planning projection',
+    successStatus: '200',
+    responseSchemas: { '0.3': 'WorkUnitPlanningProjectionPageV03' },
+  },
+} as const);
 
 function stripGeneratedSchemaNoise(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stripGeneratedSchemaNoise);
-  }
-
+  if (Array.isArray(value)) return value.map(stripGeneratedSchemaNoise);
   if (value && typeof value === 'object') {
-    const source = value as JsonRecord;
     const result: JsonRecord = {};
-    for (const [key, child] of Object.entries(source)) {
-      if (key === '$schema') {
-        continue;
-      }
-      result[key] = stripGeneratedSchemaNoise(child);
+    for (const [key, child] of Object.entries(value as JsonRecord)) {
+      if (key !== '$schema') result[key] = stripGeneratedSchemaNoise(child);
     }
     return result;
   }
-
   return value;
 }
 
@@ -45,192 +95,160 @@ function schemaFor(schema: z.ZodType): JsonRecord {
   return stripGeneratedSchemaNoise(z.toJSONSchema(schema)) as JsonRecord;
 }
 
-export function buildPublicOpenApiDocument(): JsonRecord {
+function schemaContent(
+  versions: readonly ProtocolVersion[],
+  schemas: Readonly<Partial<Record<ProtocolVersion, string>>>,
+): JsonRecord {
+  return Object.fromEntries(versions.map((version) => [
+    mediaTypes[version],
+    { schema: { $ref: `#/components/schemas/${schemas[version]}` } },
+  ]));
+}
+
+function problemResponse(status: keyof typeof responsibilityHttpProblemSchemasV01): JsonRecord {
+  const schemaName = `ResponsibilityHttpProblem${status}V01`;
   return {
-    openapi: '3.1.0',
-    info: {
-      title: 'Waldo Public API',
-      version: '0.1.0',
+    description: status === 404
+      ? 'Content-free not-found problem, or an indistinguishable plain 404 while the route gate is disabled'
+      : 'Content-free responsibility problem',
+    headers: {
+      'Cache-Control': { required: true, schema: { const: 'no-store' } },
+      Vary: { required: true, schema: { const: 'Authorization, Accept' } },
+      ...(status === 429
+        ? { 'Retry-After': { required: true, schema: { const: '60' } } }
+        : {}),
     },
-    paths: {
-      '/public/v1/briefs/morning/current': {
-        get: {
-          operationId: 'getCurrentMorningBrief',
-          summary: 'Read the current committed morning Brief projection',
-          description:
-            'Side-effect-free projection read. The ETag is opaque and subject-bound; 304 is valid only for the same verified subject.',
-          security: [{ bearerAuth: [] }],
-          parameters: [
-            {
-              name: 'Accept',
-              in: 'header',
-              required: true,
-              schema: { const: 'application/vnd.waldo.morning-brief.v1+json' },
-            },
-            {
-              name: 'If-None-Match',
-              in: 'header',
-              required: false,
-              description: 'Malformed validators are ignored as cache misses; they never produce 304.',
-              schema: { type: 'string', pattern: '^"[A-Za-z0-9_-]{32,128}"$' },
-            },
-          ],
-          responses: {
-            '200': {
-              description: 'Ready, pending, or empty current morning Brief state',
-              headers: {
-                ETag: {
-                  required: true,
-                  description: 'Opaque validator bound to the verified subject and projection revision',
-                  schema: { type: 'string', pattern: '^"[A-Za-z0-9_-]{32,128}"$' },
-                },
-                'Cache-Control': {
-                  required: true,
-                  schema: { const: 'private, no-cache' },
-                },
-                Vary: {
-                  required: true,
-                  schema: { const: 'Authorization, Accept' },
-                },
-              },
-              content: {
-                'application/vnd.waldo.morning-brief.v1+json': {
-                  schema: { $ref: '#/components/schemas/PublicMorningBriefResponse' },
-                },
-              },
-            },
-            '304': {
-              description: 'Not modified for this verified subject; no response body and no side effect',
-              headers: {
-                ETag: {
-                  required: true,
-                  schema: { type: 'string', pattern: '^"[A-Za-z0-9_-]{32,128}"$' },
-                },
-                'Cache-Control': {
-                  required: true,
-                  schema: { const: 'private, no-cache' },
-                },
-                Vary: {
-                  required: true,
-                  schema: { const: 'Authorization, Accept' },
-                },
-              },
-            },
-            '401': problemResponse('Authentication failed', 'WaldoUnauthorizedProblemV1'),
-            '403': problemResponse('Access forbidden', 'WaldoForbiddenProblemV1'),
-            '406': problemResponse('Unsupported representation', 'WaldoNotAcceptableProblemV1'),
-            '429': problemResponse('Rate limited', 'WaldoRateLimitedProblemV1', true),
-            '500': problemResponse('Internal failure', 'WaldoInternalErrorProblemV1'),
-            '503': problemResponse(
-              'Temporarily unavailable',
-              'WaldoTemporarilyUnavailableProblemV1',
-              true,
-            ),
-          },
-        },
+    content: {
+      'application/problem+json': {
+        schema: { $ref: `#/components/schemas/${schemaName}` },
       },
-      '/v1/engagement-events': {
-        post: {
-          operationId: 'createEngagementEvent',
-          summary: 'Record a redacted engagement event',
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/PublicEngagementEventRequest' },
-              },
-            },
-          },
-          responses: {
-            '202': {
-              description: 'Accepted',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/PublicEngagementEventResponse' },
-                },
-              },
-            },
-            '400': {
-              description: 'Invalid request',
-              content: {
-                'application/json': {
-                  schema: { $ref: '#/components/schemas/PublicError' },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-    components: {
-      securitySchemes: {
-        bearerAuth: {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          description: 'Project Woof ES256 access token',
-        },
-      },
-      schemas: {
-        PublicEngagementEventRequest: schemaFor(publicEngagementEventRequestSchema),
-        PublicEngagementEventResponse: schemaFor(publicEngagementEventResponseSchema),
-        PublicError: schemaFor(publicErrorSchema),
-        PublicMorningBriefReady: {
-          ...(schemaFor(publicMorningBriefReadySchema) as JsonRecord),
-          'x-waldo-invariants': [
-            'source_updated_at <= generated_at',
-            'generated_at <= as_of',
-            'generated_at < stale_at',
-            'freshness = fresh iff as_of < stale_at; otherwise stale',
-          ],
-        },
-        PublicMorningBriefPending: schemaFor(publicMorningBriefPendingSchema),
-        PublicMorningBriefEmpty: schemaFor(publicMorningBriefEmptySchema),
-        PublicMorningBriefResponse: {
-          ...(schemaFor(publicMorningBriefResponseSchema) as JsonRecord),
-          'x-waldo-invariants': [
-            'ready.source_updated_at <= ready.generated_at',
-            'ready.generated_at <= ready.as_of',
-            'ready.generated_at < ready.stale_at',
-            'ready.freshness = fresh iff ready.as_of < ready.stale_at; otherwise stale',
-          ],
-        },
-        WaldoProblemV1: schemaFor(waldoProblemV1Schema),
-        WaldoUnauthorizedProblemV1: schemaFor(waldoUnauthorizedProblemV1Schema),
-        WaldoForbiddenProblemV1: schemaFor(waldoForbiddenProblemV1Schema),
-        WaldoNotFoundProblemV1: schemaFor(waldoNotFoundProblemV1Schema),
-        WaldoNotAcceptableProblemV1: schemaFor(waldoNotAcceptableProblemV1Schema),
-        WaldoRateLimitedProblemV1: schemaFor(waldoRateLimitedProblemV1Schema),
-        WaldoInternalErrorProblemV1: schemaFor(waldoInternalErrorProblemV1Schema),
-        WaldoTemporarilyUnavailableProblemV1: schemaFor(
-          waldoTemporarilyUnavailableProblemV1Schema,
-        ),
-      },
+      ...(status === 404 ? { 'text/plain': { schema: { const: 'not found' } } } : {}),
     },
   };
 }
 
-function problemResponse(
-  description: string,
-  schemaName: string,
-  retryAfter = false,
-): JsonRecord {
+function successHeaders(route: ResponsibilityHttpRouteV01): JsonRecord {
   return {
-    description,
-    ...(retryAfter
-      ? {
-          headers: {
-            'Retry-After': {
-              required: true,
-              description: 'Must equal retry_after_seconds in the WaldoProblemV1 body.',
-              schema: { type: 'integer', minimum: 1, maximum: 300 },
-            },
-          },
-        }
-      : {}),
-    content: {
-      'application/problem+json': {
-        schema: { $ref: `#/components/schemas/${schemaName}` },
+    'Cache-Control': { required: true, schema: { const: 'private, no-store' } },
+    Vary: { required: true, schema: { const: 'Authorization, Accept' } },
+    'Waldo-Offline-Commands': { required: true, schema: { const: 'none' } },
+    'Waldo-Protocol-Version': {
+      required: true,
+      schema: { enum: route.protocolVersions },
+    },
+  };
+}
+
+function projectionParameters(): JsonRecord[] {
+  return [
+    {
+      name: 'fromExclusiveCursor', in: 'query', required: true,
+      schema: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+    },
+    {
+      name: 'limit', in: 'query', required: true,
+      schema: { type: 'integer', minimum: 1, maximum: 256 },
+    },
+    {
+      name: 'snapshotId', in: 'query', required: false,
+      schema: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' },
+    },
+  ];
+}
+
+function operationFor(route: ResponsibilityHttpRouteV01): JsonRecord {
+  const metadata = operationMetadata[route.id];
+  const versions = route.protocolVersions as readonly ProtocolVersion[];
+  const responseSchemas = metadata.responseSchemas as Readonly<
+    Partial<Record<ProtocolVersion, string>>
+  >;
+  const requestSchemas = 'requestSchemas' in metadata
+    ? metadata.requestSchemas as Readonly<Partial<Record<ProtocolVersion, string>>>
+    : undefined;
+  return {
+    operationId: metadata.operationId,
+    summary: metadata.summary,
+    description:
+      'Available only when RESPONSIBILITY_PUBLIC_API_ENABLED is exactly true. ' +
+      'Authentication, admission, owner routing, and response validation fail closed.',
+    security: [{ bearerAuth: [] }],
+    'x-waldo-feature-gate': {
+      environmentVariable: 'RESPONSIBILITY_PUBLIC_API_ENABLED',
+      enabledValue: 'true',
+      default: 'disabled',
+    },
+    'x-waldo-protocol-versions': route.protocolVersions,
+    parameters: [
+      {
+        name: 'Accept', in: 'header', required: true,
+        schema: { enum: versions.map((version) => mediaTypes[version]) },
+      },
+      ...(route.method === 'GET' ? projectionParameters() : []),
+    ],
+    ...(requestSchemas === undefined ? {} : {
+      requestBody: { required: true, content: schemaContent(versions, requestSchemas) },
+    }),
+    responses: {
+      [metadata.successStatus]: {
+        description: 'Schema-validated owner-bound result',
+        headers: successHeaders(route),
+        content: schemaContent(versions, responseSchemas),
+      },
+      ...Object.fromEntries(
+        ([400, 401, 404, 406, 409, 429, 500, 503] as const)
+          .map((status) => [status, problemResponse(status)]),
+      ),
+    },
+  };
+}
+
+export function buildPublicOpenApiDocument(
+  routeManifest: readonly ResponsibilityHttpRouteV01[] = responsibilityHttpRouteManifestV01,
+): JsonRecord {
+  const paths: JsonRecord = {};
+  for (const route of routeManifest) {
+    const path = (paths[route.path] ??= {}) as JsonRecord;
+    path[route.method.toLowerCase()] = operationFor(route);
+  }
+
+  return {
+    openapi: '3.1.0',
+    info: { title: 'Waldo Public API', version: '0.2.0' },
+    paths,
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http', scheme: 'bearer', bearerFormat: 'JWT',
+          description: 'Project Woof ES256 access token',
+        },
+      },
+      schemas: {
+        ResponsibilityCaptureRequestV01: schemaFor(responsibilityCaptureRequestSchema),
+        ResponsibilityCaptureRequestV02: schemaFor(responsibilityCaptureRequestV02Schema),
+        ResponsibilityCaptureResultV01: schemaFor(
+          responsibilityCaptureResultV01CompatibilitySchema,
+        ),
+        ResponsibilityCaptureResultV02: schemaFor(responsibilityCaptureResultV02Schema),
+        ResponsibilityProjectionPageV01: schemaFor(
+          responsibilityProjectionPageV01CompatibilitySchema,
+        ),
+        ResponsibilityProjectionPageV02: schemaFor(responsibilityProjectionPageV02Schema),
+        WorkUnitPlanningTurnRequestV03: schemaFor(workUnitPlanningTurnRequestV03Schema),
+        WorkUnitPlanningTurnResultV03: {
+          ...schemaFor(workUnitPlanningTurnResultV03Schema),
+          description:
+            'Owner-visible planning result. Provider invocation fields are inspectable execution provenance, not default product presentation.',
+          'x-waldo-presentation': 'inspectable-provenance',
+        },
+        WorkUnitPlanningCancelRequestV03: schemaFor(workUnitPlanningCancelRequestV03Schema),
+        WorkUnitPlanningCancelResultV03: schemaFor(workUnitPlanningCancelResultV03Schema),
+        WorkUnitPlanningProjectionPageV03: schemaFor(workUnitPlanningProjectionPageV03Schema),
+        ...Object.fromEntries(
+          Object.entries(responsibilityHttpProblemSchemasV01).map(([status, schema]) => [
+            `ResponsibilityHttpProblem${status}V01`,
+            schemaFor(schema),
+          ]),
+        ),
       },
     },
   };

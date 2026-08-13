@@ -319,10 +319,15 @@ describe('responsibility Worker adapter', () => {
   it('keeps the production route behind an explicit fail-closed deployment switch', async () => {
     const disabled = await worker.fetch(request(captureBody), {} as Cloudflare.Env);
     expect(disabled.status).toBe(404);
+    expect(disabled.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(disabled.headers.get('cache-control')).toBe('no-store');
+    expect(disabled.headers.get('vary')).toBe('Authorization, Accept');
+    expect(await disabled.text()).toBe('not found');
     const unconfigured = await worker.fetch(request(captureBody), {
       RESPONSIBILITY_PUBLIC_API_ENABLED: 'true',
     } as Cloudflare.Env);
     expect(unconfigured.status).toBe(503);
+    expect(unconfigured.headers.get('vary')).toBe('Authorization, Accept');
   });
 
   it('applies the edge rate limit before body parsing or authentication', async () => {

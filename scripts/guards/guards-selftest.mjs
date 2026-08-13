@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 const GUARD = 'scripts/guards/guard-health-leak.mjs';
 const FAKE_CALLBACK_GUARD = 'scripts/guards/guard-fake-callbacks.mjs';
 const DO_ONLY_RUNTIME_GUARD = 'scripts/guards/guard-do-only-runtime.mjs';
+const DO_MIGRATION_GUARD = 'scripts/guards/guard-do-migration-lineage.mjs';
 
 const LEAK_CASES = [
   { name: 'same-line assignment', code: 'const hrv = 42;\n' },
@@ -43,6 +44,26 @@ function runDoOnlyRuntimeGuardOn(root) {
   return spawnSync('node', [DO_ONLY_RUNTIME_GUARD, '--root', root], { encoding: 'utf8' });
 }
 
+function runDoMigrationGuardOn(root, baseRef) {
+  const args = [DO_MIGRATION_GUARD, '--root', root];
+  if (baseRef) args.push('--base-ref', baseRef);
+  else args.push('--allow-unversioned-fixture');
+  const env = { ...process.env };
+  delete env.GITHUB_BASE_REF;
+  delete env.WALDO_DO_MIGRATION_BASE_REF;
+  return spawnSync('node', args, { encoding: 'utf8', env });
+}
+
+function runDoMigrationGuardWithoutFixtureMode(root) {
+  const env = { ...process.env };
+  delete env.GITHUB_BASE_REF;
+  delete env.WALDO_DO_MIGRATION_BASE_REF;
+  return spawnSync('node', [DO_MIGRATION_GUARD, '--root', root], {
+    encoding: 'utf8',
+    env,
+  });
+}
+
 function reportsOnlyPath(result, path) {
   return result.status !== 0 && result.stderr.trim() === path && result.stdout.trim() === '';
 }
@@ -63,7 +84,600 @@ function withFixture(fileName, code, fn) {
   }
 }
 
+function withDoMigrationFixture(source, reservations, fn) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    const sourcePath = join(root, 'packages/runtime/src/do-schema.ts');
+    const reservationPath = join(root, 'packages/runtime/do-migration-reservations.json');
+    mkdirSync(dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, source);
+    writeFileSync(reservationPath, `${JSON.stringify(reservations, null, 2)}\n`);
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function withMissingDoMigrationInput(source, reservations, fn) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    if (source !== undefined) {
+      const sourcePath = join(root, 'packages/runtime/src/do-schema.ts');
+      mkdirSync(dirname(sourcePath), { recursive: true });
+      writeFileSync(sourcePath, source);
+    }
+    if (reservations !== undefined) {
+      const reservationPath = join(root, 'packages/runtime/do-migration-reservations.json');
+      mkdirSync(dirname(reservationPath), { recursive: true });
+      writeFileSync(reservationPath, `${JSON.stringify(reservations, null, 2)}\n`);
+    }
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function runFixtureGit(root, args) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+  }
+  return result.stdout.trim();
+}
+
+function withVersionedDoMigrationFixture(baseSource, baseReservations, source, reservations, fn) {
+  const root = mkdtempSync(join(tmpdir(), 'guard-selftest-'));
+  try {
+    const sourcePath = join(root, 'packages/runtime/src/do-schema.ts');
+    const reservationPath = join(root, 'packages/runtime/do-migration-reservations.json');
+    mkdirSync(dirname(sourcePath), { recursive: true });
+    writeFileSync(sourcePath, baseSource);
+    writeFileSync(reservationPath, `${JSON.stringify(baseReservations, null, 2)}\n`);
+    runFixtureGit(root, ['init', '--quiet']);
+    runFixtureGit(root, ['config', 'user.name', 'Guard Selftest']);
+    runFixtureGit(root, ['config', 'user.email', 'guard-selftest@example.invalid']);
+    runFixtureGit(root, ['add', '.']);
+    runFixtureGit(root, ['commit', '--quiet', '-m', 'base']);
+    const baseRef = runFixtureGit(root, ['rev-parse', 'HEAD']);
+    writeFileSync(sourcePath, source);
+    writeFileSync(reservationPath, `${JSON.stringify(reservations, null, 2)}\n`);
+    runFixtureGit(root, ['add', '.']);
+    runFixtureGit(root, ['commit', '--quiet', '--allow-empty', '-m', 'current']);
+    const headRef = runFixtureGit(root, ['rev-parse', 'HEAD']);
+    return fn(root, baseRef, headRef);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 let failures = 0;
+
+const unversionedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  runDoMigrationGuardWithoutFixtureMode,
+);
+if (
+  unversionedDoMigration.status === 0 ||
+  !unversionedDoMigration.stderr.includes('migration history is unavailable')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED implicit unversioned mode\n');
+  failures += 1;
+}
+
+const historicalNameRewrite = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = { version: 1, name: 'rewritten', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'rewritten' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (
+  historicalNameRewrite.status === 0 ||
+  !historicalNameRewrite.stderr.includes('historical migration 1 changed')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED historical rewrite\n');
+  failures += 1;
+}
+
+const historicalSqlEdit = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: ['CREATE TABLE first (id TEXT PRIMARY KEY);'],
+  down: ['DROP TABLE first;'],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: ['CREATE TABLE rewritten (id TEXT PRIMARY KEY);'],
+  down: ['DROP TABLE rewritten;'],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (!reportsClean(historicalSqlEdit)) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on historical SQL edit:\n' +
+      historicalSqlEdit.stderr,
+  );
+  failures += 1;
+}
+
+const historicalPostDeclarationSqlEdit = withVersionedDoMigrationFixture(
+  `const FIRST_UP = ['CREATE TABLE first (id TEXT PRIMARY KEY);'];
+export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: FIRST_UP,
+  down: ['DROP TABLE first;'],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `const FIRST_UP = ['CREATE TABLE first (id TEXT PRIMARY KEY);'];
+FIRST_UP[0] = 'CREATE TABLE rewritten (id TEXT PRIMARY KEY);';
+export const FIRST: DoMigration = {
+  version: 1,
+  name: 'first',
+  up: FIRST_UP,
+  down: ['DROP TABLE first;'],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (!reportsClean(historicalPostDeclarationSqlEdit)) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on out-of-scope SQL edit:\n' +
+      historicalPostDeclarationSqlEdit.stderr,
+  );
+  failures += 1;
+}
+
+const historicalAppend = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 2, name: 'second' },
+    ],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (!reportsClean(historicalAppend)) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on historical append:\n' +
+      historicalAppend.stderr,
+  );
+  failures += 1;
+}
+
+const historicalTriviaChange = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = {
+  version: 1, // comments and formatting are not executable lineage
+  name: 'first',
+  up: [],
+  down: [], // trailing commas are also non-executable trivia
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (!reportsClean(historicalTriviaChange)) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on historical trivia:\n' +
+      historicalTriviaChange.stderr,
+  );
+  failures += 1;
+}
+
+const historicalConstantRename = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const RENAMED: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [RENAMED] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef) => runDoMigrationGuardOn(root, baseRef),
+);
+if (!reportsClean(historicalConstantRename)) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on constant rename:\n' +
+      historicalConstantRename.stderr,
+  );
+  failures += 1;
+}
+
+const unavailableHistoricalBase = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root) => runDoMigrationGuardOn(root, 'missing-base-ref'),
+);
+if (
+  unavailableHistoricalBase.status === 0 ||
+  !unavailableHistoricalBase.stderr.includes('migration base ref "missing-base-ref" is unavailable')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED missing base ref\n');
+  failures += 1;
+}
+
+const currentHeadHistoricalBase = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, _baseRef, headRef) => runDoMigrationGuardOn(root, headRef),
+);
+if (
+  currentHeadHistoricalBase.status === 0 ||
+  !currentHeadHistoricalBase.stderr.includes('must be a strict ancestor of HEAD')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED current HEAD as base\n');
+  failures += 1;
+}
+
+const nonAncestorHistoricalBase = withVersionedDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  (root, baseRef, headRef) => {
+    runFixtureGit(root, ['checkout', '--quiet', baseRef]);
+    writeFileSync(join(root, 'sibling-marker.txt'), 'sibling\n');
+    runFixtureGit(root, ['add', '.']);
+    runFixtureGit(root, ['commit', '--quiet', '-m', 'sibling']);
+    const siblingRef = runFixtureGit(root, ['rev-parse', 'HEAD']);
+    runFixtureGit(root, ['checkout', '--quiet', headRef]);
+    return runDoMigrationGuardOn(root, siblingRef);
+  },
+);
+if (
+  nonAncestorHistoricalBase.status === 0 ||
+  !nonAncestorHistoricalBase.stderr.includes('must be a strict ancestor of HEAD')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED non-ancestor base\n');
+  failures += 1;
+}
+
+const duplicateDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 1, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 1, name: 'second' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  duplicateDoMigration.status === 0 ||
+  !duplicateDoMigration.stderr.includes('migration version 1 is duplicated')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED duplicate version\n');
+  failures += 1;
+}
+
+const duplicateDoMigrationName = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'same', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'same', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'same' },
+      { version: 2, name: 'same' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  duplicateDoMigrationName.status === 0 ||
+  !duplicateDoMigrationName.stderr.includes('migration name "same" is duplicated')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED duplicate name\n');
+  failures += 1;
+}
+
+const gappedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const THIRD: DoMigration = { version: 3, name: 'third', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, THIRD] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 3, name: 'third' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (gappedDoMigration.status === 0 || !gappedDoMigration.stderr.includes('reserve version 2')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED version gap\n');
+  failures += 1;
+}
+
+const reorderedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [SECOND, FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 2, name: 'second' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  reorderedDoMigration.status === 0 ||
+  !reorderedDoMigration.stderr.includes('reserve version 1')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED reordered chain\n');
+  failures += 1;
+}
+
+const unreservedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  runDoMigrationGuardOn,
+);
+if (unreservedDoMigration.status === 0 || !unreservedDoMigration.stderr.includes('unreserved')) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED unreserved migration\n');
+  failures += 1;
+}
+
+const mismatchedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'source-second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 2, name: 'reserved-second' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  mismatchedDoMigration.status === 0 ||
+  !mismatchedDoMigration.stderr.includes('does not match reservation')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED source mismatch\n');
+  failures += 1;
+}
+
+const malformedDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: '1', name: 'first' }],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  malformedDoMigration.status === 0 ||
+  !malformedDoMigration.stderr.includes('migration 1 is malformed')
+) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage MISSED malformed reservation\n',
+  );
+  failures += 1;
+}
+
+const missingDoMigrationSource = withMissingDoMigrationInput(
+  undefined,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  missingDoMigrationSource.status === 0 ||
+  !missingDoMigrationSource.stderr.includes('packages/runtime/src/do-schema.ts: required')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED missing source\n');
+  failures += 1;
+}
+
+const missingDoMigrationReservations = withMissingDoMigrationInput(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  undefined,
+  runDoMigrationGuardOn,
+);
+if (
+  missingDoMigrationReservations.status === 0 ||
+  !missingDoMigrationReservations.stderr.includes(
+    'packages/runtime/do-migration-reservations.json: required',
+  )
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage MISSED missing reservations\n');
+  failures += 1;
+}
+
+const commentSpoofedDoMigration = withDoMigrationFixture(
+  `export const FIRST = {
+  version: 99,
+  name: 'tampered',
+  /* export const FIRST: DoMigration = { version: 1, name: 'first', */
+  up: [],
+  down: [],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  runDoMigrationGuardOn,
+);
+if (
+  commentSpoofedDoMigration.status === 0 ||
+  !commentSpoofedDoMigration.stderr.includes('does not match reservation')
+) {
+  process.stderr.write('guards-selftest: guard-do-migration-lineage ACCEPTED comment spoof\n');
+  failures += 1;
+}
+
+const inlineCommentDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = {
+  version: 1, // versions remain contiguous
+  name: 'first',
+  up: [],
+  down: [],
+};
+export const DO_SCHEMA_MIGRATIONS = [FIRST] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [{ version: 1, name: 'first' }],
+  },
+  runDoMigrationGuardOn,
+);
+if (!reportsClean(inlineCommentDoMigration)) {
+  process.stderr.write(
+    'guards-selftest: guard-do-migration-lineage FALSE POSITIVE on inline comment:\n' +
+      inlineCommentDoMigration.stderr,
+  );
+  failures += 1;
+}
+
+const cleanDoMigration = withDoMigrationFixture(
+  `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };
+export const SECOND: DoMigration = { version: 2, name: 'second', up: [], down: [] };
+export const DO_SCHEMA_MIGRATIONS = [FIRST, SECOND] as const;
+`,
+  {
+    allocation: 'rebase_then_append',
+    migrations: [
+      { version: 1, name: 'first' },
+      { version: 2, name: 'second' },
+    ],
+  },
+  runDoMigrationGuardOn,
+);
+if (!reportsClean(cleanDoMigration)) {
+  process.stderr.write(
+    `guards-selftest: guard-do-migration-lineage FALSE POSITIVE on a clean chain:\n${cleanDoMigration.stderr}`,
+  );
+  failures += 1;
+}
 
 for (const c of LEAK_CASES) {
   const res = withFixture('leak.ts', c.code, runGuardOn);
