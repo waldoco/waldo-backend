@@ -15,7 +15,8 @@ describe('generate responsibility effect v0.4 fixtures', () => {
     );
     mkdirSync(directory, { recursive: true });
     const bundle = buildResponsibilityEffectV04Bundle((value) =>
-      createHash('sha256').update(value).digest('hex'));
+      createHash('sha256').update(value).digest('hex'),
+    );
     const intent = effectIntentV04Schema.parse(JSON.parse(bundle['effect-intent.valid.json']!));
     expect(intent.intentDigest).toBe(
       `sha256:${createHash('sha256')

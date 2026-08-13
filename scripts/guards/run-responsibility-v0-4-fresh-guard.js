@@ -3,6 +3,9 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const family = process.argv[2];
+if (!/^(presence-channel|execution|closure|continuity)$/.test(family ?? '')) {
+  throw new Error('unknown v0.4 fixture family');
+}
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const vitest = join(
   root,

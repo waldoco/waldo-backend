@@ -17,7 +17,8 @@ describe('generate responsibility judgment and authority v0.4 fixtures', () => {
     );
     mkdirSync(directory, { recursive: true });
     const bundle = buildResponsibilityJudgmentAuthorityV04Bundle((value) =>
-      createHash('sha256').update(value).digest('hex'));
+      createHash('sha256').update(value).digest('hex'),
+    );
     const request = judgmentRequestV04Schema.parse(
       JSON.parse(bundle['judgment-request.valid.json']!),
     );

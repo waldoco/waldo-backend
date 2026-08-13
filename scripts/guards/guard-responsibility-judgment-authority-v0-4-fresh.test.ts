@@ -14,7 +14,8 @@ describe('guard-responsibility-judgment-authority-v0-4-fresh', () => {
       import.meta.url,
     );
     const bundle = buildResponsibilityJudgmentAuthorityV04Bundle((value) =>
-      createHash('sha256').update(value).digest('hex'));
+      createHash('sha256').update(value).digest('hex'),
+    );
     expect(findFixtureBundleDrift(fileURLToPath(directory), bundle)).toEqual([]);
   });
 
@@ -22,7 +23,8 @@ describe('guard-responsibility-judgment-authority-v0-4-fresh', () => {
     const directory = mkdtempSync(join(tmpdir(), 'waldo-judgment-authority-v04-'));
     try {
       const bundle = buildResponsibilityJudgmentAuthorityV04Bundle((value) =>
-        createHash('sha256').update(value).digest('hex'));
+        createHash('sha256').update(value).digest('hex'),
+      );
       for (const [path, contents] of Object.entries(bundle)) {
         writeFileSync(join(directory, path), contents);
       }

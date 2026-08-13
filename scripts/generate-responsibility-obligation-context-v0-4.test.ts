@@ -15,7 +15,8 @@ describe('generate responsibility obligation context v0.4 fixtures', () => {
     );
     mkdirSync(directory, { recursive: true });
     const bundle = buildResponsibilityObligationContextV04Bundle((value) =>
-      createHash('sha256').update(value).digest('hex'));
+      createHash('sha256').update(value).digest('hex'),
+    );
     const context = outcomeObligationContextV04Schema.parse(
       JSON.parse(bundle['obligation-context-confirmed.valid.json']!),
     );

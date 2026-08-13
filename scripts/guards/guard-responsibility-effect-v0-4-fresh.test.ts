@@ -7,8 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { buildResponsibilityEffectV04Bundle } from '../../packages/contracts/src/protocol/responsibility-effect-v0-4-fixtures';
 import { findFixtureBundleDrift } from './fixture-bundle-freshness';
 
-const bundle = () => buildResponsibilityEffectV04Bundle((value) =>
-  createHash('sha256').update(value).digest('hex'));
+const bundle = () =>
+  buildResponsibilityEffectV04Bundle((value) => createHash('sha256').update(value).digest('hex'));
 
 describe('guard-responsibility-effect-v0-4-fresh', () => {
   it('keeps committed fixtures byte-for-byte aligned with the source builder', () => {

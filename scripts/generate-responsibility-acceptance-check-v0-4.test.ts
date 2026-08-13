@@ -11,7 +11,8 @@ describe('generate responsibility acceptance check v0.4 fixtures', () => {
     );
     mkdirSync(directory, { recursive: true });
     const bundle = buildResponsibilityAcceptanceCheckV04Bundle((value) =>
-      createHash('sha256').update(value).digest('hex'));
+      createHash('sha256').update(value).digest('hex'),
+    );
     for (const [path, contents] of Object.entries(bundle)) {
       writeFileSync(new URL(path, directory), contents);
     }
