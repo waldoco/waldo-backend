@@ -1,0 +1,19 @@
+{
+  "protocolVersion": "0.4",
+  "family": "responsibility-execution",
+  "files": {
+    "execution-request.schema.json": "sha256:f0d500b190169f4ed3c78c803924778f2ffe084f76e96ae988dd4cee04f83fb2",
+    "execution-lease.schema.json": "sha256:45207550d887177878d5e8e92e7a4fff774d95f04f6aad281190490e92fedcf9",
+    "execution-attempt.schema.json": "sha256:9b991af844c115b65a51e88e01827ef69bc191a01157f0d7570fd7178de08ccb",
+    "execution-session.schema.json": "sha256:dae3c5ec10d69c35b39e8e605bbd5ae4ac1213066dba647e5574be3faea6d4ee",
+    "executor-observation.schema.json": "sha256:08b37850be80ca7e95582b97db4f6e48bc64f73194ad1ce6e62ba38af504046a",
+    "execution-reconciliation.schema.json": "sha256:df0ed95f92383d801ec6fa8aaa9c0a0c2c8dcdd133359c582cd3b5f00e23af05",
+    "execution-request.valid.json": "sha256:42ec99a6f7d683305d51c8ab9fe161955b7b4ea8707fd9efb86f916f26fc9a25",
+    "execution-lease.valid.json": "sha256:b9492af4c6408313e966f3e8a0e830f8922e8bafe865306f382ce750ed7c0fd0",
+    "execution-attempt.valid.json": "sha256:0bda5ba60fc82fcf8e5fe041e275c46209f0cb551bc725a49ad09891c24b5def",
+    "execution-session.valid.json": "sha256:eb9e07fe954fdace0afebe27b6f0c8e6989dbd3c4b5f8e6c517a156c94a82f5c",
+    "executor-observation.valid.json": "sha256:545570dcf33611be4fa07ee89cd4663a18ba6cf58fe9f70238ace3f88deb03c3",
+    "execution-reconciliation.valid.json": "sha256:92558f81aab30512238c4a20389d3308937fc3f979c98f6a1c758e0a8fa0081a",
+    "execution.rejections.json": "sha256:1d4cbfa60cee2c0763ffc0f546e86a6a06dc1250b8c9f8220136edd9af1027c6"
+  }
+}

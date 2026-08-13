@@ -1,0 +1,15 @@
+{
+  "protocolVersion": "0.4",
+  "family": "responsibility-closure",
+  "files": {
+    "candidate-evidence.schema.json": "sha256:bd84bae5a8998fb704b48975a4b0ff9a82a83d6cf8f8227345eaf6d2658060de",
+    "evidence.schema.json": "sha256:17159b7a6fb35572cba15adb9cb6ad88106dbcc8a2280495a45724f6d8c1adef",
+    "verification.schema.json": "sha256:9c251b9465fb2a1a49d58dff4813b8f0442ef0dfdb5a8113f43fb4a9c2caefa0",
+    "acceptance.schema.json": "sha256:743609aa61096b586b02833fad733b8c7fc4bffd7e0be5910416152abeeec526",
+    "candidate-evidence.valid.json": "sha256:aeb71fb259450d5553f000e963947ac6a64e984ab6308ac7dcd9b36e97051b5e",
+    "evidence.valid.json": "sha256:5769e0962d037171fcf13447234f486a2deeda66a625918eb3ce8332fd2d9306",
+    "verification-indeterminate.valid.json": "sha256:4d2991858e920dcfb42da863af971a0ed094ae9ca293f5710e034c4fb1488bea",
+    "acceptance.valid.json": "sha256:6ccd48180daa544501e3a3c306199788e4466429457b2f242a6935113fbfad6d",
+    "closure.rejections.json": "sha256:43b26ab36fd6a2918ed63af0d83b0bc113af4fb20fe8cf7fa480010469d625ce"
+  }
+}

@@ -100,6 +100,14 @@ function fixtureAjv(): Ajv2020 {
 }
 
 describe('responsibility judgment and authority v0.4', () => {
+  it('rejects displayed authority choices that cannot be honored', () => {
+    const bundle = buildResponsibilityJudgmentAuthorityV04Bundle((value) => createHash('sha256').update(value).digest('hex'));
+    const request = JSON.parse(bundle['judgment-request.valid.json']!);
+    expect(judgmentRequestV04Schema.safeParse({ ...request, requestedAuthority: null }).success).toBe(false);
+    expect(judgmentRequestV04Schema.safeParse({ ...request, subject: { kind: 'outcome', id: 'outcome', revision: 1 } }).success).toBe(false);
+    expect(judgmentRequestV04Schema.safeParse({ ...request, options: request.options.map((option: { authorityDisposition: string }) => ({ ...option, authorityDisposition: 'refuse' })) }).success).toBe(false);
+  });
+
   it('lets a surface answer only an exact JudgmentRequest revision', () => {
     const answer = {
       protocolVersion: '0.4',

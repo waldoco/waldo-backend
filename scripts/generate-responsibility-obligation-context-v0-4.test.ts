@@ -17,9 +17,9 @@ describe('generate responsibility obligation context v0.4 fixtures', () => {
     const bundle = buildResponsibilityObligationContextV04Bundle((value) =>
       createHash('sha256').update(value).digest('hex'));
     const context = outcomeObligationContextV04Schema.parse(
-      JSON.parse(bundle['obligation-context-declared.valid.json']!),
+      JSON.parse(bundle['obligation-context-confirmed.valid.json']!),
     );
-    if (context.acceptanceCriteria.state !== 'declared') {
+    if (context.acceptanceCriteria.state !== 'confirmed') {
       throw new Error('generated declared fixture must retain declared criteria');
     }
     expect(context.acceptanceCriteria.digest).toBe(

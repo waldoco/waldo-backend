@@ -7,23 +7,23 @@
   "files": [
     {
       "path": "obligation-context-absent.valid.json",
-      "sha256": "sha256:3327e961d3b8cc3b38f9a7359e2271f40e77cde442cc17aacd0db9c958124e44"
+      "sha256": "sha256:c8604586c85ffa00b2fcfafaf8e1f3580bf80ec04b95f1e6d662af585f33b192"
     },
     {
-      "path": "obligation-context-declared.valid.json",
-      "sha256": "sha256:73f5bd69c3cf149ccf2c5820eb6f8530bfa127f47ca360c93dd8b316c9e9f535"
+      "path": "obligation-context-confirmed.valid.json",
+      "sha256": "sha256:f7c336a3658b0c814ca137a9e6e6452caca0ee7cd5aee66d8d1a8280b9993528"
     },
     {
       "path": "obligation-context-declined.valid.json",
-      "sha256": "sha256:752c28e0d591d6b3dce080dd868c1d60a2dcc7275f333df87975a7808d786c35"
+      "sha256": "sha256:b5b92ce80c2c4d52b490298a3a40d154574001ae27a0d3a6756f66028b81e8c1"
     },
     {
       "path": "obligation-context.rejections.json",
-      "sha256": "sha256:b9040abe8b862deb8ee3f4cc1865319584882f147caccd0d7a228959f15c3698"
+      "sha256": "sha256:3bf3b6273b457788faa8fa4c35f8173edc5d5dce86d7301a1eabf3bef82b2e85"
     },
     {
       "path": "obligation-context.schema.json",
-      "sha256": "sha256:2fe723a7b04812e5b44434d15b8cc3ed3340b6efdd66b69cd1c6e9ee801cc7b9"
+      "sha256": "sha256:985cc69676d4070bb364e707a75184620951d08b59b2e90ec7f5c6149e54a21b"
     }
   ]
 }

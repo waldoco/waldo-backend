@@ -1,0 +1,25 @@
+{
+  "protocolVersion": "0.4",
+  "presence": {
+    "category": "presence",
+    "id": "presence_fixture",
+    "registrationRevision": 1
+  },
+  "adapter": {
+    "category": "channel_adapter",
+    "id": "fake_channel_fixture",
+    "version": "1.0.0",
+    "manifest": {
+      "id": "channel_manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "externalAccountRef": "external_account_fixture",
+  "state": "linked",
+  "capabilityManifest": {
+    "id": "channel_manifest_fixture",
+    "version": "1.0.0",
+    "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+  }
+}

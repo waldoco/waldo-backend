@@ -1,0 +1,14 @@
+{
+  "protocolVersion": "0.4",
+  "id": "reconciliation_fixture",
+  "ownerId": "owner_fixture",
+  "attemptId": "attempt_fixture",
+  "leaseId": "lease_fixture",
+  "fencingGeneration": 1,
+  "cancellationGeneration": 1,
+  "state": "indeterminate",
+  "basisObservationIds": [
+    "observation_fixture"
+  ],
+  "checkedAt": "2026-08-13T12:00:04.000Z"
+}

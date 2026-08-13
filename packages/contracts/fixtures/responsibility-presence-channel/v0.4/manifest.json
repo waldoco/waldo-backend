@@ -1,0 +1,17 @@
+{
+  "protocolVersion": "0.4",
+  "family": "responsibility-presence-channel",
+  "files": {
+    "surface-capability.schema.json": "sha256:91f5950efb294b42cba2544088c36ff790d36486baf6870dbed99de5d179f2b0",
+    "channel-presence.schema.json": "sha256:b11d7ba096a56dc1e09bbd9d2100450b1e34f96d900a7a35823461fdd1c8e49d",
+    "normalized-inbound.schema.json": "sha256:325884920f152fdf059e817344c52d648a4454f17abcdaf880547aea0ad26a47",
+    "delivery-intent.schema.json": "sha256:f1ee7cb6cf8f35abc9257aadba7a51b1859fd71c66f38eee679e48eb11617191",
+    "delivery-settlement.schema.json": "sha256:db57ad4a8c4f3c37383d2fe3845a5013c83e1a74d013ecfdf0242fc035c3a598",
+    "presence-channel.rejections.json": "sha256:ca682d78c75a408ccffd5f36cba515cdf0a45b10df0d7faf80d9216562b12439",
+    "surface-capability.valid.json": "sha256:8f8a3fca1f8a3d15c1c98a08568fa752bb9761a105043478dc284bb90a74fbac",
+    "channel-presence.valid.json": "sha256:6e2ca62165b228186ef67235a609651c1092231d2b97511cc6751405fbdc2cb9",
+    "normalized-inbound.valid.json": "sha256:fc3f498085866d344d2d60670647ae42815153affaa33eea109bc295806e5fcb",
+    "delivery-intent.valid.json": "sha256:da40f85fecc7de03544f393451e39d92fcb747ed9fda7639356f5a108a12bb34",
+    "delivery-settlement.valid.json": "sha256:b844637baf211576beacfccf0c6ab89617bc8a5fd8a85634dcebca173a7a1d85"
+  }
+}

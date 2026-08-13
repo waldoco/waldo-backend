@@ -1,0 +1,116 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "provider-environment-confusion",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "execution_request_fixture",
+        "ownerId": "owner_fixture",
+        "outcome": {
+          "id": "aggregate_fixture",
+          "revision": 1,
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "workUnit": {
+          "id": "aggregate_fixture",
+          "revision": 1,
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "provider": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "environment": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "authorityCeiling": {
+          "tools": [],
+          "connectors": [],
+          "externalEffects": "none",
+          "outcomeMutation": "none",
+          "evidenceAdmission": "none",
+          "verification": "none",
+          "acceptance": "none",
+          "closure": "none"
+        },
+        "contextProjectionRef": "context_fixture",
+        "contextProjectionDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "cancellationGeneration": 1,
+        "requestedAt": "2026-08-13T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "stale-fence-observation",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "observation_fixture",
+        "ownerId": "owner_fixture",
+        "attemptId": "attempt_fixture",
+        "environment": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "leaseId": "lease_fixture",
+        "fencingGeneration": 2,
+        "cancellationGeneration": 1,
+        "sequence": 1,
+        "kind": "ended",
+        "payloadRef": null,
+        "payloadDigest": null,
+        "observedAt": "2026-08-13T12:00:03.000Z"
+      }
+    },
+    {
+      "name": "executor-done-closes-outcome",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "observation_fixture",
+        "ownerId": "owner_fixture",
+        "attemptId": "attempt_fixture",
+        "environment": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "leaseId": "lease_fixture",
+        "fencingGeneration": 1,
+        "cancellationGeneration": 1,
+        "sequence": 1,
+        "kind": "ended",
+        "payloadRef": null,
+        "payloadDigest": null,
+        "observedAt": "2026-08-13T12:00:03.000Z",
+        "outcomeState": "completed"
+      }
+    }
+  ]
+}

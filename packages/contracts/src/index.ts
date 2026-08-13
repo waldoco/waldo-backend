@@ -132,6 +132,15 @@ export type {
 } from './protocol/responsibility-handshake-v0-2';
 export * from './protocol/responsibility-planning-turn-v0-3';
 export * from './protocol/responsibility-planning-turn-v0-3-fixtures';
+export * from './protocol/responsibility-protocol-v0-4';
+export * from './protocol/responsibility-presence-channel-v0-4';
+export * from './protocol/responsibility-presence-channel-v0-4-fixtures';
+export * from './protocol/responsibility-execution-v0-4';
+export * from './protocol/responsibility-execution-v0-4-fixtures';
+export * from './protocol/responsibility-closure-v0-4';
+export * from './protocol/responsibility-closure-v0-4-fixtures';
+export * from './protocol/responsibility-continuity-v0-4';
+export * from './protocol/responsibility-continuity-v0-4-fixtures';
 export * from './protocol/responsibility-acceptance-check-v0-4';
 export * from './protocol/responsibility-acceptance-check-v0-4-fixtures';
 export * from './protocol/responsibility-judgment-authority-v0-4';

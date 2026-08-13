@@ -45,8 +45,11 @@ function declaredContext() {
     ownerId: 'owner_01',
     revision: 1,
     outcome: { id: 'outcome_01', revision: 3 },
+    accountability: { kind: 'self' },
+    consequence: { kind: 'missed_opportunity', statementRef: 'consequence_01', statementDigest: `sha256:${'c'.repeat(64)}` },
+    temporalBinding: { kind: 'hard_deadline', at: '2026-08-15T18:00:00.000Z' },
     acceptanceCriteria: {
-      state: 'declared',
+      state: 'confirmed',
       revision: 2,
       digest: `sha256:${'0'.repeat(64)}`,
       checks: [{
@@ -78,6 +81,20 @@ function declaredContext() {
 }
 
 describe('responsibility obligation context v0.4', () => {
+  it('models owner-stated obligation semantics without authority or ranking power', () => {
+    const context = declaredContext();
+    expect(context.accountability).toEqual({ kind: 'self' });
+    expect(context.temporalBinding.kind).toBe('hard_deadline');
+    expect(outcomeObligationContextV04Schema.safeParse({ ...context, capabilityEligibility: 'high' }).success).toBe(false);
+    expect(outcomeObligationContextV04Schema.safeParse({ ...context, authorityGrant: 'grant' }).success).toBe(false);
+  });
+
+  it('keeps declared proposals distinct from confirmed strict checks', () => {
+    const context = declaredContext();
+    expect(outcomeObligationContextV04Schema.parse({ ...context, acceptanceCriteria: {
+      state: 'declared', revision: 3, proposals: [{ id: 'proposal', revision: 1, digest: `sha256:${'d'.repeat(64)}` }],
+    } }).acceptanceCriteria.state).toBe('declared');
+  });
   it('binds owner-stated criteria to the exact canonical Outcome revision and digest', () => {
     const verifier = createOutcomeObligationContextBindingVerifierV04(sha256Hex);
     const context = declaredContext();
@@ -97,7 +114,7 @@ describe('responsibility obligation context v0.4', () => {
         digest: `sha256:${'f'.repeat(64)}`,
       },
     }, binding)).toThrow(
-      'declared acceptance criteria digest must match canonical criteria bytes',
+      'confirmed acceptance criteria digest must match canonical criteria bytes',
     );
   });
 
@@ -108,15 +125,18 @@ describe('responsibility obligation context v0.4', () => {
       ownerId: 'owner_01',
       revision: 1,
       outcome: { id: 'outcome_01', revision: 3 },
+      accountability: { kind: 'self' },
+      consequence: { kind: 'missed_opportunity', statementRef: 'consequence_01', statementDigest: `sha256:${'c'.repeat(64)}` },
+      temporalBinding: { kind: 'open_ended' },
       recordedAt: '2026-08-08T18:00:00.000Z',
     } as const;
     const declared = declaredContext();
-    if (declared.acceptanceCriteria.state !== 'declared') {
+    if (declared.acceptanceCriteria.state !== 'confirmed') {
       throw new Error('declared fixture must retain declared criteria');
     }
     const verifier = createOutcomeObligationContextBindingVerifierV04(sha256Hex);
     const binding = { ownerId: 'owner_01', outcome: { id: 'outcome_01', revision: 3 } };
-    for (const state of ['absent', 'declined'] as const) {
+    for (const state of ['absent_by_owner_choice', 'declined'] as const) {
       const context = { ...base, acceptanceCriteria: { state } };
       expect(outcomeObligationContextV04Schema.parse(context)).toEqual(context);
       expect(verifier.verifyContext(context, binding)).toEqual(context);
@@ -132,7 +152,7 @@ describe('responsibility obligation context v0.4', () => {
 
   it('requires an explicit deterministic read-back or artifact method for every criterion', () => {
     const context = declaredContext();
-    if (context.acceptanceCriteria.state !== 'declared') {
+    if (context.acceptanceCriteria.state !== 'confirmed') {
       throw new Error('declared fixture must retain declared criteria');
     }
     const [check] = context.acceptanceCriteria.checks;
@@ -206,7 +226,7 @@ describe('responsibility obligation context v0.4', () => {
 
   it('rejects prohibited nested fields at criterion and deterministic method boundaries', () => {
     const context = declaredContext();
-    if (context.acceptanceCriteria.state !== 'declared') {
+    if (context.acceptanceCriteria.state !== 'confirmed') {
       throw new Error('declared fixture must retain declared criteria');
     }
     const [check] = context.acceptanceCriteria.checks;
@@ -278,7 +298,7 @@ describe('responsibility obligation context v0.4', () => {
 
   it('accepts a 2,048-character criterion and rejects 2,049 at the exact field', () => {
     const context = declaredContext();
-    if (context.acceptanceCriteria.state !== 'declared') {
+    if (context.acceptanceCriteria.state !== 'confirmed') {
       throw new Error('declared fixture must retain declared criteria');
     }
     const [check] = context.acceptanceCriteria.checks;
@@ -313,6 +333,9 @@ describe('responsibility obligation context v0.4', () => {
     const reordered = {
       recordedAt: context.recordedAt,
       acceptanceCriteria: context.acceptanceCriteria,
+      temporalBinding: context.temporalBinding,
+      consequence: context.consequence,
+      accountability: context.accountability,
       outcome: {
         revision: context.outcome.revision,
         id: context.outcome.id,
@@ -329,7 +352,7 @@ describe('responsibility obligation context v0.4', () => {
       ...context,
       outcome: { ...context.outcome, revision: 4 },
     })).not.toBe(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(context));
-    if (context.acceptanceCriteria.state !== 'declared') {
+    if (context.acceptanceCriteria.state !== 'confirmed') {
       throw new Error('declared fixture must retain declared criteria');
     }
     expect(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest({
@@ -355,10 +378,10 @@ describe('responsibility obligation context v0.4', () => {
         canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(value),
       )}`,
     ])).toEqual([
-      ['base', 'sha256:20102bafc1b06829d5c335235c83ad148dec699b89b904dc1d90577c74b51729'],
-      ['ownerId', 'sha256:b4049c2ee999ad8f901f9be060b5606d534b85d40d7288b21a4a034ff66e1db0'],
-      ['outcome.id', 'sha256:ab0c866fe58a9325d10093341388b2b93e2b7bc79b8b47f232a727d05565b642'],
-      ['outcome.revision', 'sha256:8cd30d751791ebb56d0e2aca173e5ec201302e89afdffe06fc570f49fe5827e7'],
+      ['base', 'sha256:600a834169e436f9a5abccd86f200498dc6f80f5d8320d9f331e9207813871d4'],
+      ['ownerId', 'sha256:6c47e60c08f458e4853225074be012e2b58f471131ad4317bacadab6bb71595b'],
+      ['outcome.id', 'sha256:4f0eaf2694918a56d6c668a7f96561e2b81740e71889e2279e0b9e1bd98ba673'],
+      ['outcome.revision', 'sha256:6f5caa371aca770684a67a761f5f07bc3138f3a5f85ea796ffc7bb3b4528dd13'],
     ]);
   });
 
@@ -372,7 +395,7 @@ describe('responsibility obligation context v0.4', () => {
     ]) ajv.addKeyword(keyword);
     const validate = ajv.compile(schema);
     for (const path of [
-      'obligation-context-declared.valid.json',
+      'obligation-context-confirmed.valid.json',
       'obligation-context-absent.valid.json',
       'obligation-context-declined.valid.json',
     ]) {

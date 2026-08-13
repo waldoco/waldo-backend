@@ -34,8 +34,39 @@ export const outcomeAcceptanceCriterionV04Schema = z.strictObject({
 });
 export type OutcomeAcceptanceCriterionV04 = z.infer<typeof outcomeAcceptanceCriterionV04Schema>;
 
+export const obligationAccountabilityV04Schema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('self') }),
+  z.strictObject({ kind: z.literal('person'), ref: protocolIdSchema }),
+  z.strictObject({ kind: z.literal('organization'), ref: protocolIdSchema }),
+]);
+
+export const obligationConsequenceV04Schema = z.strictObject({
+  kind: z.enum(['commitment_breach', 'missed_opportunity', 'wellbeing_cost', 'other']),
+  statementRef: protocolIdSchema,
+  statementDigest: protocolDigestSchema,
+});
+
+export const obligationTemporalBindingV04Schema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('hard_deadline'), at: iso8601Schema }),
+  z.strictObject({ kind: z.literal('soft_window'), startsAt: iso8601Schema, endsAt: iso8601Schema })
+    .refine((value) => Date.parse(value.endsAt) > Date.parse(value.startsAt), {
+      path: ['endsAt'], error: 'soft window must end after it starts',
+    }),
+  z.strictObject({ kind: z.literal('open_ended') }),
+]);
+
 export const declaredOutcomeAcceptanceCriteriaV04Schema = z.strictObject({
   state: z.literal('declared'),
+  revision: positiveRevisionV04Schema,
+  proposals: z.array(z.strictObject({
+    id: protocolIdSchema,
+    revision: positiveRevisionV04Schema,
+    digest: protocolDigestSchema,
+  })).min(1).max(16),
+});
+
+export const confirmedOutcomeAcceptanceCriteriaV04Schema = z.strictObject({
+  state: z.literal('confirmed'),
   revision: positiveRevisionV04Schema,
   digest: protocolDigestSchema,
   checks: z.array(outcomeAcceptanceCriterionV04Schema).min(1).max(16),
@@ -45,7 +76,7 @@ export type DeclaredOutcomeAcceptanceCriteriaV04 = z.infer<
 >;
 
 export const absentOutcomeAcceptanceCriteriaV04Schema = z.strictObject({
-  state: z.literal('absent'),
+  state: z.literal('absent_by_owner_choice'),
 });
 
 export const declinedOutcomeAcceptanceCriteriaV04Schema = z.strictObject({
@@ -54,6 +85,7 @@ export const declinedOutcomeAcceptanceCriteriaV04Schema = z.strictObject({
 
 export const outcomeAcceptanceCriteriaStateV04Schema = z.discriminatedUnion('state', [
   declaredOutcomeAcceptanceCriteriaV04Schema,
+  confirmedOutcomeAcceptanceCriteriaV04Schema,
   absentOutcomeAcceptanceCriteriaV04Schema,
   declinedOutcomeAcceptanceCriteriaV04Schema,
 ]);
@@ -71,6 +103,9 @@ export const outcomeObligationContextV04Schema = z.strictObject({
   ownerId: protocolIdSchema,
   revision: positiveRevisionV04Schema,
   outcome: outcomeObligationBindingV04Schema.shape.outcome,
+  accountability: obligationAccountabilityV04Schema,
+  consequence: obligationConsequenceV04Schema,
+  temporalBinding: obligationTemporalBindingV04Schema,
   acceptanceCriteria: outcomeAcceptanceCriteriaStateV04Schema,
   recordedAt: iso8601Schema,
 });
@@ -80,8 +115,8 @@ export function canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(
   value: unknown,
 ): string {
   const context = outcomeObligationContextV04Schema.parse(value);
-  if (context.acceptanceCriteria.state !== 'declared') {
-    throw new TypeError('only declared acceptance criteria have canonical digest bytes');
+  if (context.acceptanceCriteria.state !== 'confirmed') {
+    throw new TypeError('only confirmed acceptance criteria have canonical digest bytes');
   }
   const { digest: _assertedDigest, ...criteria } = context.acceptanceCriteria;
   return canonicalizeProtocolJson({
@@ -103,7 +138,7 @@ export class OutcomeObligationContextBindingMismatchError extends Error {
 
 export class DeclaredOutcomeAcceptanceCriteriaDigestMismatchError extends Error {
   constructor() {
-    super('declared acceptance criteria digest must match canonical criteria bytes');
+    super('confirmed acceptance criteria digest must match canonical criteria bytes');
     this.name = 'DeclaredOutcomeAcceptanceCriteriaDigestMismatchError';
   }
 }
@@ -126,7 +161,7 @@ export function createOutcomeObligationContextBindingVerifierV04(
         context.outcome.revision !== binding.outcome.revision) {
       throw new OutcomeObligationContextBindingMismatchError();
     }
-    if (context.acceptanceCriteria.state === 'declared') {
+    if (context.acceptanceCriteria.state === 'confirmed') {
       const digestHex = sha256Hex(
         canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(context),
       );

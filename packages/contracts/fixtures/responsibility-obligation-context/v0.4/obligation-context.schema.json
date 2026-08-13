@@ -31,6 +31,137 @@
       ],
       "additionalProperties": false
     },
+    "accountability": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "self"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "person"
+            },
+            "ref": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "organization"
+            },
+            "ref": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "consequence": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "commitment_breach",
+            "missed_opportunity",
+            "wellbeing_cost",
+            "other"
+          ]
+        },
+        "statementRef": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "statementDigest": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "kind",
+        "statementRef",
+        "statementDigest"
+      ],
+      "additionalProperties": false
+    },
+    "temporalBinding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "hard_deadline"
+            },
+            "at": {
+              "$ref": "#/$defs/__schema3"
+            }
+          },
+          "required": [
+            "kind",
+            "at"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "startsAt": {
+              "$ref": "#/$defs/__schema3"
+            },
+            "endsAt": {
+              "$ref": "#/$defs/__schema3"
+            }
+          },
+          "required": [
+            "kind",
+            "startsAt",
+            "endsAt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "open_ended"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
     "acceptanceCriteria": {
       "oneOf": [
         {
@@ -43,6 +174,32 @@
             "revision": {
               "$ref": "#/$defs/__schema1"
             },
+            "proposals": {
+              "minItems": 1,
+              "maxItems": 16,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema5"
+              }
+            }
+          },
+          "required": [
+            "state",
+            "revision",
+            "proposals"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "confirmed"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema1"
+            },
             "digest": {
               "$ref": "#/$defs/__schema2"
             },
@@ -51,7 +208,7 @@
               "maxItems": 16,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema3"
+                "$ref": "#/$defs/__schema6"
               }
             }
           },
@@ -68,7 +225,7 @@
           "properties": {
             "state": {
               "type": "string",
-              "const": "absent"
+              "const": "absent_by_owner_choice"
             }
           },
           "required": [
@@ -92,9 +249,7 @@
       ]
     },
     "recordedAt": {
-      "type": "string",
-      "format": "date-time",
-      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+      "$ref": "#/$defs/__schema3"
     }
   },
   "required": [
@@ -103,6 +258,9 @@
     "ownerId",
     "revision",
     "outcome",
+    "accountability",
+    "consequence",
+    "temporalBinding",
     "acceptanceCriteria",
     "recordedAt"
   ],
@@ -124,6 +282,35 @@
       "pattern": "^sha256:[a-f0-9]{64}$"
     },
     "__schema3": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema4": {
+      "type": "string",
+      "const": "soft_window"
+    },
+    "__schema5": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema6": {
       "type": "object",
       "properties": {
         "id": {

@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "presence": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "const": "presence"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "registrationRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "category",
+        "id",
+        "registrationRevision"
+      ],
+      "additionalProperties": false
+    },
+    "adapter": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "const": "channel_adapter"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "version": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "manifest": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "category",
+        "id",
+        "version",
+        "manifest"
+      ],
+      "additionalProperties": false
+    },
+    "externalAccountRef": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "linked",
+        "revoked",
+        "blocked"
+      ]
+    },
+    "capabilityManifest": {
+      "$ref": "#/$defs/__schema1"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "presence",
+    "adapter",
+    "externalAccountRef",
+    "state",
+    "capabilityManifest"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema1": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "version": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-presence-channel:0.4:channel-presence"
+}

@@ -1,0 +1,94 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "provider-self-acceptance",
+      "value": {
+        "protocolVersion": "0.4",
+        "submissionId": "submission_fixture",
+        "source": {
+          "kind": "provider",
+          "id": "provider_fixture",
+          "version": "1.0.0"
+        },
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_fixture",
+          "revision": 1
+        },
+        "acceptanceCheckId": "check_fixture",
+        "claim": {
+          "ref": "claim_fixture",
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "artifactRefs": [],
+        "observedAt": "2026-08-13T12:00:00.000Z",
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "name": "unavailable-as-passed",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "verification_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture",
+          "revision": 1
+        },
+        "acceptanceCheck": {
+          "id": "check_fixture",
+          "revision": 1,
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "evidence": [
+          {
+            "id": "evidence_fixture",
+            "revision": 1,
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        ],
+        "evidenceSetDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "verifier": {
+          "id": "verifier_fixture",
+          "version": "1.0.0",
+          "independentFromProducer": false,
+          "disclosureRef": "disclosure_fixture"
+        },
+        "methodVersion": "1.0.0",
+        "state": "passed",
+        "findingsRef": null,
+        "findingsDigest": null,
+        "verifiedAt": "2026-08-13T12:02:00.000Z"
+      }
+    },
+    {
+      "name": "inline-evidence",
+      "value": {
+        "protocolVersion": "0.4",
+        "submissionId": "submission_fixture",
+        "source": {
+          "kind": "provider",
+          "id": "provider_fixture",
+          "version": "1.0.0"
+        },
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_fixture",
+          "revision": 1
+        },
+        "acceptanceCheckId": "check_fixture",
+        "claim": {
+          "ref": "claim_fixture",
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "artifactRefs": [],
+        "observedAt": "2026-08-13T12:00:00.000Z",
+        "inlineEvidence": {
+          "secret": true
+        }
+      }
+    }
+  ]
+}

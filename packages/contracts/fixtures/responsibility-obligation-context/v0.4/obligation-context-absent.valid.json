@@ -7,8 +7,20 @@
     "id": "outcome_fixture_01",
     "revision": 3
   },
+  "accountability": {
+    "kind": "self"
+  },
+  "consequence": {
+    "kind": "missed_opportunity",
+    "statementRef": "consequence_fixture_01",
+    "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "temporalBinding": {
+    "kind": "hard_deadline",
+    "at": "2026-08-15T18:00:00.000Z"
+  },
   "acceptanceCriteria": {
-    "state": "absent"
+    "state": "absent_by_owner_choice"
   },
   "recordedAt": "2026-08-08T18:00:00.000Z"
 }

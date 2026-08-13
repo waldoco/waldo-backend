@@ -16,10 +16,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -69,10 +81,22 @@
           "id": "outcome_fixture_01",
           "revision": 4
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -112,7 +136,7 @@
       "schema": "obligation-context.schema.json",
       "layer": "binding",
       "zodOutcome": "accept",
-      "expectedError": "declared acceptance criteria digest must match canonical criteria bytes",
+      "expectedError": "confirmed acceptance criteria digest must match canonical criteria bytes",
       "value": {
         "protocolVersion": "0.4",
         "id": "obligation_context_fixture_01",
@@ -122,8 +146,20 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
           "digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
           "checks": [
@@ -174,10 +210,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 0,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -226,10 +274,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": []
         },
         "recordedAt": "2026-08-08T18:00:00.000Z"
@@ -249,10 +309,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -278,10 +350,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -311,10 +395,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_fixture_01",
@@ -573,10 +669,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -612,10 +720,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -651,10 +771,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_artifact_fixture_01",
@@ -690,10 +822,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -728,8 +872,20 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "absent",
+          "state": "absent_by_owner_choice",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -763,6 +919,18 @@
         "outcome": {
           "id": "outcome_fixture_01",
           "revision": 3
+        },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
         },
         "acceptanceCriteria": {
           "state": "declined",
@@ -800,10 +968,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -855,10 +1035,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -908,10 +1100,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -963,10 +1167,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -1018,10 +1234,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -1073,10 +1301,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -1126,10 +1366,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -1179,10 +1431,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",
@@ -1234,10 +1498,22 @@
           "id": "outcome_fixture_01",
           "revision": 3
         },
+        "accountability": {
+          "kind": "self"
+        },
+        "consequence": {
+          "kind": "missed_opportunity",
+          "statementRef": "consequence_fixture_01",
+          "statementDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "temporalBinding": {
+          "kind": "hard_deadline",
+          "at": "2026-08-15T18:00:00.000Z"
+        },
         "acceptanceCriteria": {
-          "state": "declared",
+          "state": "confirmed",
           "revision": 2,
-          "digest": "sha256:cc095e1677ab5545e1f72cc9e8cfc971781e4ca381e95ac753538a62b8efaa7d",
+          "digest": "sha256:db07771806ce6db7ca5781a0daf827f0667afd74be734f469ffc5ae1bb5bdcdb",
           "checks": [
             {
               "id": "acceptance_check_read_back_fixture_01",

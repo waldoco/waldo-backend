@@ -7,9 +7,10 @@ import {
   protocolNameSchema,
 } from './responsibility-handshake-v0-1';
 import { responsibilityCaptureTextV02Schema } from './responsibility-handshake-v0-2';
+import { protocolVersionV04Schema } from './responsibility-protocol-v0-4';
 
 const MAX_ACCEPTANCE_CHECK_BYTES = 4_096;
-export const protocolVersionV04Schema = z.literal('0.4');
+export { protocolVersionV04Schema } from './responsibility-protocol-v0-4';
 
 function utf8ByteLength(value: string): number {
   let bytes = 0;

@@ -118,6 +118,12 @@ export const judgmentRequestV04Schema = z.strictObject({
     });
   }
   if (request.requestedAuthority !== null) {
+    if (request.subject.kind !== 'work_unit') {
+      context.addIssue({ code: 'custom', path: ['subject', 'kind'], message: 'requested authority must target an exact WorkUnit revision' });
+    }
+    if (!request.options.some((option) => option.authorityDisposition === 'grant')) {
+      context.addIssue({ code: 'custom', path: ['options'], message: 'requested authority requires at least one grant option' });
+    }
     const validUntil = Date.parse(request.requestedAuthority.validUntil);
     if (validUntil <= createdAt || validUntil > Date.parse(request.expiresAt)) {
       context.addIssue({
@@ -126,6 +132,8 @@ export const judgmentRequestV04Schema = z.strictObject({
         message: 'requested authority validity must fit within its JudgmentRequest',
       });
     }
+  } else if (request.options.some((option) => option.authorityDisposition === 'grant')) {
+    context.addIssue({ code: 'custom', path: ['options'], message: 'a grant option requires requested authority' });
   }
 });
 export type JudgmentRequestV04 = z.infer<typeof judgmentRequestV04Schema>;

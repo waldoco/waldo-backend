@@ -27,11 +27,11 @@ describe('guard-responsibility-obligation-context-v0-4-fresh', () => {
         writeFileSync(join(directory, path), contents);
       }
       writeFileSync(
-        join(directory, 'obligation-context-declared.valid.json'),
-        expected['obligation-context-declared.valid.json']!.replace(/\n/g, '\r\n'),
+        join(directory, 'obligation-context-confirmed.valid.json'),
+        expected['obligation-context-confirmed.valid.json']!.replace(/\n/g, '\r\n'),
       );
       expect(findFixtureBundleDrift(directory, expected)).toEqual([
-        'obligation-context-declared.valid.json:content',
+        'obligation-context-confirmed.valid.json:content',
       ]);
     } finally {
       rmSync(directory, { recursive: true, force: true });

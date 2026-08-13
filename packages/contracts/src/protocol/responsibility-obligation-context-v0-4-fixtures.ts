@@ -83,8 +83,15 @@ export function buildResponsibilityObligationContextV04Bundle(
     ownerId: 'owner_fixture_01',
     revision: 1,
     outcome: { id: 'outcome_fixture_01', revision: 3 },
+    accountability: { kind: 'self' },
+    consequence: {
+      kind: 'missed_opportunity',
+      statementRef: 'consequence_fixture_01',
+      statementDigest: `sha256:${'c'.repeat(64)}`,
+    },
+    temporalBinding: { kind: 'hard_deadline', at: '2026-08-15T18:00:00.000Z' },
     acceptanceCriteria: {
-      state: 'declared',
+      state: 'confirmed',
       revision: 2,
       digest: `sha256:${'0'.repeat(64)}`,
       checks: [
@@ -129,8 +136,8 @@ export function buildResponsibilityObligationContextV04Bundle(
       )}`,
     },
   });
-  if (declared.acceptanceCriteria.state !== 'declared') {
-    throw new Error('default obligation context must retain declared criteria');
+  if (declared.acceptanceCriteria.state !== 'confirmed') {
+    throw new Error('default obligation context must retain confirmed criteria');
   }
   const declaredCriteria = declared.acceptanceCriteria;
   const [readBackCheck, artifactCheck] = declaredCriteria.checks;
@@ -143,7 +150,7 @@ export function buildResponsibilityObligationContextV04Bundle(
   const absent = outcomeObligationContextV04Schema.parse({
     ...declared,
     id: 'obligation_context_absent_fixture_01',
-    acceptanceCriteria: { state: 'absent' },
+    acceptanceCriteria: { state: 'absent_by_owner_choice' },
   });
   const declined = outcomeObligationContextV04Schema.parse({
     ...declared,
@@ -154,7 +161,7 @@ export function buildResponsibilityObligationContextV04Bundle(
   const bindingError =
     'obligation context must bind canonical owner and exact Outcome id/revision';
   const digestError =
-    'declared acceptance criteria digest must match canonical criteria bytes';
+    'confirmed acceptance criteria digest must match canonical criteria bytes';
   const tooManyChecks = Array.from({ length: 17 }, (_, index) => ({
     ...readBackCheck,
     id: `acceptance_check_fixture_${String(index + 1).padStart(2, '0')}`,
@@ -165,7 +172,7 @@ export function buildResponsibilityObligationContextV04Bundle(
       outcomeObligationContextV04Schema,
       'obligation-context',
     )),
-    'obligation-context-declared.valid.json': file(declared),
+    'obligation-context-confirmed.valid.json': file(declared),
     'obligation-context-absent.valid.json': file(absent),
     'obligation-context-declined.valid.json': file(declined),
     'obligation-context.rejections.json': file(
@@ -335,7 +342,7 @@ export function buildResponsibilityObligationContextV04Bundle(
             zodOutcome: 'reject',
             value: {
               ...absent,
-              acceptanceCriteria: { state: 'absent', checks: [readBackCheck] },
+              acceptanceCriteria: { state: 'absent_by_owner_choice', checks: [readBackCheck] },
             },
           },
           {
