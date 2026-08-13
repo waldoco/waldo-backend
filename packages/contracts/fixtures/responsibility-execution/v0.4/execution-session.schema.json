@@ -145,5 +145,6 @@
       "additionalProperties": false
     }
   },
-  "$id": "urn:waldo:protocol:responsibility-execution:0.4:execution-session"
+  "$id": "urn:waldo:protocol:responsibility-execution:0.4:execution-session",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
 }

@@ -2,14 +2,17 @@
   "protocolVersion": "0.4",
   "family": "responsibility-closure",
   "files": {
-    "candidate-evidence.schema.json": "sha256:bd84bae5a8998fb704b48975a4b0ff9a82a83d6cf8f8227345eaf6d2658060de",
-    "evidence.schema.json": "sha256:17159b7a6fb35572cba15adb9cb6ad88106dbcc8a2280495a45724f6d8c1adef",
-    "verification.schema.json": "sha256:2d855339d0325780b7b7af2b3d3080249689394fc946ed55cc0a23f89e38089e",
-    "acceptance.schema.json": "sha256:743609aa61096b586b02833fad733b8c7fc4bffd7e0be5910416152abeeec526",
+    "candidate-evidence.schema.json": "sha256:eb2f15ef4225d3543a3fec363837c0ae2727583909a75abf6a9a94933607ea92",
+    "evidence.schema.json": "sha256:5a7d7335c273074111d5a7874cae82b322bb4eb757710bffcaf6b8bdf7911cc9",
+    "verification.schema.json": "sha256:3ce3842a5df4e271c8966c2cda0040fcd005db2e69c5cf4bf9a41520d74b7f58",
+    "acceptance.schema.json": "sha256:8ebb31bc45b4b5a3e6e72a829f7cf515eebfbf8bd8ecbee3e4d662f167371d4f",
+    "acceptance-command-request.schema.json": "sha256:4fb9d089eec35106f2c205535e1f733441aa0ff34d8863105209c4ff904cad88",
     "candidate-evidence.valid.json": "sha256:aeb71fb259450d5553f000e963947ac6a64e984ab6308ac7dcd9b36e97051b5e",
     "evidence.valid.json": "sha256:5769e0962d037171fcf13447234f486a2deeda66a625918eb3ce8332fd2d9306",
-    "verification-indeterminate.valid.json": "sha256:5f319196111ec5f1efc86127be5750a651c535a46e12a640ed5531367c1de1cd",
-    "acceptance.valid.json": "sha256:6ccd48180daa544501e3a3c306199788e4466429457b2f242a6935113fbfad6d",
-    "closure.rejections.json": "sha256:4c12a40c5be4cdc1235d1f1d21c8520b1fcb2d2e732343da15768f86c51a7d23"
+    "verification-indeterminate.valid.json": "sha256:c2127f65fdb69fb39c676229cb3296dcac4879831d234b04d8dd365082962dab",
+    "acceptance.valid.json": "sha256:1d02fa0b418753ae810b07a0bd7a1b5895519d65934be2f85d822f4e545741bb",
+    "acceptance-delegated.valid.json": "sha256:a34554efc62302c2e05c1f1d8f67cb5c6536985b8f14ec092d349b2567e73fd2",
+    "acceptance-command-request.valid.json": "sha256:a728251b3712ced294298560d337451558c6dbd9716f137718f0ef33b6080230",
+    "closure.rejections.json": "sha256:ab5998f2d57696f8bc25409ad58e989d9560b5eaa730e29d334946ec6d7fa73d"
   }
 }

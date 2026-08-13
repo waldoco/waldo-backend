@@ -224,5 +224,6 @@
       "additionalProperties": false
     }
   },
-  "$id": "urn:waldo:protocol:responsibility-execution:0.4:execution-request"
+  "$id": "urn:waldo:protocol:responsibility-execution:0.4:execution-request",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
 }

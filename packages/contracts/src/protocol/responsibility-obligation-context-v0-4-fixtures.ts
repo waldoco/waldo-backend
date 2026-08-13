@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest,
+  canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest,
   outcomeObligationContextV04Schema,
 } from './responsibility-obligation-context-v0-4';
 import { protocolVersionV04Schema } from './responsibility-acceptance-check-v0-4';
@@ -41,17 +41,23 @@ export const RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04 = [
   'lone-surrogate-criterion',
 ] as const;
 
-const obligationContextRejectionCasesV04Schema = z.array(z.strictObject({
-  name: z.enum(RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04),
-  schema: z.literal('obligation-context.schema.json'),
-  layer: z.enum(['schema', 'runtime', 'binding']),
-  zodOutcome: z.enum(['accept', 'reject']),
-  expectedError: z.string().min(1).max(256).optional(),
-  value: z.unknown(),
-})).length(RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04.length)
+const obligationContextRejectionCasesV04Schema = z
+  .array(
+    z.strictObject({
+      name: z.enum(RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04),
+      schema: z.literal('obligation-context.schema.json'),
+      layer: z.enum(['schema', 'runtime', 'binding']),
+      zodOutcome: z.enum(['accept', 'reject']),
+      expectedError: z.string().min(1).max(256).optional(),
+      value: z.unknown(),
+    }),
+  )
+  .length(RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04.length)
   .superRefine((cases, context) => {
-    for (const [index, expected] of
-      RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04.entries()) {
+    for (const [
+      index,
+      expected,
+    ] of RESPONSIBILITY_OBLIGATION_CONTEXT_REJECTION_NAMES_V04.entries()) {
       if (cases[index]?.name !== expected) {
         context.addIssue({
           code: 'custom',
@@ -132,7 +138,7 @@ export function buildResponsibilityObligationContextV04Bundle(
     acceptanceCriteria: {
       ...declaredCandidate.acceptanceCriteria,
       digest: `sha256:${hashHex(
-        canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(declaredCandidate),
+        canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(declaredCandidate),
       )}`,
     },
   });
@@ -141,8 +147,10 @@ export function buildResponsibilityObligationContextV04Bundle(
   }
   const declaredCriteria = declared.acceptanceCriteria;
   const [readBackCheck, artifactCheck] = declaredCriteria.checks;
-  if (readBackCheck?.verificationMethod.kind !== 'deterministic_read_back' ||
-      artifactCheck?.verificationMethod.kind !== 'deterministic_artifact_check') {
+  if (
+    readBackCheck?.verificationMethod.kind !== 'deterministic_read_back' ||
+    artifactCheck?.verificationMethod.kind !== 'deterministic_artifact_check'
+  ) {
     throw new Error('default obligation context must retain deterministic criteria methods');
   }
   const { verificationMethod: _method, ...checkWithoutMethod } = readBackCheck;
@@ -158,20 +166,17 @@ export function buildResponsibilityObligationContextV04Bundle(
     acceptanceCriteria: { state: 'declined' },
   });
 
-  const bindingError =
-    'obligation context must bind canonical owner and exact Outcome id/revision';
-  const digestError =
-    'confirmed acceptance criteria digest must match canonical criteria bytes';
+  const bindingError = 'obligation context must bind canonical owner and exact Outcome id/revision';
+  const digestError = 'confirmed acceptance criteria digest must match canonical criteria bytes';
   const tooManyChecks = Array.from({ length: 17 }, (_, index) => ({
     ...readBackCheck,
     id: `acceptance_check_fixture_${String(index + 1).padStart(2, '0')}`,
   }));
 
   const files: Record<string, string> = {
-    'obligation-context.schema.json': file(schema(
-      outcomeObligationContextV04Schema,
-      'obligation-context',
-    )),
+    'obligation-context.schema.json': file(
+      schema(outcomeObligationContextV04Schema, 'obligation-context'),
+    ),
     'obligation-context-confirmed.valid.json': file(declared),
     'obligation-context-absent.valid.json': file(absent),
     'obligation-context-declined.valid.json': file(declined),
@@ -251,13 +256,15 @@ export function buildResponsibilityObligationContextV04Bundle(
               ...declared,
               acceptanceCriteria: {
                 ...declaredCriteria,
-                checks: [{
-                  ...readBackCheck,
-                  verificationMethod: {
-                    kind: 'declared_semantic_check',
-                    capability: 'artifact.semantic.verify',
+                checks: [
+                  {
+                    ...readBackCheck,
+                    verificationMethod: {
+                      kind: 'declared_semantic_check',
+                      capability: 'artifact.semantic.verify',
+                    },
                   },
-                }],
+                ],
               },
             },
           },
@@ -293,13 +300,15 @@ export function buildResponsibilityObligationContextV04Bundle(
               ...declared,
               acceptanceCriteria: {
                 ...declaredCriteria,
-                checks: [{
-                  ...readBackCheck,
-                  verificationMethod: {
-                    ...readBackCheck.verificationMethod,
-                    providerDone: true,
+                checks: [
+                  {
+                    ...readBackCheck,
+                    verificationMethod: {
+                      ...readBackCheck.verificationMethod,
+                      providerDone: true,
+                    },
                   },
-                }],
+                ],
               },
             },
           },
@@ -312,13 +321,15 @@ export function buildResponsibilityObligationContextV04Bundle(
               ...declared,
               acceptanceCriteria: {
                 ...declaredCriteria,
-                checks: [{
-                  ...artifactCheck,
-                  verificationMethod: {
-                    ...artifactCheck.verificationMethod,
-                    providerDone: true,
+                checks: [
+                  {
+                    ...artifactCheck,
+                    verificationMethod: {
+                      ...artifactCheck.verificationMethod,
+                      providerDone: true,
+                    },
                   },
-                }],
+                ],
               },
             },
           },
@@ -437,10 +448,12 @@ export function buildResponsibilityObligationContextV04Bundle(
       mediaType: 'application/vnd.waldo.responsibility.v0.4+json',
       offlineCommands: 'none',
       proofLevel: 'adapter_conformance_fixture',
-      files: Object.keys(files).sort().map((path) => ({
-        path,
-        sha256: `sha256:${hashHex(files[path]!)}`,
-      })),
+      files: Object.keys(files)
+        .sort()
+        .map((path) => ({
+          path,
+          sha256: `sha256:${hashHex(files[path]!)}`,
+        })),
     }),
   };
 }

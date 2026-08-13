@@ -20,6 +20,8 @@
     }
   ],
   "evidenceSetDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+  "methodVersion": "1.0.0",
+  "findings": null,
   "verifier": {
     "id": "verifier_fixture",
     "version": "1.0.0",
@@ -27,9 +29,6 @@
     "independentFromProducer": true,
     "disclosureRef": "disclosure_fixture"
   },
-  "methodVersion": "1.0.0",
   "state": "indeterminate",
-  "findingsRef": null,
-  "findingsDigest": null,
   "verifiedAt": "2026-08-13T12:02:00.000Z"
 }

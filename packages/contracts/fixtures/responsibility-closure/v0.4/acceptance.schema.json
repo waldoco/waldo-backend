@@ -1,28 +1,202 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "properties": {
-    "protocolVersion": {
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "outcome": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "evidenceSetDigest": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "verificationIds": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "decision": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "reasonRef": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "recordedAt": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "actor": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "owner"
+            },
+            "id": {
+              "$ref": "#/$defs/__schema1"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "const": "explicit_owner"
+        },
+        "delegatedPolicy": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "outcome",
+        "evidenceSetDigest",
+        "verificationIds",
+        "decision",
+        "reasonRef",
+        "recordedAt",
+        "actor",
+        "mode",
+        "delegatedPolicy"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "outcome": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "evidenceSetDigest": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "verificationIds": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "decision": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "reasonRef": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "recordedAt": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "actor": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "service",
+                "person"
+              ]
+            },
+            "id": {
+              "$ref": "#/$defs/__schema1"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "mode": {
+          "type": "string",
+          "const": "delegated_policy"
+        },
+        "delegatedPolicy": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema4"
+            }
+          },
+          "required": [
+            "id",
+            "revision",
+            "digest"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "outcome",
+        "evidenceSetDigest",
+        "verificationIds",
+        "decision",
+        "reasonRef",
+        "recordedAt",
+        "actor",
+        "mode",
+        "delegatedPolicy"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "__schema0": {
       "type": "string",
       "const": "0.4"
     },
-    "id": {
-      "$ref": "#/$defs/__schema0"
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
     },
-    "ownerId": {
-      "$ref": "#/$defs/__schema0"
+    "__schema2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
     },
-    "revision": {
-      "$ref": "#/$defs/__schema1"
-    },
-    "outcome": {
+    "__schema3": {
       "type": "object",
       "properties": {
         "id": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         "revision": {
-          "$ref": "#/$defs/__schema1"
+          "$ref": "#/$defs/__schema2"
         }
       },
       "required": [
@@ -31,60 +205,18 @@
       ],
       "additionalProperties": false
     },
-    "evidenceSetDigest": {
+    "__schema4": {
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$"
     },
-    "verificationIds": {
+    "__schema5": {
       "maxItems": 32,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema0"
+        "$ref": "#/$defs/__schema1"
       }
     },
-    "actor": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "enum": [
-            "owner",
-            "presence",
-            "service",
-            "provider",
-            "person"
-          ]
-        },
-        "id": {
-          "$ref": "#/$defs/__schema0"
-        }
-      },
-      "required": [
-        "kind",
-        "id"
-      ],
-      "additionalProperties": false
-    },
-    "mode": {
-      "type": "string",
-      "enum": [
-        "explicit_owner",
-        "delegated_policy"
-      ]
-    },
-    "delegatedPolicyRevision": {
-      "anyOf": [
-        {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 9007199254740991
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "decision": {
+    "__schema6": {
       "type": "string",
       "enum": [
         "accepted",
@@ -92,50 +224,22 @@
         "released"
       ]
     },
-    "reasonRef": {
+    "__schema7": {
       "anyOf": [
         {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema1"
         },
         {
           "type": "null"
         }
       ]
     },
-    "recordedAt": {
+    "__schema8": {
       "type": "string",
       "format": "date-time",
       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
     }
   },
-  "required": [
-    "protocolVersion",
-    "id",
-    "ownerId",
-    "revision",
-    "outcome",
-    "evidenceSetDigest",
-    "verificationIds",
-    "actor",
-    "mode",
-    "delegatedPolicyRevision",
-    "decision",
-    "reasonRef",
-    "recordedAt"
-  ],
-  "additionalProperties": false,
-  "$defs": {
-    "__schema0": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
-    },
-    "__schema1": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    }
-  },
-  "$id": "urn:waldo:protocol:responsibility-closure:0.4:acceptance"
+  "$id": "urn:waldo:protocol:responsibility-closure:0.4:acceptance",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
 }

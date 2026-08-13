@@ -7,9 +7,7 @@ import {
   protocolNameSchema,
   protocolRevisionSchema,
 } from './responsibility-handshake-v0-1';
-import { protocolVersionV04Schema } from './responsibility-acceptance-check-v0-4';
-
-const exactRevisionV04Schema = z.int().positive().max(Number.MAX_SAFE_INTEGER);
+import { exactRevisionV04Schema, protocolVersionV04Schema } from './responsibility-protocol-v0-4';
 
 const exactAggregateV04Schema = z.strictObject({
   id: protocolIdSchema,
@@ -29,51 +27,53 @@ const effectAdapterV04Schema = z.strictObject({
   manifestDigest: protocolDigestSchema,
 });
 
-export const effectIntentV04Schema = z.strictObject({
-  protocolVersion: protocolVersionV04Schema,
-  id: protocolIdSchema,
-  ownerId: protocolIdSchema,
-  revision: z.literal(1),
-  outcome: exactAggregateV04Schema,
-  workUnit: exactAggregateV04Schema,
-  judgment: z.strictObject({
-    requestId: protocolIdSchema,
-    requestRevision: exactRevisionV04Schema,
-    decisionId: protocolIdSchema,
-    decisionRevision: exactRevisionV04Schema,
-  }),
-  authority: z.strictObject({
-    grantId: protocolIdSchema,
-    grantRevision: exactRevisionV04Schema,
-    useIndex: z.literal(1),
-    revocationGeneration: protocolRevisionSchema,
-  }),
-  purpose: protocolNameSchema,
-  effectFamily: protocolNameSchema,
-  argumentDigest: protocolDigestSchema,
-  contextDigest: protocolDigestSchema,
-  artifactDigest: protocolDigestSchema.nullable(),
-  capability: effectCapabilityV04Schema,
-  adapter: effectAdapterV04Schema,
-  reconciliationKey: protocolIdSchema,
-  lease: z.strictObject({
+export const effectIntentV04Schema = z
+  .strictObject({
+    protocolVersion: protocolVersionV04Schema,
     id: protocolIdSchema,
-    fencingGeneration: exactRevisionV04Schema,
-  }),
-  cancellationGeneration: protocolRevisionSchema,
-  expiresAt: iso8601Schema,
-  frozenAt: iso8601Schema,
-  state: z.literal('frozen'),
-  intentDigest: protocolDigestSchema,
-}).superRefine((intent, context) => {
-  if (Date.parse(intent.expiresAt) <= Date.parse(intent.frozenAt)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['expiresAt'],
-      message: 'EffectIntent must expire after it is frozen',
-    });
-  }
-});
+    ownerId: protocolIdSchema,
+    revision: z.literal(1),
+    outcome: exactAggregateV04Schema,
+    workUnit: exactAggregateV04Schema,
+    judgment: z.strictObject({
+      requestId: protocolIdSchema,
+      requestRevision: exactRevisionV04Schema,
+      decisionId: protocolIdSchema,
+      decisionRevision: exactRevisionV04Schema,
+    }),
+    authority: z.strictObject({
+      grantId: protocolIdSchema,
+      grantRevision: exactRevisionV04Schema,
+      useIndex: z.literal(1),
+      revocationGeneration: protocolRevisionSchema,
+    }),
+    purpose: protocolNameSchema,
+    effectFamily: protocolNameSchema,
+    argumentDigest: protocolDigestSchema,
+    contextDigest: protocolDigestSchema,
+    artifactDigest: protocolDigestSchema.nullable(),
+    capability: effectCapabilityV04Schema,
+    adapter: effectAdapterV04Schema,
+    reconciliationKey: protocolIdSchema,
+    lease: z.strictObject({
+      id: protocolIdSchema,
+      fencingGeneration: exactRevisionV04Schema,
+    }),
+    cancellationGeneration: protocolRevisionSchema,
+    expiresAt: iso8601Schema,
+    frozenAt: iso8601Schema,
+    state: z.literal('frozen'),
+    intentDigest: protocolDigestSchema,
+  })
+  .superRefine((intent, context) => {
+    if (Date.parse(intent.expiresAt) <= Date.parse(intent.frozenAt)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['expiresAt'],
+        message: 'EffectIntent must expire after it is frozen',
+      });
+    }
+  });
 export type EffectIntentV04 = z.infer<typeof effectIntentV04Schema>;
 
 export function canonicalizeEffectIntentV04ForDigest(value: unknown): string {
@@ -81,46 +81,48 @@ export function canonicalizeEffectIntentV04ForDigest(value: unknown): string {
   return canonicalizeProtocolJson(canonicalBody);
 }
 
-export const effectReceiptV04Schema = z.strictObject({
-  protocolVersion: protocolVersionV04Schema,
-  id: protocolIdSchema,
-  ownerId: protocolIdSchema,
-  intentId: protocolIdSchema,
-  intentDigest: protocolDigestSchema,
-  reconciliationKey: protocolIdSchema,
-  adapter: effectAdapterV04Schema,
-  attempt: z.int().min(1).max(2),
-  adapterOutcome: z.enum([
-    'reported_applied',
-    'reported_not_applied',
-    'rejected',
-    'failed',
-    'timed_out',
-  ]),
-  externalEffectRef: protocolIdSchema.nullable(),
-  observation: z.strictObject({
-    ref: protocolIdSchema,
-    digest: protocolDigestSchema,
-  }),
-  issuedAt: iso8601Schema,
-  observedAt: iso8601Schema,
-  state: z.literal('observed'),
-}).superRefine((receipt, context) => {
-  if (Date.parse(receipt.observedAt) < Date.parse(receipt.issuedAt)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['observedAt'],
-      message: 'EffectReceipt observation cannot predate issue',
-    });
-  }
-  if (receipt.adapterOutcome === 'reported_applied' && receipt.externalEffectRef === null) {
-    context.addIssue({
-      code: 'custom',
-      path: ['externalEffectRef'],
-      message: 'reported applied receipt requires a bounded external effect reference',
-    });
-  }
-});
+export const effectReceiptV04Schema = z
+  .strictObject({
+    protocolVersion: protocolVersionV04Schema,
+    id: protocolIdSchema,
+    ownerId: protocolIdSchema,
+    intentId: protocolIdSchema,
+    intentDigest: protocolDigestSchema,
+    reconciliationKey: protocolIdSchema,
+    adapter: effectAdapterV04Schema,
+    attempt: z.int().min(1).max(2),
+    adapterOutcome: z.enum([
+      'reported_applied',
+      'reported_not_applied',
+      'rejected',
+      'failed',
+      'timed_out',
+    ]),
+    externalEffectRef: protocolIdSchema.nullable(),
+    observation: z.strictObject({
+      ref: protocolIdSchema,
+      digest: protocolDigestSchema,
+    }),
+    issuedAt: iso8601Schema,
+    observedAt: iso8601Schema,
+    state: z.literal('observed'),
+  })
+  .superRefine((receipt, context) => {
+    if (Date.parse(receipt.observedAt) < Date.parse(receipt.issuedAt)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['observedAt'],
+        message: 'EffectReceipt observation cannot predate issue',
+      });
+    }
+    if (receipt.adapterOutcome === 'reported_applied' && receipt.externalEffectRef === null) {
+      context.addIssue({
+        code: 'custom',
+        path: ['externalEffectRef'],
+        message: 'reported applied receipt requires a bounded external effect reference',
+      });
+    }
+  });
 export type EffectReceiptV04 = z.infer<typeof effectReceiptV04Schema>;
 
 const reconciliationCommonV04Shape = {
@@ -271,15 +273,19 @@ export function createResponsibilityEffectBindingVerifierV04(
     if (existingCanonical === candidateCanonical) {
       return { disposition: 'exact_replay' as const, intent: existing };
     }
-    if (existing.ownerId === candidate.ownerId &&
-        existing.authority.grantId === candidate.authority.grantId &&
-        existing.authority.useIndex === candidate.authority.useIndex) {
+    if (
+      existing.ownerId === candidate.ownerId &&
+      existing.authority.grantId === candidate.authority.grantId &&
+      existing.authority.useIndex === candidate.authority.useIndex
+    ) {
       throw new EffectIntentBindingConflictError(
         'grant/use binding already belongs to a different EffectIntent digest',
       );
     }
-    if (existing.ownerId === candidate.ownerId &&
-        existing.reconciliationKey === candidate.reconciliationKey) {
+    if (
+      existing.ownerId === candidate.ownerId &&
+      existing.reconciliationKey === candidate.reconciliationKey
+    ) {
       throw new EffectIntentBindingConflictError(
         'reconciliation key already belongs to a different EffectIntent digest',
       );
@@ -287,10 +293,7 @@ export function createResponsibilityEffectBindingVerifierV04(
     return { disposition: 'new_intent' as const, intent: candidate };
   };
 
-  const verifyReceiptBinding = (
-    intentValue: unknown,
-    receiptValue: unknown,
-  ): EffectReceiptV04 => {
+  const verifyReceiptBinding = (intentValue: unknown, receiptValue: unknown): EffectReceiptV04 => {
     const intent = verifyIntent(intentValue);
     const receipt = effectReceiptV04Schema.parse(receiptValue);
     if (receipt.ownerId !== intent.ownerId) {
@@ -313,8 +316,10 @@ export function createResponsibilityEffectBindingVerifierV04(
         'EffectReceipt adapter identity must match its EffectIntent',
       );
     }
-    if (Date.parse(receipt.issuedAt) < Date.parse(intent.frozenAt) ||
-        Date.parse(receipt.issuedAt) >= Date.parse(intent.expiresAt)) {
+    if (
+      Date.parse(receipt.issuedAt) < Date.parse(intent.frozenAt) ||
+      Date.parse(receipt.issuedAt) >= Date.parse(intent.expiresAt)
+    ) {
       throw new EffectReceiptBindingMismatchError(
         'EffectReceipt issue must occur after intent freeze and before expiry',
       );
@@ -333,8 +338,10 @@ export function createResponsibilityEffectBindingVerifierV04(
         'effect reconciliation owner must match its EffectIntent',
       );
     }
-    if (reconciliation.intentId !== intent.id ||
-        reconciliation.intentDigest !== intent.intentDigest) {
+    if (
+      reconciliation.intentId !== intent.id ||
+      reconciliation.intentDigest !== intent.intentDigest
+    ) {
       throw new EffectReconciliationBindingMismatchError(
         'effect reconciliation must bind the exact EffectIntent digest',
       );
@@ -352,12 +359,11 @@ export function createResponsibilityEffectBindingVerifierV04(
     reconciliationValue: unknown,
     referencedValue?: unknown,
   ): EffectReconciliationV04 => {
-    const reconciliation = verifyReconciliationIntentBinding(
-      intentValue,
-      reconciliationValue,
-    );
-    if (reconciliation.state !== 'retry_admitted' &&
-        reconciliation.state !== 'terminal_ambiguity') {
+    const reconciliation = verifyReconciliationIntentBinding(intentValue, reconciliationValue);
+    if (
+      reconciliation.state !== 'retry_admitted' &&
+      reconciliation.state !== 'terminal_ambiguity'
+    ) {
       return reconciliation;
     }
     if (referencedValue === undefined) {
@@ -369,20 +375,26 @@ export function createResponsibilityEffectBindingVerifierV04(
     const referencedDigest = `sha256:${sha256Hex(
       canonicalizeEffectReconciliationV04ForDigest(referenced),
     )}`;
-    if (reconciliation.basis.reconciliationId !== referenced.id ||
-        reconciliation.basis.digest !== referencedDigest) {
+    if (
+      reconciliation.basis.reconciliationId !== referenced.id ||
+      reconciliation.basis.digest !== referencedDigest
+    ) {
       throw new EffectReconciliationBindingMismatchError(
         'reconciliation basis must bind the exact referenced record ID and digest',
       );
     }
-    if (reconciliation.state === 'retry_admitted' &&
-        referenced.state !== 'authoritative_not_applied') {
+    if (
+      reconciliation.state === 'retry_admitted' &&
+      referenced.state !== 'authoritative_not_applied'
+    ) {
       throw new EffectReconciliationBindingMismatchError(
         'retry requires the referenced authoritative_not_applied reconciliation record',
       );
     }
-    if (reconciliation.state === 'terminal_ambiguity' &&
-        referenced.state !== reconciliation.basis.kind) {
+    if (
+      reconciliation.state === 'terminal_ambiguity' &&
+      referenced.state !== reconciliation.basis.kind
+    ) {
       throw new EffectReconciliationBindingMismatchError(
         'terminal ambiguity basis must match the referenced unavailable or unknown record',
       );

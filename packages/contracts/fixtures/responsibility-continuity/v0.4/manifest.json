@@ -2,10 +2,12 @@
   "protocolVersion": "0.4",
   "family": "responsibility-continuity",
   "files": {
-    "open-loop.schema.json": "sha256:62cbadb5f4ce3a8e672ec688d7c69fc812a873a46d557f2d0e540f57708e0587",
-    "re-entry-point.schema.json": "sha256:7f8d7600e76318773e615b59deab14a623e39d678101066d5930ba6c6e03ea02",
+    "open-loop.schema.json": "sha256:843e95586d3d43e52cac1ab4610bc0deaf2375ebcf1aaf8cdf7622b06b1f8e0e",
+    "re-entry-point.schema.json": "sha256:94fac0d0d02d28eaff98ee0201e67a195fe53f3c9009a7907aff9020c3388baa",
+    "open-loop-disposition-command.schema.json": "sha256:19b31ca94eff6e443ad6ab3022f877a0fe68e7ce49ebc0a4486bb9a41abe54f3",
     "open-loop.valid.json": "sha256:6d7e6e3c166944600642c5ce5cf5809b5f9956f88bf02a1b4aa9316b8cb5eadb",
     "re-entry-point.valid.json": "sha256:85171a63ea10dec5ffea926f0461c0da0cbd3bc9e565a824a95ec759e29327f9",
-    "continuity.rejections.json": "sha256:6b8b2a2dea9ed82aeabfefde1993e1a08f7523c767fa1e2c9927c899d2ef6c92"
+    "open-loop-disposition-command.valid.json": "sha256:98ed4e7b595742a1758cb6ced94e79f063755b7e9a85c2b96a3d3c33d6fba04b",
+    "continuity.rejections.json": "sha256:3c4b936f7253190babd942030f19ff0f295004548ad905ba4169cde8550e87a9"
   }
 }

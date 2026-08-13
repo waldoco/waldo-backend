@@ -65,5 +65,6 @@
       ]
     }
   },
-  "$id": "urn:waldo:protocol:responsibility-presence-channel:0.4:surface-capability"
+  "$id": "urn:waldo:protocol:responsibility-presence-channel:0.4:surface-capability",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
 }

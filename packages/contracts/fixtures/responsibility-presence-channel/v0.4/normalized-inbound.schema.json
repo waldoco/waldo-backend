@@ -104,5 +104,6 @@
       "pattern": "^sha256:[a-f0-9]{64}$"
     }
   },
-  "$id": "urn:waldo:protocol:responsibility-presence-channel:0.4:normalized-inbound"
+  "$id": "urn:waldo:protocol:responsibility-presence-channel:0.4:normalized-inbound",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
 }

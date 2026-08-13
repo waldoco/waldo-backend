@@ -5,7 +5,7 @@
       "$ref": "#/$defs/__schema0"
     },
     {
-      "$ref": "#/$defs/__schema37"
+      "$ref": "#/$defs/__schema33"
     }
   ],
   "$defs": {
@@ -41,25 +41,25 @@
               "$ref": "#/$defs/__schema4"
             },
             "revision": {
-              "$ref": "#/$defs/__schema28"
+              "$ref": "#/$defs/__schema5"
             },
             "judgmentRequestId": {
               "$ref": "#/$defs/__schema4"
             },
             "judgmentRequestRevision": {
-              "$ref": "#/$defs/__schema29"
+              "$ref": "#/$defs/__schema5"
             },
             "judgmentDecisionId": {
               "$ref": "#/$defs/__schema4"
             },
             "grantor": {
-              "$ref": "#/$defs/__schema25"
+              "$ref": "#/$defs/__schema23"
             },
             "grantee": {
-              "$ref": "#/$defs/__schema30"
+              "$ref": "#/$defs/__schema26"
             },
             "subject": {
-              "$ref": "#/$defs/__schema31"
+              "$ref": "#/$defs/__schema27"
             },
             "purpose": {
               "$ref": "#/$defs/__schema4"
@@ -83,16 +83,16 @@
               "$ref": "#/$defs/__schema1"
             },
             "artifactDigest": {
-              "$ref": "#/$defs/__schema32"
+              "$ref": "#/$defs/__schema28"
             },
             "useLimit": {
-              "$ref": "#/$defs/__schema33"
+              "$ref": "#/$defs/__schema29"
             },
             "usesConsumed": {
-              "$ref": "#/$defs/__schema34"
+              "$ref": "#/$defs/__schema30"
             },
             "nextUseIndex": {
-              "$ref": "#/$defs/__schema35"
+              "$ref": "#/$defs/__schema31"
             },
             "validFrom": {
               "$ref": "#/$defs/__schema17"
@@ -101,10 +101,10 @@
               "$ref": "#/$defs/__schema17"
             },
             "revocationGeneration": {
-              "$ref": "#/$defs/__schema26"
+              "$ref": "#/$defs/__schema24"
             },
             "state": {
-              "$ref": "#/$defs/__schema36"
+              "$ref": "#/$defs/__schema32"
             },
             "createdAt": {
               "$ref": "#/$defs/__schema17"
@@ -272,9 +272,7 @@
           "$ref": "#/$defs/__schema4"
         },
         "revision": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "$ref": "#/$defs/__schema5"
         }
       },
       "required": [
@@ -514,9 +512,7 @@
               "$ref": "#/$defs/__schema4"
             },
             "expectedRevision": {
-              "type": "integer",
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991
+              "$ref": "#/$defs/__schema5"
             }
           },
           "required": [
@@ -573,13 +569,13 @@
           "$ref": "#/$defs/__schema4"
         },
         "revision": {
-          "$ref": "#/$defs/__schema23"
+          "$ref": "#/$defs/__schema5"
         },
         "judgmentRequestId": {
           "$ref": "#/$defs/__schema4"
         },
         "judgmentRequestRevision": {
-          "$ref": "#/$defs/__schema24"
+          "$ref": "#/$defs/__schema5"
         },
         "subject": {
           "$ref": "#/$defs/__schema6"
@@ -591,7 +587,7 @@
           "$ref": "#/$defs/__schema1"
         },
         "actor": {
-          "$ref": "#/$defs/__schema25"
+          "$ref": "#/$defs/__schema23"
         },
         "presenceId": {
           "$ref": "#/$defs/__schema4"
@@ -600,13 +596,13 @@
           "$ref": "#/$defs/__schema4"
         },
         "ownerPolicyRevision": {
-          "$ref": "#/$defs/__schema26"
+          "$ref": "#/$defs/__schema24"
         },
         "authAssurance": {
           "$ref": "#/$defs/__schema4"
         },
         "state": {
-          "$ref": "#/$defs/__schema27"
+          "$ref": "#/$defs/__schema25"
         },
         "decidedAt": {
           "$ref": "#/$defs/__schema17"
@@ -633,16 +629,6 @@
       "additionalProperties": false
     },
     "__schema23": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    },
-    "__schema24": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    },
-    "__schema25": {
       "type": "object",
       "properties": {
         "kind": {
@@ -659,26 +645,16 @@
       ],
       "additionalProperties": false
     },
-    "__schema26": {
+    "__schema24": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema27": {
+    "__schema25": {
       "type": "string",
       "const": "recorded"
     },
-    "__schema28": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    },
-    "__schema29": {
-      "type": "integer",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991
-    },
-    "__schema30": {
+    "__schema26": {
       "type": "object",
       "properties": {
         "kind": {
@@ -699,7 +675,7 @@
       ],
       "additionalProperties": false
     },
-    "__schema31": {
+    "__schema27": {
       "type": "object",
       "properties": {
         "kind": {
@@ -710,9 +686,7 @@
           "$ref": "#/$defs/__schema4"
         },
         "revision": {
-          "type": "integer",
-          "exclusiveMinimum": 0,
-          "maximum": 9007199254740991
+          "$ref": "#/$defs/__schema5"
         }
       },
       "required": [
@@ -722,7 +696,7 @@
       ],
       "additionalProperties": false
     },
-    "__schema32": {
+    "__schema28": {
       "anyOf": [
         {
           "$ref": "#/$defs/__schema1"
@@ -732,21 +706,21 @@
         }
       ]
     },
-    "__schema33": {
+    "__schema29": {
       "type": "number",
       "const": 1
     },
-    "__schema34": {
+    "__schema30": {
       "type": "integer",
       "minimum": 0,
       "maximum": 1
     },
-    "__schema35": {
+    "__schema31": {
       "type": "integer",
       "minimum": 1,
       "maximum": 2
     },
-    "__schema36": {
+    "__schema32": {
       "type": "string",
       "enum": [
         "active",
@@ -756,7 +730,7 @@
         "superseded"
       ]
     },
-    "__schema37": {
+    "__schema33": {
       "type": "object",
       "properties": {
         "requestDigest": {

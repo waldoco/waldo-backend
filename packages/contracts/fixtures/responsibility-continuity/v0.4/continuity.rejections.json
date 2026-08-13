@@ -64,6 +64,24 @@
         "expiresAt": null,
         "context": "full transcript"
       }
+    },
+    {
+      "name": "resolve-without-acceptance",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "disposition_fixture",
+        "commandType": "open_loop.disposition",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "open_loop",
+          "id": "loop_fixture",
+          "expectedRevision": 1
+        },
+        "clientIssuedAt": "2026-08-13T12:01:00.000Z",
+        "disposition": "resolve",
+        "acceptanceId": null,
+        "reEntryPointId": null
+      }
     }
   ]
 }

@@ -7,7 +7,7 @@ import {
   protocolNameSchema,
 } from './responsibility-handshake-v0-1';
 import { responsibilityCaptureTextV02Schema } from './responsibility-handshake-v0-2';
-import { protocolVersionV04Schema } from './responsibility-protocol-v0-4';
+import { exactRevisionV04Schema, protocolVersionV04Schema } from './responsibility-protocol-v0-4';
 
 const MAX_ACCEPTANCE_CHECK_BYTES = 4_096;
 export { protocolVersionV04Schema } from './responsibility-protocol-v0-4';
@@ -25,7 +25,7 @@ function utf8ByteLength(value: string): number {
 export const acceptanceCheckSubjectV04Schema = z.strictObject({
   kind: z.enum(['outcome', 'work_unit']),
   id: protocolIdSchema,
-  revision: z.int().positive().max(Number.MAX_SAFE_INTEGER),
+  revision: exactRevisionV04Schema,
 });
 
 export const deterministicReadBackVerificationMethodV04Schema = z.strictObject({
@@ -80,21 +80,22 @@ export const acceptanceVerificationMethodV04Schema = z.discriminatedUnion('kind'
   declaredSemanticVerificationMethodV04Schema,
 ]);
 
-export const acceptanceCheckV04Schema = z.strictObject({
-  protocolVersion: protocolVersionV04Schema,
-  id: protocolIdSchema,
-  ownerId: protocolIdSchema,
-  revision: z.int().positive().max(Number.MAX_SAFE_INTEGER),
-  subject: acceptanceCheckSubjectV04Schema,
-  /** Owner-readable meaning: the condition the owner recognizes as satisfied. */
-  criterion: responsibilityCaptureTextV02Schema.max(2_048),
-  /** Executable method: the exact procedure used to gather and judge verification evidence. */
-  verificationMethod: acceptanceVerificationMethodV04Schema,
-  createdAt: iso8601Schema,
-}).refine(
-  (value) => utf8ByteLength(JSON.stringify(value)) <= MAX_ACCEPTANCE_CHECK_BYTES,
-  { error: `acceptance check must not exceed ${MAX_ACCEPTANCE_CHECK_BYTES} UTF-8 bytes` },
-);
+export const acceptanceCheckV04Schema = z
+  .strictObject({
+    protocolVersion: protocolVersionV04Schema,
+    id: protocolIdSchema,
+    ownerId: protocolIdSchema,
+    revision: exactRevisionV04Schema,
+    subject: acceptanceCheckSubjectV04Schema,
+    /** Owner-readable meaning: the condition the owner recognizes as satisfied. */
+    criterion: responsibilityCaptureTextV02Schema.max(2_048),
+    /** Executable method: the exact procedure used to gather and judge verification evidence. */
+    verificationMethod: acceptanceVerificationMethodV04Schema,
+    createdAt: iso8601Schema,
+  })
+  .refine((value) => utf8ByteLength(JSON.stringify(value)) <= MAX_ACCEPTANCE_CHECK_BYTES, {
+    error: `acceptance check must not exceed ${MAX_ACCEPTANCE_CHECK_BYTES} UTF-8 bytes`,
+  });
 export type AcceptanceCheckV04 = z.infer<typeof acceptanceCheckV04Schema>;
 
 export function canonicalizeAcceptanceCheckV04ForDigest(value: unknown): string {

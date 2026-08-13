@@ -1,6 +1,6 @@
 {
   "protocolVersion": "0.4",
-  "id": "acceptance_fixture",
+  "id": "delegated_acceptance_fixture",
   "ownerId": "owner_fixture",
   "revision": 1,
   "outcome": {
@@ -15,9 +15,13 @@
   "reasonRef": null,
   "recordedAt": "2026-08-13T12:03:00.000Z",
   "actor": {
-    "kind": "owner",
-    "id": "owner_fixture"
+    "kind": "service",
+    "id": "acceptance_policy_service_fixture"
   },
-  "mode": "explicit_owner",
-  "delegatedPolicy": null
+  "mode": "delegated_policy",
+  "delegatedPolicy": {
+    "id": "acceptance_policy_fixture",
+    "revision": 1,
+    "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+  }
 }

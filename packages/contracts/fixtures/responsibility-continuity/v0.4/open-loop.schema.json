@@ -194,5 +194,6 @@
       "maximum": 9007199254740991
     }
   },
-  "$id": "urn:waldo:protocol:responsibility-continuity:0.4:open-loop"
+  "$id": "urn:waldo:protocol:responsibility-continuity:0.4:open-loop",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
 }

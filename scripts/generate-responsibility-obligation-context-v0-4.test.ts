@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildResponsibilityObligationContextV04Bundle,
-  canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest,
+  canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest,
   outcomeObligationContextV04Schema,
 } from '../packages/contracts/src';
 
@@ -24,7 +24,7 @@ describe('generate responsibility obligation context v0.4 fixtures', () => {
     }
     expect(context.acceptanceCriteria.digest).toBe(
       `sha256:${createHash('sha256')
-        .update(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(context))
+        .update(canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(context))
         .digest('hex')}`,
     );
     for (const [path, contents] of Object.entries(bundle)) {

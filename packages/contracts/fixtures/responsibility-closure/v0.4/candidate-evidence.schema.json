@@ -139,5 +139,6 @@
       "additionalProperties": false
     }
   },
-  "$id": "urn:waldo:protocol:responsibility-closure:0.4:candidate-evidence"
+  "$id": "urn:waldo:protocol:responsibility-closure:0.4:candidate-evidence",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
 }

@@ -7,7 +7,7 @@
   "files": [
     {
       "path": "authority-grant.schema.json",
-      "sha256": "sha256:ad049d659bf3babfc75992157d879242fddcbcf2b1c7477f6d47f22097f8022e"
+      "sha256": "sha256:1d30509ba4f5c5b069a0ac3d0d7e91cf70c7d4b378e1d9106ac29623eeb1241c"
     },
     {
       "path": "authority-grant.valid.json",
@@ -23,7 +23,7 @@
     },
     {
       "path": "judgment-authority-binding.schema.json",
-      "sha256": "sha256:33c50ad1885cc654b4c566cce1abdb870b711e816dfe3ee85c1c540ac4ca761d"
+      "sha256": "sha256:5daa808b4d5d2d4f9b709847bc8542ec89a8481363ff03d5d9d1167dafcf5f04"
     },
     {
       "path": "judgment-authority-binding.valid.json",
@@ -39,7 +39,7 @@
     },
     {
       "path": "judgment-decision.schema.json",
-      "sha256": "sha256:ed1f56a0a441c706ec6f3e46ff49d4afe6cf1d811470850de3765da4dfcddd2b"
+      "sha256": "sha256:45bb5fbde5f68876c6ce0bdee675c62dcdf811cb1edfb6ee771467d1140d9e8d"
     },
     {
       "path": "judgment-decision.valid.json",
@@ -47,7 +47,7 @@
     },
     {
       "path": "judgment-request.schema.json",
-      "sha256": "sha256:e54945ce998a049abaf8d1bc463ca3dc642fe3121781a8335d723d6fb14d0e5a"
+      "sha256": "sha256:c4ad6ef3580bc06e5eb6375622552ed3945d22c750a73d8f13b7ff63942fe7a2"
     },
     {
       "path": "judgment-request.valid.json",

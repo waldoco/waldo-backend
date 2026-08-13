@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "requestId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "commandType": {
+      "type": "string",
+      "const": "acceptance.record"
+    },
+    "presenceRegistrationId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "aggregate": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "outcome"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "expectedRevision"
+      ],
+      "additionalProperties": false
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "accept",
+        "reopen",
+        "release"
+      ]
+    },
+    "evidenceSetDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "verificationIds": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "reasonRef": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema0"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "clientIssuedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "requestId",
+    "commandType",
+    "presenceRegistrationId",
+    "aggregate",
+    "decision",
+    "evidenceSetDigest",
+    "verificationIds",
+    "reasonRef",
+    "clientIssuedAt"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-closure:0.4:acceptance-command-request",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
+}

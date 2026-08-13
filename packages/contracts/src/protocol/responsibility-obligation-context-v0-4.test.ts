@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020.js';
 import {
   buildResponsibilityObligationContextV04Bundle,
-  canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest,
+  canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest,
   createOutcomeObligationContextBindingVerifierV04,
   outcomeObligationContextV04Schema,
   responsibilityObligationContextRejectionCatalogueV04Schema,
@@ -46,26 +46,32 @@ function declaredContext() {
     revision: 1,
     outcome: { id: 'outcome_01', revision: 3 },
     accountability: { kind: 'self' },
-    consequence: { kind: 'missed_opportunity', statementRef: 'consequence_01', statementDigest: `sha256:${'c'.repeat(64)}` },
+    consequence: {
+      kind: 'missed_opportunity',
+      statementRef: 'consequence_01',
+      statementDigest: `sha256:${'c'.repeat(64)}`,
+    },
     temporalBinding: { kind: 'hard_deadline', at: '2026-08-15T18:00:00.000Z' },
     acceptanceCriteria: {
       state: 'confirmed',
       revision: 2,
       digest: `sha256:${'0'.repeat(64)}`,
-      checks: [{
-        id: 'acceptance_check_01',
-        revision: 1,
-        criterion: 'The calendar contains the approved investor meeting.',
-        verificationMethod: {
-          kind: 'deterministic_read_back',
-          capability: 'calendar.event.read',
-          targetRef: 'calendar_event_target_01',
-          assertion: {
-            operator: 'digest_equals',
-            expectedDigest: `sha256:${'a'.repeat(64)}`,
+      checks: [
+        {
+          id: 'acceptance_check_01',
+          revision: 1,
+          criterion: 'The calendar contains the approved investor meeting.',
+          verificationMethod: {
+            kind: 'deterministic_read_back',
+            capability: 'calendar.event.read',
+            targetRef: 'calendar_event_target_01',
+            assertion: {
+              operator: 'digest_equals',
+              expectedDigest: `sha256:${'a'.repeat(64)}`,
+            },
           },
         },
-      }],
+      ],
     },
     recordedAt: '2026-08-08T18:00:00.000Z',
   } as const;
@@ -74,7 +80,7 @@ function declaredContext() {
     acceptanceCriteria: {
       ...candidate.acceptanceCriteria,
       digest: `sha256:${sha256Hex(
-        canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(candidate),
+        canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(candidate),
       )}`,
     },
   });
@@ -85,15 +91,27 @@ describe('responsibility obligation context v0.4', () => {
     const context = declaredContext();
     expect(context.accountability).toEqual({ kind: 'self' });
     expect(context.temporalBinding.kind).toBe('hard_deadline');
-    expect(outcomeObligationContextV04Schema.safeParse({ ...context, capabilityEligibility: 'high' }).success).toBe(false);
-    expect(outcomeObligationContextV04Schema.safeParse({ ...context, authorityGrant: 'grant' }).success).toBe(false);
+    expect(
+      outcomeObligationContextV04Schema.safeParse({ ...context, capabilityEligibility: 'high' })
+        .success,
+    ).toBe(false);
+    expect(
+      outcomeObligationContextV04Schema.safeParse({ ...context, authorityGrant: 'grant' }).success,
+    ).toBe(false);
   });
 
   it('keeps declared proposals distinct from confirmed strict checks', () => {
     const context = declaredContext();
-    expect(outcomeObligationContextV04Schema.parse({ ...context, acceptanceCriteria: {
-      state: 'declared', revision: 3, proposals: [{ id: 'proposal', revision: 1, digest: `sha256:${'d'.repeat(64)}` }],
-    } }).acceptanceCriteria.state).toBe('declared');
+    expect(
+      outcomeObligationContextV04Schema.parse({
+        ...context,
+        acceptanceCriteria: {
+          state: 'declared',
+          revision: 3,
+          proposals: [{ id: 'proposal', revision: 1, digest: `sha256:${'d'.repeat(64)}` }],
+        },
+      }).acceptanceCriteria.state,
+    ).toBe('declared');
   });
   it('binds owner-stated criteria to the exact canonical Outcome revision and digest', () => {
     const verifier = createOutcomeObligationContextBindingVerifierV04(sha256Hex);
@@ -101,21 +119,27 @@ describe('responsibility obligation context v0.4', () => {
     const binding = { ownerId: 'owner_01', outcome: { id: 'outcome_01', revision: 3 } };
 
     expect(verifier.verifyContext(context, binding)).toEqual(context);
-    expect(() => verifier.verifyContext({
-      ...context,
-      outcome: { ...context.outcome, revision: 4 },
-    }, binding)).toThrow(
-      'obligation context must bind canonical owner and exact Outcome id/revision',
-    );
-    expect(() => verifier.verifyContext({
-      ...context,
-      acceptanceCriteria: {
-        ...context.acceptanceCriteria,
-        digest: `sha256:${'f'.repeat(64)}`,
-      },
-    }, binding)).toThrow(
-      'confirmed acceptance criteria digest must match canonical criteria bytes',
-    );
+    expect(() =>
+      verifier.verifyContext(
+        {
+          ...context,
+          outcome: { ...context.outcome, revision: 4 },
+        },
+        binding,
+      ),
+    ).toThrow('obligation context must bind canonical owner and exact Outcome id/revision');
+    expect(() =>
+      verifier.verifyContext(
+        {
+          ...context,
+          acceptanceCriteria: {
+            ...context.acceptanceCriteria,
+            digest: `sha256:${'f'.repeat(64)}`,
+          },
+        },
+        binding,
+      ),
+    ).toThrow('confirmed acceptance criteria digest must match canonical criteria bytes');
   });
 
   it('records explicit absence or owner decline without hidden criteria', () => {
@@ -126,7 +150,11 @@ describe('responsibility obligation context v0.4', () => {
       revision: 1,
       outcome: { id: 'outcome_01', revision: 3 },
       accountability: { kind: 'self' },
-      consequence: { kind: 'missed_opportunity', statementRef: 'consequence_01', statementDigest: `sha256:${'c'.repeat(64)}` },
+      consequence: {
+        kind: 'missed_opportunity',
+        statementRef: 'consequence_01',
+        statementDigest: `sha256:${'c'.repeat(64)}`,
+      },
       temporalBinding: { kind: 'open_ended' },
       recordedAt: '2026-08-08T18:00:00.000Z',
     } as const;
@@ -140,13 +168,15 @@ describe('responsibility obligation context v0.4', () => {
       const context = { ...base, acceptanceCriteria: { state } };
       expect(outcomeObligationContextV04Schema.parse(context)).toEqual(context);
       expect(verifier.verifyContext(context, binding)).toEqual(context);
-      expect(outcomeObligationContextV04Schema.safeParse({
-        ...context,
-        acceptanceCriteria: {
-          state,
-          checks: declared.acceptanceCriteria.checks,
-        },
-      }).success).toBe(false);
+      expect(
+        outcomeObligationContextV04Schema.safeParse({
+          ...context,
+          acceptanceCriteria: {
+            state,
+            checks: declared.acceptanceCriteria.checks,
+          },
+        }).success,
+      ).toBe(false);
     }
   });
 
@@ -174,39 +204,45 @@ describe('responsibility obligation context v0.4', () => {
       message: 'Invalid input: expected object, received undefined',
     });
 
-    expect(outcomeObligationContextV04Schema.safeParse({
-      ...context,
-      acceptanceCriteria: {
-        ...context.acceptanceCriteria,
-        checks: [{
-          ...context.acceptanceCriteria.checks[0],
-          verificationMethod: {
-            kind: 'declared_semantic_check',
-            capability: 'artifact.semantic.verify',
-          },
-        }],
-      },
-    }).success).toBe(false);
+    expect(
+      outcomeObligationContextV04Schema.safeParse({
+        ...context,
+        acceptanceCriteria: {
+          ...context.acceptanceCriteria,
+          checks: [
+            {
+              ...context.acceptanceCriteria.checks[0],
+              verificationMethod: {
+                kind: 'declared_semantic_check',
+                capability: 'artifact.semantic.verify',
+              },
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
 
     const artifactCandidate = {
       ...context,
       acceptanceCriteria: {
         ...context.acceptanceCriteria,
         digest: `sha256:${'0'.repeat(64)}`,
-        checks: [{
-          id: 'acceptance_check_artifact_01',
-          revision: 1,
-          criterion: 'The owner-reviewed release bytes match exactly.',
-          verificationMethod: {
-            kind: 'deterministic_artifact_check',
-            capability: 'artifact.digest.read',
-            artifactRef: 'artifact_release_01',
-            assertion: {
-              operator: 'digest_equals',
-              expectedDigest: `sha256:${'b'.repeat(64)}`,
+        checks: [
+          {
+            id: 'acceptance_check_artifact_01',
+            revision: 1,
+            criterion: 'The owner-reviewed release bytes match exactly.',
+            verificationMethod: {
+              kind: 'deterministic_artifact_check',
+              capability: 'artifact.digest.read',
+              artifactRef: 'artifact_release_01',
+              assertion: {
+                operator: 'digest_equals',
+                expectedDigest: `sha256:${'b'.repeat(64)}`,
+              },
             },
           },
-        }],
+        ],
       },
     } as const;
     const artifactContext = outcomeObligationContextV04Schema.parse({
@@ -214,14 +250,16 @@ describe('responsibility obligation context v0.4', () => {
       acceptanceCriteria: {
         ...artifactCandidate.acceptanceCriteria,
         digest: `sha256:${sha256Hex(
-          canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(artifactCandidate),
+          canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(artifactCandidate),
         )}`,
       },
     });
-    expect(createOutcomeObligationContextBindingVerifierV04(sha256Hex).verifyContext(
-      artifactContext,
-      { ownerId: 'owner_01', outcome: { id: 'outcome_01', revision: 3 } },
-    )).toEqual(artifactContext);
+    expect(
+      createOutcomeObligationContextBindingVerifierV04(sha256Hex).verifyContext(artifactContext, {
+        ownerId: 'owner_01',
+        outcome: { id: 'outcome_01', revision: 3 },
+      }),
+    ).toEqual(artifactContext);
   });
 
   it('rejects prohibited nested fields at criterion and deterministic method boundaries', () => {
@@ -251,10 +289,12 @@ describe('responsibility obligation context v0.4', () => {
           ...context,
           acceptanceCriteria: {
             ...context.acceptanceCriteria,
-            checks: [{
-              ...check,
-              verificationMethod: { ...check.verificationMethod, providerDone: true },
-            }],
+            checks: [
+              {
+                ...check,
+                verificationMethod: { ...check.verificationMethod, providerDone: true },
+              },
+            ],
           },
         },
         path: ['acceptanceCriteria', 'checks', 0, 'verificationMethod'],
@@ -265,19 +305,21 @@ describe('responsibility obligation context v0.4', () => {
           ...context,
           acceptanceCriteria: {
             ...context.acceptanceCriteria,
-            checks: [{
-              ...check,
-              verificationMethod: {
-                kind: 'deterministic_artifact_check',
-                capability: 'artifact.digest.read',
-                artifactRef: 'artifact_release_01',
-                assertion: {
-                  operator: 'digest_equals',
-                  expectedDigest: `sha256:${'b'.repeat(64)}`,
+            checks: [
+              {
+                ...check,
+                verificationMethod: {
+                  kind: 'deterministic_artifact_check',
+                  capability: 'artifact.digest.read',
+                  artifactRef: 'artifact_release_01',
+                  assertion: {
+                    operator: 'digest_equals',
+                    expectedDigest: `sha256:${'b'.repeat(64)}`,
+                  },
+                  providerDone: true,
                 },
-                providerDone: true,
               },
-            }],
+            ],
           },
         },
         path: ['acceptanceCriteria', 'checks', 0, 'verificationMethod'],
@@ -287,12 +329,14 @@ describe('responsibility obligation context v0.4', () => {
       const result = outcomeObligationContextV04Schema.safeParse(candidate.value);
       expect(result.success, candidate.name).toBe(false);
       if (result.success) throw new Error('nested provider field must be rejected');
-      expect(result.error.issues).toEqual([{
-        code: 'unrecognized_keys',
-        keys: ['providerDone'],
-        path: candidate.path,
-        message: 'Unrecognized key: "providerDone"',
-      }]);
+      expect(result.error.issues).toEqual([
+        {
+          code: 'unrecognized_keys',
+          keys: ['providerDone'],
+          path: candidate.path,
+          message: 'Unrecognized key: "providerDone"',
+        },
+      ]);
     }
   });
 
@@ -310,22 +354,22 @@ describe('responsibility obligation context v0.4', () => {
         checks: [{ ...check, criterion }],
       },
     });
-    expect(outcomeObligationContextV04Schema.safeParse(
-      withCriterion('a'.repeat(2_048)),
-    ).success).toBe(true);
-    const over = outcomeObligationContextV04Schema.safeParse(
-      withCriterion('a'.repeat(2_049)),
-    );
+    expect(
+      outcomeObligationContextV04Schema.safeParse(withCriterion('a'.repeat(2_048))).success,
+    ).toBe(true);
+    const over = outcomeObligationContextV04Schema.safeParse(withCriterion('a'.repeat(2_049)));
     expect(over.success).toBe(false);
     if (over.success) throw new Error('criterion above 2,048 characters must be rejected');
-    expect(over.error.issues).toEqual([{
-      origin: 'string',
-      code: 'too_big',
-      maximum: 2_048,
-      inclusive: true,
-      path: ['acceptanceCriteria', 'checks', 0, 'criterion'],
-      message: 'Too big: expected string to have <=2048 characters',
-    }]);
+    expect(over.error.issues).toEqual([
+      {
+        origin: 'string',
+        code: 'too_big',
+        maximum: 2_048,
+        inclusive: true,
+        path: ['acceptanceCriteria', 'checks', 0, 'criterion'],
+        message: 'Too big: expected string to have <=2048 characters',
+      },
+    ]);
   });
 
   it('canonicalizes field order but never omits exact Outcome revision', () => {
@@ -345,20 +389,24 @@ describe('responsibility obligation context v0.4', () => {
       id: context.id,
       protocolVersion: context.protocolVersion,
     };
-    expect(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(reordered)).toBe(
-      canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(context),
+    expect(canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(reordered)).toBe(
+      canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(context),
     );
-    expect(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest({
-      ...context,
-      outcome: { ...context.outcome, revision: 4 },
-    })).not.toBe(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(context));
+    expect(
+      canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest({
+        ...context,
+        outcome: { ...context.outcome, revision: 4 },
+      }),
+    ).not.toBe(canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(context));
     if (context.acceptanceCriteria.state !== 'confirmed') {
       throw new Error('declared fixture must retain declared criteria');
     }
-    expect(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest({
-      ...context,
-      acceptanceCriteria: { ...context.acceptanceCriteria, revision: 3 },
-    })).not.toBe(canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(context));
+    expect(
+      canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest({
+        ...context,
+        acceptanceCriteria: { ...context.acceptanceCriteria, revision: 3 },
+      }),
+    ).not.toBe(canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(context));
   });
 
   it('pins independent canonical digests for canonical owner and Outcome binding fields', () => {
@@ -367,21 +415,27 @@ describe('responsibility obligation context v0.4', () => {
       ['base', context],
       ['ownerId', { ...context, ownerId: 'owner_02' }],
       ['outcome.id', { ...context, outcome: { ...context.outcome, id: 'outcome_02' } }],
-      ['outcome.revision', {
-        ...context,
-        outcome: { ...context.outcome, revision: 4 },
-      }],
+      [
+        'outcome.revision',
+        {
+          ...context,
+          outcome: { ...context.outcome, revision: 4 },
+        },
+      ],
     ] as const;
-    expect(cases.map(([field, value]) => [
-      field,
-      `sha256:${sha256Hex(
-        canonicalizeDeclaredOutcomeAcceptanceCriteriaV04ForDigest(value),
-      )}`,
-    ])).toEqual([
+    expect(
+      cases.map(([field, value]) => [
+        field,
+        `sha256:${sha256Hex(canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest(value))}`,
+      ]),
+    ).toEqual([
       ['base', 'sha256:600a834169e436f9a5abccd86f200498dc6f80f5d8320d9f331e9207813871d4'],
       ['ownerId', 'sha256:6c47e60c08f458e4853225074be012e2b58f471131ad4317bacadab6bb71595b'],
       ['outcome.id', 'sha256:4f0eaf2694918a56d6c668a7f96561e2b81740e71889e2279e0b9e1bd98ba673'],
-      ['outcome.revision', 'sha256:6f5caa371aca770684a67a761f5f07bc3138f3a5f85ea796ffc7bb3b4528dd13'],
+      [
+        'outcome.revision',
+        'sha256:6f5caa371aca770684a67a761f5f07bc3138f3a5f85ea796ffc7bb3b4528dd13',
+      ],
     ]);
   });
 
@@ -389,10 +443,8 @@ describe('responsibility obligation context v0.4', () => {
     const bundle = buildResponsibilityObligationContextV04Bundle(sha256Hex);
     const schema = JSON.parse(bundle['obligation-context.schema.json']!);
     const ajv = new Ajv2020({ strict: true, allErrors: true, validateFormats: false });
-    for (const keyword of [
-      'x-waldo-validation-level',
-      'x-waldo-offline-commands',
-    ]) ajv.addKeyword(keyword);
+    for (const keyword of ['x-waldo-validation-level', 'x-waldo-offline-commands'])
+      ajv.addKeyword(keyword);
     const validate = ajv.compile(schema);
     for (const path of [
       'obligation-context-confirmed.valid.json',
@@ -411,9 +463,13 @@ describe('responsibility obligation context v0.4', () => {
       ...REQUIRED_OBLIGATION_CONTEXT_REJECTIONS_V04,
     ]);
     const verifier = createOutcomeObligationContextBindingVerifierV04(sha256Hex);
-    const binding = { ownerId: 'owner_fixture_01', outcome: {
-      id: 'outcome_fixture_01', revision: 3,
-    } };
+    const binding = {
+      ownerId: 'owner_fixture_01',
+      outcome: {
+        id: 'outcome_fixture_01',
+        revision: 3,
+      },
+    };
     for (const rejection of catalogue.cases) {
       expect(
         validate(rejection.value),
@@ -424,10 +480,9 @@ describe('responsibility obligation context v0.4', () => {
         rejection.name,
       ).toBe(rejection.zodOutcome === 'accept');
       if (rejection.layer === 'binding') {
-        expect(
-          () => verifier.verifyContext(rejection.value, binding),
-          rejection.name,
-        ).toThrow(rejection.expectedError);
+        expect(() => verifier.verifyContext(rejection.value, binding), rejection.name).toThrow(
+          rejection.expectedError,
+        );
       }
     }
   });

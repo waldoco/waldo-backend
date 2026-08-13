@@ -1,21 +1,40 @@
 import { z } from 'zod';
 import { iso8601Schema } from '../core/error';
-import { canonicalizeProtocolJson, protocolDigestSchema, protocolIdSchema, protocolNameSchema } from './responsibility-handshake-v0-1';
-import { boundedProtocolTextV04, exactRevisionV04Schema, protocolVersionV04Schema, versionedManifestReferenceV04Schema } from './responsibility-protocol-v0-4';
+import {
+  canonicalizeProtocolJson,
+  protocolDigestSchema,
+  protocolIdSchema,
+  protocolNameSchema,
+} from './responsibility-handshake-v0-1';
+import {
+  boundedProtocolTextV04,
+  exactRevisionV04Schema,
+  protocolVersionV04Schema,
+  versionedManifestReferenceV04Schema,
+} from './responsibility-protocol-v0-4';
 
 export const presenceRefV04Schema = z.strictObject({
-  category: z.literal('presence'), id: protocolIdSchema, registrationRevision: exactRevisionV04Schema,
+  category: z.literal('presence'),
+  id: protocolIdSchema,
+  registrationRevision: exactRevisionV04Schema,
 });
 export const channelAdapterRefV04Schema = z.strictObject({
-  category: z.literal('channel_adapter'), id: protocolIdSchema, version: protocolNameSchema,
+  category: z.literal('channel_adapter'),
+  id: protocolIdSchema,
+  version: protocolNameSchema,
   manifest: versionedManifestReferenceV04Schema,
 });
 export const surfaceCapabilityManifestV04Schema = z.strictObject({
   protocolVersion: protocolVersionV04Schema,
   id: protocolIdSchema,
   version: protocolNameSchema,
-  commands: z.array(z.enum(['conversation.send', 'responsibility.capture'])).min(1).max(2),
-  projections: z.array(z.enum(['conversation', 'responsibility_status', 'needs_you', 're_entry'])).max(4),
+  commands: z
+    .array(z.enum(['conversation.send', 'responsibility.capture']))
+    .min(1)
+    .max(2),
+  projections: z
+    .array(z.enum(['conversation', 'responsibility_status', 'needs_you', 're_entry']))
+    .max(4),
   offlineCommands: z.literal('none'),
 });
 export const channelPresenceV04Schema = z.strictObject({
@@ -48,12 +67,18 @@ const surfaceCommandBase = {
 export const conversationCommandRequestV04Schema = z.strictObject({
   ...surfaceCommandBase,
   commandType: z.literal('conversation.send'),
-  payload: z.strictObject({ content: boundedProtocolTextV04(4_096), contentDigest: protocolDigestSchema }),
+  payload: z.strictObject({
+    content: boundedProtocolTextV04(4_096),
+    contentDigest: protocolDigestSchema,
+  }),
 });
 export const responsibilityCaptureCommandRequestV04Schema = z.strictObject({
   ...surfaceCommandBase,
   commandType: z.literal('responsibility.capture'),
-  payload: z.strictObject({ userStatement: boundedProtocolTextV04(4_096), statementDigest: protocolDigestSchema }),
+  payload: z.strictObject({
+    userStatement: boundedProtocolTextV04(4_096),
+    statementDigest: protocolDigestSchema,
+  }),
 });
 export const deliveryIntentV04Schema = z.strictObject({
   protocolVersion: protocolVersionV04Schema,
