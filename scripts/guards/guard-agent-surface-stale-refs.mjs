@@ -46,7 +46,7 @@ const checks = [
   {
     id: 'retired-rule-file',
     pattern: /\.claude\/rules\/(?:architecture|coding-standards|phase-orchestration)\.md/,
-    message: 'use .claude/rules/INDEX.md and the six mirrored universal rule files',
+    message: 'use .claude/rules/INDEX.md and the five mirrored universal rule files',
   },
   {
     id: 'retired-contract-package',

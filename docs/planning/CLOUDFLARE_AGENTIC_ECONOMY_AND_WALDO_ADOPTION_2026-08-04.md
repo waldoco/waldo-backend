@@ -1,5 +1,7 @@
 # Cloudflare's Agentic Economy Thesis and Waldo Adoption Plan
 
+> **Reference only.** This preserves source-pinned infrastructure research. It does not define current product scope, build order, provider selection, or shipped status; use the convergence, architecture lock, and production run contract.
+
 **Date:** 2026-08-04
 **Status:** source-backed research plus locked Cloudflare implementation posture
 **Scope:** recent Cloudflare first-party posts through the live 2026-08-04 feed refresh

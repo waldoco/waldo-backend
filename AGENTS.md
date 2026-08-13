@@ -7,13 +7,12 @@
 | [`.claude/rules/posture.md`](.claude/rules/posture.md) | Role · truthfulness (`[inference]`/`[blocked]`) · communication · verification · destructive actions. |
 | [`.claude/rules/mental-model.md`](.claude/rules/mental-model.md) | 6 disciplines + "every line earns its place" + no-cross-references-in-code. |
 | [`.claude/rules/language.md`](.claude/rules/language.md) | Architecture vocabulary. |
-| [`.claude/rules/hey-109-workflow.md`](.claude/rules/hey-109-workflow.md) | Multi-agent coordination — cluster split (waldo-backend is mostly Codex's; Claude owns Supabase schema · CRS · memory · GDPR runbook), Linear labels, Agent-Ready bar. |
 | [`.claude/rules/work-modes.md`](.claude/rules/work-modes.md) | Five surfaces · trigger modes · writing block. |
 | [`.claude/rules/security-checklist.md`](.claude/rules/security-checklist.md) | 5 Always-Check invariants · conditional checks · severity matrix · health-data overlay. |
 
 Mirrored from canonical source in `waldo-brain` per [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md). Do not edit locally.
 
-The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. Start with [`docs/foundation/NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md), the [`architecture lock`](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), and [`CONTRIBUTOR-ONBOARDING.md`](docs/foundation/CONTRIBUTOR-ONBOARDING.md). For the contributor loop, skill status, plugin boundaries, and verification wall, read [`AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). Retired wave and ticket plans remain in Git history and are not current product or sequencing authority.
+The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. Start with [`docs/foundation/NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md), the [`production run contract`](docs/foundation/NEXT-BACKEND-SESSION-PROMPT.md), the [`execution ledger`](docs/foundation/EXECUTION-LEDGER.md), the [`product/architecture convergence`](docs/planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md), the [`architecture lock`](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), and [`CONTRIBUTOR-ONBOARDING.md`](docs/foundation/CONTRIBUTOR-ONBOARDING.md). For the contributor loop, skill status, plugin boundaries, and verification wall, read [`AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). GitHub issues, milestones, labels, PRs, and linked evidence are the current delivery workflow; Linear/HEY identifiers are historical only. Every write-capable session registers its issue, branch/worktree, base SHA, scope, file ownership, agent/subagent roster, and handoff evidence through [#116](https://github.com/Pin4sf/waldo-backend/issues/116). Retired wave and ticket plans remain in Git history and are not current product or sequencing authority.
 
 ---
 
@@ -71,7 +70,6 @@ Canonical source: `.claude/skills/`. `.agents/skills/` is a compatibility mirror
 - `/check-contract` — verify implementation code matches `packages/contracts`
 - `/run-eval` — run the eval suite when present; otherwise record the eval-suite gap and run the verify wall
 - `/write-a-skill` — create a new skill for this repo
-- `/session-bus` — cross-session state handoff; invoke at session start and end
 - `/waldo-isa-run-contract` — define current state, ideal state, criteria, test strategy, work slices, verification, and learning
 - `/waldo-builder-registry` — design/audit source-backed builder skills, plugin records, tool manifests, and eval gates
 - `/waldo-memory-proposal-review` — review persistent memory/goal/context updates before they become durable truth

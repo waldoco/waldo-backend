@@ -1,5 +1,7 @@
 # Waldo Final Home + Work Backend Architecture Plan
 
+> **Authority note — refreshed 2026-08-12:** This document preserves the source-pinned contract, state-machine, failure-path, and migration analysis from 2026-08-04. The [Product and Architecture Convergence](./WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md) now owns the current product definition, Health First optionality, Kennel Electron Home/Work composition, simplicity/account experience, and proof-gated execution order. The [Architecture Lock](./WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) owns current placement and invariants. Where wording conflicts, do not use this earlier plan to restore a superseded product decision.
+
 **Status:** founder-approved stable-kernel build direction; accepted ADRs remain canonical until reconciled, and no product implementation is claimed by this document
 **Date:** 2026-08-04
 **Implementation-start addendum:** 2026-08-05
@@ -21,7 +23,7 @@ Every recommendation is marked **[Observed fact]**, **[Inference]**, **[Proposed
 
 > **[Decision — locked]** Preserve the trusted run loop’s effect intent, keyed reconciliation, journal, governor, outbox, owner binding, and crash recovery. Extract them behind a narrow `ExecutionKernel` interface. Do not treat current Goal, Run, Session, Trace, or Spot vocabulary as the final product model.
 
-> **[Proposed decision — Reject]** Health is not Waldo’s category, agenda, trigger ontology, or autonomy controller. Health is optional, consented, passive rich context that can make help more caring. Raw health stays in its source store; execution receives none by default and only a purpose-bound, derived, expiring projection when allowed.
+> **[Decision refresh]** Health First is a recommended, consented, first-class product enhancement, but never a prerequisite, category ceiling, agenda, trigger authority, diagnosis engine, or autonomy controller. CRS, Form, Spots, Constellation, longitudinal context, and care proposals remain visible capabilities. Raw health stays in its governed source store; execution receives none by default and only a purpose-bound, derived, expiring projection when allowed. Without health, the complete core personal-agent and orchestration product remains available.
 
 > **[Proposed decision — Adapt]** Treat ChatGPT’s July 2026 Voice/Work direction as market validation for voice-guided cross-project coordination, progress checks, desktop context, and connected tools. Waldo’s stronger contract is one identity and one Outcome/Open Loop model across all providers and surfaces. Voice is a presence capability, not another agent or memory.
 
@@ -66,7 +68,7 @@ The architecture succeeds only when it produces continuity, follow-through, exec
 | Effect semantics | **[Decision — locked]** Use at-least-once execution plus idempotency, keyed reconciliation, and effectively-once visible effects; never claim cross-system exactly-once execution. |
 | Context size | **[Decision — locked]** Prompt capacity is not consent; context stays purpose-bound and bounded. |
 | Session completion | **[Decision — locked]** Provider or harness `done` is an AgentSession observation only. |
-| Health/body data | **[Decision — locked]** It is optional passive context for care, never Waldo's category, agenda, or authority source. |
+| Health/body data | **[Decision — refreshed]** Health First is recommended and first-class but optional; it enhances care/planning/agency without becoming Waldo's category, prerequisite, agenda, diagnosis, or authority source. |
 
 ## 3. Observed current state at the pinned SHA
 
@@ -1211,7 +1213,7 @@ An issue may narrow the first two commands when its path scope proves the other 
 | Independent verification builds trust | It adds cost/latency without reducing false completion or repair rate |
 | One Waldo across Home and Work is valuable | Users consistently split identity/context despite scopes and correction controls |
 | Needs You reduces burden | Missed consequences rise or users still inspect raw sessions routinely |
-| Health as passive context feels caring | Users perceive derived context as controlling, invasive, or irrelevant even with consent/correction |
+| Optional Health First improves care/planning without narrowing Waldo | Users perceive derived context as controlling, invasive, irrelevant, required, or disabling when declined |
 | Computer can be an executor | Any isolation/credential/egress/recovery/consistency/cost/version gate fails |
 | Same-DO product root remains viable | Measured storage/concurrency/collaboration patterns conflict with it, not hypothetical scale anxiety |
 
