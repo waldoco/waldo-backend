@@ -1,114 +1,101 @@
-# Next Session Plan — Whole-Product Waldo Build
+# Next Session Plan — Waldo Backend Production Convergence
 
-**Status:** current repository entrypoint after the 2026-08-05 architecture lock
-**Scope:** backend, Kennel protocol/executor seams, other presences, connectors, governed execution, evidence, continuity, workspace, and distribution contracts
+**Status:** current repository entrypoint
+**Updated:** 2026-08-13
+**Milestone:** [Waldo Backend Production Launch](https://github.com/Pin4sf/waldo-backend/milestone/1)
+**Umbrella:** [#78](https://github.com/Pin4sf/waldo-backend/issues/78)
+**Execution ledger:** [#116](https://github.com/Pin4sf/waldo-backend/issues/116) and [protocol](./EXECUTION-LEDGER.md)
+**Next action:** B0 only — [#107](https://github.com/Pin4sf/waldo-backend/issues/107), with PRs #99 and #100 reviewed against fresh main
 
-## Build authority
+Waldo is one private, user-owned agent account across three primary launch surfaces: Electron Kennel desktop, Waldo mobile with optional Health/Care, and messaging presence. Telegram and Discord are required at launch; WhatsApp remains a primary target whose vendor approval cannot block launch. The backend owns identity, authority, canonical Outcome state, context governance, evidence, verification, acceptance, continuity, and ordered projections. Presences render or propose; providers, executors, connectors, tools, channels, and people contribute bounded observations or effects. None can declare the user's Outcome complete.
 
-This is one whole-product build across personal assistance, work orchestration, and their bridge. Work is organized through parallel, dependency-aware workstreams; there are no product phases or slices and no team-size scope cuts.
+The product promise is: **a person can tell Waldo, “Make sure this gets handled,” and trust it to carry the responsibility until the result is verified, accepted, reopened, or consciously released—without taking control away.** Health First is a recommended and differentiated enhancement, never a prerequisite.
 
-The product promise is: **a person can tell Waldo, “Make sure this gets handled,” and trust it to carry the responsibility until the result is verified, accepted, reopened, or consciously released—without taking control away.**
+## Read in this order
 
-Read in this order:
+1. [Documentation map](../README.md) — live authority versus reference-only evidence.
+2. [Production run contract](./NEXT-BACKEND-SESSION-PROMPT.md) — B0-B6 criteria, dependency map, issue links, falsifiers, and verification wall.
+3. [Product and architecture convergence](../planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md) — current product definition and experience authority.
+4. [Product capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) — whole-product envelope and honest delivery classification.
+5. [Architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) — placement, definitive writers, trust boundaries, and invariants.
+6. [Contributor onboarding](./CONTRIBUTOR-ONBOARDING.md), [operating workflow](./AGENT-OPERATING-WORKFLOW.md), and [local verification](./LOCAL-DEV-TESTING-PIPELINE.md).
+7. Fresh source/tests, the current issue/PR, and accepted ADRs for the exact seam being changed.
 
-1. [Product capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) — positioning, promised product envelope, user value/falsifiers, and honest delivery statuses.
-2. [Architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) — build authority, owner placement, definitive writers, governance, workspace, workstreams, and proof gates.
-3. [Final Home + Work architecture](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) — pinned current state, target contracts/state machines, failure semantics, migration, and unknowns.
-4. [Capability source notes](../planning/WALDO_PRODUCT_CAPABILITY_VALIDATION_SOURCE_NOTES_2026-08-04.md) — comparator evidence and interpretation limits.
-5. [Contributor onboarding](./CONTRIBUTOR-ONBOARDING.md), [agent workflow](./AGENT-OPERATING-WORKFLOW.md), and [local verification](./LOCAL-DEV-TESTING-PIPELINE.md).
-6. Fresh source/tests, the current issue/PR, and accepted ADRs for the exact seam being changed.
+Planning text is never shipped proof. Re-pin `origin/main`, inspect the implementation, preserve dirty work, and classify claims as `architecture_specified`, `contract_defined`, `module_implemented`, `adapter_conformance_passed`, `cross_surface_acceptance_passed`, or `operational_proof_passed`.
 
-Do not treat a planning document as shipped truth. Pin the current `origin/main` SHA, inspect implementation and tests, preserve dirty checkouts, and distinguish `shipped`, `partial`, `stub`, `proposed`, `missing`, and `rejected`.
+## Current evidence
 
-## Immediate implementation start
+Checked 2026-08-13:
 
-Responsibility-handshake v0.1 and its golden fixtures landed in PR #74. PR #75 added the owner-domain tracer bullet and negotiated v0.2 capture/projection, and PR #76 added the authenticated public adapter. The current Gate B candidate adds the version-pinned v0.3 Outcome-bound planning harness; its exact merge state and proof level must be checked live. Neither this document nor a PR proves current `main`: every continuation must fetch and pin `origin/main`, inspect the live PR state, and classify its evidence again. The [next backend session prompt](./NEXT-BACKEND-SESSION-PROMPT.md) begins with that re-pin and separates Kennel v0.3 consumption from the next Waldo-owned Evidence/Verification slice.
+- repository documentation pin: `origin/main@51da2d1`;
+- newest product-code pin represented by the convergence: `dd434e9`;
+- contracts: 58 files and 1,475 tests passed;
+- guards: passed, including self-tests;
+- runtime: 37 files passed and 1 failed; 994 tests passed and 7 failed because two authorization fixtures expired on 2026-08-08;
+- Docker/Supabase: unavailable at the local OrbStack socket, so the full repository wall and Supabase integration are not proved.
 
-That contract work is the first dependency of one complete responsibility backbone:
+Implemented locally: authenticated owner-routed responsibility ingress, capture/projection v0.1/v0.2, bounded planning v0.3, owner events/projections, and one leased/fenced/cancellable zero-tool planning turn. A separate trusted RunLoop substrate provides journal/outbox, recovery, scheduling, safety, provider, context, and effect foundations.
 
-1. capture responsibility in Kennel;
-2. admit a canonical Outcome in the backend;
-3. delegate a bounded WorkUnit to Kennel;
-4. receive session observations and candidate evidence;
-5. pause for a durable Needs You judgment;
-6. perform one reversible effect through the trusted execution path;
-7. verify independently;
-8. accept, reopen, or release; and
-9. restore the exact surviving OpenLoop/ReEntryPoint the next day.
-
-Backend domain/reducer work and the Kennel protocol client begin in parallel as soon as their exact shared fixtures land. More providers, cloud workspaces, DeepWiki ingestion, capability marketplaces, and dashboard breadth must not substitute for this proof.
-
-## Outcome Finisher ownership split
-
-| Capability | Kennel’s job | Waldo’s job |
-|---|---|---|
-| Mission planning | Interactive planning UI; propose Mission and WorkUnits | Validate and persist canonical Mission/WorkUnits |
-| Prompt enhancement | Present/edit the brief and send it to Codex | Compile governed context from Outcome, decisions, constraints and evidence requirements |
-| Session dashboard | Show running/waiting/blocked/completed sessions | Ensure session status cannot falsely determine Outcome status |
-| Agent control | Start, steer, pause, resume, cancel; recover local processes | Authorize the bounded work and determine whether it remains valid |
-| Evidence | Gather diffs, tests, artifacts and provider reports | Decide what counts as candidate evidence and run independent verification |
-| Re-entry | Show the exact place to return in Kennel | Persist the canonical OpenLoop/ReEntryPoint |
-| Completion | Present acceptance/reopen controls | Own verified state and record the user’s acceptance/reopen decision |
-
-“Not a prompt enhancer or agent-session dashboard” does not reject those Kennel capabilities. Kennel must provide prompt/context enhancement, session visibility/control, mission planning UI, supervision, and re-entry presentation beneath the Waldo-powered Outcome Finisher. They are not canonical product truth or sufficient completion conditions. Waldo owns and adjudicates durable Outcome/Mission/WorkUnit state, acceptance criteria, authority, verification, OpenLoop, and re-entry state; Kennel proposes, plans, renders, executes, and owns local process recovery. Paxel-style historical session analysis remains an optional evidence/continuity input, not the main product loop.
-
-The capture tracer bullet records bounded canonical `WorkUnit` objects with dependencies, evidence requirements, required capabilities, stop conditions, and server-owned deny-by-default authority, budget, isolation, assignee, and session fields. Gate B authorizes only one no-tools provider planning turn and records its bounded candidate plan. Non-planning execution, effectful capabilities, candidate Evidence, independent Verification, Acceptance, OpenLoop/ReEntry, and completion remain separate work.
+Missing or unproved: the WorkUnit-to-trusted-execution bridge; Judgment/Evidence/Verification/Acceptance/OpenLoop/ReEntry; multi-presence Home/channel gateway; service-first Connections and real reversible effects; governed context, routines, credentials and laptop-off execution; Kennel/mobile/Telegram/Discord acceptance; deletion/restore; staging; and production operations.
 
 ## Stable kernel
 
-- One Waldo identity and one per-owner backend authority root.
-- `WaldoCoordinator` is logically above providers/executors and remains inside the owner Durable Object transaction boundary with `RunLoopEngine` until measured evidence earns another placement.
-- The trusted RunLoop remains the only physical execution/effect path while the Coordinator and product domain are added around it.
-- Kennel proposes and executes under a valid backend lease; the owner backend admits. Kennel owns local operation/process durability, never canonical identity, memory, Outcome truth, authority, Acceptance, or closure.
-- Providers, connectors, people, and execution environments return untrusted observations, receipts, and candidate evidence.
-- External effects persist frozen intent and digest before I/O, reconcile ambiguity before retry, and have exactly one retry owner.
-- Agent activity, Evidence, Verification, Acceptance, and Open Loop closure remain separate.
-- User statements and corrections outrank inference. Health is optional passive context inside a user-grounded purpose, never the product category or authority source.
-- Protocol 0.1 and the negotiated v0.2 capability advertise `offlineCommands: "none"`. Disconnected presences can show only an explicitly stale read-only projection.
+- One owner maps to one canonical backend authority root.
+- One named reducer is the durable writer for each aggregate.
+- `WaldoCoordinator` authenticates, authorizes, and sequences; `RunLoopEngine` remains the only physical trusted execution/effect path during additive migration.
+- Kennel owns device-local process/workspace durability, never canonical identity, context, Outcome truth, authority, Acceptance, or closure.
+- Provider or executor `done` is an observation. Evidence, Verification, Acceptance, Outcome state, and OpenLoop closure are distinct.
+- Effects persist frozen intent and digest before I/O; ambiguity reconciles before retry; each call path has one retry owner.
+- User statements and corrections outrank inference. Memory is not permission.
+- Health-declined users retain the complete core agent product without invented readiness or pressure.
+- Ordinary setup exposes one Waldo account, recognizable Connections, plain-language authority, and truthful placement/status—not MCP, CLI, Markdown, repositories, API keys, models, or runtimes.
+- Protocol 0.1/v0.2 advertises `offlineCommands: "none"`; disconnected presences show only explicitly stale read-only projections until the accepted offline-draft ADR conflict is reconciled.
 
-## Session start
+## Build order
 
-1. Run `git status -sb`, inspect worktrees, fetch the relevant remote branch, and record the SHA being claimed.
-2. Read the current contract/module/test surfaces for the assigned workstream. Never infer implementation from a plan or ticket.
-3. Define one observable outcome, dependencies, data/privacy and authority impact, invalid/degraded cases, exact verification, and rollback.
-4. Use the definitive writer matrix. Do not add a second durable writer, alternate truth store, direct provider authority, or speculative microservice.
-5. Build against released contracts and shared fixtures. Fakes prove contracts only; real adapter/product claims require version-pinned conformance and cross-surface acceptance.
-6. Run the affected package tests plus the full integration gate before merge.
+| Gate | Required result | Issues | Promotion rule |
+|---|---|---|---|
+| B0 | trustworthy baseline and public route/OpenAPI parity | #107; PRs #99, #100 | only B0 is active now |
+| B1 | shared command primitives and one WorkUnit-to-execution writer | #81, #80, #87, #88 | start #81 after B0 proof; #86 owns the B3 channel envelope |
+| B2 | durable judgment and honest closure spine | #82, #84, #85 | start after B1 contracts/replay proof |
+| B3 | one Waldo across ordered desktop/mobile/messaging presences | #95, #104, #108, #86 | require both health states plus link/revoke/gap/cross-owner proof |
+| B4 | Connections, effects and real Telegram/Discord adapters | #90, #91, #109, #83, #89, #112, #113 | require Calendar/inbox test accounts and credentialed channel staging |
+| B5 | context, routines, cloud execution and durable messaging | #92, #94, #110, #114 | require restart/fault/rate-limit/retry/deletion/budget proof |
+| B6 | portability, deletion and three-surface production release | #96, #111 | require Electron, mobile, Telegram and Discord operational proof |
 
-## Current work organization
+Model-routing breadth (#93), MCP distribution (#97), and approval-dependent WhatsApp activation (#115) are post-launch/non-blocking. Telegram and Discord messaging are launch-critical. Gate labels express dependency order; they are not independent product editions or permission to omit later whole-product acceptance.
 
-The architecture lock defines these concurrent workstreams:
+Open PRs are reconciled in the [production run contract](./NEXT-BACKEND-SESSION-PROMPT.md): #99/#100 are B0 candidates; #98/#103 inform B1/B2; #105 informs B3; #101 informs B4; #102 is superseded by #78; and merge-dirty pre-convergence PRs #30/#59/#70 must not merge as-is.
 
-- contract and conformance spine;
-- owner root and product domain;
-- trusted execution and effects;
-- Kennel and desktop harness;
-- workspace, artifacts, and knowledge;
-- connectors and real-world effects;
-- personal assistance and continuity;
-- work orchestration and distribution;
-- security, portability, deletion, and operations.
+Parallel surface work is tracked in GitHub, not Linear: Kennel [#26–#28](https://github.com/Pin4sf/kennel/issues/26), mobile [#6–#8](https://github.com/Pin4sf/waldo-app/issues/6), and messaging backend #86/#112–#114. During B0, Kennel may prepare its contract client shell and mobile may resolve its canonical lineage; real integration waits for the named backend fixture gate.
 
-Dependency edges determine what can integrate, not a smaller product release order. An issue is assignable only when its required contracts, scope, proof cases, and rollback are explicit.
+## Start the next session
 
-## Known reconciliation requirement
+1. Read [execution ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116), register `SESSION START` on #107, preserve unrelated dirty checkouts, and create a clean worktree from fresh `origin/main` for B0 implementation.
+2. Read issue #107 and inspect PRs #99 and #100 against the actual source and current CI. Do not merge from tracker prose alone.
+3. Define the B0 run contract and failure paths, then repair the time-relative fixture, migration-lineage guard, and public Worker/OpenAPI parity as separate reviewable changes.
+4. Run contracts, runtime, Supabase integration, guards, generated-artifact checks, and the full repository wall at one SHA. Classify unavailable/skipped evidence explicitly.
+5. Run breaker plus independent Standards and Spec review. Close B0 only when another clean checkout can reproduce the evidence.
+6. Promote #81—and no other B1 issue—after B0 closes.
 
-The architecture lock's current offline decision is stricter than accepted ADR-0077 and ADR-0082, which preserve device-local chat drafts. Do not silently choose either behavior. Reconcile the accepted ADRs before merging implementation that removes or retains disconnected draft creation/queueing.
+### Copy-ready next-session prompt
 
-## Retired documents
+> Continue Waldo backend production convergence from the current `origin/main`. Read `AGENTS.md`, `.claude/rules/INDEX.md`, `docs/foundation/NEXT-SESSION-PLAN.md`, `docs/foundation/NEXT-BACKEND-SESSION-PROMPT.md`, `docs/foundation/EXECUTION-LEDGER.md`, the latest `docs/ledger/` handoff, GitHub issues #116, #78, and #107, then inspect PRs #99 and #100 against fresh source and CI. Start only B0. Before writing, create a clean worktree, preserve every unrelated dirty checkout, and post `SESSION START` on #107 with session/parent ID, owner and agent/subagent roster, branch/worktree/base SHA, exact file ownership, dependencies, acceptance, falsifier, verification, and rollback. Define the B0 run contract and failure paths before implementation. Repair the time-relative authorization fixture, migration-lineage guard, and public Worker/OpenAPI route parity as separate reviewable changes. Run contracts, runtime, Supabase integration, guards, generated-artifact checks, and the full repository wall at one SHA; classify passed, failed, skipped, unavailable, deferred, and not-run evidence separately. Run breaker plus independent Standards and Spec review. Post `SESSION HANDOFF` with commits, PR, evidence, residual risks, next owner, and worktree disposition. Close B0 only when another clean checkout can reproduce the evidence, then promote #81 and no other B1 issue. Do not start B1-B6, merge from tracker prose, deploy, fabricate Docker/Supabase proof, or let provider completion imply Outcome completion.
 
-Completed ticket handoffs, July wave plans, superseded app/health-first plans, and one-off verification logs are intentionally absent from the live documentation tree. Git history preserves them for archaeology. Do not restore or cite them as current product scope, work order, ownership, or shipped proof.
+## Retired guidance
+
+The HEY-109 cluster workflow, session-bus skill, completed Gate A/Gate B/capture handoffs, July wave plans, superseded app/health-only plans, and one-off verification logs are retired. Git history preserves tracked files. Do not restore their labels, ownership split, “start now” directions, or parallel sequencing as current authority.
 
 ## Verification
 
-Documentation-only changes:
+Documentation and governance changes:
 
 ```bash
 git diff --check
 npx -y pnpm@10.34.4 verify:guards
 ```
 
-Runtime, contract, or integration changes:
+Runtime, contracts, migration, or integration changes:
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/contracts test
@@ -117,4 +104,4 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-Record passed, failed, expired, skipped, unavailable, deferred, and not-run evidence distinctly. A green local test is not staging, production, adapter-conformance, or product-acceptance proof.
+Record passed, failed, expired, skipped, unavailable, deferred, and not-run evidence separately. Local/fake proof is not staging, production, adapter-conformance, or product-acceptance proof.

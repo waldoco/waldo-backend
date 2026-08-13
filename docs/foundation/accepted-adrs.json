@@ -259,7 +259,7 @@
   {
     "adr": "0043",
     "title": "Cross-Session Bus for Multi-Developer, Multi-Machine, Multi-Repo Claude Code Work",
-    "status": "accepted",
+    "status": "superseded",
     "file": "0043-cross-session-bus.md"
   },
   {
@@ -441,6 +441,12 @@
     "title": "Conversation spaces, nested threading, context pins, health bundles, and replay",
     "status": "accepted",
     "file": "0077-conversation-spaces-threading-context-pins-and-replay.md"
+  },
+  {
+    "adr": "0084",
+    "title": "Retire HEY-109 session bus and fixed agent-cluster workflow",
+    "status": "accepted",
+    "file": "0084-retire-hey-109-session-bus-and-cluster-workflow.md"
   },
   {
     "adr": "2026",

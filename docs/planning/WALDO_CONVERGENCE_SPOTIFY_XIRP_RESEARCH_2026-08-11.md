@@ -1,5 +1,7 @@
 # Spotify Xirp + Portal Research for Waldo Product/Architecture Convergence
 
+> **Reference only.** This preserves clean-room comparator research. It does not define Waldo's current architecture, delivery order, or shipped capability.
+
 **Date:** 2026-08-11
 **Scope:** Public-source product and architecture research for the Waldo convergence investigation
 **Status:** Research input, not an implementation decision or shipped-capability claim

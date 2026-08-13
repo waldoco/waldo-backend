@@ -78,7 +78,7 @@ When the user uses these phrases (or anything semantically close), switch into t
 | `science loop` / `hypothesis` / `falsify` | Generate plural hypotheses, name falsifiers, seek disconfirming evidence, and state the threshold for action. |
 | `impact analysis` / `blast radius` | Name contracts, data stores, agent tools, privacy/security surfaces, user flows, downstream repos, docs, tests, and rollback. |
 | `conformance mode` / `rule gate` | Translate markdown/ADR rules into deterministic checks where possible. Findings use `block`, `warn`, or `suppressed` with justification. |
-| `review mode` / `@waldo-review` | Apply the AI-native review protocol from `hey-109-workflow.md`: security, contract safety, determinism, tests, impact, conformance. |
+| `review mode` / `@waldo-review` | Apply the repository review loop: Standards and Spec review, security/privacy triggers, contract safety, determinism, tests, impact, conformance, and independent verification. |
 
 These compose: `red-team a council on whether to deprecate the X adapter` is valid — multiple voices, each adversarial.
 
@@ -117,6 +117,6 @@ When the surface is **writing** (drafts, essays, posts, journalism), three failu
 - **`posture.md`** applies in all five modes. Truthfulness contract, communication norms, destructive-action discipline — constant.
 - **`mental-model.md`** applies most directly in engineering mode. The 6 disciplines still translate to other modes (problem-first applies to a writing brief; first-principles applies to a strategy call; no-slop applies to every word published), but the operational form is engineering.
 - **`language.md`** applies in engineering and strategy. The Module · Interface · Seam vocabulary lets engineering and architecture discussions converge.
-- **`hey-109-workflow.md`** applies when work crosses into a Linear ticket — that is mostly engineering, occasionally writing (a planned doc), rarely strategy (a planned decision artefact).
+- **Repository operating workflows** apply when work crosses into an issue or pull request. The current repository entrypoint and issue evidence define sequencing; tracker state never overrides accepted ADRs, source, tests, or the user's latest instruction.
 
 When a session genuinely needs more than one mode — common — declare the mode shift inline: "Switching to strategy mode for this decision, then back to engineering for the implementation." The user can then redirect if the mode is wrong.

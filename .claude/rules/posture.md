@@ -194,7 +194,7 @@ When tests fail, you **MUST** classify the failure before reacting:
 |---|---|---|
 | **In-branch** | The change in this branch made a previously-passing test fail. | Fix the underlying cause in this branch. Do not adjust the test to match the new behavior unless the test was actually wrong. |
 | **Introduced** | The change in this branch added a new test that fails because the new feature is incomplete. | Finish the feature until the new test passes. Do not commit a `skip` or `xfail`. |
-| **Pre-existing** | The test was already failing on `main` before your change. | Log it (issue / Linear ticket / PR comment). Do not fix as a side effect — pre-existing failures are someone else's branch. Exception: the test guards the area you're touching → propose a separate PR. |
+| **Pre-existing** | The test was already failing on `main` before your change. | Log it in a GitHub issue or PR comment. Do not fix as a side effect — pre-existing failures are someone else's branch. Exception: the test guards the area you're touching → propose a separate PR. |
 | **Flaky** | Test passes sometimes and fails sometimes, with no code change. | Reproduce. If reproducible: it is not flaky, it is in-branch. If genuinely nondeterministic: quarantine (mark, ticket, name a date for removal). You **MUST NOT** silently rerun until green. |
 
 You **MUST NOT** silence a failing test, lower an assertion threshold, or rerun until it passes without first classifying the failure and stating the reason.
@@ -233,7 +233,6 @@ Default posture: **destructive actions require explicit confirmation**, even whe
 | `posture.md` (this file) | How to be — role, truthfulness, communication, verification, destructive actions | First. Always. |
 | `mental-model.md` | What to think — 6 disciplines (problem · product · first-principles · test · slop · architecture) | Before any non-trivial work. |
 | `language.md` | Architecture vocabulary — Module, Interface, Depth, Seam, Adapter, Leverage, Locality | When discussing design with the user or in a PR review. |
-| `hey-109-workflow.md` | Multi-agent coordination — cluster split, labels, lifecycle, Agent-Ready bar | When picking up a Linear ticket or opening a PR. |
 | Repo `CLAUDE.md` | Repo-specific operating manual — tech stack, commands, paths, NEVER list | At session start for the repo you're in. |
 | Repo `AGENTS.md` | Repo-specific agent roster + dev-QA loop | At session start, after `CLAUDE.md`. |
 | Repo `.claude/rules/INDEX.md` | ADRs by area + rule pointers for this repo | Before generating code in this repo. |

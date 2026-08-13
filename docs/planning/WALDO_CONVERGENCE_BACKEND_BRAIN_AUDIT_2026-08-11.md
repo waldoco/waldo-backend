@@ -1,5 +1,7 @@
 # Waldo Convergence: Backend + Brain Audit
 
+> **Reference only.** This is a pinned implementation audit, not current sequencing or shipped proof. Use fresh source/tests and the production run contract for current work.
+
 **Snapshot:** 2026-08-11
 **Scope:** read-only audit of the current `waldo-backend` checkout, with `waldo-brain` used as product and architecture context
 **Question:** what is implemented now, what is architecture-specified, what remains prototype/test-only, and what must join before Waldo can truthfully be called one durable agent that handles responsibilities over time?
