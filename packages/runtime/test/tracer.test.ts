@@ -210,20 +210,29 @@ describe('TracerDO one-path: scheduled wake -> governor -> gate -> outbox -> sin
   it('persists a canonical one-shot handoff schedule row for the tracer alarm', async () => {
     const stub = freshStub();
 
-    const runId = await schedule(stub);
-    const entry = await readScheduleEntry(stub);
+    // This case inspects persistence without consuming the alarm. Keep the wake outside the test
+    // window and always cancel it: an armed alarm can otherwise auto-fire after beforeEach resets
+    // the module-scoped FakeSink and contaminate a later test's delivery count.
+    const runId = await schedule(stub, Date.now() + 60_000);
+    try {
+      const entry = await readScheduleEntry(stub);
 
-    expect(scheduleEntrySchema.safeParse(entry).success).toBe(true);
-    expect(entry).toMatchObject({
-      id: `handoff:${runId}`,
-      kind: 'handoff',
-      recurrence: null,
-      payload_refs: { run_id: runId, cursor: 'tracer' },
-      status: 'armed',
-      attempts: 0,
-      last_fired_at: null,
-      quarantined_until: null,
-    });
+      expect(scheduleEntrySchema.safeParse(entry).success).toBe(true);
+      expect(entry).toMatchObject({
+        id: `handoff:${runId}`,
+        kind: 'handoff',
+        recurrence: null,
+        payload_refs: { run_id: runId, cursor: 'tracer' },
+        status: 'armed',
+        attempts: 0,
+        last_fired_at: null,
+        quarantined_until: null,
+      });
+    } finally {
+      await runInDurableObject(stub, async (_instance, state) => {
+        await state.storage.deleteAlarm();
+      });
+    }
   });
 
   it('happy path: a scheduled alarm drives the run to DONE and the sink observes exactly one send', async () => {
