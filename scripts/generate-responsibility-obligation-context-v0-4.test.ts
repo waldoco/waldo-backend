@@ -21,7 +21,7 @@ describe('generate responsibility obligation context v0.4 fixtures', () => {
       JSON.parse(bundle['obligation-context-confirmed.valid.json']!),
     );
     if (context.acceptanceCriteria.state !== 'confirmed') {
-      throw new Error('generated declared fixture must retain declared criteria');
+      throw new Error('generated confirmed fixture must retain confirmed criteria');
     }
     expect(context.acceptanceCriteria.digest).toBe(
       `sha256:${createHash('sha256')
