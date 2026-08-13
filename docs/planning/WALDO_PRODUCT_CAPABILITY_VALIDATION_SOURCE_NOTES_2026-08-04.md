@@ -1,5 +1,7 @@
 # Waldo Product Capability Validation — Source Notes
 
+> **Historical-source note — refreshed 2026-08-12:** This is the 2026-08-04 benchmark snapshot, retained as evidence. Current product authority is the [Product and Architecture Convergence](./WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md); current capability status is the [Product Capability Matrix](./WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md). Spotify Xirp/Portal and Grok Bot were researched later in separate first-party-source reports and must not be backdated into this snapshot: [Xirp/Portal](./WALDO_CONVERGENCE_SPOTIFY_XIRP_RESEARCH_2026-08-11.md), [Grok Bot](./GROK_BOT_PRODUCT_RESEARCH_2026-08-12.md).
+
 > Date checked: 2026-08-04
 > Purpose: source notes for validating the final Waldo Home + Work architecture against the public Waldo thesis and the Dimension, Folk, Poke, Agent Orchestrator, Medley, and Hermes benchmark set.
 > Scope: product capabilities, jobs, trust/authority, continuity, surfaces, orchestration, limitations, and architecture fit. This is not implementation evidence.
