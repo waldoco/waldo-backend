@@ -137,6 +137,14 @@ export function buildResponsibilityClosureV04Bundle(
         name: 'acceptance-command-client-authority',
         value: { ...acceptanceCommand, authorityGrant: 'grant_attacker' },
       },
+      {
+        name: 'candidate-with-admitted-time',
+        value: { ...evidence, state: 'candidate' },
+      },
+      {
+        name: 'admitted-without-time',
+        value: { ...evidence, admittedAt: null },
+      },
     ],
   });
   bundle['manifest.json'] = file({

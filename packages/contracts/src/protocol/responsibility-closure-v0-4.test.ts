@@ -5,6 +5,7 @@ import {
   acceptanceMatchesAuthorityV04,
   acceptanceV04Schema,
   candidateEvidenceSubmissionV04Schema,
+  evidenceV04Schema,
   verificationV04Schema,
   acceptanceCommandRequestV04Schema,
 } from './responsibility-closure-v0-4';
@@ -61,6 +62,21 @@ describe('responsibility closure v0.4', () => {
         candidateEvidenceSubmissionV04Schema.safeParse({ ...candidate, [field]: 'forbidden' })
           .success,
       ).toBe(false);
+    }
+  });
+
+  it('keeps Evidence admission state and time portable and non-contradictory', () => {
+    const bundle = buildResponsibilityClosureV04Bundle(() => 'c'.repeat(64));
+    const catalogue = JSON.parse(bundle['closure.rejections.json']!) as {
+      cases: Array<{ name: string; value: unknown }>;
+    };
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(
+      JSON.parse(bundle['evidence.schema.json']!),
+    );
+    for (const name of ['candidate-with-admitted-time', 'admitted-without-time']) {
+      const value = catalogue.cases.find((entry) => entry.name === name)!.value;
+      expect(evidenceV04Schema.safeParse(value).success, name).toBe(false);
+      expect(validate(value), name).toBe(false);
     }
   });
   it('represents unavailable verification only as indeterminate', () => {
@@ -156,12 +172,25 @@ describe('responsibility closure v0.4', () => {
     ).toBe(true);
     expect(acceptanceMatchesAuthorityV04(delegated, 'owner_fixture')).toBe(false);
     expect(
-      acceptanceMatchesAuthorityV04(delegated, 'owner_fixture', delegated.delegatedPolicy),
+      acceptanceMatchesAuthorityV04(
+        delegated,
+        'owner_fixture',
+        delegated.delegatedPolicy,
+        delegated.actor,
+      ),
     ).toBe(true);
     expect(
-      acceptanceMatchesAuthorityV04(delegated, 'owner_fixture', {
-        ...delegated.delegatedPolicy,
-        revision: 2,
+      acceptanceMatchesAuthorityV04(
+        delegated,
+        'owner_fixture',
+        { ...delegated.delegatedPolicy, revision: 2 },
+        delegated.actor,
+      ),
+    ).toBe(false);
+    expect(
+      acceptanceMatchesAuthorityV04(delegated, 'owner_fixture', delegated.delegatedPolicy, {
+        ...delegated.actor,
+        id: 'service_attacker',
       }),
     ).toBe(false);
     const command = JSON.parse(bundle['acceptance-command-request.valid.json']!);
@@ -185,6 +214,8 @@ describe('responsibility closure v0.4', () => {
       'provider-explicit-acceptance',
       'delegated-without-policy',
       'acceptance-command-client-authority',
+      'candidate-with-admitted-time',
+      'admitted-without-time',
     ]);
     expect(candidateEvidenceSubmissionV04Schema.safeParse(catalogue.cases[0]!.value).success).toBe(
       false,
@@ -198,5 +229,7 @@ describe('responsibility closure v0.4', () => {
     expect(acceptanceCommandRequestV04Schema.safeParse(catalogue.cases[5]!.value).success).toBe(
       false,
     );
+    expect(evidenceV04Schema.safeParse(catalogue.cases[6]!.value).success).toBe(false);
+    expect(evidenceV04Schema.safeParse(catalogue.cases[7]!.value).success).toBe(false);
   });
 });

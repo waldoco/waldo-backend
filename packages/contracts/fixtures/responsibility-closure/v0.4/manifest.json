@@ -3,7 +3,7 @@
   "family": "responsibility-closure",
   "files": {
     "candidate-evidence.schema.json": "sha256:eb2f15ef4225d3543a3fec363837c0ae2727583909a75abf6a9a94933607ea92",
-    "evidence.schema.json": "sha256:5a7d7335c273074111d5a7874cae82b322bb4eb757710bffcaf6b8bdf7911cc9",
+    "evidence.schema.json": "sha256:bd2367c824fc67d596252ccd6b7bbd9fe214452ef0ebebd14c2287eb31d39528",
     "verification.schema.json": "sha256:3ce3842a5df4e271c8966c2cda0040fcd005db2e69c5cf4bf9a41520d74b7f58",
     "acceptance.schema.json": "sha256:8ebb31bc45b4b5a3e6e72a829f7cf515eebfbf8bd8ecbee3e4d662f167371d4f",
     "acceptance-command-request.schema.json": "sha256:4fb9d089eec35106f2c205535e1f733441aa0ff34d8863105209c4ff904cad88",
@@ -13,6 +13,6 @@
     "acceptance.valid.json": "sha256:1d02fa0b418753ae810b07a0bd7a1b5895519d65934be2f85d822f4e545741bb",
     "acceptance-delegated.valid.json": "sha256:a34554efc62302c2e05c1f1d8f67cb5c6536985b8f14ec092d349b2567e73fd2",
     "acceptance-command-request.valid.json": "sha256:a728251b3712ced294298560d337451558c6dbd9716f137718f0ef33b6080230",
-    "closure.rejections.json": "sha256:ab5998f2d57696f8bc25409ad58e989d9560b5eaa730e29d334946ec6d7fa73d"
+    "closure.rejections.json": "sha256:415716fc9387832140e4d9d9a215e4c86c247c30cb80c9c5cd0e6e86ad203b3e"
   }
 }

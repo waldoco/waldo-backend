@@ -7,7 +7,7 @@ import {
   judgmentDecisionV04Schema,
   judgmentRequestV04Schema,
 } from './responsibility-judgment-authority-v0-4';
-import { protocolVersionV04Schema } from './responsibility-acceptance-check-v0-4';
+import { protocolVersionV04Schema } from './responsibility-protocol-v0-4';
 
 type HashHex = (input: string) => string;
 const file = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
@@ -74,27 +74,32 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04 = [
   'binding-coordinated-request-digest-mismatch',
 ] as const;
 
-const rejectionCasesV04Schema = z.array(z.strictObject({
-    name: z.enum(RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04),
-    schema: z.enum([
-      'judgment-answer.schema.json',
-      'judgment-request.schema.json',
-      'judgment-decision.schema.json',
-      'authority-grant.schema.json',
-      'judgment-authority-binding.schema.json',
-    ]),
-    layer: z.enum(['schema', 'runtime']),
-    zodOutcome: z.enum(['accept', 'reject']),
-    value: z.unknown(),
-  }))
+const rejectionCasesV04Schema = z
+  .array(
+    z.strictObject({
+      name: z.enum(RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04),
+      schema: z.enum([
+        'judgment-answer.schema.json',
+        'judgment-request.schema.json',
+        'judgment-decision.schema.json',
+        'authority-grant.schema.json',
+        'judgment-authority-binding.schema.json',
+      ]),
+      layer: z.enum(['schema', 'runtime']),
+      zodOutcome: z.enum(['accept', 'reject']),
+      value: z.unknown(),
+    }),
+  )
   .length(RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04.length)
   .superRefine((cases, context) => {
     const names = cases.map((entry) => entry.name);
     if (new Set(names).size !== names.length) {
       context.addIssue({ code: 'custom', message: 'rejection case names must be unique' });
     }
-    for (const [index, expected] of
-      RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04.entries()) {
+    for (const [
+      index,
+      expected,
+    ] of RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V04.entries()) {
       if (names[index] !== expected) {
         context.addIssue({
           code: 'custom',
@@ -370,7 +375,10 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
             zodOutcome: 'accept',
             value: {
               ...judgmentAnswer,
-              payload: { ...judgmentAnswer.payload, displayedRequestDigest: `sha256:${'b'.repeat(64)}` },
+              payload: {
+                ...judgmentAnswer.payload,
+                displayedRequestDigest: `sha256:${'b'.repeat(64)}`,
+              },
             },
           },
           {
@@ -494,7 +502,10 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
             schema: 'authority-grant.schema.json',
             layer: 'runtime',
             zodOutcome: 'reject',
-            value: { ...authorityGrant, scopes: ['calendar.event.create', 'calendar.event.create'] },
+            value: {
+              ...authorityGrant,
+              scopes: ['calendar.event.create', 'calendar.event.create'],
+            },
           },
           {
             name: 'binding-owner-mismatch',
@@ -827,10 +838,12 @@ export function buildResponsibilityJudgmentAuthorityV04Bundle(
       mediaType: 'application/vnd.waldo.responsibility.v0.4+json',
       offlineCommands: 'none',
       proofLevel: 'adapter_conformance_fixture',
-      files: Object.keys(files).sort().map((path) => ({
-        path,
-        sha256: `sha256:${hashHex(files[path]!)}`,
-      })),
+      files: Object.keys(files)
+        .sort()
+        .map((path) => ({
+          path,
+          sha256: `sha256:${hashHex(files[path]!)}`,
+        })),
     }),
   };
 }

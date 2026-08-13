@@ -34,7 +34,7 @@ export const candidateEvidenceSubmissionV04Schema = z.strictObject({
     .max(32),
   observedAt: iso8601Schema,
 });
-export const evidenceV04Schema = z.strictObject({
+const evidenceBaseV04Shape = {
   protocolVersion: protocolVersionV04Schema,
   id: protocolIdSchema,
   ownerId: protocolIdSchema,
@@ -46,9 +46,21 @@ export const evidenceV04Schema = z.strictObject({
   claimDigest: protocolDigestSchema,
   source: candidateEvidenceSubmissionV04Schema.shape.source,
   artifactRefs: candidateEvidenceSubmissionV04Schema.shape.artifactRefs,
-  state: z.enum(['candidate', 'admitted', 'stale', 'invalidated']),
-  admittedAt: iso8601Schema.nullable(),
-});
+} as const;
+export const evidenceV04Schema = z.discriminatedUnion('state', [
+  z.strictObject({ ...evidenceBaseV04Shape, state: z.literal('candidate'), admittedAt: z.null() }),
+  z.strictObject({
+    ...evidenceBaseV04Shape,
+    state: z.literal('admitted'),
+    admittedAt: iso8601Schema,
+  }),
+  z.strictObject({ ...evidenceBaseV04Shape, state: z.literal('stale'), admittedAt: iso8601Schema }),
+  z.strictObject({
+    ...evidenceBaseV04Shape,
+    state: z.literal('invalidated'),
+    admittedAt: iso8601Schema,
+  }),
+]);
 const verificationBaseV04Shape = {
   protocolVersion: protocolVersionV04Schema,
   id: protocolIdSchema,
@@ -168,14 +180,21 @@ export function acceptanceMatchesAuthorityV04(
   value: unknown,
   authenticatedOwnerId: string,
   expectedDelegatedPolicyValue?: unknown,
+  expectedDelegatedActorValue?: unknown,
 ): boolean {
   const acceptance = acceptanceV04Schema.parse(value);
   if (acceptance.ownerId !== authenticatedOwnerId) return false;
   if (acceptance.mode === 'explicit_owner') return acceptance.actor.id === authenticatedOwnerId;
-  if (expectedDelegatedPolicyValue === undefined) return false;
+  if (expectedDelegatedPolicyValue === undefined || expectedDelegatedActorValue === undefined) {
+    return false;
+  }
   const expectedPolicy = protocolReferenceV04Schema.parse(expectedDelegatedPolicyValue);
+  const expectedActor = z
+    .strictObject({ kind: z.enum(['owner', 'service', 'person']), id: protocolIdSchema })
+    .parse(expectedDelegatedActorValue);
   return (
     canonicalizeProtocolJson(acceptance.delegatedPolicy) ===
-    canonicalizeProtocolJson(expectedPolicy)
+      canonicalizeProtocolJson(expectedPolicy) &&
+    canonicalizeProtocolJson(acceptance.actor) === canonicalizeProtocolJson(expectedActor)
   );
 }

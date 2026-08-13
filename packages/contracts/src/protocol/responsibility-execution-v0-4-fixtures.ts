@@ -196,6 +196,26 @@ export function buildResponsibilityExecutionV04Bundle(
         },
       },
       {
+        name: 'lease-request-mismatch',
+        value: {
+          attempt,
+          lease: { ...lease, executionRequestId: 'request_other' },
+          observation,
+          lastAdmittedSequence: 0,
+          receivedAt: observation.observedAt,
+        },
+      },
+      {
+        name: 'observation-after-receipt',
+        value: {
+          attempt,
+          lease,
+          observation: { ...observation, observedAt: '2026-08-13T12:00:04.001Z' },
+          lastAdmittedSequence: 0,
+          receivedAt: '2026-08-13T12:00:04.000Z',
+        },
+      },
+      {
         name: 'cancel-client-owned-owner',
         value: { ...cancelRequest, ownerId: 'owner_attacker' },
       },

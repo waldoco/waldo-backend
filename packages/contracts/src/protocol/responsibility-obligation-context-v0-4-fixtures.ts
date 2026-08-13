@@ -3,7 +3,7 @@ import {
   canonicalizeConfirmedOutcomeAcceptanceCriteriaV04ForDigest,
   outcomeObligationContextV04Schema,
 } from './responsibility-obligation-context-v0-4';
-import { protocolVersionV04Schema } from './responsibility-acceptance-check-v0-4';
+import { protocolVersionV04Schema } from './responsibility-protocol-v0-4';
 
 type HashHex = (input: string) => string;
 const file = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;

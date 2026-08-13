@@ -195,6 +195,7 @@ export function executionObservationIsFreshV04(
     observationMatchesExecutionAttemptV04(attempt, observation) &&
     lease.ownerId === attempt.ownerId &&
     lease.attemptId === attempt.id &&
+    lease.executionRequestId === attempt.executionRequestId &&
     lease.id === attempt.leaseId &&
     lease.fencingGeneration === attempt.fencingGeneration &&
     lease.cancellationGeneration === attempt.cancellationGeneration &&
@@ -203,6 +204,7 @@ export function executionObservationIsFreshV04(
     lastAdmittedSequence >= 0 &&
     observation.sequence > lastAdmittedSequence &&
     observedAtEpoch >= acquiredAtEpoch &&
+    observedAtEpoch <= receivedAtEpoch &&
     observedAtEpoch < expiresAtEpoch &&
     receivedAtEpoch >= acquiredAtEpoch &&
     receivedAtEpoch < expiresAtEpoch

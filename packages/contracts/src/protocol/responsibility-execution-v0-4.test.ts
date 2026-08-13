@@ -137,6 +137,24 @@ describe('responsibility execution v0.4', () => {
         '2026-08-13T12:05:00.000Z',
       ),
     ).toBe(false);
+    expect(
+      executionObservationIsFreshV04(
+        attempt,
+        { ...lease, executionRequestId: 'request_other' },
+        observation,
+        0,
+        '2026-08-13T12:05:00.000Z',
+      ),
+    ).toBe(false);
+    expect(
+      executionObservationIsFreshV04(
+        attempt,
+        lease,
+        { ...observation, observedAt: '2026-08-13T12:05:00.001Z' },
+        0,
+        '2026-08-13T12:05:00.000Z',
+      ),
+    ).toBe(false);
   });
 
   it.each([
@@ -206,6 +224,8 @@ describe('responsibility execution v0.4', () => {
       'environment-manifest-drift',
       'expired-lease-observation',
       'replayed-observation',
+      'lease-request-mismatch',
+      'observation-after-receipt',
       'cancel-client-owned-owner',
     ]);
     expect(executionRequestV04Schema.safeParse(catalogue.cases[0]!.value).success).toBe(false);
@@ -213,7 +233,7 @@ describe('responsibility execution v0.4', () => {
     expect(observationMatchesExecutionAttemptV04(attempt, stale)).toBe(false);
     expect(executorObservationV04Schema.safeParse(catalogue.cases[2]!.value).success).toBe(false);
     expect(observationMatchesExecutionAttemptV04(attempt, catalogue.cases[3]!.value)).toBe(false);
-    for (const index of [4, 5]) {
+    for (const index of [4, 5, 6, 7]) {
       const value = catalogue.cases[index]!.value as {
         attempt: unknown;
         lease: unknown;
@@ -232,13 +252,13 @@ describe('responsibility execution v0.4', () => {
         catalogue.cases[index]!.name,
       ).toBe(false);
     }
-    expect(executionCancelRequestV04Schema.safeParse(catalogue.cases[6]!.value).success).toBe(
+    expect(executionCancelRequestV04Schema.safeParse(catalogue.cases[8]!.value).success).toBe(
       false,
     );
     expect(
       new Ajv2020({ strict: false, validateFormats: false }).compile(
         JSON.parse(bundle['execution-cancel-request.schema.json']!),
-      )(catalogue.cases[6]!.value),
+      )(catalogue.cases[8]!.value),
     ).toBe(false);
   });
 
