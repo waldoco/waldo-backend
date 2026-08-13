@@ -159,7 +159,7 @@ export function createResponsibilityWorkerAdapter(
       if (context === null) return problem(401);
 
       try {
-        if (planningCancel) {
+        if (route.id === 'planning_cancel') {
           const parsed = workUnitPlanningCancelRequestV03Schema.safeParse(body);
           if (!parsed.success) {
             const bodyVersion = isRecord(body) ? body.protocolVersion : undefined;
@@ -184,7 +184,7 @@ export function createResponsibilityWorkerAdapter(
           }
           return json(publicResult, 200, '0.3');
         }
-        if (planningTurn) {
+        if (route.id === 'planning_turn') {
           const parsed = workUnitPlanningTurnRequestV03Schema.safeParse(body);
           if (!parsed.success) {
             const bodyVersion = isRecord(body) ? body.protocolVersion : undefined;
@@ -254,7 +254,7 @@ export function createResponsibilityWorkerAdapter(
           }
           return json(publicResult, 200, '0.3');
         }
-        if (capture) {
+        if (route.id === 'capture') {
           const requestSchema = version === '0.1'
             ? responsibilityCaptureRequestSchema
             : responsibilityCaptureRequestV02Schema;
@@ -308,7 +308,7 @@ export function createResponsibilityWorkerAdapter(
           return json(publicResult, 201, version);
         }
 
-        if (planningProjection) {
+        if (route.id === 'planning_projection') {
           const query = parseProjectionQuery(url.searchParams);
           if (query === null) return problem(400);
           const ownerRoot = await dependencies.ownerRootFor(context);
@@ -325,25 +325,29 @@ export function createResponsibilityWorkerAdapter(
           return json(publicResult, 200, '0.3');
         }
 
-        const query = parseProjectionQuery(url.searchParams);
-        if (query === null) return problem(400);
-        const ownerRoot = await dependencies.ownerRootFor(context);
-        const projectionVersion = version === '0.1' ? '0.1' : '0.2';
-        const result = await ownerRoot.readProjection(
-          {
-            routedOwnerId: context.ownerId,
-            protocolVersion: projectionVersion,
-            ...query,
-          },
-          ingressContext(context),
-        );
-        const publicResult = projectionVersion === '0.1'
-          ? responsibilityProjectionPageV01CompatibilitySchema.parse(result)
-          : responsibilityProjectionPageV02Schema.parse(result);
-        if (publicResult.ownerId !== context.ownerId || publicResult.protocolVersion !== projectionVersion) {
-          throw new Error('responsibility response authority mismatch');
+        if (route.id === 'projection') {
+          const query = parseProjectionQuery(url.searchParams);
+          if (query === null) return problem(400);
+          const ownerRoot = await dependencies.ownerRootFor(context);
+          const projectionVersion = version === '0.1' ? '0.1' : '0.2';
+          const result = await ownerRoot.readProjection(
+            {
+              routedOwnerId: context.ownerId,
+              protocolVersion: projectionVersion,
+              ...query,
+            },
+            ingressContext(context),
+          );
+          const publicResult = projectionVersion === '0.1'
+            ? responsibilityProjectionPageV01CompatibilitySchema.parse(result)
+            : responsibilityProjectionPageV02Schema.parse(result);
+          if (publicResult.ownerId !== context.ownerId || publicResult.protocolVersion !== projectionVersion) {
+            throw new Error('responsibility response authority mismatch');
+          }
+          return json(publicResult, 200, projectionVersion);
         }
-        return json(publicResult, 200, projectionVersion);
+
+        return unreachableResponsibilityRoute(route);
       } catch (error) {
         const publicStatus = responsibilityBoundaryStatus(error);
         if (publicStatus !== null) return problem(publicStatus);
@@ -352,6 +356,10 @@ export function createResponsibilityWorkerAdapter(
       }
     },
   };
+}
+
+function unreachableResponsibilityRoute(route: never): never {
+  throw new Error(`unhandled responsibility route: ${JSON.stringify(route)}`);
 }
 
 function selectedVersion(accept: string | null): ResponsibilityProtocolVersion | null {

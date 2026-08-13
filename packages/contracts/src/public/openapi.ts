@@ -202,9 +202,11 @@ function operationFor(route: ResponsibilityHttpRouteV01): JsonRecord {
   };
 }
 
-export function buildPublicOpenApiDocument(): JsonRecord {
+export function buildPublicOpenApiDocument(
+  routeManifest: readonly ResponsibilityHttpRouteV01[] = responsibilityHttpRouteManifestV01,
+): JsonRecord {
   const paths: JsonRecord = {};
-  for (const route of responsibilityHttpRouteManifestV01) {
+  for (const route of routeManifest) {
     const path = (paths[route.path] ??= {}) as JsonRecord;
     path[route.method.toLowerCase()] = operationFor(route);
   }
