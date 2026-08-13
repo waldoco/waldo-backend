@@ -2,12 +2,15 @@
 
 **Status:** decision-ready product and target-architecture specification; implementation and operational proof remain separate
 **Snapshot:** 2026-08-11
-**Scope:** Waldo Cloud, Kennel, mobile, durable continuity, agent orchestration, Mission Control, execution, evidence, verification, privacy, and launch sequencing
+**Product-experience refresh:** 2026-08-12
+**Launch-execution refresh:** 2026-08-13; the [production run contract](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) and [umbrella issue #78](https://github.com/Pin4sf/waldo-backend/issues/78) own B0-B6 sequencing
+**Primary-surface refresh:** 2026-08-13; launch requires Electron Kennel, Waldo mobile, Telegram, and Discord; WhatsApp remains approval-dependent and non-blocking
+**Scope:** Waldo Cloud, Kennel, mobile, messaging presence, durable continuity, agent orchestration, Mission Control, execution, evidence, verification, privacy, and launch sequencing
 **Pre-existing investigation ledger (read-only):** `waldo-brain/04-Sessions/weekly/2026-08-11-waldo-product-architecture-ledger.md`
 
 This synthesis plus its three linked audits is the durable resumption artifact for the completed convergence. The Brain ledger was already untracked, changing work in another checkout, so this investigation preserved it instead of creating a competing writer or overwriting user-owned state.
 
-## Revision record — Health First  and Kennel Home/Work
+## Revision record — Health First, Kennel Home/Work, and complexity invisibility
 
 **Founder correction:** health is a strong Waldo wedge and the existing CRS, Form, Spots, Constellation, and related mobile experiences must be preserved and joined to agency. Kennel is one Electron application with a synchronized personal **Home** and an execution-focused **Work** surface inspired by Xirp's local custody model.
 
@@ -22,8 +25,20 @@ This synthesis plus its three linked audits is the durable resumption artifact f
 | Cross-device sync | Mobile was the primary personal UI; Kennel mostly rendered work. | Mobile and Kennel Home consume the same cloud-owned `HomeProjection`; neither syncs a second task or health truth store to the other. |
 | Health privacy | Kennel had no default health access. | Kennel Home receives only purpose-bound derived health/capacity projections by default; raw health remains inside the governed health boundary. |
 | Launch exclusions | No health-first navigation. | No **health-only dashboard**, opaque readiness authority, diagnosis, fabricated intervention, or raw-health propagation. Health-first entry is explicitly allowed. |
+| Product account | One Waldo identity was an architecture property. | **One Waldo account is the primary product presence** across mobile, Kennel, Telegram, Discord, later WhatsApp, web, and cloud. Named helpers are bounded roles beneath it, never separate truth, memory, credential, or authority roots. |
+| Setup | Onboarding exposed identity, health, calendar, Kennel, and provider configuration as separate steps. | **A short human setup compiles the machinery.** Ask what Waldo should help with, which recognizable services it may connect, what it may do, and what must always require approval. |
+| Connections | Connector and MCP contracts were principally architecture concerns. | **Service-first Connections are a launch surface.** Users see Gmail, Calendar, GitHub, Notion, health sources, accounts, scopes, purposes, approval boundaries, and revoke—not OAuth/MCP/CLI implementation vocabulary. |
+| Delegation | Capture and Outcome creation were the principal handoff. | **“Have Waldo handle this” is the universal bridge** from Home, communication, calendar, or conversation into an Outcome, bounded Work Units, authority, acceptance checks, and execution placement. |
+| Local/cloud placement | Portable workspace/checkpoint contracts were visible architecture. | **Placement is product-managed and normally invisible.** Waldo reports “continuing in cloud,” “waiting for your Mac,” “needs approval,” or “ready for review”; advanced inspection may reveal the executor and receipts. |
+| Learned work | Routines, skills, and capability packages were committed but abstract. | **Teach once, review, then repeat.** A demonstration or successful run becomes a draft behavior proposal with steps, inputs, approvals, validation, version, and rollback before it can become a routine. |
+| Simplicity bar | Product acceptance focused on responsibility closure. | Responsibility closure and complexity invisibility are joint requirements: a non-technical user must reach useful work without encountering terminals, repositories, Markdown configuration, MCP, model selection, API keys, or deployment choices. |
+| Launch surfaces | Desktop and mobile were the explicit launch clients; messaging was later breadth. | **Three primary surface families launch together:** Electron Kennel desktop, Waldo mobile Health/Care, and messaging presence. Telegram and Discord are required. WhatsApp is a primary target but approval-dependent activation cannot block launch. |
 
 > **Product flag — Health is recommended, not required.** Health First is a high-value Waldo surface and enhancement that should be offered and recommended to every user because consented body context can make planning, care, and agency substantially better. It must never be a prerequisite for using Waldo. A user who does not connect health—or later revokes it—still receives the complete core personal-agent and orchestration product: Home, calendar and communication context, capture, Outcomes, planning, Morning Brief, Kennel Work, agent execution, verification, Open Loops, and Daily Close. The product must degrade by omitting health-derived enhancement, never by disabling Waldo, inventing a readiness default, penalizing the user, or repeatedly pressuring them to connect health. Build around health as a differentiated optional capability, not as a category ceiling or architectural lock-in.
+
+> **Product flag — Complexity is invisible; control remains inspectable.** Models, Markdown, MCP, CLIs, repositories, leases, fences, provider sessions, credentials, and local/cloud placement remain implementation machinery or optional advanced detail. The normal product asks for an intended result, recognizable connections, understandable authority, timing, and acceptance. Hiding machinery must never hide where sensitive data is used, what Waldo can change, why work is blocked, or how to revoke it.
+
+> **Product flag — Messaging is a primary presence, not a second agent.** Telegram and Discord must let a person add and converse with the same owner-bound Waldo at launch. Channel messages are untrusted transport input; channel delivery is transport evidence. Neither can create identity, authority, memory, Acceptance, or closure by implication. WhatsApp must pass the same contract when approval is available, but pending approval is not a launch blocker or readiness claim.
 
 ## Evidence contract
 
@@ -38,18 +53,18 @@ This synthesis plus its three linked audits is the durable resumption artifact f
 
 | Repository | Evidence pin used | Lineage warning |
 | --- | --- | --- |
-| `waldo-backend` | active `main@dd434e9` | A read-only `ls-remote` confirmed remote `main@dd434e9`; no live deployment inference follows. |
+| `waldo-backend` | product-code evidence `dd434e9`; documentation convergence `origin/main@51da2d1` checked 2026-08-13 | The later SHA changes documentation/governance, not the product-code boundary described here. No live deployment inference follows. Re-pin before implementation claims. |
 | `waldo-brain` | active local `main@d778402` | Remote `main` was `9f280abe` when checked. The local research commits and untracked convergence ledger were read-only evidence, not silently promoted to remote canonical truth. |
 | `kennel` | canonical Electron `main@367c484` | A read-only `ls-remote` confirmed the remote pin. Per founder direction, Electron is the only implementation lineage used for product and build decisions. |
 | `waldo-app` | active local `main@d9578e6`; remote `main@ed255869` as a separate evidence pin | A read-only `ls-remote` confirmed `main@ed255869`. Active HEAD is a source-empty scaffold and 66 commits behind its recorded remote. The richer Expo audit describes remote `main`, not the active checkout. Canonical implementation revision is **[Unknown]**. |
 
-**[Decision]** Build Kennel on Electron `main`. Resolve the mobile revision before creating mobile implementation tickets. The keep/modify/rebuild dispositions identify reusable concepts, not authorization to merge branches or preserve unrelated implementations.
+**[Decision]** Build Kennel on Electron `main`. Resolve the mobile revision before mobile implementation tickets become ready or implementation starts; blocked planning/acceptance tickets may preserve the dependency and criteria. The keep/modify/rebuild dispositions identify reusable concepts, not authorization to merge branches or preserve unrelated implementations.
 
 ## Executive convergence
 
 ### The answer
 
-> **[Decision] Waldo is the body-aware, durable, user-owned agent that helps a person plan within real human constraints and carries responsibility from intent to a verified, consciously accepted outcome across time, devices, people, and execution agents.**
+> **[Decision] Waldo is the body-aware, durable, user-owned agent account that helps a person plan within real human constraints and carries responsibility from intent to a verified, consciously accepted outcome across time, devices, people, and execution agents—without making the person configure agent infrastructure.**
 
 The single strongest problem is not task capture or agent launching. It is **responsibility decay between intention and real-world closure**. Work is fragmented across conversations, calendars, people, coding agents, files, and services. Individual sessions can finish while the underlying responsibility remains partially true, unverified, blocked, waiting, or forgotten. Waldo owns that gap.
 
@@ -59,7 +74,9 @@ The single strongest problem is not task capture or agent launching. It is **res
 - **Kennel Home** is the desktop personal-agent surface: the same Today, health-informed Brief, calendar, tasks, communication Catch Up, meeting preparation, Needs You, and Close that continue on mobile.
 - **Kennel Work** is Waldo's trusted local execution and orchestration harness: projects, worktrees, terminals, provider sessions, artifacts, evidence, and consequential judgments. It owns device-local process and workspace durability, never canonical Outcome truth.
 - **Mobile** is the body-aware, highest-frequency human connection: CRS, Form, Spots, Constellation, wearable context, capture, Today, Morning Brief, Needs You, corrections, receipts, and Daily Close. It is not a second runtime or truth store.
+- **Messaging presence** is the low-friction relational surface: Telegram and Discord at launch, then WhatsApp when approved. It supports conversation, Capture, Needs You, status, verified-ready receipts, Acceptance/reopen/release, and exact re-entry through channel-safe projections. It never owns a channel-specific agent brain or truth store.
 - **Claude, Codex, Pi, Hermes, browser agents, cloud agents, tools, and people** are replaceable executors. Their completion reports are observations.
+- **Named helpers or specialist agents** are optional user-facing roles under the same Waldo account. They may have bounded context, capabilities, routines, and threads, but do not own separate personal memory, ambient credentials, authority, Outcome truth, or closure.
 
 ### The abstraction decision
 
@@ -160,10 +177,11 @@ The matrix compares product primitives, not feature counts.
 
 | Reference | Strongest primitive | Missing or unsafe for Waldo | Waldo disposition |
 | --- | --- | --- | --- |
-| Waldo target | Consented longitudinal body context joined to daily planning, durable Outcome ownership, local execution, evidence, acceptance, and Open Loops. | Health foundations, product kernel, trusted RunLoop, mobile, and Kennel are not yet connected in one operationally proved loop. | **Build the Health First → Home → Work → verified closure vertical slice before breadth.** |
+| Waldo target | Consented longitudinal body context joined to daily planning, durable Outcome ownership, local execution, evidence, acceptance, and Open Loops. | Health foundations, product kernel, trusted RunLoop, mobile, and Kennel are not yet connected in one operationally proved loop. | **Build shared Home → Work → verified closure before breadth and prove both Health First connected and health-declined paths.** |
 | Dimension | Connected workday loop: Morning Briefing, Catch Up, action, artifacts, recap. | No public durable Outcome/verification contract; product availability is time-bounded. | **Adapt** the daily loop and calm projections. |
 | Folk | Persistent relational presence, editable memory, routines, messaging, cloud execution, Crew. | Memory provenance/authority and general verified completion are not public at Waldo depth. | **Adapt** relationship continuity; keep memory correctable and non-authoritative. |
 | Poke | Messaging-native delegation, Recipes, MCP, event/API ingress, human fallback. | Broad command/integration access does not prove exact authority or effect reconciliation. | **Adapt** distribution and concise interaction; reject arbitrary JSON as trusted commands. |
+| Grok Bot | Messaging-style named agents, short role setup, service-first Plugins, persistent user-scoped cloud computer, desktop/iPhone continuity, scheduled routines, teach-by-demonstration drafts, parallel Bots, and Bot handoffs. | Public sources do not prove per-Bot security isolation, multi-human shared sessions, general local/cloud migration, verified Outcome closure, or the reel's “hundreds of tools” claim; all Bots for one user share cloud files/browser/logins. | **Adapt urgently** the complexity compression, account presence, connections, cloud continuity, demonstration-to-draft behavior, and visible handoffs. **Reject** shared ambient authority and session-done-as-Outcome. |
 | Paxel | Local multi-provider transcript analysis and cross-session behavioral/session patterns. | Builder scores and archetypes are not Outcome truth; excerpts and derived payloads cross privacy boundaries. | **Adapt** deterministic extraction and provenance; reject personality scoring and raw-upload defaults. |
 | Agent Orchestrator | Dense parallel coding supervision, isolated worktrees, terminal control, CI/review feedback loops. | Repository/session/PR remains the work unit; current product is coding-specific. | **Adapt** Kennel supervision below Outcome truth. |
 | Medley | Mission interview, reviewed DAG, per-task provider routing, parallel workers, steering. | Mission engine is proprietary; inherited host permissions/context are too broad for Waldo authority. | **Adapt** optional Mission and frontier planning; require Waldo leases and grants. |
@@ -217,6 +235,8 @@ Reject raw transcript upload by default. The return path should be a classified 
 | `ContextClaim` | Stores correctable, provenance-bearing continuity rather than opaque memory blobs. |
 | `HealthContextClaim` / `CareProposal` | Represents minimized CRS/Form-derived context and an explained, correctable proposed response without turning a health signal into authority. Raw samples remain outside the owner DO. |
 | `HomeProjection` | Gives mobile and Kennel Home one revisioned view of body context, day plan, commitments, Catch Up, Needs You, and Open Loops without duplicate task or health stores. |
+| `ConnectionBinding` | Represents one recognizable service/account, declared read/write capabilities, purpose eligibility, credential handle metadata, approval policy, freshness, and revocation without exposing protocol details as the product. |
+| `RoutineDefinition` / `BehaviorProposal` | Separates a schedule from a reviewed procedure and keeps demonstrations or successful runs in draft until scope, authority, validation, version, and rollback are explicit. |
 | `Event` | Preserves ordered audit/replay input and projection repair without making full rebuild-only event sourcing mandatory. |
 
 ### Terms deliberately not made separate canonical objects
@@ -227,6 +247,7 @@ Reject raw transcript upload by default. The return path should be a classified 
 - **Goal/Project:** optional organizational links/views, not mandatory ancestors of every Outcome.
 - **Memory:** product capability composed from Context Claims, episodes, decisions, artifacts, and retrieval policy, not one undifferentiated row type.
 - **Spots/Constellation:** retained Health First product experiences and projections over governed health/context contracts; this convergence does not replace them with generic task ontology or invent new semantics for them.
+- **Agent/Bot/Helper:** optional UI language for a bounded role or executor profile beneath one Waldo account; never a second user identity, personal-memory root, credential pool, authority writer, or Outcome store.
 
 ### Essential relationships
 
@@ -253,6 +274,7 @@ One durable agent does not mean one immortal model process or one giant prompt. 
 - owner identity and registered presences;
 - current Outcome/Mission/Work Unit revisions;
 - commitments, schedules, triggers, and attention policy;
+- connection bindings, capability eligibility, behavior proposals, installed skills, and routine revisions;
 - health consent/source state, derived Health Context Claims, care proposals, and their correction/decision history; raw health samples remain in the governed health store;
 - user statements, corrections, provenance, and purpose-bound Context Claims;
 - decisions, authority grants, revocations, and expiry generations;
@@ -296,6 +318,7 @@ flowchart TB
   Verify["Evidence + Verification\ndeterministic read-back first"]
   Effects["Effect Engine\nfrozen intent · receipt · reconciliation"]
   KennelRuntime["Kennel local daemon\noperation ledger · workspace · provider adapters"]
+  CloudRuntime["Governed cloud workspace\nbrowser · files · tools · scheduled work"]
   Providers["Codex · Claude · Pi · Hermes · browser/local agents"]
   Connectors["Calendar · email · SaaS · people"]
   R2["R2 / BlobStore\nencrypted artifacts + sealed checkpoints"]
@@ -312,7 +335,9 @@ flowchart TB
   Proj --> KennelWork
   Root --> Kernel
   Kernel <--> KennelRuntime
+  Kernel <--> CloudRuntime
   KennelRuntime <--> Providers
+  CloudRuntime <--> Providers
   Root --> Effects
   Effects <--> Connectors
   Root --> Verify
@@ -333,6 +358,7 @@ flowchart TB
 | Local files, apps, terminals | References only | **Owns execution custody** | None | Acts through Kennel grant |
 | Provider process lifecycle | Admits, leases, reconciles | **Owns local mechanics** | Shows projection | Owns native session only |
 | Cloud execution workspace | Admits and tracks | Checkpoint/restore client | None | Adapter owns mechanics |
+| Connections and routines | **Owns bindings, policy, schedules, and revision history** | Connects device-local capabilities; renders advanced detail | Primary simple connect/revoke/teach/schedule surface | Receives only scoped handles and instructions |
 | Evidence admission/verification | **Owns** | Collects candidate evidence | Reviews/accepts | Supplies candidate evidence |
 | External effects | **Owns intent/reconciliation** | Requests or executes local effects | Approves | Connector performs effect |
 | Acceptance and closure | **Owns canonical record** | Rich review surface | Primary quick decision surface | Never owns |
@@ -491,6 +517,8 @@ Events are content-minimized and reference encrypted artifacts where payload era
 | **Daily Close** | Conscious closure and tomorrow handoff. | Accepted, progressed, blocked, slipped, released, and exact re-entry. | Accept corrections, reschedule, release, ask. | Close projection over Outcomes/Open Loops. | Must |
 | **Waldo Knows** | Inspect and correct continuity. | Context Claims, source, freshness, purpose, correction/deletion state. | Correct, forget, revoke source, export. | Continuity/portability/deletion. | Should |
 | **Settings & Privacy** | Make the trust boundary understandable. | Connections, data classes, model destinations, retention, devices, export/delete. | Revoke, reconnect, export, delete. | Policy, audit, portability. | Must |
+| **Connections** | Connect recognizable accounts without infrastructure setup. | Service/account, read/write scope, purposes, approval boundary, freshness, and status. | Connect, reauthenticate, restrict, revoke, inspect usage. | Connection bindings, capability manifests, credential broker, conformance. | Must; Calendar and inbox first |
+| **Routines** | Repeat proven work without building agents. | Trigger, owner, inputs, expected result, approval boundary, last run, next run, failure state. | Test, approve, pause, edit, revoke. | Routine/behavior proposal, scheduler, authority, receipts. | Should; first accepted workflow |
 
 Health/Body remains an accessible first-class mobile destination because it is the wedge, not a buried capacity card. Missions, Sessions, Open Loops, Calendar, Memory, and Approvals remain contextual views within Home, Outcome, Waldo, and Settings until use proves a dedicated destination is necessary. The exact existing semantics of Spots and Constellation remain source authority; this convergence joins them to agency rather than renaming them speculatively.
 
@@ -504,13 +532,24 @@ Health/Body remains an accessible first-class mobile destination because it is t
 | **Outcome Detail** | Full local-to-cloud responsibility trace. | Context sources, sessions, artifacts, evidence, checks, decisions, Open Loop and re-entry. | Must |
 | **Sessions** | Provider-native operator drill-down. | Terminals, worktrees, process state, native controls, logs, usage. | Must, secondary |
 | **Computer** | Local capability and permission custody. | Repositories, workspaces, agent versions, credentials/permissions status, adapters. | Must, settings-level |
+| **Connections & Routines** | Advanced desktop view of the same cloud-owned bindings and repeatable work. | Connected accounts, local/cloud capability eligibility, behavior proposals, schedules, approvals, last/next run, revoke/test controls. | Must; service-first language |
 | **Shelf** | Artifact handoff and inspection. | Files, previews, hashes, provenance, export/open. | Should |
 
 Home and Work are two modes of one Electron Kennel, not separate products or identities. Both consume cloud-owned projections. Home never reads a separate mobile task database, and Work never promotes provider state to Outcome truth. “Mission Control” represents Outcomes and unresolved consequence; `Sessions` remains a drill-down for operators who need it.
 
+### Messaging Presence
+
+| Surface | Purpose | Shows/actions | Launch |
+| --- | --- | --- | --- |
+| **Telegram** | Add the same Waldo to a familiar personal chat surface. | Converse, capture, receive Brief/Needs You/status/verified-ready updates, accept/reopen/release, return through exact re-entry, link/revoke. | Must |
+| **Discord** | Add the same Waldo to an approved DM or explicitly admitted server/channel context. | The Telegram capability set plus declared guild/channel/mention boundaries and no ambient server ingestion. | Must |
+| **WhatsApp** | Reach the same Waldo through WhatsApp after vendor approval. | Same shared channel-presence contract and conformance suite; no mocked readiness. | Primary target; approval-dependent and non-blocking |
+
+Messaging is a presentation and transport adapter over the owner backend. Webhook or interaction payloads are untrusted; account linking is server-derived and revocable. Outbound intent persists before vendor I/O, ambiguity reconciles before retry where supported, and delivery receipts never imply Outcome Verification, Acceptance, or closure. Raw health, credentials, full transcripts, and unrelated private context are excluded; only purpose-bound channel-safe interpretations may render.
+
 ### Waldo Cloud
 
-Cloud has no primary consumer dashboard at launch. Its visible surfaces are projections and receipts consumed by mobile/Kennel:
+Cloud has no primary consumer dashboard at launch. Its visible surfaces are projections and receipts consumed by mobile, Kennel, Telegram, and Discord:
 
 - shared mobile/Kennel Home, Health First interpretation, Morning Brief, Catch Up, and Daily Close;
 - Work board and Outcome detail;
@@ -531,7 +570,7 @@ Actions: **Why this plan? · Approve plan · Change plan · Start eligible agent
 
 ### During work
 
-User: “Get the onboarding bug fixed before tonight.”
+User selects an email, calendar item, task, or conversation and chooses **“Have Waldo handle this,”** or says: “Get the onboarding bug fixed before tonight.”
 
 Waldo associates or creates the Outcome, confirms the acceptance check, creates one Work Unit, leases it to Kennel Work, and chooses an eligible provider. Work opens the relevant project/worktree/session environment while preserving the Outcome and remaining consequence above provider activity. Kennel collects diff/test/build/preview evidence. Waldo interrupts only for ambiguity, changed scope, authority, or acceptance; Kennel Home and mobile show the same canonical `Needs You` item.
 
@@ -619,12 +658,17 @@ Always require fresh explicit judgment for sending consequential messages, produ
 | P0 | Evidence/Verification/Acceptance/Open Loop | Add sole-writer reducers, schemas, events, projections, invalid transitions, stale-digest behavior. | Execution bridge; deterministic checks and user acceptance fixture. |
 | P0 | Kennel protocol | Versioned register/start/resume/steer/pause/cancel/reconcile/event contracts with lease/fence/cursor. | Shared fixtures in backend and Kennel. |
 | P0 | Multi-presence gateway/projections | Owner-bound registrations, ordered cursor, snapshots, gap/account-switch handling. | Identity routing; mobile/Kennel conformance. |
+| P0 | Account/setup/connection contracts | One Waldo account projection plus service-first connection bindings, purpose/scope/revoke state, and a short guided setup contract; infrastructure details remain optional inspection. | Multi-presence identity, credential broker, capability manifests, auth/privacy review. |
 | P0 | Health First production path | Join consent/RLS ingestion, CRS/Form computation, provenance/freshness, Spots/Constellation projection inputs, and care-proposal policy without leaking raw values into agent/runtime logs. | Real device/source fixtures, health-data review, privacy mutation tests, app-to-projection acceptance. |
 | P0 | Shared Home projection | One revisioned projection for mobile and Kennel Home: health interpretation, Today plan, calendar, tasks/commitments, Catch Up candidates, Needs You, and Open Loops. | Multi-presence ordering, purpose-bound context, truthful source/degraded state. |
+| P0 | Messaging presence contract | Channel registration/link/revoke, normalized untrusted inbound envelope, channel-safe conversation/closure projections, durable delivery intent/settlement, deterministic persona/privacy/health redaction. | Shared fake transport; B1/B2 command and closure contracts; B3 owner/cursor conformance. |
+| P0 | Telegram and Discord adapters | Two real adapters behind the shared contract with vendor-specific identity/signature, scope, rate, ambiguity, block/removal and revoke behavior declared. | Credentialed staging, injected CI transports, security/privacy review, B4/B5 fault conformance. |
 | P0 | Effect family | Reversible Google Calendar create/update with client-generated ID, frozen intent, read-back, and terminal ambiguity. | OAuth/scopes decision and test tenant. |
 | P1 | Context/continuity | Context Claims, corrections, purpose-bound compiler, Open Loop/Re-entry projections. | Privacy/deletion tests. |
 | P1 | Morning Brief/Daily Close | Deterministic projection recipe plus restrained LLM narrative. | Today/Open Loop/Commitment truth. |
 | P1 | Artifact/blob/checkpoint | Content-addressed metadata in DO; encrypted bytes through BlobStore/R2. | Deletion and integrity conformance. |
+| P1 | Persistent cloud execution | One admitted cloud workspace adapter for scheduled/background work, browser/files/tools, restart, deletion, egress, and laptop-off continuation; no claim of automatic migration for unsupported workloads. | Execution bridge, workspace/credential contracts, operational conformance. |
+| P1 | Behavior proposal → routine | Demonstration or accepted run becomes a versioned draft, passes review/test, then may become a scheduled routine. | Evidence/acceptance, capability admission, scheduler, rollback. |
 | P2 | Additional connectors/providers | Add only through manifests and real fault-injected conformance. | First loop accepted and adapter gate stable. |
 
 Migration is additive. Keep the existing trusted RunLoop and effect proof routes until the new bridge has stronger conformance. Do not dual-write canonical Outcome truth. Preserve historical receipts and acceptance across rollback.
@@ -657,6 +701,8 @@ Migration is additive. Keep the existing trusted RunLoop and effect proof routes
 - push notifications for consequential judgment and verified-ready outcomes;
 - Daily Close;
 - privacy/connections/export/delete baseline;
+- service-first Connections for the initial Calendar and inbox accounts, with plain-language scopes and revoke;
+- “Have Waldo handle this” from Home, calendar, communication, and conversation;
 - truthful loading, stale, offline, empty, and error states.
 
 #### Should ship
@@ -669,32 +715,44 @@ Migration is additive. Keep the existing trusted RunLoop and effect proof routes
 
 #### Later
 
-- broad connector catalogue;
+- broad connector catalogue beyond the launch connection surface;
 - social/cross-person delegation;
-- cloud computer control;
+- rich cloud-computer inspection/control beyond truthful placement and status;
 - capability marketplace;
 - rich project/mission management views better suited to Kennel.
+
+### Messaging
+
+1. Build channel-neutral fixtures and a fake transport before vendor code.
+2. Register/link/revoke a channel presence through server-derived owner binding; never trust payload identity as authority.
+3. Normalize Telegram and Discord input into one untrusted envelope and render capability-appropriate projections from the same owner history.
+4. Persist outbound intent before I/O; use one retry owner, reconciliation or terminal unknown, deterministic persona/privacy/health redaction, and content-minimized observability.
+5. Prove duplicate/reordered webhooks, rate limits, block/removal, permission loss, credential rotation, restart, scheduled delivery, deletion/export and next-day re-entry.
+6. Activate WhatsApp only after approval and real conformance; its delay does not weaken or block Telegram/Discord launch.
 
 ## 13. Brutally prioritized launch product
 
 ### Onboarding
 
-1. Create/sign in to one Waldo identity.
-2. Explain Health First consent, sources, derived claims, model destinations, and what will never be shared by default.
-3. Connect one supported health source and render the first truthful CRS/Form/Spots/Constellation state, including unavailable or insufficient-data states.
-4. Connect calendar and show the first body-aware Home/Today proposal.
-5. Register one Kennel Mac and one current coding provider.
-6. Explain the trust ladder with concrete personal and work examples.
-7. Ask for one responsibility the user genuinely needs handled this week.
+1. Create/sign in to one Waldo account and ask four human questions: what should Waldo help with, which accounts may it connect, what may it do automatically, and what must always require approval.
+2. Connect Calendar and the launch inbox through service cards that show account, read/write scope, purposes, approvals, and revoke.
+3. Offer Health First as a recommended enhancement. If accepted, explain consent, sources, derived claims, model destinations, and what will never be shared by default; if declined, continue without penalty or repeated pressure.
+4. If health is connected, render the first truthful CRS/Form/Spots/Constellation state, including unavailable or insufficient-data states. Otherwise render a complete calendar/commitment/communication Home without an invented readiness value.
+5. Register one Kennel Mac and one current coding provider only when local work is needed; never make this a prerequisite for cloud-capable personal assistance.
+6. Offer Telegram and Discord linking as the messaging-presence setup. Show the exact bot/application identity, account/server context, allowed scope, notification behavior, privacy boundary, and revoke action; WhatsApp remains visibly unavailable until approved.
+7. Explain the trust ladder with concrete personal and work examples.
+8. Ask for one responsibility the user genuinely needs handled this week.
 
 ### First five minutes
 
-- The user sees one attributable health/body insight and how it changes—or deliberately does not change—the proposed day.
-- The user captures an Outcome in natural language from mobile Home or Kennel Home.
+- The user reaches a useful connected Home without seeing MCP, CLI, Markdown configuration, repositories, API keys, model selection, or deployment/runtime choices.
+- If health is connected, the user sees one attributable body insight and how it changes—or deliberately does not change—the proposed day; if not, no core capability disappears.
+- The user captures an Outcome in natural language from mobile Home, Kennel Home, Telegram, or Discord.
 - Waldo reflects the intended state, deadline, constraints, and one acceptance check.
 - The user confirms or edits it.
 - Waldo shows whether it can act now, what will remain local, and when it will ask again.
-- If executable, the first Work Unit is leased to Kennel.
+- Placement is explained only as “continuing in cloud,” “waiting for your Mac,” “needs approval,” or “ready for review,” with deeper executor detail available under Inspect.
+- If executable, the first Work Unit is leased to an eligible governed cloud or Kennel executor; local-only work waits truthfully for Kennel.
 
 ### Day 1
 
@@ -737,6 +795,8 @@ The user sees what became true, what did not, why, what remains, and exactly whe
 
 - no generic agent marketplace;
 - no dozens of connectors;
+- no infrastructure-first setup or required exposure to MCP, CLI, Markdown configuration, model/provider selection, repositories, or API keys;
+- no independent helper identity, ambient shared credential pool, or hidden cross-role context sharing;
 - no activity-heavy analytics;
 - no personality/archetype scoring;
 - no autonomous external sends/deploys/purchases;
@@ -775,6 +835,7 @@ Observable exit:
 - one calendar mutation survives apply-then-timeout without duplication;
 - user accepts/reopens/releases;
 - next-day Re-entry Point is correct after laptop sleep/restart.
+- fake channel transport renders the same Capture, Needs You, Outcome and ReEntry truth without payload-derived authority or raw-health leakage.
 
 ### Phase 2 — Private alpha
 
@@ -785,6 +846,7 @@ Observable exit:
 - reconnect/account switch/revocation/deletion tests pass;
 - false-completion and user-review burden are measured;
 - users repeat the responsibility loop weekly without being trained on the architecture.
+- credentialed Telegram and Discord staging pass link/revoke, ingress/egress, duplicate/reorder, rate-limit, block/removal, privacy-redaction and recovery conformance.
 
 ### Phase 3 — Public launch
 
@@ -795,17 +857,22 @@ Observable exit:
 - operational recovery, privacy, deletion, cost, rate-limit, and rollback proof passes;
 - Morning Brief and Daily Close reduce reassembly rather than create another feed;
 - support and incident paths are ready;
-- public claims match demonstrated proof levels.
+- public claims match demonstrated proof levels;
+- users can add the same Waldo to Telegram and Discord and complete the canonical responsibility loop; both channels have live recovery, revoke, privacy, deletion and incident evidence.
+- WhatsApp is described as pending approval unless its own real conformance and production proof have passed.
 
 ### Phase 4 — Expansion
 
-Add admitted connector families, voice/messaging presences, cloud workspace continuation, behavior packages, human/cross-agent delegation, and broader life/work Outcomes. Each expansion reuses the same Outcome, authority, evidence, acceptance, and Open Loop spine.
+Add WhatsApp when approved, further admitted channel/connector families, voice presence, broader cloud workspace continuation, behavior packages, human/cross-agent delegation, and broader life/work Outcomes. Each expansion reuses the same Outcome, authority, evidence, acceptance, and Open Loop spine.
 
 ## 15. Critical questions resolved
 
 | Question | Decision |
 | --- | --- |
 | What is Waldo? | One body-aware, durable, user-owned agent that plans within real human constraints and carries responsibility to verified and accepted outcome. |
+| What is the product account? | One Waldo account/presence across devices. Named helpers are bounded roles or executors beneath it, not separate truth or authority roots. |
+| What must setup feel like? | State the help needed, connect recognizable services, choose understandable approval boundaries, and delegate. Agent infrastructure remains hidden unless the user opens Inspect. |
+| Universal delegation action? | “Have Waldo handle this” compiles an item into an Outcome, context/authority boundary, acceptance condition, schedule, and eligible execution placement. |
 | Strongest problem? | Responsibility decay between intent, fragmented execution, and real closure. |
 | Why durable? | Responsibilities outlive sessions, devices, laptop uptime, providers, and daily context. |
 | Abstraction above sessions? | Canonical Outcome; responsibility is its user-facing contract. |
@@ -814,6 +881,7 @@ Add admitted connector families, voice/messaging presences, cloud workspace cont
 | What belongs in Cloud? | Canonical identity/state, admitted derived health context, shared Home projection, policy, planning, timers, sync, evidence, verification, acceptance, and Open Loops. |
 | What belongs locally? | Files, terminals, apps, worktrees, provider-native sessions, device credentials, local process recovery. |
 | What belongs in mobile? | Health First consent and experiences—CRS, Form, Spots, Constellation—plus Home/Today, capture, Brief, Needs You, correction, receipt, acceptance, and Close. |
+| What belongs in messaging? | Telegram and Discord launch with conversation, Capture, Needs You, channel-safe status/receipts, Acceptance/reopen/release, and exact re-entry over one owner history. WhatsApp follows approval and the same conformance suite. |
 | How know finished? | Declared postconditions → attributable Evidence → independent Verification → exact Acceptance. |
 | How understand sessions? | Deterministic event/artifact extraction first; LLM proposals with provenance and correction second. |
 | Concurrent execution? | Dependency-aware Work Units, eligible executor manifests, leases/fencing, bounded child authority, normalized events. |
@@ -828,7 +896,8 @@ Add admitted connector families, voice/messaging presences, cloud workspace cont
 | Launch wedge? | Health-informed daily agency that can carry delegated work to verified closure. |
 | Why not Dimension + AO + Codex? | Those systems split body context, daily planning, session supervision, execution, authority, and closure; Waldo makes one health-informed Home and Outcome/continuity spine canonical across them. |
 | Defensibility? | Consented longitudinal body and life context, accepted Outcome/evidence history, trusted executor protocol, verification recipes, and earned autonomy policy compound together. |
-| What ships first honestly? | One truthful Health First → shared Home plan → delegated local execution → verified/accepted Outcome → next-day re-entry loop. |
+| What ships first honestly? | One truthful shared Home plan—enhanced by Health First when consented—→ delegated execution → verified/accepted Outcome → next-day re-entry loop. |
+| What if health is declined? | Ship the same core Home, capture, connected assistance, Outcomes, execution, verification, Open Loops, and Close without health-derived enhancement or pressure. |
 
 ## 16. Hypotheses, falsifiers, and decision-changing evidence
 
@@ -843,6 +912,7 @@ Add admitted connector families, voice/messaging presences, cloud workspace cont
 | Health First is a strong entry wedge. | Users inspect CRS/Spots/Constellation but do not return for planning, accept care proposals, or connect them to meaningful action. | Preserve health utility but narrow the launch claim; test a more specific care loop instead of treating the dashboard as agency. |
 | Health-informed agency improves plans and trust. | It changes agendas without understandable causality, feels controlling/diagnostic, or performs no better than calendar/commitment context alone. | Require explicit standing purpose and explanations; constrain automatic use to validated signals, or make the signal user-invoked. |
 | Kennel Home creates one continuous Waldo. | Users treat it as a duplicated mobile dashboard or its communication/health context distracts from work. | Preserve the shared projection but reduce desktop Home to briefing, Catch Up, Needs You, and re-entry rather than creating another management surface. |
+| Complexity invisibility reduces setup burden without reducing trust. | Users still need technical assistance, encounter infrastructure vocabulary, cannot understand permissions, or cannot recover/inspect placement failures. | Collapse setup further, improve service-first permission language, and retain an optional Inspect surface rather than exposing implementation choices in the primary flow. |
 
 ## 17. Verification and evidence status
 
@@ -854,6 +924,7 @@ Add admitted connector families, voice/messaging presences, cloud workspace cont
 - Kennel's canonical product/runtime lineage is Electron `main@367c484`; all Kennel conclusions and build recommendations now use that lineage exclusively.
 - Waldo mobile's active checkout is a source-empty scaffold 66 commits behind its recorded remote; richer Expo/mobile findings belong to that recorded remote lineage, not active HEAD.
 - Current Waldo Brain contains the product architecture ledger and a dedicated current Spotify Xirp + Portal public-source dissection.
+- Current first-party Grok Bot sources validate messaging-style agent setup, service-first plugins, persistent cloud execution, routines, teach-by-demonstration drafts, desktop/iPhone continuity, and parallel Bot coordination; they do not establish Waldo-style Outcome closure, per-Bot isolation, multi-human shared sessions, or arbitrary local/cloud migration.
 - Current official comparator sources still support the key primitives, while several repositories have materially advanced since the August 4 pins.
 
 ### Unverified or not claimed
@@ -885,10 +956,11 @@ Add admitted connector families, voice/messaging presences, cloud workspace cont
 - [Backend + Brain audit](./WALDO_CONVERGENCE_BACKEND_BRAIN_AUDIT_2026-08-11.md)
 - [Canonical Kennel Electron + mobile audit](./WALDO_CONVERGENCE_KENNEL_MOBILE_AUDIT_2026-08-11.md)
 - [Spotify Xirp + Portal research](./WALDO_CONVERGENCE_SPOTIFY_XIRP_RESEARCH_2026-08-11.md)
+- [Grok Bot product research](./GROK_BOT_PRODUCT_RESEARCH_2026-08-12.md)
 - `waldo-brain/04-Sessions/weekly/2026-08-11-waldo-product-architecture-ledger.md`
 - `waldo-brain/03-References/research/spotify-xirp-portal-product-engineering-dissection-2026-08-11.md`
 
-### Current external sources checked 2026-08-11
+### Current external sources checked 2026-08-11–2026-08-12
 
 - [Dimension](https://dimension.dev/) and [Dimension docs](https://docs.dimension.dev/llms.txt)
 - [Folk memory](https://www.folk.com/docs/memory) and [Folk Crew](https://www.folk.com/docs/crew)
@@ -897,6 +969,7 @@ Add admitted connector families, voice/messaging presences, cloud workspace cont
 - [Agent Orchestrator at `aab4c973`](https://github.com/Untrivial-ai/agent-orchestrator/tree/aab4c973d0f309e796807f6f5ebce9767872f6e6)
 - [Medley at `8f41ec5d`](https://github.com/Spine-AI/medley/tree/8f41ec5df61bdbbc6c766f349dbe461fc495eee3)
 - [Spotify Xirp](https://backstage.spotify.com/docs/xirp) and [Spotify Portal](https://backstage.spotify.com/docs/portal/)
+- [Grok Bot](https://x.ai/bot), [launch post](https://x.ai/news/introducing-grok-bot), and [official documentation](https://docs.x.ai/grok-bot/overview)
 - [Hermes Agent at `c0106e50`](https://github.com/NousResearch/hermes-agent/tree/c0106e50e7ecedb3ce34e785d949725dc4e0e457)
 - [Pi at `f98629b3`](https://github.com/earendil-works/pi/tree/f98629b3991aa1c7938f21249f9d9f0f320fd432)
 - [OpenClaw at `3cfb344f`](https://github.com/openclaw/openclaw/tree/3cfb344f9f272252db3f2da3ea4bdc8ea3cada85)

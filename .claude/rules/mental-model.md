@@ -237,7 +237,7 @@ Most code here is AI-generated. Review it like an adversary, not a rubber stamp 
 - Never skip integration tests because "unit tests cover it." They don't.
 - Never assume the simulator behavior matches device behavior — it doesn't.
 - Never ship a feature without trying to break it yourself first.
-- Never close a Linear ticket without running the relevant E2E.
+- Never close a GitHub issue without running the relevant E2E.
 
 ---
 

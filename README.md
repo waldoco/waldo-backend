@@ -1,6 +1,6 @@
 # Waldo Backend
 
-Waldo Backend is the durable owner-side runtime for one Waldo across personal assistance and agent orchestration. It contains the trusted RunLoop foundation and is the target home for the per-owner Coordinator, canonical product contracts, governed execution, effects, evidence, acceptance, continuity, and cross-surface projections.
+Waldo Backend is the durable owner-side runtime for one Waldo across three primary launch surfaces: Electron Kennel desktop, Waldo mobile with optional Health/Care, and messaging presence through Telegram and Discord. WhatsApp remains a primary target but approval-dependent activation does not block launch. The backend contains the trusted RunLoop foundation and is the target home for the per-owner Coordinator, canonical product contracts, governed execution, effects, evidence, acceptance, continuity, and cross-surface projections.
 
 This repo is not meant to be worked on in isolation. Keep the Waldo Brain repository available as the companion source of truth for ADRs, foundation context, agent-harness research, source maps, and builder philosophy:
 
@@ -11,15 +11,17 @@ This repo is not meant to be worked on in isolation. Keep the Waldo Brain reposi
 
 Before coding, read:
 
-1. [Next Session Plan](docs/foundation/NEXT-SESSION-PLAN.md) for the current entrypoint and source/target boundary.
-2. [Architecture Lock](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) for build authority, ownership, invariants, and parallel workstreams.
-3. [Final Home + Work Architecture](docs/planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) for the source-pinned current state, target contracts, state machines, and migration rules.
-4. [Product Capability Matrix](docs/planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) for committed product scope and honest delivery status.
-5. [Contributor Onboarding](docs/foundation/CONTRIBUTOR-ONBOARDING.md), [AGENTS.md](AGENTS.md), and [Agent Operating Workflow](docs/foundation/AGENT-OPERATING-WORKFLOW.md) for execution discipline.
-6. [Local Dev Testing Pipeline](docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md) for verification expectations.
-7. `.claude/rules/INDEX.md` plus the relevant accepted ADRs and Waldo Brain pages for the seam you are touching. Report conflicts; do not silently treat older wording as current target direction.
+1. [Next Session Plan](docs/foundation/NEXT-SESSION-PLAN.md) for the current backend-first execution entrypoint and source/target boundary.
+2. [Product and Architecture Convergence](docs/planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md) for the current product definition, Health First optionality, surfaces, launch experience, and proof-gated build order.
+3. [Architecture Lock](docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) for placement, ownership, invariants, and implementation authority.
+4. [Product Capability Matrix](docs/planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) for the current capability envelope and honest delivery status.
+5. [Final Home + Work Architecture](docs/planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) for the earlier source-pinned contract and failure-path detail; the convergence supersedes conflicting product wording.
+6. [Execution Ledger](docs/foundation/EXECUTION-LEDGER.md) and [GitHub ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116) for live ownership, parallel worktrees, agent/subagent rosters, and bounded handoffs.
+7. [Contributor Onboarding](docs/foundation/CONTRIBUTOR-ONBOARDING.md), [AGENTS.md](AGENTS.md), and [Agent Operating Workflow](docs/foundation/AGENT-OPERATING-WORKFLOW.md) for execution discipline.
+8. [Local Dev Testing Pipeline](docs/foundation/LOCAL-DEV-TESTING-PIPELINE.md) for verification expectations.
+9. `.claude/rules/INDEX.md` plus the relevant accepted ADRs and Waldo Brain pages for the seam you are touching. Report conflicts; do not silently treat older wording as current target direction.
 
-The live documentation tree contains only current guidance and source-backed planning evidence. Retired ticket handoffs, wave plans, superseded app plans, and one-off verification logs remain available in Git history; do not restore them as current instructions.
+The live documentation tree contains only the operating packet and source-backed reference evidence listed in [docs/README.md](docs/README.md). Completed handoffs, the HEY-109 session-bus workflow, wave plans, superseded app plans, generated graphs, and one-off verification logs remain in Git history; do not restore them as current instructions.
 
 ## Operating Loop
 
@@ -31,7 +33,7 @@ Open context -> define done -> design the seam -> build with tests -> break it -
 
 Session flow:
 
-1. Read the current architecture lock and inspect the source/tests for the seam being changed.
+1. Read the current architecture lock, execution ledger, owning issue/PR, and source/tests for the seam being changed; register the session before writing.
 2. Shape fuzzy work with `/current-ideal-gap`.
 3. Use `/waldo-isa-run-contract` for non-trivial work, shared contracts, architecture changes, agent-harness work, or handoffs.
 4. Use `/thinking-mode-router` when the problem needs the right reasoning mode before action.
@@ -42,13 +44,14 @@ Session flow:
 9. Close with verification, `/compound-learning-capture` when useful, `/phase-handoff` for a
    workstream handoff, and a concise issue/PR evidence update.
 
+GitHub is the current delivery system: [umbrella #78](https://github.com/Pin4sf/waldo-backend/issues/78), [execution ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116), the [production milestone](https://github.com/Pin4sf/waldo-backend/milestone/1), gate/surface/channel labels, bounded issues, and linked PR evidence. Historical Linear and HEY identifiers are not current work state.
+
 ## Skill Guide
 
 Use these skills intentionally:
 
 | Skill | Use when |
 | --- | --- |
-| Legacy `/session-bus` | Not a loadable package in this checkout. Use issue/PR evidence and an explicit workstream handoff; record its packaging repair gap. |
 | `/current-ideal-gap` | The ask is directionally clear but needs a current state, ideal state, gaps, and verification path. |
 | `/waldo-isa-run-contract` | Done needs to be durable: acceptance criteria, tests, work slices, evidence, and learning. |
 | `/thinking-mode-router` | The work needs first-principles, systems thinking, RCA, red-team, research, creative, or council mode. |

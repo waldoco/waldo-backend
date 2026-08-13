@@ -1,6 +1,6 @@
 # waldo-backend - Rule Index
 
-This repo mirrors the six universal Waldo rule files from
+This repo mirrors the five universal Waldo rule files from
 [waldo-brain/.claude/rules](https://github.com/Pin4sf/waldo-brain/tree/main/.claude/rules).
 In cloud sessions, read the mirrored local files in this directory. Do not depend
 on a sibling `waldo-brain` checkout being present.
@@ -12,9 +12,8 @@ on a sibling `waldo-brain` checkout being present.
 | 0 | `posture.md` | Role, truthfulness, scope control, verification, destructive actions. |
 | 1 | `mental-model.md` | Problem-first, product-first, first-principles, science loop, systems loop, every-line-earned discipline. |
 | 2 | `language.md` | Architecture vocabulary: Module, Interface, Contract, Capability Manifest, Seam, Adapter, Drift, Conformance Rule. |
-| 3 | `hey-109-workflow.md` | Multi-agent coordination, Claude/Codex split, Agent-Ready bar, review loop. |
-| 4 | `work-modes.md` | Engineering, writing, strategy, ideation, evangelism mode discipline. |
-| 5 | `security-checklist.md` | Always-check security invariants, conditional checks, health-data overlay. |
+| 3 | `work-modes.md` | Engineering, writing, strategy, ideation, evangelism mode discipline. |
+| 4 | `security-checklist.md` | Always-check security invariants, conditional checks, health-data overlay. |
 
 ## Stable Operating Discipline
 

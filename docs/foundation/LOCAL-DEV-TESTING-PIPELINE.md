@@ -7,7 +7,7 @@
 
 Tests prove a named invariant at a named proof level. They do not promote architecture, fixtures, fake adapters, or local success into shipped product capability.
 
-Before changing code, read the [current session entrypoint](./NEXT-SESSION-PLAN.md), the [architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), the touched source/tests, and the accepted ADRs for the seam.
+Before changing code, read the [current session entrypoint](./NEXT-SESSION-PLAN.md), the [product and architecture convergence](../planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md), the [capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md), the [architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), the touched source/tests, and the accepted ADRs for the seam.
 
 ## Proof levels
 
@@ -103,19 +103,19 @@ Do not claim a command exists until it is present in the current package scripts
 | Acceptance/continuity | Revision/evidence-digest binding, accept/reopen/release history, exact surviving OpenLoop/ReEntryPoint |
 | Supabase migration/RLS | Migrate from zero, pgTAP/schema contract, canonical migration ordering, two-owner rejection when relevant |
 | Cross-repository protocol | Shared golden fixtures, compatibility policy, backend/Kennel consumer conformance, no handwritten parallel truth model |
+| Messaging presence | Verified webhook/interaction secret or signature, server-derived owner binding, normalized untrusted envelope, dedupe/replay/rate-limit tests, deterministic privacy/health redaction, durable delivery intent, reconciliation/terminal ambiguity, revoke/block/removal |
 
-## Responsibility-backbone integration order
+## Production-gate integration order
 
-These are dependency edges, not separate products:
+These are dependency and proof gates, not separate products. The [production run contract](./NEXT-BACKEND-SESSION-PROMPT.md) owns their exact issue map and acceptance criteria:
 
-1. responsibility-handshake protocol and fixtures;
-2. owner root plus Capture/Outcome/WorkUnit reducers;
-3. canonical Kennel protocol client and stale-cache cutover;
-4. governed session observation and durable Judgment;
-5. one reversible external effect through the trusted RunLoop path;
-6. independent Verification and user Acceptance/reopen/release;
-7. exact next-day OpenLoop/ReEntryPoint;
-8. the same history from another declared presence.
+1. **B0:** reproducible repository baseline plus public route/OpenAPI parity;
+2. **B1:** one contract-defined writer from product WorkUnit to trusted execution;
+3. **B2:** durable Judgment, Evidence, Verification, Acceptance, OpenLoop, and ReEntry;
+4. **B3:** ordered desktop/mobile/messaging presence contracts and daily interaction in health-connected and health-declined states;
+5. **B4:** capability admission, credential custody, service-first Connections, real reversible effects, and real Telegram/Discord adapters;
+6. **B5:** governed context, routines, schedules, recoverable laptop-off execution, and durable channel delivery/recovery;
+7. **B6:** portability, deletion, Electron/mobile/Telegram/Discord staging, recovery, observability, rollback, and canonical production proof.
 
 Run both complete proofs:
 

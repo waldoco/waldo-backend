@@ -1,5 +1,7 @@
 # Waldo Convergence — Canonical Kennel Electron and Mobile Audit
 
+> **Reference only.** This preserves a pinned cross-surface audit. It does not establish the current mobile revision, delivery order, or product readiness.
+
 **Date:** 2026-08-11
 **Mode:** read-only source and isolated verification audit
 **Kennel authority:** Electron remote `main@367c484dac87d0c64aac2247e57ceb367f50c196`

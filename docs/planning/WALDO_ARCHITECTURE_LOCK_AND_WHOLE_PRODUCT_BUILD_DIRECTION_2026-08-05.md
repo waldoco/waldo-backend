@@ -2,14 +2,18 @@
 
 **Status:** founder-approved build-direction lock; formal ADR reconciliation is required before conflicting code merges
 **Date:** 2026-08-05
-**Scope:** Waldo backend agent, Kennel desktop presence/executor, other presences, governed execution, continuity, workspace, connectors, and distribution contracts
+**Convergence refresh:** 2026-08-12
+**Launch-execution refresh:** 2026-08-13; the [production run contract](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) owns B0-B6 sequencing
+**Primary-surface refresh:** 2026-08-13; Electron Kennel, Waldo mobile, Telegram, and Discord are required launch presences; WhatsApp is approval-dependent and non-blocking
+**Scope:** Waldo backend agent, Kennel desktop presence/executor, mobile Health/Care presence, messaging presences, governed execution, continuity, workspace, connectors, and distribution contracts
 **Primary design:** [`WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md`](./WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md)
 **Product envelope:** [`WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md`](./WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md)
+**Current product authority:** [`WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md`](./WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md)
 **Cloud implementation choices:** [`CLOUDFLARE_AGENTIC_ECONOMY_AND_WALDO_ADOPTION_2026-08-04.md`](./CLOUDFLARE_AGENTIC_ECONOMY_AND_WALDO_ADOPTION_2026-08-04.md)
 
 ## 1. Lock verdict
 
-**[Decision — locked] Lock ownership and semantics now; select, prove, and replace implementations during building.** The architecture is ready for backend and Kennel implementation to begin in parallel. A model, provider, harness, connector, storage vendor, cloud executor, protocol revision, or UI composition may be selected during building behind its locked Interface and conformance suite. Those choices do not reopen Waldo's identity, authority, state ownership, effect, evidence, acceptance, or continuity model.
+**[Decision — locked] Lock ownership and semantics now; select, prove, and replace implementations during building.** The architecture is ready for implementation. Backend contracts and fixtures lead each dependency gate; Electron Kennel, the selected mobile lineage, and channel-neutral messaging clients then build in parallel against released fixtures. Real Telegram and Discord adapters integrate at B4 and harden at B5; all required surfaces converge at B6. This is integration sequencing, not a product-scope cut. A model, provider, harness, connector, storage vendor, cloud executor, protocol revision, or UI composition may be selected during building behind its locked Interface and conformance suite. Those choices do not reopen Waldo's identity, authority, state ownership, effect, evidence, acceptance, or continuity model.
 
 Accepted ADRs remain the repository's ratified architecture authority until amended or superseded with rationale and migration history. This founder-approved lock authorizes contract work and compatible implementation now; when a work item conflicts with an accepted ADR, its ADR reconciliation must merge before the conflicting code. This document defines target direction and build constraints, not shipped behavior or unilateral ADR ratification.
 
@@ -25,21 +29,36 @@ Accepted ADRs remain the repository's ratified architecture authority until amen
 
 Architecture exists to preserve that relationship. A module, contract, provider, integration, workspace, or UI is valuable only when it improves continuity, follow-through, execution, well-timed judgment, or honest completion. Agent launches, messages sent, tool calls, generated artifacts, and provider `done` states are observations; none is the product result.
 
+**[Decision — locked] Complexity is invisible; control remains inspectable.** The ordinary user sees one Waldo account, recognizable service Connections, “Have Waldo handle this,” understandable approval boundaries, schedules, and truthful states such as continuing in cloud, waiting for the Mac, needs approval, and ready for review. Models, MCP, Markdown configuration, CLIs, repositories, credentials, leases/fences, and executor placement are implementation machinery or optional advanced inspection—not setup requirements.
+
+**[Decision — locked] Health First is recommended, not required.** CRS, Form, Spots, Constellation, longitudinal health context, and care proposals remain first-class capabilities and may enhance Home, planning, timing, and agency when consented. Declining or revoking health never disables Home, capture, connected assistance, Outcomes, execution, verification, Open Loops, or Daily Close and never creates an invented readiness default or repeated pressure to connect.
+
+**[Decision — locked] Three surface families are launch-critical.** Electron Kennel desktop, Waldo mobile, and messaging presence are first-class clients of one owner backend. Telegram and Discord must pass real adapter and production acceptance before launch. WhatsApp remains a primary target, but unavailable vendor approval cannot block launch or justify a readiness claim. A channel is a registered transport/presentation presence, never an identity, memory, authority, Outcome, Acceptance, or closure root.
+
+### 1.2 Current implementation boundary at the convergence refresh
+
+**[Observed at `waldo-backend@dd434e9`]** Responsibility capture v0.1/v0.2, bounded planning-turn v0.3, authenticated public ingress, owner routing, `IdentityPresenceModule`, `WaldoCoordinator`, `OutcomeModule`, owner events/projections, and one leased/fenced/cancellable zero-tool planning turn are implemented locally. The trusted RunLoop, ContextComposer, DeliveryGate, scheduling, journal/outbox, safety, and effect foundations also exist as a separate substrate.
+
+**[Not yet proved]** No product WorkUnit enters that general trusted execution path. Evidence/Verification/Acceptance/OpenLoop/ReEntry reducers, multi-presence/Home/channel synchronization, service-first Connections, real Calendar/inbox product effects, Telegram/Discord adapters, reviewed routine promotion, persistent cloud execution, Electron Kennel consumption, mobile acceptance, staging, and production proof remain missing or unproved. The capability matrix carries the row-level status; this lock must not be cited as implementation proof.
+
+**[Observed 2026-08-13]** Repository documentation is current at `origin/main@51da2d1`; the product-code evidence above remains pinned to `dd434e9`. Contracts and guards pass locally. Runtime verification currently fails seven cases because two test sessions expired on 2026-08-08; Docker/Supabase proof is unavailable locally. B0 must restore and record the complete baseline before B1 begins.
+
 ## 2. Whole-product thesis checksum
 
 The locked architecture must produce one Waldo that owns both personal assistance and work orchestration, including their bridge:
 
-- one user-owned identity and correctable continuity across Home and Work;
+- one user-owned Waldo account and correctable continuity across Mobile, Kennel Home, Kennel Work, Telegram, Discord, cloud, and later WhatsApp/voice presences;
 - Capture, Outcome, optional Mission, WorkUnit, Judgment, Authority, Artifact, Evidence, Verification, Acceptance, Open Loop, and exact ReEntryPoint;
 - Morning Brief, Catch Up, meeting preparation/follow-through, commitments, restrained proactivity, and Daily Close;
 - provider-neutral multi-agent supervision through Kennel and future presences;
 - local and cloud execution through portable workspace/checkpoint contracts;
 - connectors and effectful work with intent-before-I/O, reconciliation, receipts, and terminal ambiguity;
 - governed context, credentials, capability discovery, routines, skills, integration recipes, and capability packages;
+- short guided setup, service-first Connections, product-managed local/cloud placement, and demonstration/success-to-reviewed-routine without exposing infrastructure vocabulary;
 - inspectable knowledge projections, export/import/deletion, source provenance, and cross-surface protocol;
 - distribution into other harnesses without distributing Waldo identity, memory authority, acceptance, or closure.
 
-Health/body context remains optional, consented, passive context inside an existing user-grounded purpose. It is not Waldo's product category, agenda, priority engine, or source of authority.
+Health/body context is a recommended, consented, first-class enhancement and launch wedge. It remains optional and never becomes Waldo's category ceiling, prerequisite, agenda, priority authority, or diagnosis engine.
 
 ## 3. Locked authority and placement
 
@@ -57,16 +76,16 @@ flowchart LR
 ```
 
 1. Waldo backend owns identity binding, canonical product state, admission, context policy, authority, acceptance, Open Loop closure, and ordered projections.
-2. Kennel is Waldo's first desktop presence and local executor. **Kennel proposes; the owner Durable Object admits.** Kennel owns local operation durability and workspace processes, never canonical Outcome, authority, memory, acceptance, or closure.
+2. Kennel is Waldo's Electron desktop presence and local executor with synchronized Home and Xirp-informed Work. **Kennel proposes; the owner Durable Object admits.** Kennel owns local operation durability and workspace processes, never canonical Outcome, authority, memory, acceptance, or closure.
 3. `WaldoCoordinator` is logically above provider/executor adapters and is physically hosted with `RunLoopEngine` in the per-owner Durable Object and SQLite transaction boundary until measured evidence requires another placement.
 4. Providers, harnesses, connectors, people, and execution environments return untrusted observations, receipts, and candidate evidence. Their `done` state changes no Waldo product truth by implication.
 5. No transitive delegation exists. A downstream executor receives the intersection of the owner's current grant, WorkUnit ceiling, adapter capability, purpose, resource, audience, lease, expiry, and revocation generation.
 
 ### 3.1 Canonical Kennel implementation boundary
 
-- **[Observed fact]** [`Developerr86/Kennel@9184f83`](https://github.com/Developerr86/Kennel/commit/9184f8303ccc4feb339582327d5d26adcc190b73) is an ancestor baseline of the canonical [`Pin4sf/kennel`](https://github.com/Pin4sf/kennel) repository. New Waldo integration targets `Pin4sf/kennel`; the upstream repository remains source history, not a separate product authority.
-- **[Observed fact]** Current Kennel has substantial desktop execution and supervision behavior, while its Outcome/Mission/WorkUnit records and contract v3 are local and no canonical Waldo backend client exists.
-- **[Decision — locked · Adapt]** Kennel retains the desktop Island/Work/Needs You experience, persistent local daemon, provider supervision, worktrees/files/terminals, device-local operation ledger and recovery, provider-specific adapters, and an explicitly stale read-only projection cache.
+- **[Observed fact]** The canonical Kennel lineage is the Electron repository audited at remote `main@367c484`. Swift/native branches are not the build target. New Waldo integration targets Electron `Pin4sf/kennel`.
+- **[Observed fact]** Electron Kennel has a persistent daemon, contract-v6 Island/Work projection, Codex App Server supervision, repositories/worktrees/terminals, Mission orchestration, evidence-oriented review, and local recovery. Its Outcome/Mission/WorkUnit records remain local and no canonical Waldo backend client exists.
+- **[Decision — locked · Adapt]** Kennel retains the desktop Island, synchronized Home, Xirp-informed Work, Needs You, persistent local daemon, provider supervision, worktrees/files/terminals/rules/skills, device-local operation ledger and recovery, provider-specific adapters, and an explicitly stale read-only projection cache.
 - **[Decision — locked · Adopt]** The backend owns Waldo identity, responsibility/Outcome truth, commitments, context policy, authority and judgments, effects, verification, Acceptance, OpenLoops, and ReEntryPoints. Kennel reports untrusted session observations and candidate evidence through the shared protocol.
 - **[Decision — locked · Reject]** Do not overwrite Kennel wholesale or keep its local product database as a second canonical writer. Cut over aggregate by aggregate behind compatibility adapters, reconciliation, and rollback.
 
@@ -90,6 +109,14 @@ Agent Governance is cross-cutting policy and enforcement, not a new central modu
 | Preserve, correct, export, delete, and prevent resurrection of continuity | `ContinuityModule` + `PortabilityModule` + `DeletionCoordinator` |
 
 The [definitive aggregate-writer matrix](#5-definitive-aggregate-writer-matrix) remains normative. This synthesis neither grants the Coordinator direct writes nor changes any sole-writer boundary.
+
+### 3.3 Product account, Connections, roles, and placement
+
+- One Waldo account maps to one owner authority root. A named helper, specialist, or “agent” is a bounded behavior/capability profile under that account, not another identity, credential pool, memory authority, or canonical writer.
+- A service-first Connection binds a recognizable account to declared read/write capabilities, eligible purposes, approval policy, credential-handle metadata, freshness, usage receipts, and revocation. OAuth, MCP, CLI, browser login, or native-adapter mechanics remain behind the Interface.
+- “Have Waldo handle this” compiles a source item or natural-language request into a Capture/Outcome, context purpose, Work Units when needed, authority ceiling, schedule, acceptance check, and eligible execution placement.
+- The placement policy selects an admitted cloud or Kennel executor. Cloud-capable work may continue when devices close; local-only work waits for an enrolled Kennel presence; checkpoint portability requires a sealed manifest and new fenced lease. The surface reports truthful placement and blocked state without asking the ordinary user to choose a runtime.
+- A demonstration or successful run creates a draft `BehaviorProposal`. It becomes a Skill/Routine only after review, safe testing, capability/authority binding, validation, versioning, promotion, and rollback are explicit.
 
 ## 4. Cross-repository protocol v0.1
 
@@ -174,19 +201,19 @@ One named reducer is the only durable writer for each aggregate. `WaldoCoordinat
 | ContextClaim, Spot, Episode, Constellation, OpenLoop, ReEntryPoint | `ContinuityModule` | Per-owner DO SQLite | Provenance-bearing proposal, correction, or authorized lifecycle command |
 | Artifact metadata and lifecycle | `ArtifactRegistry` | Per-owner DO SQLite; bytes through `BlobStorePort` | Content-addressed artifact registration/lifecycle command |
 | Workspace metadata, checkpoints, restore attempts | `WorkspaceModule` | Per-owner DO SQLite; encrypted chunks through `BlobStorePort` | Workspace adapter checkpoint/restore observation |
-| Capability manifests and eligibility | `CapabilityRegistry` | Versioned registry plus per-owner policy | Source-pinned manifest and conformance result |
+| Capability manifests, per-owner eligibility, and `ConnectionBinding` lifecycle | `CapabilityRegistry` | Versioned registry plus per-owner connection/policy state; secret values stay in broker/vault | Authenticated service binding or source-pinned manifest and conformance result |
 | ContextProjection and projection recipes | `ContextCompiler` | Per-owner DO SQLite plus source references | Purpose-bound compilation command and attributable source observations |
 | BudgetReservation, UsageReceipt | `BudgetLedger` | Per-owner DO SQLite plus provider reconciliation | Authorized reservation and attributable usage observation |
 | SourceUsageReceipt, AttributionEvent | `SourceAttributionLedger` | Per-owner DO SQLite | Purpose-bound source retrieval/use observation |
 | ExternalDelegationRequest/Disposition, DelegationReply, SharedContextGrant | `DelegationModule` | Per-owner DO SQLite | Authorized counterparty command and untrusted reply observation |
 | ExecutionPrincipal, WorkloadIdentity, DelegationGrant, CredentialHandle metadata | `WorkloadIdentityModule` | Per-owner DO SQLite; secret value remains in broker/vault | Authorized execution/delegation command and broker receipt |
 | ProtocolBinding and protocol-adapter mapping state | `ProtocolBindingRegistry` | Versioned registry plus per-owner binding state | Source-pinned adapter command and remote observation |
-| RoutineDefinition, SkillBundle, IntegrationRecipe, CapabilityPackage lifecycle | `BehaviorPackageRegistry` | Versioned registry plus per-owner installation state | Source-pinned package command and conformance result |
+| RoutineDefinition, BehaviorProposal, SkillBundle, IntegrationRecipe, CapabilityPackage lifecycle | `BehaviorPackageRegistry` | Versioned registry plus per-owner installation state | Source-pinned behavior/package command and conformance result |
 | EvaluationEnvelope and promotion eligibility evidence | `EvaluationRegistry` | Versioned evaluation ledger | Pinned evaluation run and attributable result |
 | WaldoExportBundle, import/restore job | `PortabilityModule` | Per-owner DO SQLite; encrypted payload through `BlobStorePort` | Explicit owner export/import/delete command |
 | DeletionTombstone and per-store acknowledgements | `DeletionCoordinator` | Per-owner DO SQLite | Explicit owner/policy deletion command and store receipt |
 | ExecutionPosture and containment disposition | `PostureModule` | Bounded security ledger | Redacted executor/egress/credential/process observation |
-| Product projections and snapshot metadata | `ProjectionPublisher` | Rebuildable read models | Committed domain events only |
+| Product projections, including `HomeProjection`, and snapshot metadata | `ProjectionPublisher` | Rebuildable read models | Committed domain events only |
 | Local executor operations/processes | Kennel `OperationLedger` | Owner-bound device-local store | Backend execution command with lease/fence |
 
 Cross-module work uses commands and committed outbox records. Only the same-DO transaction runner may atomically commit events from more than one writer, and each event must still be produced by its owning reducer.
@@ -370,9 +397,12 @@ There are no product phases or slices. Work proceeds through concurrent, depende
 | Owner root and domain | Routing, Coordinator, product FSMs, writer modules, projections | Relevant contract is published | Deterministic replay, owner isolation, full supported-transition property tests |
 | Trusted execution and effects | `ExecutionKernel`, grants, intent/receipt, reconciliation, budgets, cancellation | Authority/effect contracts are published | Existing RunLoop regression plus kill/ambiguity/no-duplicate-effect tests |
 | Kennel and desktop harness | Presence client, operation ledger, local executor, session control, local workspace | Protocol/executor fixtures are published | Fake-backend and real-adapter conformance; backend admits every consequential proposal |
+| Mobile Health/Care presence | Consent, Health/Home, capture, Needs You, acceptance, correction, Close | Presence/Home/health fixtures are published | Health-connected and health-declined device acceptance; no app-owned truth/runtime |
+| Messaging presence | Channel link/revoke, normalized ingress, safe projections, durable delivery, Telegram/Discord adapters | Presence, conversation and closure fixtures are published | Fake transport plus credentialed vendor conformance; no payload-derived authority, duplicate send or receipt-as-closure |
 | Workspace, artifacts, and knowledge | Portable checkpoint, BlobStore, local/cloud adapters, Artifact and knowledge projections | Workspace/Artifact contracts are published | Seal/restore/delete, chunk integrity, provenance, and Mac-to-Linux declared-support tests |
 | Connectors and real-world effects | Calendar, mail, docs, messaging, people/services | Connector/effect family declares exact scopes and reconciliation | Apply-then-timeout, duplicate, expiry, cancellation, revoke, read-back, terminal ambiguity |
 | Personal assistance and continuity | Capture, Brief, Catch Up, commitments, meeting lifecycle, Close, Open Loops | Domain/projection contracts are published | Same history and exact re-entry across presences; no feed/activity substitution |
+| Account, Connections, and simplicity | Guided setup, account/role projections, service bindings, plain-language authority, “Have Waldo handle this” | Identity, capability, credential, and domain contracts are published | First useful delegation in under five minutes without infrastructure setup; revoke and degraded states remain understandable |
 | Work orchestration and distribution | Outcomes, optional Missions, WorkUnits, multi-agent control, MCP/SDK/Packs | Domain/capability contracts are published | Multiple providers/harnesses cannot mint authority, acceptance, memory, or closure |
 | Security, portability, deletion, and operations | Threat model, context/credential policy, posture, export/import, tombstones, load/cost/rollback | Runs alongside every workstream | Negative privacy/tenant tests, deletion proof, redacted traces, recovery/load/cost evidence |
 
@@ -383,12 +413,16 @@ The shared protocol/conformance spine is a dependency for cross-repository integ
 The following are continuous acceptance scenarios, not releases or scope boundaries. All remain required:
 
 1. capture through accepted Outcome, optional Mission paths, WorkUnits, multiple agent sessions, Judgment, reversible external effect, independent read-back, artifact checks, Acceptance/reopen, Daily Close, and exact next-day re-entry;
-2. the same canonical Outcome and Needs You state from Kennel, mobile/web, messaging, and voice capabilities that declare support;
+2. the same canonical Outcome, Needs You, Acceptance and ReEntry state across launch Electron, mobile, Telegram and Discord presences; later presences must pass the same contract;
 3. local workspace seal, eligible cloud restore/recreation, Artifact return, deletion, and resumption in Kennel without authority or effect duplication;
 4. another harness receiving a bounded WorkUnit through Waldo's MCP/SDK, returning candidate Artifact/Evidence, and failing to mint authority, memory, Acceptance, or closure;
 5. user correction, consent withdrawal, account switch, credential revocation, provider replacement, and adapter rollback propagating without cross-owner or stale-context residue;
 6. routines, skills, integration recipes, and capability packages installed, updated, revoked, and quarantined independently with no hidden privilege expansion.
 7. a disconnected presence shows an explicitly stale last-synced projection while every command, approval, execution, and canonical-state mutation attempt fails closed until online backend authority is available.
+8. a non-technical user creates one Waldo account, connects Calendar and inbox through service cards, chooses approval boundaries, invokes “Have Waldo handle this,” and receives a truthful result/status without encountering MCP, CLI, Markdown configuration, repositories, API keys, model selection, or runtime selection.
+9. the same core flow passes when health is declined; when health is consented, a provenance-bearing CRS/Form/Spot/Constellation-derived proposal may improve the plan without granting authority or entering Kennel Work by default.
+10. an accepted/demonstrated workflow becomes a reviewed and tested routine that continues in cloud while the laptop is closed; local-only work waits for Kennel without duplicate execution or false migration.
+11. Telegram and Discord each pass real link/revoke, verified ingress, dedupe/replay, rate-limit, block/removal, outbound ambiguity, privacy/health redaction, deletion/export and recovery tests; WhatsApp approval is non-blocking and never represented by mocks as ready.
 
 ### 9.2 Responsibility-backbone implementation start
 
@@ -467,4 +501,4 @@ Provider choice, connector choice, local/cloud placement, object-store vendor, f
 
 ## 14. Start decision
 
-**Start building now.** Use the [next backend session prompt](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) to publish the responsibility-handshake subset of protocol v0.1 and its fixtures as the first common integration seam. Backend domain and Kennel consumer work then advance in parallel against those fixtures. A workstream may wait on a named contract or authority decision; the product is not divided into smaller promised versions, and no capability is removed because another workstream is still in progress.
+**Continue building now, backend first.** Responsibility capture v0.1/v0.2 and the bounded planning-turn v0.3 are already implemented locally at the current evidence pin. Use the [next backend session prompt](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) to repair the current verification/documented-route baseline, join canonical WorkUnits to the trusted RunLoop, and add the Evidence → Verification → Acceptance/OpenLoop/ReEntry spine. Then publish the multi-presence/Home/Connection/execution contracts that Electron Kennel consumes. Mobile integration starts after the intended app lineage is selected and the same public fixtures are stable. This sequence does not remove any committed product capability.
