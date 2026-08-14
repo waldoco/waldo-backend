@@ -27,6 +27,7 @@ This handoff supersedes the next-session instructions in the [B0 closure handoff
 - Preserved provider, execution-environment, presence, and channel-adapter identity as distinct categories.
 - Preserved every tracked v0.1-v0.3 fixture byte and added a guard that fails on old-fixture drift.
 - Added distinct fake desktop, mobile, Telegram, and Discord contract consumers. They prove shared wire conformance only and write no canonical truth.
+- **Required consumer action:** Kennel, Waldo mobile, and later Telegram/Discord lanes must pin reviewed release `df0abae1c74c24029556f47ba8b7ed49e83a40b8` and fixture tree `adff7e52da78d5523363a634eef1df8d62b3dffb`, run their own fixture/client conformance, and report failures to the owning backend issue. Until each named cross-repository gate passes, fixture parsing is not live integration or consumer acceptance.
 
 ## What Works (with evidence)
 
@@ -82,7 +83,7 @@ Every unrelated dirty checkout was preserved. No deployment, hosted database, li
 - Exact execution-environment binding includes category, kind, version, manifest identity, and digest; matching only ID/version is unsafe.
 - Freshness admission must bind lease request to attempt request and prove `acquiredAt <= observedAt <= receivedAt < expiresAt` with monotonic observation sequence.
 - Fake consumers must be distinct producers/consumers, not the same object reparsed under four labels.
-- Freshness helpers and command runners are attack surfaces: validate family allowlists and avoid shell-enabled spawning.
+- Freshness helpers and command runners are attack surfaces: validate a closed family allowlist before interpolation. The reviewed runner permits `shell: true` only for Windows command resolution after that validation; unchecked input must never reach a shell-enabled spawn.
 - Review findings remain open until the exact corrected SHA is rechecked. A previous PASS cannot be carried across source changes by assertion.
 
 ## Next-Session Prerequisites
