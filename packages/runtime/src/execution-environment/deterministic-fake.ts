@@ -80,7 +80,7 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
   async execute(commandValue: ExecutionEnvironmentCommandV1): Promise<unknown> {
     this.#store.executeCalls += 1;
     const command = await verifyExecutionEnvironmentCommandIdentity(commandValue);
-    this.#assertCommandBinding(command);
+    this.#assertCommandBinding(command, true);
     const existing = this.#store.receipts.get(command.operationId);
     if (existing !== undefined) {
       if (existing.operationDigest !== command.operationDigest) {
@@ -119,7 +119,7 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
   async recover(commandValue: ExecutionEnvironmentCommandV1): Promise<unknown> {
     this.#store.recoverCalls += 1;
     const command = await verifyExecutionEnvironmentCommandIdentity(commandValue);
-    this.#assertCommandBinding(command);
+    this.#assertCommandBinding(command, false);
     const existing = this.#store.receipts.get(command.operationId);
     if (existing === undefined) {
       const reconcileScript = command.action === 'reconcile'
@@ -180,7 +180,10 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
     });
   }
 
-  #assertCommandBinding(command: ExecutionEnvironmentCommandV1): void {
+  #assertCommandBinding(
+    command: ExecutionEnvironmentCommandV1,
+    requireActiveLease: boolean,
+  ): void {
     const capability = this.descriptor.capabilities[command.action];
     if (JSON.stringify(command.adapter) !== JSON.stringify(this.descriptor.adapter) ||
         JSON.stringify(command.environment) !== JSON.stringify(this.descriptor.environment) ||
@@ -191,16 +194,15 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
       throw new Error('execution environment command does not match adapter descriptor');
     }
     const now = iso8601Schema.parse(this.#now());
-    if (Date.parse(now) >= Date.parse(command.leaseExpiresAt)) {
+    if (requireActiveLease && Date.parse(now) >= Date.parse(command.leaseExpiresAt)) {
       throw new Error('execution environment fake rejected an expired lease');
     }
     const previous = this.#store.authorityHighWater.get(command.executionRequestId);
     if (previous !== undefined &&
         (command.fencingGeneration < previous.fencingGeneration ||
           command.cancellationGeneration < previous.cancellationGeneration ||
-          (command.fencingGeneration === previous.fencingGeneration &&
-            command.cancellationGeneration === previous.cancellationGeneration &&
-            command.leaseId !== previous.leaseId))) {
+          (command.leaseId !== previous.leaseId &&
+            command.fencingGeneration <= previous.fencingGeneration))) {
       throw new Error('execution environment fake rejected stale or conflicting authority');
     }
     if (previous === undefined ||

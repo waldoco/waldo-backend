@@ -290,6 +290,7 @@ export class ExecutionEnvironmentBoundary {
   async #readCurrentForCommand(
     ownerId: string,
     command: Awaited<ReturnType<typeof buildExecutionEnvironmentCommand>>,
+    requireActiveLease: boolean,
   ): Promise<ReturnType<typeof currentExecutionBinding>> {
     const aggregate = await this.#dependencies.readCurrentAggregate(
       ownerId,
@@ -314,7 +315,7 @@ export class ExecutionEnvironmentBoundary {
           current.attempt.state !== 'running')) {
       throw new Error('execution environment aggregate is stale before external I/O');
     }
-    this.#assertLeaseActive(current.lease.expiresAt);
+    if (requireActiveLease) this.#assertLeaseActive(current.lease.expiresAt);
     return current;
   }
 
@@ -378,7 +379,7 @@ export class ExecutionEnvironmentBoundary {
       mode: capability.mode,
       version: capability.version,
     }) as ExecutionEnvironmentDispatchResult['support'];
-    await this.#readCurrentForCommand(current.aggregate.request.ownerId, command);
+    await this.#readCurrentForCommand(current.aggregate.request.ownerId, command, false);
     const recovery = parseExecutionEnvironmentRecoveryResult(
       await this.#registered.recover(command),
     );
@@ -386,6 +387,7 @@ export class ExecutionEnvironmentBoundary {
     const afterRecovery = await this.#readCurrentForCommand(
       current.aggregate.request.ownerId,
       command,
+      false,
     );
     if (recovery.status !== 'known_not_applied') {
       return Object.freeze({
@@ -408,11 +410,12 @@ export class ExecutionEnvironmentBoundary {
     if (parsedInput.action === 'start' && afterRecovery.session.lastObservationSequence > 0) {
       throw new Error('execution environment start was already observed');
     }
+    await this.#readCurrentForCommand(current.aggregate.request.ownerId, command, true);
     const result = parseExecutionEnvironmentIssueResult(
       await this.#registered.execute(command),
     );
     assertOperationIdentity(command, result);
-    await this.#readCurrentForCommand(current.aggregate.request.ownerId, command);
+    await this.#readCurrentForCommand(current.aggregate.request.ownerId, command, false);
     return Object.freeze({
       command,
       support,

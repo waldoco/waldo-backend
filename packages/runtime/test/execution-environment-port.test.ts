@@ -449,9 +449,17 @@ describe('execution environment port conformance', () => {
       let recoverCalls = 0;
       let executeCalls = 0;
       const adapter = port();
-      adapter.recover = async () => {
+      adapter.recover = async (command) => {
         recoverCalls += 1;
-        throw new Error('must not recover under an expired lease');
+        return {
+          protocolVersion: '0.4',
+          category: 'execution_environment_recovery_result',
+          operationId: command.operationId,
+          operationDigest: command.operationDigest,
+          status: 'known_not_applied',
+          result: null,
+          checkedAt: attempt.updatedAt,
+        };
       };
       adapter.execute = async () => {
         executeCalls += 1;
@@ -466,7 +474,7 @@ describe('execution environment port conformance', () => {
         action: 'start',
         control: null,
       })).rejects.toThrow(/lease.*expired/i);
-      expect({ recoverCalls, executeCalls }).toEqual({ recoverCalls: 0, executeCalls: 0 });
+      expect({ recoverCalls, executeCalls }).toEqual({ recoverCalls: 1, executeCalls: 0 });
     }
 
     let now = attempt.updatedAt;
@@ -497,6 +505,64 @@ describe('execution environment port conformance', () => {
       control: null,
     })).rejects.toThrow(/lease.*expired/i);
     expect(executeCalls).toBe(0);
+  });
+
+  it('permits read-only receipt recovery and reconciliation after lease expiry', async () => {
+    let now = attempt.updatedAt;
+    const store = createDeterministicFakeExecutionEnvironmentStore();
+    const fake = new DeterministicFakeExecutionEnvironment({
+      descriptor: port().descriptor,
+      store,
+      script: {
+        start: {
+          status: 'observed',
+          draft: {
+            category: 'execution_environment_observation_draft',
+            id: 'post_expiry_recovered_observation',
+            sequence: 1,
+            kind: 'started',
+            payloadRef: null,
+            payloadDigest: null,
+            observedAt: attempt.updatedAt,
+          },
+        },
+        reconcile: {
+          status: 'observed',
+          draft: {
+            category: 'execution_environment_reconciliation_draft',
+            id: 'post_expiry_reconciliation',
+            state: 'failed',
+            basisObservationIds: [],
+            checkedAt: lease.expiresAt,
+          },
+        },
+      },
+      now: () => now,
+    });
+    const expiringInFlightAdapter: ExecutionEnvironmentPort = {
+      descriptor: fake.descriptor,
+      recover: (command) => fake.recover(command),
+      async execute(command) {
+        const result = await fake.execute(command);
+        now = lease.expiresAt;
+        return result;
+      },
+    };
+    const boundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(expiringInFlightAdapter),
+      { readCurrentAggregate: () => aggregate, now: () => now },
+    );
+    const issued = await boundary.dispatch(aggregate, { action: 'start', control: null });
+    expect(issued.status).toBe('observed');
+
+    const recovered = await boundary.dispatch(aggregate, { action: 'start', control: null });
+    expect(recovered.status).toBe('observed');
+    const reconciled = await boundary.dispatch(aggregate, { action: 'reconcile', control: null });
+    expect(reconciled).toMatchObject({
+      status: 'observed',
+      result: { draft: { state: 'failed', checkedAt: lease.expiresAt } },
+    });
+    expect(store.physicalIssues).toBe(1);
   });
 
   it('rechecks cancellation and fence authority after recovery before issue', async () => {
