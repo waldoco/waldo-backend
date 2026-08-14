@@ -13,8 +13,12 @@ import { runInDurableObject } from 'cloudflare:test';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { PlanningExecutionModule } from '../src/coordinator/planning-execution-module';
-import { WaldoCoordinator } from '../src/coordinator/waldo-coordinator';
+import {
+  WaldoCoordinator,
+  type CoordinatorDependencies,
+} from '../src/coordinator/waldo-coordinator';
 import { provisionDoSchema } from '../src/do-schema';
+import { ResponsibilityDigestConflictError } from '../src/responsibility/errors';
 import type { RuntimeProbeDO } from '../src/index';
 import type {
   ResponsibilityCanonicalAuthorityRegistration,
@@ -243,6 +247,86 @@ describe('responsibility execution v0.4 sole writer', () => {
       );
       now = '2026-08-13T12:00:00.500Z';
       expect(await coordinator.admitExecutionRequestV04(admission, authority)).toEqual(admitted);
+    });
+  });
+
+  it('admits public start only at the re-read WorkUnit revision and conflicts stale replay', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => request.requestedAt,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      const publicAdmission = {
+        id: request.id,
+        workUnitId: request.workUnit.id,
+        expectedWorkUnitRevision: request.workUnit.revision,
+      };
+      const admitted = await coordinator.admitPublicExecutionRequestV04(
+        publicAdmission,
+        authority,
+      );
+      expect(admitted.request.outcome.id).toBe(request.outcome.id);
+      expect(admitted.request.workUnit.revision).toBe(request.workUnit.revision);
+      await expect(coordinator.admitPublicExecutionRequestV04({
+        ...publicAdmission,
+        expectedWorkUnitRevision: request.workUnit.revision + 1,
+      }, authority)).rejects.toBeInstanceOf(ResponsibilityDigestConflictError);
+
+      state.storage.sql.exec(
+        'UPDATE work_units SET revision = revision + 1 WHERE id = ?',
+        request.workUnit.id,
+      );
+      await expect(coordinator.admitPublicExecutionRequestV04(
+        publicAdmission,
+        authority,
+      )).rejects.toBeInstanceOf(ResponsibilityDigestConflictError);
+    });
+  });
+
+  it('reconstructs a private start intent from the immutable persisted request digest', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      const dependencies: CoordinatorDependencies = {
+        now: () => request.requestedAt,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() { return 'a'.repeat(64); },
+      };
+      const coordinator = new WaldoCoordinator(state.storage, dependencies);
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      await coordinator.admitPublicExecutionRequestV04({
+        id: request.id,
+        workUnitId: request.workUnit.id,
+        expectedWorkUnitRevision: request.workUnit.revision,
+      }, authority);
+      const first = await coordinator.resolveExecutionStartIntentV04(request.ownerId, request.id);
+      const reconstructed = new WaldoCoordinator(state.storage, dependencies);
+      expect(await reconstructed.resolveExecutionStartIntentV04(
+        request.ownerId,
+        request.id,
+      )).toEqual(first);
+      expect(first).toEqual({
+        ref: `execution_start_intent_${'a'.repeat(64)}`,
+        digest: `sha256:${'a'.repeat(64)}`,
+      });
+
+      state.storage.sql.exec(
+        `UPDATE planning_execution_requests SET request_digest = ? WHERE id = ?`,
+        `sha256:${'b'.repeat(64)}`,
+        request.id,
+      );
+      await expect(reconstructed.resolveExecutionStartIntentV04(
+        request.ownerId,
+        request.id,
+      )).rejects.toThrow('execution start intent digest mismatch');
     });
   });
 

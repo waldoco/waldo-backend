@@ -11,6 +11,7 @@ import {
   executionRequestV04Schema,
   executionSessionV04Schema,
   executorObservationV04Schema,
+  exactRevisionV04Schema,
   protocolDigestSchema,
   protocolIdSchema,
   providerRefV04Schema,
@@ -113,6 +114,29 @@ export type ExecutionAdmissionV04 = Readonly<{
   outcomeId: string;
   workUnitId: string;
 }>;
+
+export type PublicExecutionAdmissionV04 = Readonly<{
+  id: string;
+  workUnitId: string;
+  expectedWorkUnitRevision: number;
+}>;
+
+function parsePublicExecutionAdmissionV04(value: unknown): PublicExecutionAdmissionV04 {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('public execution admission must be a strict object');
+  }
+  const input = value as Record<string, unknown>;
+  const expectedKeys = ['id', 'workUnitId', 'expectedWorkUnitRevision'];
+  if (Object.keys(input).length !== expectedKeys.length ||
+      expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(input, key))) {
+    throw new Error('public execution admission contains unrecognized fields');
+  }
+  return Object.freeze({
+    id: protocolIdSchema.parse(input.id),
+    workUnitId: protocolIdSchema.parse(input.workUnitId),
+    expectedWorkUnitRevision: exactRevisionV04Schema.parse(input.expectedWorkUnitRevision),
+  });
+}
 
 export type ExecutionBindingResolutionV04 = Readonly<{
   provider: CoordinatorExecutionRequestV04['provider'];
@@ -501,6 +525,58 @@ export class WaldoCoordinator {
     });
   }
 
+  async admitPublicExecutionRequestV04(
+    admissionValue: unknown,
+    canonicalAuthority: ResponsibilityCanonicalAuthority,
+  ): Promise<ExecutionAggregateV04> {
+    const admission = parsePublicExecutionAdmissionV04(admissionValue);
+    const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+      canonicalAuthority,
+      this.#deps.now(),
+    );
+    const productMaterial = this.#planning.readExecutionProductDigestMaterialForWorkUnitV04(
+      authority.ownerId,
+      admission.workUnitId,
+    );
+    if (productMaterial.workUnit.revision !== admission.expectedWorkUnitRevision) {
+      throw new ResponsibilityDigestConflictError();
+    }
+    const existing = this.#planning.readExecutionAggregateByRequestIdV04IfExists(admission.id);
+    if (existing !== null && (
+      existing.request.ownerId !== authority.ownerId ||
+      existing.request.workUnit.id !== admission.workUnitId ||
+      existing.request.workUnit.revision !== admission.expectedWorkUnitRevision ||
+      existing.request.outcome.id !== productMaterial.outcome.id
+    )) {
+      throw new ResponsibilityDigestConflictError();
+    }
+    return this.admitExecutionRequestV04({
+      id: admission.id,
+      outcomeId: productMaterial.outcome.id,
+      workUnitId: admission.workUnitId,
+    }, canonicalAuthority);
+  }
+
+  async resolveExecutionStartIntentV04(
+    ownerId: string,
+    executionRequestId: string,
+  ): Promise<Readonly<{ ref: string; digest: string }>> {
+    const material = this.#planning.readExecutionRequestIntentMaterialV04(
+      ownerId,
+      executionRequestId,
+    );
+    const recomputed = `sha256:${await this.#deps.sha256Hex(JSON.stringify(material.request))}`;
+    if (recomputed !== material.requestDigest) {
+      throw new Error('execution start intent digest mismatch');
+    }
+    return Object.freeze({
+      ref: protocolIdSchema.parse(
+        `execution_start_intent_${material.requestDigest.slice('sha256:'.length)}`,
+      ),
+      digest: protocolDigestSchema.parse(material.requestDigest),
+    });
+  }
+
   claimExecutionAttemptV04(claimValue: unknown): ExecutionAggregateV04 {
     const claim = parseExecutionClaimV04(claimValue);
     return this.#storage.transactionSync(() => {
@@ -661,6 +737,42 @@ export class WaldoCoordinator {
     executionRequestId: string,
   ): ExecutionAggregateV04 {
     return this.#planning.readExecutionAggregateV04(ownerId, executionRequestId);
+  }
+
+  async readCurrentExecutionAggregateV04(
+    ownerId: string,
+    executionRequestId: string,
+  ): Promise<ExecutionAggregateV04> {
+    const aggregate = this.#planning.readExecutionAggregateV04(ownerId, executionRequestId);
+    const productMaterial = this.#planning.readExecutionProductDigestMaterialV04(
+      ownerId,
+      aggregate.request.outcome.id,
+      aggregate.request.workUnit.id,
+    );
+    const [outcomeDigestHex, workUnitDigestHex] = await Promise.all([
+      this.#deps.sha256Hex(productMaterial.outcomeMaterial),
+      this.#deps.sha256Hex(productMaterial.workUnitMaterial),
+    ]);
+    return this.#storage.transactionSync(() => {
+      const currentAggregate = this.#planning.readExecutionAggregateV04(
+        ownerId,
+        executionRequestId,
+      );
+      const currentProduct = this.#planning.readExecutionProductDigestMaterialV04(
+        ownerId,
+        currentAggregate.request.outcome.id,
+        currentAggregate.request.workUnit.id,
+      );
+      const currentMatches = JSON.stringify(currentProduct) === JSON.stringify(productMaterial) &&
+        currentAggregate.request.outcome.revision === currentProduct.outcome.revision &&
+        currentAggregate.request.outcome.digest === `sha256:${outcomeDigestHex}` &&
+        currentAggregate.request.workUnit.revision === currentProduct.workUnit.revision &&
+        currentAggregate.request.workUnit.digest === `sha256:${workUnitDigestHex}` &&
+        JSON.stringify(currentAggregate.request.authorityCeiling) ===
+          JSON.stringify(currentProduct.authorityCeiling);
+      if (!currentMatches) throw new ResponsibilityDigestConflictError();
+      return currentAggregate;
+    });
   }
 
   readPlanningPromptMaterial(ownerId: string, executionRequestId: string) {

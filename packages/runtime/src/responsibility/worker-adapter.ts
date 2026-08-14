@@ -4,8 +4,10 @@ import {
   responsibilityHttpMediaTypeV01,
   responsibilityHttpMediaTypeV02,
   responsibilityHttpMediaTypeV03,
+  responsibilityExecutionHttpMediaTypeV04,
   responsibilityHttpProblemV01,
   matchResponsibilityHttpRouteV01,
+  matchResponsibilityExecutionHttpRouteV04,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureResultV01CompatibilitySchema,
@@ -24,6 +26,8 @@ import {
   workUnitPlanningTurnResultV03Schema,
   workUnitPlanningTurnTrustedEnvelopeV03Schema,
   workUnitPlanningProjectionPageV03Schema,
+  workUnitExecutionStartRequestV04Schema,
+  workUnitExecutionStartResultV04Schema,
   ROSTER,
   ROSTER_REFS,
   type ActorRef,
@@ -38,7 +42,7 @@ import type {
 import { responsibilityBoundaryStatus } from './errors';
 import { parseResponsibilityJsonBytes, readBoundedResponsibilityBody } from './raw-json';
 
-export type ResponsibilityProtocolVersion = '0.1' | '0.2' | '0.3';
+export type ResponsibilityProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4';
 
 export type TrustedResponsibilityContext = Readonly<{
   ownerId: string;
@@ -69,6 +73,10 @@ export interface ResponsibilityOwnerRoot {
     input: WorkUnitPlanningProjectionRead,
     ingress: ResponsibilityIngressContext,
   ): Promise<unknown>;
+  startExecution?(
+    input: Readonly<{ routedOwnerId: string; request: unknown }>,
+    ingress: ResponsibilityIngressContext,
+  ): Promise<unknown>;
 }
 
 export type ResponsibilityIngressContext = Readonly<{
@@ -97,6 +105,7 @@ const MEDIA_TYPES: Readonly<Record<ResponsibilityProtocolVersion, string>> = Obj
   '0.1': responsibilityHttpMediaTypeV01,
   '0.2': responsibilityHttpMediaTypeV02,
   '0.3': responsibilityHttpMediaTypeV03,
+  '0.4': responsibilityExecutionHttpMediaTypeV04,
 });
 
 export function createResponsibilityWorkerAdapter(
@@ -105,20 +114,22 @@ export function createResponsibilityWorkerAdapter(
   return {
     async fetch(request: Request): Promise<Response> {
       const url = new URL(request.url);
-      const route = matchResponsibilityHttpRouteV01(request.method, url.pathname);
+      const route = matchResponsibilityHttpRouteV01(request.method, url.pathname) ??
+        matchResponsibilityExecutionHttpRouteV04(request.method, url.pathname);
       if (route === null) return problem(404);
       const capture = route.id === 'capture';
       const planningTurn = route.id === 'planning_turn';
       const planningCancel = route.id === 'planning_cancel';
       const projection = route.id === 'projection';
       const planningProjection = route.id === 'planning_projection';
+      const executionStart = route.id === 'execution_start';
 
       const version = selectedVersion(request.headers.get('accept'));
       if (version === null) return problem(406);
       if (!route.protocolVersions.some((supported) => supported === version)) {
         return problem(406);
       }
-      const writesBody = capture || planningTurn || planningCancel;
+      const writesBody = capture || planningTurn || planningCancel || executionStart;
       if (writesBody && normalizedMediaType(request.headers.get('content-type')) !== MEDIA_TYPES[version]) {
         return problem(406);
       }
@@ -159,6 +170,31 @@ export function createResponsibilityWorkerAdapter(
       if (context === null) return problem(401);
 
       try {
+        if (route.id === 'execution_start') {
+          const parsed = workUnitExecutionStartRequestV04Schema.safeParse(body);
+          if (!parsed.success) {
+            const bodyVersion = isRecord(body) ? body.protocolVersion : undefined;
+            return bodyVersion !== undefined && bodyVersion !== version ? problem(406) : problem(400);
+          }
+          if (parsed.data.presenceRegistrationId !== context.presenceRegistrationId) {
+            return problem(401);
+          }
+          const ownerRoot = await dependencies.ownerRootFor(context);
+          if (ownerRoot.startExecution === undefined) {
+            throw new Error('execution start owner root unavailable');
+          }
+          const result = await ownerRoot.startExecution({
+            routedOwnerId: context.ownerId,
+            request: parsed.data,
+          }, ingressContext(context));
+          const publicResult = workUnitExecutionStartResultV04Schema.parse(result);
+          if (publicResult.requestId !== parsed.data.requestId ||
+              publicResult.workUnit.id !== parsed.data.aggregate.id ||
+              publicResult.workUnit.revision !== parsed.data.aggregate.expectedRevision) {
+            throw new Error('execution start response authority mismatch');
+          }
+          return json(publicResult, 200, '0.4');
+        }
         if (route.id === 'planning_cancel') {
           const parsed = workUnitPlanningCancelRequestV03Schema.safeParse(body);
           if (!parsed.success) {
@@ -367,6 +403,7 @@ function selectedVersion(accept: string | null): ResponsibilityProtocolVersion |
   if (mediaType === MEDIA_TYPES['0.1']) return '0.1';
   if (mediaType === MEDIA_TYPES['0.2']) return '0.2';
   if (mediaType === MEDIA_TYPES['0.3']) return '0.3';
+  if (mediaType === MEDIA_TYPES['0.4']) return '0.4';
   return null;
 }
 

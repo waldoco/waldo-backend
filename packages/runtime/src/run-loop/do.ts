@@ -5,11 +5,13 @@ import {
   canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
   canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
   canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
+  canonicalizeWorkUnitExecutionStartRequestV04ForDigest,
   workUnitCandidatePlanV03Schema,
   workUnitPlanningAuthorizationResultV03Schema,
   workUnitPlanningCancelRequestV03Schema,
   workUnitPlanningTurnRequestV03Schema,
   workUnitPlanningTurnResultV03Schema,
+  workUnitExecutionStartRequestV04Schema,
   acceptTrustedInvocation,
   buildSessionState,
   canonicalInvocationIdempotencySerialization,
@@ -92,7 +94,10 @@ import {
   type SignedResponsibilityIngressContext,
 } from '../responsibility/ingress-signature';
 import { RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION } from '../responsibility/constants';
-import { ResponsibilityIngressRateLimitError } from '../responsibility/errors';
+import {
+  ResponsibilityExecutionUnavailableError,
+  ResponsibilityIngressRateLimitError,
+} from '../responsibility/errors';
 import {
   RuntimeLLMProvider,
   TRUSTED_PROVIDER_EFFECT_METERING_CAP,
@@ -152,6 +157,11 @@ import {
   type TrustedRunV2ToolEffectWitness,
   type TrustedRunV2State,
 } from './trusted-v2';
+import {
+  localWorkUnitExecutionBinding,
+  localWorkUnitExecutionEnvironmentFor,
+  WorkUnitExecutionBridge,
+} from './work-unit-execution';
 
 const TRIGGER = 'brief' satisfies TriggerType;
 const PUSH_CLASS = 'brief' as const;
@@ -324,6 +334,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   private journalOutbox: RunJournalOutbox;
   private llm: RuntimeLLMProvider;
   private readonly waldoCoordinator: WaldoCoordinator;
+  private readonly workUnitExecutionBridge: WorkUnitExecutionBridge | null;
   private testCircuitBreaker: CircuitBreaker | undefined;
   private readonly trustedDrivePromises = new Map<string, Promise<void>>();
 
@@ -350,7 +361,31 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     this.scheduler = new Scheduler(ctx.storage.sql, ctx.storage, this.deps);
     this.journalOutbox = this.#createJournalOutbox(this.adapters.sink);
     this.llm = new RuntimeLLMProvider({ gateway: this.adapters.gateway });
-    this.waldoCoordinator = new WaldoCoordinator(ctx.storage);
+    if (isLocalRunLoopEnvironment(env.WALDO_ENV)) {
+      const coordinatorNow = () => new Date(this.deps.now()).toISOString();
+      this.waldoCoordinator = new WaldoCoordinator(ctx.storage, {
+        now: coordinatorNow,
+        newId: (kind) => `${kind}_${crypto.randomUUID()}`,
+        sha256Hex: (value) => this.deps.sha256Hex(value),
+        resolveExecutionBindingV04: async (input) => localWorkUnitExecutionBinding(
+          input,
+          `sha256:${await this.deps.sha256Hex(JSON.stringify([
+            'local-execution-context-v0.4', input.ownerId, input.outcomeId, input.workUnitId,
+          ]))}`,
+        ),
+      });
+      this.workUnitExecutionBridge = new WorkUnitExecutionBridge({
+        coordinator: this.waldoCoordinator,
+        registeredEnvironmentFor: (aggregate) =>
+          localWorkUnitExecutionEnvironmentFor(aggregate, coordinatorNow),
+        now: coordinatorNow,
+        newId: (kind) => `${kind}_${crypto.randomUUID()}`,
+        sha256Hex: (value) => this.deps.sha256Hex(value),
+      });
+    } else {
+      this.waldoCoordinator = new WaldoCoordinator(ctx.storage);
+      this.workUnitExecutionBridge = null;
+    }
   }
 
   async __waldoCaptureResponsibilityForTest(
@@ -405,6 +440,31 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     const authority = this.#admitResponsibilityAuthorityAndIngress(ingress);
     return this.waldoCoordinator.cancelAuthorizedPlanningExecution(admission, authority);
+  }
+
+  async startExecutionFromWorker(
+    admission: Readonly<{ routedOwnerId: string; request: unknown }>,
+    ingress: SignedResponsibilityIngressContext,
+  ) {
+    await this.#assertResponsibilityIngressContext(ingress, 'execution_start');
+    const request = workUnitExecutionStartRequestV04Schema.parse(admission.request);
+    const expectedDigest = `sha256:${await this.deps.sha256Hex(
+      canonicalizeWorkUnitExecutionStartRequestV04ForDigest(request),
+    )}`;
+    if (ingress.ownerId !== admission.routedOwnerId ||
+        ingress.presenceRegistrationId !== request.presenceRegistrationId ||
+        ingress.requestDigest !== expectedDigest || ingress.operationDigest !== expectedDigest) {
+      throw new Error('responsibility ingress authority mismatch');
+    }
+    const authority = this.#admitResponsibilityAuthorityAndIngress(ingress);
+    if (this.workUnitExecutionBridge === null) {
+      throw new ResponsibilityExecutionUnavailableError();
+    }
+    return this.workUnitExecutionBridge.start({
+      requestId: request.requestId,
+      workUnitId: request.aggregate.id,
+      expectedWorkUnitRevision: request.aggregate.expectedRevision,
+    }, authority);
   }
 
   async readResponsibilityProjectionFromWorker(
@@ -1245,7 +1305,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   async #assertResponsibilityIngressContext(
     ingress: SignedResponsibilityIngressContext,
-    operation: 'capture' | 'projection' | 'planning_turn' | 'planning_cancel' | 'planning_projection',
+    operation: 'capture' | 'projection' | 'planning_turn' | 'planning_cancel' |
+      'planning_projection' | 'execution_start',
   ): Promise<void> {
     const now = this.deps.now();
     const secret = this.envBindings.RESPONSIBILITY_INGRESS_HMAC_SECRET;

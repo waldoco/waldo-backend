@@ -1,7 +1,8 @@
 import type { ResponsibilityIngressContext } from './worker-adapter';
 
 export type ResponsibilityIngressOperation =
-  'capture' | 'projection' | 'planning_turn' | 'planning_cancel' | 'planning_projection';
+  'capture' | 'projection' | 'planning_turn' | 'planning_cancel' | 'planning_projection' |
+  'execution_start';
 
 export function canonicalizeResponsibilityProjectionIngressForDigest(input: Readonly<{
   protocolVersion?: '0.1' | '0.2';

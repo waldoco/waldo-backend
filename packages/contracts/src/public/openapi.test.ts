@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { responsibilityHttpRouteManifestV01 } from '../protocol/responsibility-http-adapter-v0-1';
+import { responsibilityExecutionHttpRouteManifestV04 } from '../protocol/responsibility-workunit-execution-http-v0-4';
 import { buildPublicOpenApiDocument } from './openapi';
 
 const forbiddenFragments = [
@@ -23,13 +24,17 @@ describe('public OpenAPI artifact', () => {
   it('publishes exactly the guarded responsibility route inventory', () => {
     const generated = buildPublicOpenApiDocument();
     const paths = generated.paths as Record<string, Record<string, PublicOperation>>;
+    const publicRoutes = [
+      ...responsibilityHttpRouteManifestV01,
+      ...responsibilityExecutionHttpRouteManifestV04,
+    ];
     expect(Object.keys(paths).sort()).toEqual(
-      [...new Set(responsibilityHttpRouteManifestV01.map((route) => route.path))].sort(),
+      [...new Set(publicRoutes.map((route) => route.path))].sort(),
     );
     expect(paths).not.toHaveProperty('/public/v1/briefs/morning/current');
     expect(paths).not.toHaveProperty('/v1/engagement-events');
 
-    for (const route of responsibilityHttpRouteManifestV01) {
+    for (const route of publicRoutes) {
       const operation = paths[route.path]![route.method.toLowerCase()]!;
       expect(operation).toBeDefined();
       expect(operation.security).toEqual([{ bearerAuth: [] }]);
@@ -77,6 +82,13 @@ describe('public OpenAPI artifact', () => {
         'application/vnd.waldo.responsibility.v0.3+json',
       ]);
     }
+    const execution = paths['/public/responsibilities/work-units/executions']!.post!;
+    expect(Object.keys(execution.requestBody!.content)).toEqual([
+      'application/vnd.waldo.responsibility.v0.4+json',
+    ]);
+    expect(Object.keys(execution.responses['200']!.content!)).toEqual([
+      'application/vnd.waldo.responsibility.v0.4+json',
+    ]);
     expect(paths['/public/responsibilities/projection']!.get).not.toHaveProperty('requestBody');
     expect(paths['/public/responsibilities/planning-turns/projection']!.get)
       .not.toHaveProperty('requestBody');

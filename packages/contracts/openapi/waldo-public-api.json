@@ -1488,6 +1488,291 @@
           }
         }
       }
+    },
+    "/public/responsibilities/work-units/executions": {
+      "post": {
+        "operationId": "startWorkUnitExecution",
+        "summary": "Start one owner-bound WorkUnit execution",
+        "description": "Available only when RESPONSIBILITY_PUBLIC_API_ENABLED is exactly true. Authentication, admission, owner routing, and response validation fail closed.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-waldo-feature-gate": {
+          "environmentVariable": "RESPONSIBILITY_PUBLIC_API_ENABLED",
+          "enabledValue": "true",
+          "default": "disabled"
+        },
+        "x-waldo-protocol-versions": [
+          "0.4"
+        ],
+        "parameters": [
+          {
+            "name": "Accept",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/vnd.waldo.responsibility.v0.4+json"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.waldo.responsibility.v0.4+json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkUnitExecutionStartRequestV04"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Schema-validated owner-bound result",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "private, no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              },
+              "Waldo-Offline-Commands": {
+                "required": true,
+                "schema": {
+                  "const": "none"
+                }
+              },
+              "Waldo-Protocol-Version": {
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "0.4"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/vnd.waldo.responsibility.v0.4+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkUnitExecutionStartResultV04"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem400V01"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem401V01"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Content-free not-found problem, or an indistinguishable plain 404 while the route gate is disabled",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem404V01"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "not found"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem406V01"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem409V01"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              },
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "const": "60"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem429V01"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem500V01"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem503V01"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3560,6 +3845,234 @@
           "generatedAt"
         ],
         "additionalProperties": false
+      },
+      "WorkUnitExecutionStartRequestV04": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "type": "string",
+            "const": "0.4"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "commandType": {
+            "type": "string",
+            "const": "work_unit.start_execution"
+          },
+          "presenceRegistrationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "aggregate": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "work_unit"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "expectedRevision"
+            ],
+            "additionalProperties": false
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "clientIssuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "commandType",
+          "presenceRegistrationId",
+          "aggregate",
+          "clientIssuedAt"
+        ],
+        "additionalProperties": false
+      },
+      "WorkUnitExecutionStartResultV04": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "protocolVersion": {
+                "type": "string",
+                "const": "0.4"
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "workUnit": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "additionalProperties": false
+              },
+              "executionRequestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "attemptId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "status": {
+                "type": "string",
+                "const": "started"
+              },
+              "observation": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "sequence": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "kind": {
+                    "type": "string",
+                    "const": "started"
+                  }
+                },
+                "required": [
+                  "id",
+                  "sequence",
+                  "kind"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "protocolVersion",
+              "requestId",
+              "workUnit",
+              "executionRequestId",
+              "attemptId",
+              "status",
+              "observation"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "protocolVersion": {
+                "type": "string",
+                "const": "0.4"
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "workUnit": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "additionalProperties": false
+              },
+              "executionRequestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "attemptId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "status": {
+                "type": "string",
+                "const": "indeterminate"
+              },
+              "observation": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "protocolVersion",
+              "requestId",
+              "workUnit",
+              "executionRequestId",
+              "attemptId",
+              "status",
+              "observation"
+            ],
+            "additionalProperties": false
+          }
+        ]
       },
       "ResponsibilityHttpProblem400V01": {
         "type": "object",

@@ -21,6 +21,8 @@ import {
   planningAgentSessionV03Schema,
   workUnitPlanningCancelResultV03Schema,
   workUnitPlanningAuthorizationResultV03Schema,
+  workUnitPlanningAuthorityCeilingV03Schema,
+  workUnitAuthorityCeilingV02Schema,
   workUnitPlanningCommandResultV03Schema,
   workUnitPlanningExecutionRequestV03Schema,
   workUnitPlanningProjectionItemV03Schema,
@@ -41,6 +43,7 @@ import type {
 import { OwnerEventLog } from './owner-event-log';
 import {
   ResponsibilityDigestConflictError,
+  ResponsibilityOwnerRootMismatchError,
   ResponsibilityPlanningConflictError,
   ResponsibilityProjectionCursorError,
 } from '../responsibility/errors';
@@ -104,10 +107,35 @@ export type ExecutionProductDigestProofV04 = Readonly<{
   workUnitDigest: string;
 }>;
 
+export type ExecutionRequestIntentMaterialV04 = Readonly<{
+  request: ExecutionRequestV04;
+  requestDigest: string;
+}>;
+
 export const EXECUTION_LEASE_MAX_DURATION_MS_V04 = 10 * 60 * 1_000;
 
 function sameValidatedValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function parseCanonicalExecutionAuthorityCeilingV04(
+  value: unknown,
+): ExecutionRequestV04['authorityCeiling'] {
+  const current = executionAuthorityCeilingV04Schema.safeParse(value);
+  if (current.success) return current.data;
+  const planning = workUnitPlanningAuthorityCeilingV03Schema.safeParse(value);
+  const captured = workUnitAuthorityCeilingV02Schema.safeParse(value);
+  if (!planning.success && !captured.success) throw current.error;
+  return executionAuthorityCeilingV04Schema.parse({
+    tools: [],
+    connectors: [],
+    externalEffects: 'none',
+    outcomeMutation: 'none',
+    evidenceAdmission: 'none',
+    verification: 'none',
+    acceptance: 'none',
+    closure: 'none',
+  });
 }
 
 function parseExecutionAdmissionBindingV04(
@@ -237,6 +265,41 @@ export class PlanningExecutionModule {
       authorityCeiling: binding.authorityCeiling,
       outcomeMaterial: binding.outcomeMaterial,
       workUnitMaterial: binding.workUnitMaterial,
+    });
+  }
+
+  readExecutionProductDigestMaterialForWorkUnitV04(
+    ownerId: string,
+    workUnitId: string,
+  ): ExecutionProductDigestMaterialV04 {
+    const row = this.storage.sql.exec<{ outcome_id: string }>(
+      `SELECT work_units.outcome_id
+         FROM owner_roots
+         JOIN work_units ON work_units.owner_id = owner_roots.owner_id
+        WHERE owner_roots.root_key = 1 AND owner_roots.owner_id = ?
+          AND owner_roots.state = 'active' AND work_units.id = ?`,
+      ownerId,
+      workUnitId,
+    ).toArray()[0];
+    if (row === undefined) throw new ResponsibilityOwnerRootMismatchError();
+    return this.readExecutionProductDigestMaterialV04(ownerId, row.outcome_id, workUnitId);
+  }
+
+  readExecutionRequestIntentMaterialV04(
+    ownerId: string,
+    executionRequestId: string,
+  ): ExecutionRequestIntentMaterialV04 {
+    const row = this.storage.sql.exec<{ request_digest: string; request_json: string }>(
+      `SELECT request_digest, request_json
+         FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.4'`,
+      protocolIdSchema.parse(executionRequestId),
+      protocolIdSchema.parse(ownerId),
+    ).toArray()[0];
+    if (row === undefined) throw new Error('execution request not found');
+    return Object.freeze({
+      request: executionRequestV04Schema.parse(JSON.parse(row.request_json)),
+      requestDigest: protocolDigestSchema.parse(row.request_digest),
     });
   }
 
@@ -905,7 +968,7 @@ export class PlanningExecutionModule {
       ownerId,
     ).toArray()[0];
     if (row === undefined) throw new Error('canonical execution binding mismatch');
-    const authorityCeiling = executionAuthorityCeilingV04Schema.parse(
+    const authorityCeiling = parseCanonicalExecutionAuthorityCeilingV04(
       JSON.parse(row.authority_ceiling_json),
     );
     return Object.freeze({

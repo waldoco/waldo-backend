@@ -24,14 +24,23 @@ import {
   workUnitPlanningTurnRequestV03Schema,
   workUnitPlanningTurnResultV03Schema,
 } from '../protocol/responsibility-planning-turn-v0-3';
+import {
+  responsibilityExecutionHttpMediaTypeV04,
+  responsibilityExecutionHttpRouteManifestV04,
+  workUnitExecutionStartRequestV04Schema,
+  workUnitExecutionStartResultV04Schema,
+  type ResponsibilityExecutionHttpRouteV04,
+} from '../protocol/responsibility-workunit-execution-http-v0-4';
 
 type JsonRecord = Record<string, unknown>;
-type ProtocolVersion = '0.1' | '0.2' | '0.3';
+type ProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4';
+type PublicResponsibilityRoute = ResponsibilityHttpRouteV01 | ResponsibilityExecutionHttpRouteV04;
 
 const mediaTypes: Readonly<Record<ProtocolVersion, string>> = Object.freeze({
   '0.1': responsibilityHttpMediaTypeV01,
   '0.2': responsibilityHttpMediaTypeV02,
   '0.3': responsibilityHttpMediaTypeV03,
+  '0.4': responsibilityExecutionHttpMediaTypeV04,
 });
 
 const operationMetadata = Object.freeze({
@@ -77,7 +86,19 @@ const operationMetadata = Object.freeze({
     successStatus: '200',
     responseSchemas: { '0.3': 'WorkUnitPlanningProjectionPageV03' },
   },
+  execution_start: {
+    operationId: 'startWorkUnitExecution',
+    summary: 'Start one owner-bound WorkUnit execution',
+    successStatus: '200',
+    requestSchemas: { '0.4': 'WorkUnitExecutionStartRequestV04' },
+    responseSchemas: { '0.4': 'WorkUnitExecutionStartResultV04' },
+  },
 } as const);
+
+const publicResponsibilityRouteManifest = Object.freeze([
+  ...responsibilityHttpRouteManifestV01,
+  ...responsibilityExecutionHttpRouteManifestV04,
+]);
 
 function stripGeneratedSchemaNoise(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripGeneratedSchemaNoise);
@@ -127,7 +148,7 @@ function problemResponse(status: keyof typeof responsibilityHttpProblemSchemasV0
   };
 }
 
-function successHeaders(route: ResponsibilityHttpRouteV01): JsonRecord {
+function successHeaders(route: PublicResponsibilityRoute): JsonRecord {
   return {
     'Cache-Control': { required: true, schema: { const: 'private, no-store' } },
     Vary: { required: true, schema: { const: 'Authorization, Accept' } },
@@ -156,7 +177,7 @@ function projectionParameters(): JsonRecord[] {
   ];
 }
 
-function operationFor(route: ResponsibilityHttpRouteV01): JsonRecord {
+function operationFor(route: PublicResponsibilityRoute): JsonRecord {
   const metadata = operationMetadata[route.id];
   const versions = route.protocolVersions as readonly ProtocolVersion[];
   const responseSchemas = metadata.responseSchemas as Readonly<
@@ -203,7 +224,7 @@ function operationFor(route: ResponsibilityHttpRouteV01): JsonRecord {
 }
 
 export function buildPublicOpenApiDocument(
-  routeManifest: readonly ResponsibilityHttpRouteV01[] = responsibilityHttpRouteManifestV01,
+  routeManifest: readonly PublicResponsibilityRoute[] = publicResponsibilityRouteManifest,
 ): JsonRecord {
   const paths: JsonRecord = {};
   for (const route of routeManifest) {
@@ -243,6 +264,8 @@ export function buildPublicOpenApiDocument(
         WorkUnitPlanningCancelRequestV03: schemaFor(workUnitPlanningCancelRequestV03Schema),
         WorkUnitPlanningCancelResultV03: schemaFor(workUnitPlanningCancelResultV03Schema),
         WorkUnitPlanningProjectionPageV03: schemaFor(workUnitPlanningProjectionPageV03Schema),
+        WorkUnitExecutionStartRequestV04: schemaFor(workUnitExecutionStartRequestV04Schema),
+        WorkUnitExecutionStartResultV04: schemaFor(workUnitExecutionStartResultV04Schema),
         ...Object.fromEntries(
           Object.entries(responsibilityHttpProblemSchemasV01).map(([status, schema]) => [
             `ResponsibilityHttpProblem${status}V01`,
