@@ -7,7 +7,6 @@ import {
 import {
   buildExecutionEnvironmentCommand,
   currentExecutionBinding,
-  currentExecutionOperationBasis,
   parseExecutionEnvironmentDispatchInput,
   type ExecutionEnvironmentDispatchInput,
 } from './binding';
@@ -264,6 +263,10 @@ export class ExecutionEnvironmentBoundary {
       ownerId: string,
       executionRequestId: string,
     ): ExecutionAggregateV04 | Promise<ExecutionAggregateV04>;
+    resolveOperationIntent(
+      aggregate: ExecutionAggregateV04,
+      input: ExecutionEnvironmentDispatchInput,
+    ): unknown | Promise<unknown>;
     now(): string;
   }>;
 
@@ -274,6 +277,10 @@ export class ExecutionEnvironmentBoundary {
         ownerId: string,
         executionRequestId: string,
       ): ExecutionAggregateV04 | Promise<ExecutionAggregateV04>;
+      resolveOperationIntent(
+        aggregate: ExecutionAggregateV04,
+        input: ExecutionEnvironmentDispatchInput,
+      ): unknown | Promise<unknown>;
       now(): string;
     }>,
   ) {
@@ -298,7 +305,6 @@ export class ExecutionEnvironmentBoundary {
       command.executionRequestId,
     );
     const current = currentExecutionBinding(aggregate);
-    const operationBasis = currentExecutionOperationBasis(current, command.action);
     if (current.aggregate.request.id !== command.executionRequestId ||
         current.attempt.id !== command.attemptId ||
         current.lease.id !== command.leaseId ||
@@ -307,9 +313,6 @@ export class ExecutionEnvironmentBoundary {
         current.attempt.cancellationGeneration !== command.cancellationGeneration ||
         current.aggregate.currentCancellationGeneration !== command.cancellationGeneration ||
         current.lease.expiresAt !== command.leaseExpiresAt ||
-        operationBasis.observationHighWater !== command.operationBasis.observationHighWater ||
-        operationBasis.reconciliationHighWater !==
-          command.operationBasis.reconciliationHighWater ||
         executionEnvironmentIdentityKey(current.aggregate.request.environment) !==
           executionEnvironmentIdentityKey(command.environment) ||
         JSON.stringify(current.aggregate.request.provider) !== JSON.stringify(command.provider) ||
@@ -363,9 +366,14 @@ export class ExecutionEnvironmentBoundary {
           supplied.aggregate.request.contextProjectionDigest) {
       throw new Error('execution environment aggregate is stale before external I/O');
     }
+    const operationIntent = await this.#dependencies.resolveOperationIntent(
+      current.aggregate,
+      parsedInput,
+    );
     const command = await buildExecutionEnvironmentCommand(
       current.aggregate,
       parsedInput,
+      operationIntent,
       {
         adapter: this.#registered.descriptor.adapter,
         capability: {

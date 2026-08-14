@@ -75,6 +75,16 @@ function registerEnvironment(
   return new ExecutionEnvironmentRegistry().register(expectedDescriptor, adapter);
 }
 
+function defaultOperationIntent(input: Readonly<{
+  action: string;
+  control: Readonly<{ payloadRef: string }> | null;
+}>) {
+  return {
+    ref: `server_intent_${input.action}_${input.control?.payloadRef ?? 'default'}`,
+    digest: `sha256:${'c'.repeat(64)}`,
+  };
+}
+
 describe('execution environment port conformance', () => {
   it('registers one adapter by complete environment identity and rejects descriptor drift', () => {
     const registry = new ExecutionEnvironmentRegistry();
@@ -148,7 +158,7 @@ describe('execution environment port conformance', () => {
     };
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(adapter),
-      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
 
     await expect(boundary.dispatch(aggregate, {
@@ -208,7 +218,7 @@ describe('execution environment port conformance', () => {
           now: () => attempt.updatedAt,
         }),
       ),
-      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
 
     await expect(first.dispatch(aggregate, {
@@ -225,7 +235,7 @@ describe('execution environment port conformance', () => {
     });
     const reconstructed = new ExecutionEnvironmentBoundary(
       registerEnvironment(reconstructedAdapter),
-      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
     const recovered = await reconstructed.dispatch(aggregate, {
       action: 'start',
@@ -285,7 +295,7 @@ describe('execution environment port conformance', () => {
           now: () => attempt.updatedAt,
         }),
       ),
-      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
     const first = await boundary.dispatch(aggregate, {
       action: 'start',
@@ -348,7 +358,7 @@ describe('execution environment port conformance', () => {
       });
       const boundary = new ExecutionEnvironmentBoundary(
         registerEnvironment(adapter),
-        { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+        { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       await expect(boundary.dispatch(aggregate, {
         action: 'start',
@@ -390,7 +400,7 @@ describe('execution environment port conformance', () => {
     };
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(adapter),
-      { readCurrentAggregate: () => current, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => current, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
 
     await expect(boundary.dispatch(aggregate, {
@@ -438,7 +448,7 @@ describe('execution environment port conformance', () => {
     };
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(adapter),
-      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
 
     await expect(boundary.dispatch(aggregate, {
@@ -471,7 +481,7 @@ describe('execution environment port conformance', () => {
       };
       const boundary = new ExecutionEnvironmentBoundary(
         registerEnvironment(adapter),
-        { readCurrentAggregate: () => aggregate, now: () => now },
+        { readCurrentAggregate: () => aggregate, now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
 
       await expect(boundary.dispatch(aggregate, {
@@ -502,7 +512,7 @@ describe('execution environment port conformance', () => {
     };
     const expiringBoundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(expiringAdapter),
-      { readCurrentAggregate: () => aggregate, now: () => now },
+      { readCurrentAggregate: () => aggregate, now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
     await expect(expiringBoundary.dispatch(aggregate, {
       action: 'start',
@@ -554,7 +564,7 @@ describe('execution environment port conformance', () => {
     };
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(expiringInFlightAdapter),
-      { readCurrentAggregate: () => aggregate, now: () => now },
+      { readCurrentAggregate: () => aggregate, now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
     const issued = await boundary.dispatch(aggregate, { action: 'start', control: null });
     expect(issued.status).toBe('observed');
@@ -604,7 +614,7 @@ describe('execution environment port conformance', () => {
     };
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(adapter),
-      { readCurrentAggregate: () => current, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => current, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
 
     await expect(boundary.dispatch(aggregate, {
@@ -660,7 +670,7 @@ describe('execution environment port conformance', () => {
     };
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(adapter),
-      { readCurrentAggregate: () => current, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => current, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
 
     await expect(boundary.dispatch(aggregate, { action: 'start', control: null }))
@@ -677,7 +687,7 @@ describe('execution environment port conformance', () => {
     });
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(fake),
-      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
     const first = await boundary.dispatch(aggregate, {
       action: 'start',
@@ -692,7 +702,7 @@ describe('execution environment port conformance', () => {
     expect(store.physicalIssues).toBe(1);
   });
 
-  it('advances repeatable operation identity only after canonical progress', async () => {
+  it('keeps unrelated progress on one trusted intent and advances only for a new intent', async () => {
     const adapter = port().descriptor.adapter;
     const binding = (action: 'start' | 'pause' | 'reconcile') => ({
       adapter,
@@ -706,16 +716,19 @@ describe('execution environment port conformance', () => {
     const initialPause = await buildExecutionEnvironmentCommand(
       aggregate,
       input('pause'),
+      defaultOperationIntent(input('pause')),
       binding('pause'),
     );
     const initialReconcile = await buildExecutionEnvironmentCommand(
       aggregate,
       input('reconcile'),
+      defaultOperationIntent(input('reconcile')),
       binding('reconcile'),
     );
     const initialStart = await buildExecutionEnvironmentCommand(
       aggregate,
       input('start'),
+      defaultOperationIntent(input('start')),
       binding('start'),
     );
     const progressed = {
@@ -729,22 +742,87 @@ describe('execution environment port conformance', () => {
     const repeatedPause = await buildExecutionEnvironmentCommand(
       progressed,
       input('pause'),
+      defaultOperationIntent(input('pause')),
       binding('pause'),
     );
     const repeatedReconcile = await buildExecutionEnvironmentCommand(
       progressed,
       input('reconcile'),
+      defaultOperationIntent(input('reconcile')),
       binding('reconcile'),
     );
     const replayedStart = await buildExecutionEnvironmentCommand(
       progressed,
       input('start'),
+      defaultOperationIntent(input('start')),
       binding('start'),
     );
 
-    expect(repeatedPause.operationId).not.toBe(initialPause.operationId);
-    expect(repeatedReconcile.operationId).not.toBe(initialReconcile.operationId);
+    expect(repeatedPause.operationId).toBe(initialPause.operationId);
+    expect(repeatedReconcile.operationId).toBe(initialReconcile.operationId);
     expect(replayedStart.operationId).toBe(initialStart.operationId);
+    const nextPause = await buildExecutionEnvironmentCommand(
+      progressed,
+      input('pause'),
+      { ref: 'server_intent_pause_next', digest: `sha256:${'d'.repeat(64)}` },
+      binding('pause'),
+    );
+    const nextReconcile = await buildExecutionEnvironmentCommand(
+      progressed,
+      input('reconcile'),
+      { ref: 'server_intent_reconcile_next', digest: `sha256:${'d'.repeat(64)}` },
+      binding('reconcile'),
+    );
+    expect(nextPause.operationId).not.toBe(initialPause.operationId);
+    expect(nextReconcile.operationId).not.toBe(initialReconcile.operationId);
+  });
+
+  it('does not reissue indeterminate control work after an unrelated observation', async () => {
+    let current = aggregate;
+    let operationIntent = {
+      ref: 'server_intent_pause_pending',
+      digest: `sha256:${'c'.repeat(64)}`,
+    };
+    const descriptor = {
+      ...port().descriptor,
+      capabilities: {
+        ...port().descriptor.capabilities,
+        pause: { mode: 'native' as const, version: 'pause-v1' },
+      },
+    };
+    const store = createDeterministicFakeExecutionEnvironmentStore();
+    const boundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(new DeterministicFakeExecutionEnvironment({
+        descriptor,
+        store,
+        script: { pause: { status: 'indeterminate', draft: null } },
+        now: () => attempt.updatedAt,
+      })),
+      {
+        readCurrentAggregate: () => current,
+        now: () => attempt.updatedAt,
+        resolveOperationIntent: () => operationIntent,
+      },
+    );
+    const first = await boundary.dispatch(current, { action: 'pause', control: null });
+    current = {
+      ...aggregate,
+      sessions: [executionSessionV04Schema.parse({
+        ...session,
+        lastObservationSequence: session.lastObservationSequence + 1,
+      })],
+    };
+    const retry = await boundary.dispatch(current, { action: 'pause', control: null });
+    expect(retry.command.operationId).toBe(first.command.operationId);
+    expect(store.physicalIssues).toBe(1);
+
+    operationIntent = {
+      ref: 'server_intent_pause_next',
+      digest: `sha256:${'d'.repeat(64)}`,
+    };
+    const next = await boundary.dispatch(current, { action: 'pause', control: null });
+    expect(next.command.operationId).not.toBe(first.command.operationId);
+    expect(store.physicalIssues).toBe(2);
   });
 
   it('enforces adapter-side generation high-water and one claimant per lease generation', async () => {
@@ -770,6 +848,7 @@ describe('execution environment port conformance', () => {
     const staleStart = await buildExecutionEnvironmentCommand(
       aggregate,
       { action: 'start', control: null },
+      defaultOperationIntent({ action: 'start', control: null }),
       operationBinding('start'),
     );
     const nextAttempt = executionAttemptV04Schema.parse({
@@ -791,6 +870,7 @@ describe('execution environment port conformance', () => {
     const cancel = await buildExecutionEnvironmentCommand(
       cancellingAggregate,
       { action: 'cancel', control: null },
+      defaultOperationIntent({ action: 'cancel', control: null }),
       operationBinding('cancel'),
     );
 
@@ -798,6 +878,27 @@ describe('execution environment port conformance', () => {
     const cancelIssue = fake.execute(cancel);
     expect(store.physicalIssues).toBe(1);
     await cancelIssue;
+    const otherDescriptor = {
+      ...descriptor,
+      adapter: { id: 'other_environment_adapter', version: 'fake-v2' },
+    };
+    const otherAdapter = new DeterministicFakeExecutionEnvironment({
+      descriptor: otherDescriptor,
+      store,
+      script: { cancel: { status: 'indeterminate', draft: null } },
+      now: () => attempt.updatedAt,
+    });
+    const otherAdapterCommand = await buildExecutionEnvironmentCommand(
+      cancellingAggregate,
+      { action: 'cancel', control: null },
+      defaultOperationIntent({ action: 'cancel', control: null }),
+      {
+        adapter: otherDescriptor.adapter,
+        capability: operationBinding('cancel').capability,
+      },
+    );
+    await expect(otherAdapter.recover(otherAdapterCommand))
+      .rejects.toThrow(/adapter.*authority drift/i);
     await expect(fake.recover(staleStart)).rejects.toThrow(/stale|authority/i);
 
     const conflictingLease = executionLeaseV04Schema.parse({
@@ -819,7 +920,8 @@ describe('execution environment port conformance', () => {
       attempts: [conflictingAttempt],
       leases: [conflictingLease],
       sessions: [conflictingSession],
-    }, { action: 'cancel', control: null }, operationBinding('cancel'));
+    }, { action: 'cancel', control: null },
+    defaultOperationIntent({ action: 'cancel', control: null }), operationBinding('cancel'));
     await expect(fake.recover(conflictingCommand)).rejects.toThrow(/conflicting authority/i);
     expect(store.physicalIssues).toBe(1);
   });
@@ -842,7 +944,7 @@ describe('execution environment port conformance', () => {
     });
     const boundary = new ExecutionEnvironmentBoundary(
       registerEnvironment(fake),
-      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
     );
     const first = await boundary.dispatch(aggregate, { action: 'start', control: null });
     mutableDraft.id = 'mutated_observation_fixture';

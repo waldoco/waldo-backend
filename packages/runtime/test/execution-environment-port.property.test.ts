@@ -23,6 +23,16 @@ function registerEnvironment(adapter: ExecutionEnvironmentPort) {
   return new ExecutionEnvironmentRegistry().register(adapter.descriptor, adapter);
 }
 
+function defaultOperationIntent(input: Readonly<{
+  action: string;
+  control: Readonly<{ payloadRef: string }> | null;
+}>) {
+  return {
+    ref: `server_intent_${input.action}_${input.control?.payloadRef ?? 'default'}`,
+    digest: `sha256:${'c'.repeat(64)}`,
+  };
+}
+
 const bundle = buildResponsibilityExecutionV04Bundle(() => 'a'.repeat(64));
 const request = executionRequestV04Schema.parse(
   JSON.parse(bundle['execution-request.valid.json']!),
@@ -129,6 +139,7 @@ describe('execution environment conformance properties', () => {
           {
             readCurrentAggregate: () => currentAggregate,
             now: () => fixtureAttempt.updatedAt,
+            resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input),
           },
         );
         const input = {
@@ -178,7 +189,7 @@ describe('execution environment conformance properties', () => {
               now: () => fixtureAttempt.updatedAt,
             }),
           ),
-          { readCurrentAggregate: () => aggregate, now: () => fixtureAttempt.updatedAt },
+          { readCurrentAggregate: () => aggregate, now: () => fixtureAttempt.updatedAt, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
         );
         const dispatch = await boundary.dispatch(aggregate, {
           action: 'start',

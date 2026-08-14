@@ -28,6 +28,11 @@ export type ExecutionEnvironmentDispatchInput = Readonly<{
   control: ExecutionEnvironmentControl;
 }>;
 
+export type ExecutionEnvironmentOperationIntent = Readonly<{
+  ref: string;
+  digest: string;
+}>;
+
 export type ExecutionEnvironmentOperationBinding = Readonly<{
   adapter: Readonly<{ id: string; version: string }>;
   capability: Readonly<{
@@ -140,17 +145,20 @@ export function currentExecutionBinding(value: ExecutionAggregateV04): CurrentEx
   });
 }
 
-export function currentExecutionOperationBasis(
-  current: CurrentExecutionBinding,
-  action: ExecutionEnvironmentAction,
-): ExecutionEnvironmentCommandV1['operationBasis'] {
+export function parseExecutionEnvironmentOperationIntent(
+  value: unknown,
+): ExecutionEnvironmentOperationIntent {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('execution environment operation intent must be a strict object');
+  }
+  const input = value as Record<string, unknown>;
+  if (Object.keys(input).length !== 2 ||
+      !Object.hasOwn(input, 'ref') || !Object.hasOwn(input, 'digest')) {
+    throw new Error('execution environment operation intent contains unrecognized fields');
+  }
   return Object.freeze({
-    observationHighWater: action === 'resume' || action === 'pause' || action === 'reconcile'
-      ? current.session.lastObservationSequence
-      : 0,
-    reconciliationHighWater: action === 'reconcile'
-      ? current.aggregate.reconciliations.length
-      : 0,
+    ref: protocolIdSchema.parse(input.ref),
+    digest: protocolDigestSchema.parse(input.digest),
   });
 }
 
@@ -185,7 +193,8 @@ function operationIdentityMaterial(
     fencingGeneration: command.fencingGeneration,
     cancellationGeneration: command.cancellationGeneration,
     leaseExpiresAt: command.leaseExpiresAt,
-    operationBasis: command.operationBasis,
+    operationIntentRef: command.operationIntentRef,
+    operationIntentDigest: command.operationIntentDigest,
     provider: command.provider,
     environment: command.environment,
     contextProjectionRef: command.contextProjectionRef,
@@ -210,10 +219,12 @@ export async function verifyExecutionEnvironmentCommandIdentity(
 export async function buildExecutionEnvironmentCommand(
   aggregateValue: ExecutionAggregateV04,
   inputValue: ExecutionEnvironmentDispatchInput,
+  operationIntentValue: unknown,
   operationBinding: ExecutionEnvironmentOperationBinding,
 ): Promise<ExecutionEnvironmentCommandV1> {
   const current = currentExecutionBinding(aggregateValue);
   const input = parseExecutionEnvironmentDispatchInput(inputValue);
+  const operationIntent = parseExecutionEnvironmentOperationIntent(operationIntentValue);
   const { action, control } = input;
   if (operationBinding.capability.action !== action) {
     throw new Error('execution environment operation capability does not match action');
@@ -237,7 +248,8 @@ export async function buildExecutionEnvironmentCommand(
     fencingGeneration: current.attempt.fencingGeneration,
     cancellationGeneration: current.attempt.cancellationGeneration,
     leaseExpiresAt: current.lease.expiresAt,
-    operationBasis: currentExecutionOperationBasis(current, action),
+    operationIntentRef: operationIntent.ref,
+    operationIntentDigest: operationIntent.digest,
     provider: current.aggregate.request.provider,
     environment: current.aggregate.request.environment,
     contextProjectionRef: current.aggregate.request.contextProjectionRef,
@@ -273,10 +285,6 @@ function assertDispatchMatchesCurrent(
       command.fencingGeneration !== current.attempt.fencingGeneration ||
       command.cancellationGeneration !== current.attempt.cancellationGeneration ||
       command.leaseExpiresAt !== current.lease.expiresAt ||
-      command.operationBasis.observationHighWater !==
-        currentExecutionOperationBasis(current, command.action).observationHighWater ||
-      command.operationBasis.reconciliationHighWater !==
-        currentExecutionOperationBasis(current, command.action).reconciliationHighWater ||
       command.contextProjectionRef !== current.aggregate.request.contextProjectionRef ||
       command.contextProjectionDigest !== current.aggregate.request.contextProjectionDigest ||
       !sameValue(command.provider, current.aggregate.request.provider) ||

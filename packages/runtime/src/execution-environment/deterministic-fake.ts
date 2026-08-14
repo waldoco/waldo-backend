@@ -20,6 +20,9 @@ type FakeReceipt = Readonly<{
 }>;
 
 type FakeAuthorityHighWater = Readonly<{
+  adapterId: string;
+  adapterVersion: string;
+  environmentIdentity: string;
   leaseId: string;
   fencingGeneration: number;
   cancellationGeneration: number;
@@ -223,6 +226,12 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
     }
     const previous = this.#store.authorityHighWater.get(command.executionRequestId);
     if (previous !== undefined &&
+        (command.adapter.id !== previous.adapterId ||
+          command.adapter.version !== previous.adapterVersion ||
+          JSON.stringify(command.environment) !== previous.environmentIdentity)) {
+      throw new Error('execution environment fake rejected adapter or environment authority drift');
+    }
+    if (previous !== undefined &&
         (command.fencingGeneration < previous.fencingGeneration ||
           command.cancellationGeneration < previous.cancellationGeneration ||
           (command.leaseId !== previous.leaseId &&
@@ -233,6 +242,9 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
         command.fencingGeneration > previous.fencingGeneration ||
         command.cancellationGeneration > previous.cancellationGeneration) {
       this.#store.authorityHighWater.set(command.executionRequestId, Object.freeze({
+        adapterId: command.adapter.id,
+        adapterVersion: command.adapter.version,
+        environmentIdentity: JSON.stringify(command.environment),
         leaseId: command.leaseId,
         fencingGeneration: command.fencingGeneration,
         cancellationGeneration: command.cancellationGeneration,

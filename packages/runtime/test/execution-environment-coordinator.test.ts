@@ -31,6 +31,16 @@ function registerEnvironment(adapter: ExecutionEnvironmentPort) {
   return new ExecutionEnvironmentRegistry().register(adapter.descriptor, adapter);
 }
 
+function defaultOperationIntent(input: Readonly<{
+  action: string;
+  control: Readonly<{ payloadRef: string }> | null;
+}>) {
+  return {
+    ref: `server_intent_${input.action}_${input.control?.payloadRef ?? 'default'}`,
+    digest: `sha256:${'c'.repeat(64)}`,
+  };
+}
+
 const bundle = buildResponsibilityExecutionV04Bundle(() => 'a'.repeat(64));
 const request = executionRequestV04Schema.parse(
   JSON.parse(bundle['execution-request.valid.json']!),
@@ -209,7 +219,7 @@ describe('execution environment to sole-writer conformance', () => {
         registerEnvironment(traced),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ), now: () => now },
+        ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       const dispatched = await boundary.dispatch(claimed, {
         action: 'start',
@@ -265,7 +275,7 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ), now: () => now },
+        ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       const candidate = await candidateBoundary.dispatch(observed, {
         action: 'steer',
@@ -347,7 +357,7 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ), now: () => now },
+        ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       const falseSettlement = await contradictory.dispatch(cancelling, {
         action: 'cancel',
@@ -383,7 +393,7 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ), now: () => now },
+        ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       const cancellation = await cancelBoundary.dispatch(cancelling, {
         action: 'cancel',
@@ -421,7 +431,7 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ), now: () => now },
+        ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       const reopening = await reconcileBoundary.dispatch(terminal, {
         action: 'reconcile',
@@ -479,7 +489,7 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ), now: () => now },
+        ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       await expect(beforeRestart.dispatch(claimed, {
         action: 'start',
@@ -504,7 +514,7 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ), now: () => now },
+        ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
       );
       const recovered = await afterRestart.dispatch(reconstructedAggregate, {
         action: 'start',
@@ -595,7 +605,7 @@ describe('execution environment to sole-writer conformance', () => {
           ),
           { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
             request.ownerId, request.id,
-          ), now: () => now },
+          ), now: () => now, resolveOperationIntent: (_aggregate, input) => defaultOperationIntent(input) },
         );
         const dispatchPromise = boundary.dispatch(claimed, {
           action: 'reconcile',
