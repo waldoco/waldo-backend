@@ -181,6 +181,24 @@ describe('production responsibility RunLoopDO RPC', () => {
     const retryResponse = await adapter.fetch(publicRequest());
     expect(retryResponse.status).toBe(200);
     expect(await retryResponse.json()).toEqual(first);
+    const changedIssuedAt = await adapter.fetch(publicRequest({
+      ...request,
+      clientIssuedAt: '2026-08-14T17:00:02.001Z',
+    }));
+    expect(changedIssuedAt.status).toBe(409);
+    expect(await changedIssuedAt.json()).toEqual({
+      type: 'https://api.heywaldo.com/problems/request-conflict',
+      title: 'Request conflict', status: 409, code: 'request_conflict',
+    });
+    const changedCorrelation = await adapter.fetch(publicRequest({
+      ...request,
+      correlationId: 'correlation_public_execution_changed_01',
+    }));
+    expect(changedCorrelation.status).toBe(409);
+    expect(await changedCorrelation.json()).toEqual({
+      type: 'https://api.heywaldo.com/problems/request-conflict',
+      title: 'Request conflict', status: 409, code: 'request_conflict',
+    });
     const afterStats = localWorkUnitExecutionProofStats();
     expect(afterStats.physicalIssues - beforeStats.physicalIssues).toBe(1);
     const stale = await adapter.fetch(publicRequest({

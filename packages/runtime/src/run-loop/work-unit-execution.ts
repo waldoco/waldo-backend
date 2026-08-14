@@ -1,4 +1,6 @@
 import {
+  protocolDigestSchema,
+  protocolIdSchema,
   workUnitExecutionStartResultV04Schema,
   type WorkUnitExecutionStartResultV04,
 } from '@waldo/contracts';
@@ -24,6 +26,7 @@ import { ExecutionEnvironmentRegistry } from '../execution-environment/conforman
 
 export type WorkUnitExecutionStartAdmission = Readonly<{
   requestId: string;
+  publicCommandDigest: string;
   workUnitId: string;
   expectedWorkUnitRevision: number;
 }>;
@@ -47,11 +50,19 @@ export class WorkUnitExecutionBridge {
     admission: WorkUnitExecutionStartAdmission,
     authority: ResponsibilityCanonicalAuthority,
   ): Promise<WorkUnitExecutionStartResultV04> {
-    const executionRequestId = `execution_request_${await this.#dependencies.sha256Hex(
+    const publicCommandDigest = protocolDigestSchema.parse(admission.publicCommandDigest);
+    const publicCommandKeyDigest = await this.#dependencies.sha256Hex(
       `work-unit-execution-start-v0.4\0${authority.ownerId}\0${admission.requestId}`,
-    )}`;
+    );
+    const commandIdPrefix = protocolIdSchema.parse(
+      `er_${hexDigestToBase64Url(publicCommandKeyDigest)}_`,
+    );
+    const executionRequestId = protocolIdSchema.parse(
+      `${commandIdPrefix}${hexDigestToBase64Url(publicCommandDigest.slice('sha256:'.length))}`,
+    );
     let aggregate = await this.#dependencies.coordinator.admitPublicExecutionRequestV04({
       id: executionRequestId,
+      commandIdPrefix,
       workUnitId: admission.workUnitId,
       expectedWorkUnitRevision: admission.expectedWorkUnitRevision,
     }, authority);
@@ -148,6 +159,25 @@ export class WorkUnitExecutionBridge {
       observation: { id: admitted.id, sequence: admitted.sequence, kind: 'started' },
     });
   }
+}
+
+function hexDigestToBase64Url(value: string): string {
+  if (!/^[a-f0-9]{64}$/.test(value)) throw new Error('invalid sha256 digest');
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  let accumulator = 0;
+  let bitCount = 0;
+  let encoded = '';
+  for (let index = 0; index < value.length; index += 2) {
+    accumulator = (accumulator << 8) | Number.parseInt(value.slice(index, index + 2), 16);
+    bitCount += 8;
+    while (bitCount >= 6) {
+      bitCount -= 6;
+      encoded += alphabet[(accumulator >>> bitCount) & 63];
+      accumulator &= (1 << bitCount) - 1;
+    }
+  }
+  if (bitCount > 0) encoded += alphabet[(accumulator << (6 - bitCount)) & 63];
+  return encoded;
 }
 
 const LOCAL_PROOF_DIGEST = `sha256:${'d'.repeat(64)}` as const;

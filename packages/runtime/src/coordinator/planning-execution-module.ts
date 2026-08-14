@@ -923,6 +923,44 @@ export class PlanningExecutionModule {
     return this.readExecutionAggregateV04(row.owner_id, requestId);
   }
 
+  readExecutionRequestIdentityByIdPrefixIfExists(
+    ownerIdValue: string,
+    idPrefixValue: string,
+  ): Readonly<{ id: string }> | null {
+    const ownerId = protocolIdSchema.parse(ownerIdValue);
+    const idPrefix = protocolIdSchema.parse(idPrefixValue);
+    const rows = this.storage.sql.exec<{ id: string }>(
+      `SELECT id FROM planning_execution_requests
+        WHERE owner_id = ? AND substr(id, 1, length(?)) = ?
+        ORDER BY id LIMIT 2`,
+      ownerId,
+      idPrefix,
+      idPrefix,
+    ).toArray();
+    if (rows.length > 1) throw new Error('execution command identity is ambiguous');
+    const row = rows[0];
+    return row === undefined
+      ? null
+      : Object.freeze({ id: row.id });
+  }
+
+  readExecutionRequestIdentityForWorkUnitIfExists(
+    ownerIdValue: string,
+    workUnitIdValue: string,
+  ): Readonly<{ id: string }> | null {
+    const ownerId = protocolIdSchema.parse(ownerIdValue);
+    const workUnitId = protocolIdSchema.parse(workUnitIdValue);
+    const row = this.storage.sql.exec<{ id: string }>(
+      `SELECT id FROM planning_execution_requests
+        WHERE owner_id = ? AND work_unit_id = ?`,
+      ownerId,
+      workUnitId,
+    ).toArray()[0];
+    return row === undefined
+      ? null
+      : Object.freeze({ id: row.id });
+  }
+
   readExecutionAggregateForAttemptV04(
     ownerId: string,
     attemptId: string,

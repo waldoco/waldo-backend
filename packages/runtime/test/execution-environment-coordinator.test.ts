@@ -224,6 +224,7 @@ describe('execution environment to sole-writer conformance', () => {
       });
       const admission = {
         requestId: 'public_execution_start_01',
+        publicCommandDigest: `sha256:${'b'.repeat(64)}`,
         workUnitId: request.workUnit.id,
         expectedWorkUnitRevision: request.workUnit.revision,
       };
@@ -235,7 +236,7 @@ describe('execution environment to sole-writer conformance', () => {
       expect(workUnitExecutionStartResultV04Schema.parse(result)).toEqual(result);
       expect(result).toMatchObject({
         requestId: admission.requestId,
-        executionRequestId: `execution_request_${'a'.repeat(64)}`,
+        executionRequestId: expect.stringMatching(/^er_[A-Za-z0-9_-]{43}_[A-Za-z0-9_-]{43}$/),
         attemptId: 'execution_attempt_public_01',
         status: 'started',
       });
@@ -314,6 +315,7 @@ describe('execution environment to sole-writer conformance', () => {
       });
       await expect(bridge.start({
         requestId: 'public_execution_stale_product_01',
+        publicCommandDigest: `sha256:${'b'.repeat(64)}`,
         workUnitId: request.workUnit.id,
         expectedWorkUnitRevision: request.workUnit.revision,
       }, authority)).rejects.toThrow('digest conflict');

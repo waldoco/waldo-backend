@@ -462,6 +462,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     return this.workUnitExecutionBridge.start({
       requestId: request.requestId,
+      publicCommandDigest: expectedDigest,
       workUnitId: request.aggregate.id,
       expectedWorkUnitRevision: request.aggregate.expectedRevision,
     }, authority);

@@ -262,8 +262,10 @@ describe('responsibility execution v0.4 sole writer', () => {
         async sha256Hex() { return 'a'.repeat(64); },
       });
       const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      const publicExecutionRequestId = `er_${'A'.repeat(43)}_${'B'.repeat(43)}`;
       const publicAdmission = {
-        id: request.id,
+        id: publicExecutionRequestId,
+        commandIdPrefix: `er_${'A'.repeat(43)}_`,
         workUnitId: request.workUnit.id,
         expectedWorkUnitRevision: request.workUnit.revision,
       };
@@ -302,16 +304,21 @@ describe('responsibility execution v0.4 sole writer', () => {
       };
       const coordinator = new WaldoCoordinator(state.storage, dependencies);
       const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      const publicExecutionRequestId = `er_${'A'.repeat(43)}_${'B'.repeat(43)}`;
       await coordinator.admitPublicExecutionRequestV04({
-        id: request.id,
+        id: publicExecutionRequestId,
+        commandIdPrefix: `er_${'A'.repeat(43)}_`,
         workUnitId: request.workUnit.id,
         expectedWorkUnitRevision: request.workUnit.revision,
       }, authority);
-      const first = await coordinator.resolveExecutionStartIntentV04(request.ownerId, request.id);
+      const first = await coordinator.resolveExecutionStartIntentV04(
+        request.ownerId,
+        publicExecutionRequestId,
+      );
       const reconstructed = new WaldoCoordinator(state.storage, dependencies);
       expect(await reconstructed.resolveExecutionStartIntentV04(
         request.ownerId,
-        request.id,
+        publicExecutionRequestId,
       )).toEqual(first);
       expect(first).toEqual({
         ref: `execution_start_intent_${'a'.repeat(64)}`,
@@ -321,11 +328,11 @@ describe('responsibility execution v0.4 sole writer', () => {
       state.storage.sql.exec(
         `UPDATE planning_execution_requests SET request_digest = ? WHERE id = ?`,
         `sha256:${'b'.repeat(64)}`,
-        request.id,
+        publicExecutionRequestId,
       );
       await expect(reconstructed.resolveExecutionStartIntentV04(
         request.ownerId,
-        request.id,
+        publicExecutionRequestId,
       )).rejects.toThrow('execution start intent digest mismatch');
     });
   });

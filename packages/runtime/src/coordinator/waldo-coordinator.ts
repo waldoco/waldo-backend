@@ -117,6 +117,7 @@ export type ExecutionAdmissionV04 = Readonly<{
 
 export type PublicExecutionAdmissionV04 = Readonly<{
   id: string;
+  commandIdPrefix: string;
   workUnitId: string;
   expectedWorkUnitRevision: number;
 }>;
@@ -126,13 +127,20 @@ function parsePublicExecutionAdmissionV04(value: unknown): PublicExecutionAdmiss
     throw new Error('public execution admission must be a strict object');
   }
   const input = value as Record<string, unknown>;
-  const expectedKeys = ['id', 'workUnitId', 'expectedWorkUnitRevision'];
+  const expectedKeys = ['id', 'commandIdPrefix', 'workUnitId', 'expectedWorkUnitRevision'];
   if (Object.keys(input).length !== expectedKeys.length ||
       expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(input, key))) {
     throw new Error('public execution admission contains unrecognized fields');
   }
+  const id = protocolIdSchema.parse(input.id);
+  const commandIdPrefix = protocolIdSchema.parse(input.commandIdPrefix);
+  if (!/^er_[A-Za-z0-9_-]{43}_$/.test(commandIdPrefix) ||
+      !new RegExp(`^${commandIdPrefix}[A-Za-z0-9_-]{43}$`).test(id)) {
+    throw new Error('public execution admission command identity mismatch');
+  }
   return Object.freeze({
-    id: protocolIdSchema.parse(input.id),
+    id,
+    commandIdPrefix,
     workUnitId: protocolIdSchema.parse(input.workUnitId),
     expectedWorkUnitRevision: exactRevisionV04Schema.parse(input.expectedWorkUnitRevision),
   });
@@ -419,6 +427,7 @@ export class WaldoCoordinator {
   async admitExecutionRequestV04(
     admissionValue: unknown,
     canonicalAuthority: ResponsibilityCanonicalAuthority,
+    publicCommandScope?: Readonly<{ commandIdPrefix: string }>,
   ): Promise<ExecutionAggregateV04> {
     const admission = parseExecutionAdmissionV04(admissionValue);
     const admittedAt = this.#deps.now();
@@ -446,6 +455,11 @@ export class WaldoCoordinator {
         );
       });
     }
+    this.#assertPublicExecutionIdentityAvailableV04(
+      preflightAuthority.ownerId,
+      admission,
+      publicCommandScope,
+    );
     const resolveExecutionBindingV04 = this.#deps.resolveExecutionBindingV04;
     if (resolveExecutionBindingV04 === undefined) {
       throw new Error('execution binding authority unavailable');
@@ -514,6 +528,11 @@ export class WaldoCoordinator {
         }
         return concurrent;
       }
+      this.#assertPublicExecutionIdentityAvailableV04(
+        authority.ownerId,
+        admission,
+        publicCommandScope,
+      );
       this.#planning.admitExecutionRequestV04InCurrentTransaction({
         request,
         trustedBinding,
@@ -554,7 +573,27 @@ export class WaldoCoordinator {
       id: admission.id,
       outcomeId: productMaterial.outcome.id,
       workUnitId: admission.workUnitId,
-    }, canonicalAuthority);
+    }, canonicalAuthority, { commandIdPrefix: admission.commandIdPrefix });
+  }
+
+  #assertPublicExecutionIdentityAvailableV04(
+    ownerId: string,
+    admission: ExecutionAdmissionV04,
+    scope: Readonly<{ commandIdPrefix: string }> | undefined,
+  ): void {
+    if (scope === undefined) return;
+    const commandIdentity = this.#planning.readExecutionRequestIdentityByIdPrefixIfExists(
+      ownerId,
+      scope.commandIdPrefix,
+    );
+    const workUnitIdentity = this.#planning.readExecutionRequestIdentityForWorkUnitIfExists(
+      ownerId,
+      admission.workUnitId,
+    );
+    if ((commandIdentity !== null && commandIdentity.id !== admission.id) ||
+        (workUnitIdentity !== null && workUnitIdentity.id !== admission.id)) {
+      throw new ResponsibilityDigestConflictError();
+    }
   }
 
   async resolveExecutionStartIntentV04(
