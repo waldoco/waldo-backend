@@ -77,6 +77,7 @@ Use severity, disposition, owner, and dependency for each known issue. Never era
 
 ## Current ledger
 
+- [2026-08-14 — B1 execution-environment port and #87 frontier](../ledger/2026-08-14-b1-execution-environment-port-frontier.md)
 - [2026-08-14 — B1 sole execution writer and #80 convergence](../ledger/2026-08-14-b1-sole-execution-writer.md)
 - [2026-08-14 — B1 additive contract/fixture release and #80 execution-writer frontier](../ledger/2026-08-14-b1-contract-fixture-release.md)
 - [2026-08-13 — B0 baseline closure and B1 contract frontier](../ledger/2026-08-13-b0-baseline-closure.md)
