@@ -3,9 +3,12 @@
 ## Identity
 
 - **Handoff owner:** authorized #87 merge and build-frontier convergence session; human owner `@Pin4sf`
+- **Session / parent / primary agent:** delegated task from source thread `019ffffa-ccea-7ef3-ab83-2af4391c80f1`; primary agent `/root`; no #88 runtime writer was spawned or claimed
+- **Review roster:** QA breaker `Noether`; mandatory Security/authority reviewer `Kuhn`; independent Spec/Standards reviewer `Volta`
 - **Repository / gate / issue:** `Pin4sf/waldo-backend` / B1 / [#88](https://github.com/Pin4sf/waldo-backend/issues/88)
 - **Umbrella / coordination:** [#78](https://github.com/Pin4sf/waldo-backend/issues/78) / [#116](https://github.com/Pin4sf/waldo-backend/issues/116)
 - **Implementation source pin:** `origin/main@9a2b11bb2527e0c15dcbfb5f32f86bafe99301d9`
+- **Docs handoff branch / worktree / initial commit:** `codex/88-frontier-handoff` / `/Users/shivanshfulper/.codex/worktrees/6c03/waldo-backend` / base `9a2b11bb2527e0c15dcbfb5f32f86bafe99301d9` / initial docs commit `e482f9564bd65f6151fa5ab51cf088cf5f98d94f`; the final PR head and merge disposition are recorded in the live #88/#116 handoff
 - **Landed #87 dependency:** PR #126 merge `9a2b11b`; reviewed head `5b3d9f510a8aaa8243a476d2ba97abef08fc8da8`; identical tree `8a202c5ee6d96a297ce203a2036279557b05291a`
 - **Earlier dependencies:** #80 runtime `eebe931fb94cf4d5847c7accac9e19842ade5ad4`, landed at `cffae3b`; #81 release `df0abae1c74c24029556f47ba8b7ed49e83a40b8`, fixture tree `adff7e52da78d5523363a634eef1df8d62b3dffb`
 - **Implementation branch / worktree / owner:** not yet claimed; the next write-capable session must create a fresh clean worktree from current `origin/main` and register ownership on #88 and #116
@@ -35,7 +38,7 @@ No #88 runtime implementation is claimed here. The authorized predecessor merge 
 
 ### Decision
 
-- The public request is untrusted. It may identify a bounded command and expected WorkUnit revision, but cannot supply authoritative owner, Outcome, WorkUnit digest, authority ceiling, Durable Object route, provider, execution environment, context, credential, lease/fence/cancellation generation, or operation intent.
+- The public request is untrusted. It may identify a bounded command and supply only an expected WorkUnit revision as a concurrency precondition. The server re-reads canonical state and derives or validates the authoritative WorkUnit revision/digest, Outcome binding, owner, authority ceiling, Durable Object route, provider, execution environment, context, lease/fence/cancellation generation, and operation intent; the caller cannot supply or substitute them.
 - Gateway/owner-root code derives identity and routing; `WaldoCoordinator` validates and sequences; #80 alone persists canonical execution truth; #87 performs recovery/issue outside the SQLite transaction and returns a bounded untrusted draft for later public Coordinator admission.
 - Provider/session/environment completion remains an observation. It cannot mutate Outcome/WorkUnit, admit Evidence, certify Verification, decide Acceptance, or close an OpenLoop.
 - Deterministic fake-consumer proof may establish the backend composition contract only. It is not `adapter_conformance_passed`, Kennel/cloud/local-runtime acceptance, staging, deployment, or live product proof.
@@ -55,10 +58,11 @@ No #88 runtime implementation is claimed here. The authorized predecessor merge 
 ```text
 authenticated public request (untrusted payload)
   -> gateway derives owner/presence/session and owner-root route
-  -> owner Durable Object / WaldoCoordinator validates canonical WorkUnit revision and authority ceiling
+  -> owner Durable Object / WaldoCoordinator compares the bounded expected revision, then re-reads and validates canonical WorkUnit revision/digest, Outcome binding, and authority ceiling
   -> #80 sole writer commits execution request/claim/session/lease authority
   -> trusted router resolves a stable server intent from an independently proven durable source or stops
   -> transaction ends
+  -> existing RunLoopDO remains the trusted composition and I/O shell
   -> #87 recover (read-only)
   -> if known-not-applied: fresh authority/expiry check
   -> #87 execute (atomically fenced external issue)
@@ -78,7 +82,18 @@ Acceptance requires one deterministic fake executor to run one bounded canonical
 - bounded mapped public errors with no owner, Durable Object, authority, credential, provider, environment, or internal-state leakage;
 - byte-stable Outcome/WorkUnit and non-self-certifying Evidence/Verification/Acceptance/OpenLoop truth.
 
-The implementation is falsified by any client-supplied owner or routing authority; cross-owner WorkUnit access; stale revision admission; request-digest conflict treated as replay; provider/environment/context/intent substitution; two claims or adapters acting on one lease; stale fence or cancellation issue; blind restart reissue; timeout/disconnect becoming false decisive failure; provider receipt accepted as environment observation; adapter completion changing product truth; or external I/O inside the SQLite transaction.
+The implementation is falsified by any client-supplied owner or routing authority; treating the expected revision as authoritative instead of comparing it to re-read canonical state; cross-owner WorkUnit access; stale revision admission; request-digest conflict treated as replay; provider/environment/context/intent substitution; two claims or adapters acting on one lease; stale fence or cancellation issue; blind restart reissue; timeout/disconnect becoming false decisive failure; any invalid, late, stale, contradictory, or provider-receipt observation being accepted as an execution-environment observation; adapter completion changing product truth; a sibling physical execution engine bypassing the existing `RunLoopDO`; or external I/O inside the SQLite transaction.
+
+## Privacy and Authority Impact
+
+- No authority is widened by this handoff. #88 must keep the public payload limited to a bounded command plus expected-revision precondition, with owner, route, canonical product bindings, authority ceiling, provider/environment/context, operation intent, lease/fence, and cancellation state derived inside the trusted owner path.
+- Credentials, raw health data, transcripts, composed prompts, and inline evidence payloads must not enter the public command, v0.4 execution contracts, persisted execution state, adapter command, public error, or logs. Any future credential seam requires audience/purpose/resource/expiry-bound opaque handles and separately authorized review.
+- Candidate Evidence remains attributable ref/digest material only and is non-self-certifying. Provider, session, adapter, or execution-environment completion cannot admit Evidence, certify Verification, decide Acceptance, mutate Outcome/WorkUnit, or close an OpenLoop.
+
+## Rollback
+
+- This handoff is documentation and tracker state only. If a dependency pin or readiness assertion is falsified before implementation ownership, revert the docs merge, remove `ready-for-agent`, restore `blocked`, and post the exact unmet dependency on #88/#116; no runtime data or migration rollback is involved.
+- Once a #88 implementation session claims the seam, rollback means closing that session's public route/composition behind its existing default-disabled guard and reverting only its bounded branch/PR. It must not roll back or weaken landed #80/#87 authority, rewrite released #81 fixtures, or issue compensating external effects without a separately reviewed plan.
 
 ## Parallel Agent and Worktree Ledger
 
