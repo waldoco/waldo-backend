@@ -11,6 +11,7 @@ import {
   ExecutionEnvironmentRegistry,
   ExecutionEnvironmentBoundary,
   DeterministicFakeExecutionEnvironment,
+  buildExecutionEnvironmentCommand,
   createDeterministicFakeExecutionEnvironmentStore,
   materializeExecutorObservationV04,
   type ExecutionEnvironmentPort,
@@ -63,10 +64,18 @@ function port(
   };
 }
 
+function registerEnvironment(
+  adapter: ExecutionEnvironmentPort,
+  expectedDescriptor: unknown = adapter.descriptor,
+) {
+  return new ExecutionEnvironmentRegistry().register(expectedDescriptor, adapter);
+}
+
 describe('execution environment port conformance', () => {
   it('registers one adapter by complete environment identity and rejects descriptor drift', () => {
     const registry = new ExecutionEnvironmentRegistry();
-    const registered = registry.register(port());
+    const adapter = port();
+    const registered = registry.register(adapter.descriptor, adapter);
 
     expect(registry.resolve(request.environment)).toBe(registered);
     expect(registered.descriptor).toEqual({
@@ -75,14 +84,21 @@ describe('execution environment port conformance', () => {
       environment: request.environment,
       capabilities,
     });
-    expect(() => registry.register(port())).toThrow(/already registered/i);
-    expect(() => new ExecutionEnvironmentRegistry().register(port({
+    expect(() => registry.register(adapter.descriptor, port())).toThrow(/already registered/i);
+    expect(() => registerEnvironment(port({
       protocolVersion: '0.4',
       adapter: { id: 'fake_environment_adapter', version: 'fake-v1' },
       environment: request.environment,
       capabilities,
       ownerId: request.ownerId,
     }))).toThrow(/unrecognized/i);
+    expect(() => registerEnvironment(port({
+      ...adapter.descriptor,
+      capabilities: {
+        ...adapter.descriptor.capabilities,
+        start: { mode: 'emulated', version: 'start-v1' },
+      },
+    }), adapter.descriptor)).toThrow(/server pin/i);
     expect(() => registry.resolve({
       ...request.environment,
       manifest: { ...request.environment.manifest, digest: `sha256:${'b'.repeat(64)}` },
@@ -127,20 +143,18 @@ describe('execution environment port conformance', () => {
       };
     };
     const boundary = new ExecutionEnvironmentBoundary(
-      new ExecutionEnvironmentRegistry().register(adapter),
-      { readCurrentAggregate: () => aggregate },
+      registerEnvironment(adapter),
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
     );
 
     await expect(boundary.dispatch(aggregate, {
       action: 'pause',
-      intentRef: 'pause_intent_fixture',
       control: null,
     })).rejects.toThrow(/unsupported/i);
     expect({ recoverCalls, executeCalls }).toEqual({ recoverCalls: 0, executeCalls: 0 });
 
     const result = await boundary.dispatch(aggregate, {
       action: 'steer',
-      intentRef: 'steer_intent_fixture',
       control: {
         payloadRef: 'steer_instruction_fixture',
         payloadDigest: `sha256:${'e'.repeat(64)}`,
@@ -156,7 +170,6 @@ describe('execution environment port conformance', () => {
     hostile = true;
     await expect(boundary.dispatch(aggregate, {
       action: 'steer',
-      intentRef: 'hostile_steer_intent_fixture',
       control: {
         payloadRef: 'steer_instruction_fixture',
         payloadDigest: `sha256:${'e'.repeat(64)}`,
@@ -177,7 +190,7 @@ describe('execution environment port conformance', () => {
       observedAt: attempt.updatedAt,
     });
     const first = new ExecutionEnvironmentBoundary(
-      new ExecutionEnvironmentRegistry().register(
+      registerEnvironment(
         new DeterministicFakeExecutionEnvironment({
           descriptor,
           store,
@@ -191,12 +204,11 @@ describe('execution environment port conformance', () => {
           now: () => attempt.updatedAt,
         }),
       ),
-      { readCurrentAggregate: () => aggregate },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
     );
 
     await expect(first.dispatch(aggregate, {
       action: 'start',
-      intentRef: 'start_intent_fixture',
       control: null,
     })).rejects.toThrow(/disconnected/i);
     expect(store.physicalIssues).toBe(1);
@@ -208,12 +220,11 @@ describe('execution environment port conformance', () => {
       now: () => attempt.updatedAt,
     });
     const reconstructed = new ExecutionEnvironmentBoundary(
-      new ExecutionEnvironmentRegistry().register(reconstructedAdapter),
-      { readCurrentAggregate: () => aggregate },
+      registerEnvironment(reconstructedAdapter),
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
     );
     const recovered = await reconstructed.dispatch(aggregate, {
       action: 'start',
-      intentRef: 'start_intent_fixture',
       control: null,
     });
 
@@ -251,14 +262,18 @@ describe('execution environment port conformance', () => {
     await expect(reconstructedAdapter.execute({
       ...recovered.command,
       operationDigest: `sha256:${'f'.repeat(64)}`,
-    })).rejects.toThrow(/digest conflict/i);
+    })).rejects.toThrow(/operation identity|digest conflict/i);
+    await expect(reconstructedAdapter.execute({
+      ...recovered.command,
+      contextProjectionDigest: `sha256:${'f'.repeat(64)}`,
+    })).rejects.toThrow(/operation identity/i);
     expect(store.physicalIssues).toBe(1);
   });
 
   it('keeps timeout or unknown delivery indeterminate and blocks blind reissue', async () => {
     const store = createDeterministicFakeExecutionEnvironmentStore();
     const boundary = new ExecutionEnvironmentBoundary(
-      new ExecutionEnvironmentRegistry().register(
+      registerEnvironment(
         new DeterministicFakeExecutionEnvironment({
           descriptor: port().descriptor,
           store,
@@ -266,11 +281,10 @@ describe('execution environment port conformance', () => {
           now: () => attempt.updatedAt,
         }),
       ),
-      { readCurrentAggregate: () => aggregate },
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
     );
     const first = await boundary.dispatch(aggregate, {
       action: 'start',
-      intentRef: 'indeterminate_start_intent',
       control: null,
     });
     expect(first.status).toBe('indeterminate');
@@ -279,7 +293,6 @@ describe('execution environment port conformance', () => {
 
     const replay = await boundary.dispatch(aggregate, {
       action: 'start',
-      intentRef: 'indeterminate_start_intent',
       control: null,
     });
     expect(replay.status).toBe('indeterminate');
@@ -330,12 +343,11 @@ describe('execution environment port conformance', () => {
         draft,
       });
       const boundary = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(adapter),
-        { readCurrentAggregate: () => aggregate },
+        registerEnvironment(adapter),
+        { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
       );
       await expect(boundary.dispatch(aggregate, {
         action: 'start',
-        intentRef: `hostile_intent_${index}`,
         control: null,
       })).rejects.toThrow(/unrecognized|category|identity/i);
     }
@@ -373,21 +385,346 @@ describe('execution environment port conformance', () => {
       sessions: [nextSession],
     };
     const boundary = new ExecutionEnvironmentBoundary(
-      new ExecutionEnvironmentRegistry().register(adapter),
-      { readCurrentAggregate: () => current },
+      registerEnvironment(adapter),
+      { readCurrentAggregate: () => current, now: () => attempt.updatedAt },
     );
 
     await expect(boundary.dispatch(aggregate, {
       action: 'start',
-      intentRef: 'hostile_dispatch_intent',
       control: null,
       credentials: { token: 'must-not-enter-the-command' },
     } as never)).rejects.toThrow(/unrecognized/i);
     await expect(boundary.dispatch(aggregate, {
       action: 'start',
-      intentRef: 'stale_start_intent',
       control: null,
     })).rejects.toThrow(/stale before external I\/O/i);
     expect({ recoverCalls, executeCalls }).toEqual({ recoverCalls: 0, executeCalls: 0 });
+  });
+
+  it('rejects a recovered nested result whose operation identity was substituted', async () => {
+    let executeCalls = 0;
+    const adapter = port();
+    adapter.recover = async (command) => ({
+      protocolVersion: '0.4',
+      category: 'execution_environment_recovery_result',
+      operationId: command.operationId,
+      operationDigest: command.operationDigest,
+      status: 'observed',
+      result: {
+        protocolVersion: '0.4',
+        category: 'execution_environment_issue_result',
+        operationId: 'substituted_operation_identity',
+        operationDigest: command.operationDigest,
+        status: 'observed',
+        draft: {
+          category: 'execution_environment_observation_draft',
+          id: 'substituted_recovered_observation',
+          sequence: 1,
+          kind: 'started',
+          payloadRef: null,
+          payloadDigest: null,
+          observedAt: attempt.updatedAt,
+        },
+      },
+      checkedAt: attempt.updatedAt,
+    });
+    adapter.execute = async () => {
+      executeCalls += 1;
+      throw new Error('must not issue after substituted recovery');
+    };
+    const boundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(adapter),
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+    );
+
+    await expect(boundary.dispatch(aggregate, {
+      action: 'start',
+      control: null,
+    })).rejects.toThrow(/operation identity/i);
+    expect(executeCalls).toBe(0);
+  });
+
+  it('fails closed when the lease is expired or expires at trusted now', async () => {
+    for (const now of [lease.expiresAt, '2099-01-01T00:00:00.000Z']) {
+      let recoverCalls = 0;
+      let executeCalls = 0;
+      const adapter = port();
+      adapter.recover = async () => {
+        recoverCalls += 1;
+        throw new Error('must not recover under an expired lease');
+      };
+      adapter.execute = async () => {
+        executeCalls += 1;
+        throw new Error('must not issue under an expired lease');
+      };
+      const boundary = new ExecutionEnvironmentBoundary(
+        registerEnvironment(adapter),
+        { readCurrentAggregate: () => aggregate, now: () => now },
+      );
+
+      await expect(boundary.dispatch(aggregate, {
+        action: 'start',
+        control: null,
+      })).rejects.toThrow(/lease.*expired/i);
+      expect({ recoverCalls, executeCalls }).toEqual({ recoverCalls: 0, executeCalls: 0 });
+    }
+
+    let now = attempt.updatedAt;
+    let executeCalls = 0;
+    const expiringAdapter = port();
+    expiringAdapter.recover = async (command) => {
+      now = lease.expiresAt;
+      return {
+        protocolVersion: '0.4',
+        category: 'execution_environment_recovery_result',
+        operationId: command.operationId,
+        operationDigest: command.operationDigest,
+        status: 'known_not_applied',
+        result: null,
+        checkedAt: attempt.updatedAt,
+      };
+    };
+    expiringAdapter.execute = async () => {
+      executeCalls += 1;
+      throw new Error('must not issue after lease expiry during recovery');
+    };
+    const expiringBoundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(expiringAdapter),
+      { readCurrentAggregate: () => aggregate, now: () => now },
+    );
+    await expect(expiringBoundary.dispatch(aggregate, {
+      action: 'start',
+      control: null,
+    })).rejects.toThrow(/lease.*expired/i);
+    expect(executeCalls).toBe(0);
+  });
+
+  it('rechecks cancellation and fence authority after recovery before issue', async () => {
+    let current = aggregate;
+    let executeCalls = 0;
+    const adapter = port();
+    adapter.recover = async (command) => {
+      current = {
+        ...aggregate,
+        currentCancellationGeneration: aggregate.currentCancellationGeneration + 1,
+        attempts: [executionAttemptV04Schema.parse({
+          ...attempt,
+          cancellationGeneration: attempt.cancellationGeneration + 1,
+          state: 'cancelling',
+        })],
+        leases: [executionLeaseV04Schema.parse({
+          ...lease,
+          cancellationGeneration: lease.cancellationGeneration + 1,
+        })],
+        sessions: [executionSessionV04Schema.parse({ ...session, state: 'unknown' })],
+      };
+      return {
+        protocolVersion: '0.4',
+        category: 'execution_environment_recovery_result',
+        operationId: command.operationId,
+        operationDigest: command.operationDigest,
+        status: 'known_not_applied',
+        result: null,
+        checkedAt: attempt.updatedAt,
+      };
+    };
+    adapter.execute = async () => {
+      executeCalls += 1;
+      throw new Error('stale command reached external issue');
+    };
+    const boundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(adapter),
+      { readCurrentAggregate: () => current, now: () => attempt.updatedAt },
+    );
+
+    await expect(boundary.dispatch(aggregate, {
+      action: 'start',
+      control: null,
+    })).rejects.toThrow(/stale before external I\/O/i);
+    expect(executeCalls).toBe(0);
+  });
+
+  it('does not acknowledge an adapter result after authority changes in flight', async () => {
+    let current = aggregate;
+    const adapter = port();
+    adapter.recover = async (command) => ({
+      protocolVersion: '0.4',
+      category: 'execution_environment_recovery_result',
+      operationId: command.operationId,
+      operationDigest: command.operationDigest,
+      status: 'known_not_applied',
+      result: null,
+      checkedAt: attempt.updatedAt,
+    });
+    adapter.execute = async (command) => {
+      current = {
+        ...aggregate,
+        currentCancellationGeneration: aggregate.currentCancellationGeneration + 1,
+        attempts: [executionAttemptV04Schema.parse({
+          ...attempt,
+          cancellationGeneration: attempt.cancellationGeneration + 1,
+          state: 'cancelling',
+        })],
+        leases: [executionLeaseV04Schema.parse({
+          ...lease,
+          cancellationGeneration: lease.cancellationGeneration + 1,
+        })],
+        sessions: [executionSessionV04Schema.parse({ ...session, state: 'unknown' })],
+      };
+      return {
+        protocolVersion: '0.4',
+        category: 'execution_environment_issue_result',
+        operationId: command.operationId,
+        operationDigest: command.operationDigest,
+        status: 'observed',
+        draft: {
+          category: 'execution_environment_observation_draft',
+          id: 'stale_in_flight_observation',
+          sequence: 1,
+          kind: 'started',
+          payloadRef: null,
+          payloadDigest: null,
+          observedAt: attempt.updatedAt,
+        },
+      };
+    };
+    const boundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(adapter),
+      { readCurrentAggregate: () => current, now: () => attempt.updatedAt },
+    );
+
+    await expect(boundary.dispatch(aggregate, { action: 'start', control: null }))
+      .rejects.toThrow(/stale before external I\/O/i);
+  });
+
+  it('keeps restart identity canonical without caller-provided identity metadata', async () => {
+    const store = createDeterministicFakeExecutionEnvironmentStore();
+    const fake = new DeterministicFakeExecutionEnvironment({
+      descriptor: port().descriptor,
+      store,
+      script: { start: { status: 'indeterminate', draft: null } },
+      now: () => attempt.updatedAt,
+    });
+    const boundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(fake),
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+    );
+    const first = await boundary.dispatch(aggregate, {
+      action: 'start',
+      control: null,
+    });
+    const recovered = await boundary.dispatch(aggregate, {
+      action: 'start',
+      control: null,
+    });
+
+    expect(recovered.command.operationId).toBe(first.command.operationId);
+    expect(store.physicalIssues).toBe(1);
+  });
+
+  it('enforces adapter-side generation high-water and one claimant per lease generation', async () => {
+    const descriptor = port().descriptor;
+    const store = createDeterministicFakeExecutionEnvironmentStore();
+    const fake = new DeterministicFakeExecutionEnvironment({
+      descriptor,
+      store,
+      script: {
+        start: { status: 'indeterminate', draft: null },
+        cancel: { status: 'indeterminate', draft: null },
+      },
+      now: () => attempt.updatedAt,
+    });
+    const operationBinding = (action: 'start' | 'cancel') => ({
+      adapter: descriptor.adapter,
+      capability: {
+        action,
+        mode: 'native' as const,
+        version: descriptor.capabilities[action].version,
+      },
+    });
+    const staleStart = await buildExecutionEnvironmentCommand(
+      aggregate,
+      { action: 'start', control: null },
+      operationBinding('start'),
+    );
+    const nextAttempt = executionAttemptV04Schema.parse({
+      ...attempt,
+      cancellationGeneration: attempt.cancellationGeneration + 1,
+      state: 'cancelling',
+    });
+    const nextLease = executionLeaseV04Schema.parse({
+      ...lease,
+      cancellationGeneration: lease.cancellationGeneration + 1,
+    });
+    const cancellingAggregate = {
+      ...aggregate,
+      currentCancellationGeneration: aggregate.currentCancellationGeneration + 1,
+      attempts: [nextAttempt],
+      leases: [nextLease],
+      sessions: [executionSessionV04Schema.parse({ ...session, state: 'unknown' })],
+    };
+    const cancel = await buildExecutionEnvironmentCommand(
+      cancellingAggregate,
+      { action: 'cancel', control: null },
+      operationBinding('cancel'),
+    );
+
+    await fake.execute(cancel);
+    await expect(fake.execute(staleStart)).rejects.toThrow(/stale|authority/i);
+
+    const conflictingLease = executionLeaseV04Schema.parse({
+      ...nextLease,
+      id: 'conflicting_lease_fixture',
+    });
+    const conflictingAttempt = executionAttemptV04Schema.parse({
+      ...nextAttempt,
+      leaseId: conflictingLease.id,
+    });
+    const conflictingSession = executionSessionV04Schema.parse({
+      ...session,
+      id: 'conflicting_session_fixture',
+      attemptId: conflictingAttempt.id,
+      state: 'unknown',
+    });
+    const conflictingCommand = await buildExecutionEnvironmentCommand({
+      ...cancellingAggregate,
+      attempts: [conflictingAttempt],
+      leases: [conflictingLease],
+      sessions: [conflictingSession],
+    }, { action: 'cancel', control: null }, operationBinding('cancel'));
+    await expect(fake.recover(conflictingCommand)).rejects.toThrow(/conflicting authority/i);
+    expect(store.physicalIssues).toBe(1);
+  });
+
+  it('keeps fake receipts immutable when caller-owned script objects mutate', async () => {
+    const mutableDraft = {
+      category: 'execution_environment_observation_draft',
+      id: 'immutable_observation_fixture',
+      sequence: 1,
+      kind: 'started',
+      payloadRef: null,
+      payloadDigest: null,
+      observedAt: attempt.updatedAt,
+    };
+    const fake = new DeterministicFakeExecutionEnvironment({
+      descriptor: port().descriptor,
+      store: createDeterministicFakeExecutionEnvironmentStore(),
+      script: { start: { status: 'observed', draft: mutableDraft } },
+      now: () => attempt.updatedAt,
+    });
+    const boundary = new ExecutionEnvironmentBoundary(
+      registerEnvironment(fake),
+      { readCurrentAggregate: () => aggregate, now: () => attempt.updatedAt },
+    );
+    const first = await boundary.dispatch(aggregate, { action: 'start', control: null });
+    mutableDraft.id = 'mutated_observation_fixture';
+    mutableDraft.kind = 'failed';
+    const recovered = await boundary.dispatch(aggregate, { action: 'start', control: null });
+
+    expect(recovered.result?.draft).toEqual(first.result?.draft);
+    expect(recovered.result?.draft).toMatchObject({
+      id: 'immutable_observation_fixture',
+      kind: 'started',
+    });
   });
 });

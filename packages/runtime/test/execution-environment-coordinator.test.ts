@@ -27,6 +27,10 @@ import {
 } from '../src/execution-environment';
 import type { RuntimeProbeDO } from '../src/index';
 
+function registerEnvironment(adapter: ExecutionEnvironmentPort) {
+  return new ExecutionEnvironmentRegistry().register(adapter.descriptor, adapter);
+}
+
 const bundle = buildResponsibilityExecutionV04Bundle(() => 'a'.repeat(64));
 const request = executionRequestV04Schema.parse(
   JSON.parse(bundle['execution-request.valid.json']!),
@@ -202,14 +206,13 @@ describe('execution environment to sole-writer conformance', () => {
         },
       };
       const boundary = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(traced),
+        registerEnvironment(traced),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ) },
+        ), now: () => now },
       );
       const dispatched = await boundary.dispatch(claimed, {
         action: 'start',
-        intentRef: 'start_intent_fixture',
         control: null,
       });
       const observation = materializeExecutorObservationV04(claimed, dispatched);
@@ -226,7 +229,6 @@ describe('execution environment to sole-writer conformance', () => {
 
       const replay = await boundary.dispatch(claimed, {
         action: 'start',
-        intentRef: 'start_intent_fixture',
         control: null,
       });
       await coordinator.admitExecutorObservationV04(
@@ -240,7 +242,7 @@ describe('execution environment to sole-writer conformance', () => {
       now = '2026-08-13T12:00:03.500Z';
       const candidateStore = createDeterministicFakeExecutionEnvironmentStore();
       const candidateBoundary = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(
+        registerEnvironment(
           new DeterministicFakeExecutionEnvironment({
             descriptor,
             store: candidateStore,
@@ -263,11 +265,10 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ) },
+        ), now: () => now },
       );
       const candidate = await candidateBoundary.dispatch(observed, {
         action: 'steer',
-        intentRef: 'candidate_evidence_steer_intent',
         control: {
           payloadRef: 'steer_instruction_ref_fixture',
           payloadDigest: `sha256:${'d'.repeat(64)}`,
@@ -325,7 +326,7 @@ describe('execution environment to sole-writer conformance', () => {
 
       const contradictoryStore = createDeterministicFakeExecutionEnvironmentStore();
       const contradictory = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(
+        registerEnvironment(
           new DeterministicFakeExecutionEnvironment({
             descriptor,
             store: contradictoryStore,
@@ -346,11 +347,10 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ) },
+        ), now: () => now },
       );
       const falseSettlement = await contradictory.dispatch(cancelling, {
         action: 'cancel',
-        intentRef: 'cancel_intent_false_settlement',
         control: null,
       });
       await expect(coordinator.reconcileExecutionAttemptV04(
@@ -362,7 +362,7 @@ describe('execution environment to sole-writer conformance', () => {
 
       const cancelStore = createDeterministicFakeExecutionEnvironmentStore();
       const cancelBoundary = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(
+        registerEnvironment(
           new DeterministicFakeExecutionEnvironment({
             descriptor,
             store: cancelStore,
@@ -383,11 +383,10 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ) },
+        ), now: () => now },
       );
       const cancellation = await cancelBoundary.dispatch(cancelling, {
         action: 'cancel',
-        intentRef: 'cancel_intent_fixture',
         control: null,
       });
       expect(() => materializeExecutionReconciliationV04(beforeCancel, cancellation))
@@ -401,7 +400,7 @@ describe('execution environment to sole-writer conformance', () => {
       now = '2026-08-13T12:00:04.500Z';
       const reconcileStore = createDeterministicFakeExecutionEnvironmentStore();
       const reconcileBoundary = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(
+        registerEnvironment(
           new DeterministicFakeExecutionEnvironment({
             descriptor,
             store: reconcileStore,
@@ -422,11 +421,10 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ) },
+        ), now: () => now },
       );
       const reopening = await reconcileBoundary.dispatch(terminal, {
         action: 'reconcile',
-        intentRef: 'reconcile_terminal_fixture',
         control: null,
       });
       expect(reconcileStore.physicalIssues).toBe(0);
@@ -457,7 +455,7 @@ describe('execution environment to sole-writer conformance', () => {
       const claimed = coordinator.claimExecutionAttemptV04(claim);
       const store = createDeterministicFakeExecutionEnvironmentStore();
       const beforeRestart = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(
+        registerEnvironment(
           new DeterministicFakeExecutionEnvironment({
             descriptor,
             store,
@@ -481,11 +479,10 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ) },
+        ), now: () => now },
       );
       await expect(beforeRestart.dispatch(claimed, {
         action: 'start',
-        intentRef: 'restart_start_intent',
         control: null,
       })).rejects.toThrow(/disconnected/i);
       expect(store.physicalIssues).toBe(1);
@@ -497,7 +494,7 @@ describe('execution environment to sole-writer conformance', () => {
       );
       expect(reconstructedAggregate.attempts[0]?.state).toBe('running');
       const afterRestart = new ExecutionEnvironmentBoundary(
-        new ExecutionEnvironmentRegistry().register(
+        registerEnvironment(
           new DeterministicFakeExecutionEnvironment({
             descriptor,
             store,
@@ -507,11 +504,10 @@ describe('execution environment to sole-writer conformance', () => {
         ),
         { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
           request.ownerId, request.id,
-        ) },
+        ), now: () => now },
       );
       const recovered = await afterRestart.dispatch(reconstructedAggregate, {
         action: 'start',
-        intentRef: 'restart_start_intent',
         control: null,
       });
       const finalAggregate = await reconstructedCoordinator.admitExecutorObservationV04(
@@ -589,7 +585,7 @@ describe('execution environment to sole-writer conformance', () => {
       for (const item of cases) {
         const store = createDeterministicFakeExecutionEnvironmentStore();
         const boundary = new ExecutionEnvironmentBoundary(
-          new ExecutionEnvironmentRegistry().register(
+          registerEnvironment(
             new DeterministicFakeExecutionEnvironment({
               descriptor,
               store,
@@ -599,11 +595,10 @@ describe('execution environment to sole-writer conformance', () => {
           ),
           { readCurrentAggregate: () => coordinator.readExecutionAggregateV04(
             request.ownerId, request.id,
-          ) },
+          ), now: () => now },
         );
         const dispatchPromise = boundary.dispatch(claimed, {
           action: 'reconcile',
-          intentRef: `reconcile_${item.name}`,
           control: null,
         });
         if (item.boundaryError !== undefined) {

@@ -12,6 +12,7 @@ import {
 import type { ExecutionAggregateV04 } from '../coordinator/planning-execution-module';
 import {
   EXECUTION_ENVIRONMENT_ACTIONS,
+  parseExecutionEnvironmentCommandV1,
   type ExecutionEnvironmentAction,
   type ExecutionEnvironmentCommandV1,
 } from './port';
@@ -24,7 +25,6 @@ export type ExecutionEnvironmentControl = Readonly<{
 
 export type ExecutionEnvironmentDispatchInput = Readonly<{
   action: ExecutionEnvironmentAction;
-  intentRef: string;
   control: ExecutionEnvironmentControl;
 }>;
 
@@ -86,7 +86,7 @@ export function parseExecutionEnvironmentDispatchInput(
   value: unknown,
 ): ExecutionEnvironmentDispatchInput {
   const input = strictDispatchRecord(value);
-  const keys = ['action', 'intentRef', 'control'];
+  const keys = ['action', 'control'];
   if (Object.keys(input).length !== keys.length ||
       keys.some((key) => !Object.hasOwn(input, key))) {
     throw new Error('execution environment dispatch input contains unrecognized fields');
@@ -94,7 +94,6 @@ export function parseExecutionEnvironmentDispatchInput(
   const action = parseAction(input.action);
   return Object.freeze({
     action,
-    intentRef: protocolIdSchema.parse(input.intentRef),
     control: parseControl(input.control, action),
   });
 }
@@ -141,6 +140,58 @@ export function currentExecutionBinding(value: ExecutionAggregateV04): CurrentEx
   });
 }
 
+async function operationIdentityFor(
+  material: Omit<ExecutionEnvironmentCommandV1, 'operationId' | 'operationDigest'>,
+): Promise<Readonly<{ operationId: string; operationDigest: string }>> {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(JSON.stringify(material)),
+  );
+  const digestHex = Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0')).join('');
+  return Object.freeze({
+    operationDigest: protocolDigestSchema.parse(`sha256:${digestHex}`),
+    operationId: protocolIdSchema.parse(`execution_operation_${digestHex}`),
+  });
+}
+
+function operationIdentityMaterial(
+  command: Omit<ExecutionEnvironmentCommandV1, 'operationId' | 'operationDigest'>,
+): Omit<ExecutionEnvironmentCommandV1, 'operationId' | 'operationDigest'> {
+  return Object.freeze({
+    protocolVersion: command.protocolVersion,
+    category: command.category,
+    action: command.action,
+    adapter: command.adapter,
+    capability: command.capability,
+    executionRequestId: command.executionRequestId,
+    attemptId: command.attemptId,
+    sessionId: command.sessionId,
+    leaseId: command.leaseId,
+    fencingGeneration: command.fencingGeneration,
+    cancellationGeneration: command.cancellationGeneration,
+    leaseExpiresAt: command.leaseExpiresAt,
+    provider: command.provider,
+    environment: command.environment,
+    contextProjectionRef: command.contextProjectionRef,
+    contextProjectionDigest: command.contextProjectionDigest,
+    control: command.control,
+  });
+}
+
+export async function verifyExecutionEnvironmentCommandIdentity(
+  value: unknown,
+): Promise<ExecutionEnvironmentCommandV1> {
+  const command = parseExecutionEnvironmentCommandV1(value);
+  const { operationId, operationDigest } = await operationIdentityFor(
+    operationIdentityMaterial(command),
+  );
+  if (command.operationId !== operationId || command.operationDigest !== operationDigest) {
+    throw new Error('execution environment command operation identity mismatch');
+  }
+  return command;
+}
+
 export async function buildExecutionEnvironmentCommand(
   aggregateValue: ExecutionAggregateV04,
   inputValue: ExecutionEnvironmentDispatchInput,
@@ -148,7 +199,7 @@ export async function buildExecutionEnvironmentCommand(
 ): Promise<ExecutionEnvironmentCommandV1> {
   const current = currentExecutionBinding(aggregateValue);
   const input = parseExecutionEnvironmentDispatchInput(inputValue);
-  const { action, intentRef, control } = input;
+  const { action, control } = input;
   if (operationBinding.capability.action !== action) {
     throw new Error('execution environment operation capability does not match action');
   }
@@ -161,7 +212,6 @@ export async function buildExecutionEnvironmentCommand(
   const material = Object.freeze({
     protocolVersion: '0.4' as const,
     category: 'execution_environment_command' as const,
-    intentRef,
     action,
     adapter: Object.freeze({ ...operationBinding.adapter }),
     capability: Object.freeze({ ...operationBinding.capability }),
@@ -178,14 +228,7 @@ export async function buildExecutionEnvironmentCommand(
     contextProjectionDigest: current.aggregate.request.contextProjectionDigest,
     control,
   });
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(JSON.stringify(material)),
-  );
-  const digestHex = Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, '0')).join('');
-  const operationDigest = protocolDigestSchema.parse(`sha256:${digestHex}`);
-  const operationId = protocolIdSchema.parse(`execution_operation_${digestHex}`);
+  const { operationId, operationDigest } = await operationIdentityFor(material);
   return Object.freeze({
     ...material,
     operationId,

@@ -41,7 +41,6 @@ export type ExecutionEnvironmentCommandV1 = Readonly<{
   category: 'execution_environment_command';
   operationId: string;
   operationDigest: string;
-  intentRef: string;
   action: ExecutionEnvironmentAction;
   adapter: Readonly<{ id: string; version: string }>;
   capability: Readonly<{
@@ -65,7 +64,12 @@ export type ExecutionEnvironmentCommandV1 = Readonly<{
 
 export interface ExecutionEnvironmentPort {
   readonly descriptor: ExecutionEnvironmentDescriptorV1;
+  /**
+   * Adapters must durably deduplicate operation identity and reject expired,
+   * lower-generation, or conflicting-lease commands before external apply.
+   */
   execute(command: ExecutionEnvironmentCommandV1): Promise<unknown>;
+  /** Receipt recovery is read-only and must never issue the operation. */
   recover(command: ExecutionEnvironmentCommandV1): Promise<unknown>;
 }
 
@@ -170,7 +174,7 @@ export function parseExecutionEnvironmentCommandV1(
 ): ExecutionEnvironmentCommandV1 {
   const input = strictRecord(value, 'execution environment command');
   requireExactKeys(input, [
-    'protocolVersion', 'category', 'intentRef', 'action', 'adapter', 'capability',
+    'protocolVersion', 'category', 'action', 'adapter', 'capability',
     'executionRequestId',
     'attemptId', 'sessionId', 'leaseId', 'fencingGeneration',
     'cancellationGeneration', 'leaseExpiresAt', 'provider', 'environment',
@@ -220,7 +224,6 @@ export function parseExecutionEnvironmentCommandV1(
     category: 'execution_environment_command',
     operationId: protocolIdSchema.parse(input.operationId),
     operationDigest: protocolDigestSchema.parse(input.operationDigest),
-    intentRef: protocolIdSchema.parse(input.intentRef),
     action: input.action as ExecutionEnvironmentAction,
     adapter: Object.freeze({
       id: protocolIdSchema.parse(adapter.id),

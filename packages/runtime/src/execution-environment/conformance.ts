@@ -21,8 +21,15 @@ import type { ExecutionAggregateV04 } from '../coordinator/planning-execution-mo
 export class ExecutionEnvironmentRegistry {
   readonly #ports = new Map<string, RegisteredExecutionEnvironment>();
 
-  register(port: ExecutionEnvironmentPort): RegisteredExecutionEnvironment {
-    const descriptor = parseExecutionEnvironmentDescriptorV1(port.descriptor);
+  register(
+    expectedDescriptorValue: unknown,
+    port: ExecutionEnvironmentPort,
+  ): RegisteredExecutionEnvironment {
+    const descriptor = parseExecutionEnvironmentDescriptorV1(expectedDescriptorValue);
+    const adapterDescriptor = parseExecutionEnvironmentDescriptorV1(port.descriptor);
+    if (JSON.stringify(adapterDescriptor) !== JSON.stringify(descriptor)) {
+      throw new Error('execution environment adapter descriptor does not match server pin');
+    }
     const key = executionEnvironmentIdentityKey(descriptor.environment);
     if (this.#ports.has(key)) {
       throw new Error('execution environment adapter is already registered');
@@ -210,11 +217,17 @@ export function parseExecutionEnvironmentRecoveryResult(
   if (result !== null && result.status !== 'observed') {
     throw new Error('execution environment recovered result is not observed');
   }
+  const operationId = protocolIdSchema.parse(input.operationId);
+  const operationDigest = protocolDigestSchema.parse(input.operationDigest);
+  if (result !== null &&
+      (result.operationId !== operationId || result.operationDigest !== operationDigest)) {
+    throw new Error('execution environment recovered operation identity mismatch');
+  }
   return Object.freeze({
     protocolVersion: '0.4',
     category: 'execution_environment_recovery_result',
-    operationId: protocolIdSchema.parse(input.operationId),
-    operationDigest: protocolDigestSchema.parse(input.operationDigest),
+    operationId,
+    operationDigest,
     status: input.status,
     result,
     checkedAt: iso8601Schema.parse(input.checkedAt),
@@ -250,6 +263,7 @@ export class ExecutionEnvironmentBoundary {
       ownerId: string,
       executionRequestId: string,
     ): ExecutionAggregateV04 | Promise<ExecutionAggregateV04>;
+    now(): string;
   }>;
 
   constructor(
@@ -259,10 +273,49 @@ export class ExecutionEnvironmentBoundary {
         ownerId: string,
         executionRequestId: string,
       ): ExecutionAggregateV04 | Promise<ExecutionAggregateV04>;
+      now(): string;
     }>,
   ) {
     this.#registered = registered;
     this.#dependencies = dependencies;
+  }
+
+  #assertLeaseActive(expiresAt: string): void {
+    const now = iso8601Schema.parse(this.#dependencies.now());
+    if (Date.parse(now) >= Date.parse(expiresAt)) {
+      throw new Error('execution environment lease is expired');
+    }
+  }
+
+  async #readCurrentForCommand(
+    ownerId: string,
+    command: Awaited<ReturnType<typeof buildExecutionEnvironmentCommand>>,
+  ): Promise<ReturnType<typeof currentExecutionBinding>> {
+    const aggregate = await this.#dependencies.readCurrentAggregate(
+      ownerId,
+      command.executionRequestId,
+    );
+    const current = currentExecutionBinding(aggregate);
+    if (current.aggregate.request.id !== command.executionRequestId ||
+        current.attempt.id !== command.attemptId ||
+        current.lease.id !== command.leaseId ||
+        current.session.id !== command.sessionId ||
+        current.attempt.fencingGeneration !== command.fencingGeneration ||
+        current.attempt.cancellationGeneration !== command.cancellationGeneration ||
+        current.aggregate.currentCancellationGeneration !== command.cancellationGeneration ||
+        current.lease.expiresAt !== command.leaseExpiresAt ||
+        executionEnvironmentIdentityKey(current.aggregate.request.environment) !==
+          executionEnvironmentIdentityKey(command.environment) ||
+        JSON.stringify(current.aggregate.request.provider) !== JSON.stringify(command.provider) ||
+        current.aggregate.request.contextProjectionRef !== command.contextProjectionRef ||
+        current.aggregate.request.contextProjectionDigest !== command.contextProjectionDigest ||
+        (command.action === 'cancel' && current.attempt.state !== 'cancelling') ||
+        (command.action !== 'cancel' && command.action !== 'reconcile' &&
+          current.attempt.state !== 'running')) {
+      throw new Error('execution environment aggregate is stale before external I/O');
+    }
+    this.#assertLeaseActive(current.lease.expiresAt);
+    return current;
   }
 
   async dispatch(
@@ -325,10 +378,15 @@ export class ExecutionEnvironmentBoundary {
       mode: capability.mode,
       version: capability.version,
     }) as ExecutionEnvironmentDispatchResult['support'];
+    await this.#readCurrentForCommand(current.aggregate.request.ownerId, command);
     const recovery = parseExecutionEnvironmentRecoveryResult(
       await this.#registered.recover(command),
     );
     assertOperationIdentity(command, recovery);
+    const afterRecovery = await this.#readCurrentForCommand(
+      current.aggregate.request.ownerId,
+      command,
+    );
     if (recovery.status !== 'known_not_applied') {
       return Object.freeze({
         command,
@@ -347,13 +405,14 @@ export class ExecutionEnvironmentBoundary {
         checkedAt: recovery.checkedAt,
       });
     }
-    if (parsedInput.action === 'start' && current.session.lastObservationSequence > 0) {
+    if (parsedInput.action === 'start' && afterRecovery.session.lastObservationSequence > 0) {
       throw new Error('execution environment start was already observed');
     }
     const result = parseExecutionEnvironmentIssueResult(
       await this.#registered.execute(command),
     );
     assertOperationIdentity(command, result);
+    await this.#readCurrentForCommand(current.aggregate.request.ownerId, command);
     return Object.freeze({
       command,
       support,

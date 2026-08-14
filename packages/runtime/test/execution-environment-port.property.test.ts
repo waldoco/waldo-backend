@@ -15,8 +15,13 @@ import {
   ExecutionEnvironmentRegistry,
   materializeExecutorObservationV04,
   type ExecutionEnvironmentAction,
+  type ExecutionEnvironmentPort,
   type ExecutionEnvironmentSupportMode,
 } from '../src/execution-environment';
+
+function registerEnvironment(adapter: ExecutionEnvironmentPort) {
+  return new ExecutionEnvironmentRegistry().register(adapter.descriptor, adapter);
+}
 
 const bundle = buildResponsibilityExecutionV04Bundle(() => 'a'.repeat(64));
 const request = executionRequestV04Schema.parse(
@@ -120,12 +125,14 @@ describe('execution environment conformance properties', () => {
         });
         const currentAggregate = aggregateFor(action);
         const boundary = new ExecutionEnvironmentBoundary(
-          new ExecutionEnvironmentRegistry().register(fake),
-          { readCurrentAggregate: () => currentAggregate },
+          registerEnvironment(fake),
+          {
+            readCurrentAggregate: () => currentAggregate,
+            now: () => fixtureAttempt.updatedAt,
+          },
         );
         const input = {
           action,
-          intentRef: `property_intent_${suffix}`,
           control: action === 'steer'
             ? {
                 payloadRef: `steer_property_${suffix}`,
@@ -158,7 +165,7 @@ describe('execution environment conformance properties', () => {
         const aggregate = aggregateFor('start');
         const store = createDeterministicFakeExecutionEnvironmentStore();
         const boundary = new ExecutionEnvironmentBoundary(
-          new ExecutionEnvironmentRegistry().register(
+          registerEnvironment(
             new DeterministicFakeExecutionEnvironment({
               descriptor: descriptorFor('start', 'native'),
               store,
@@ -171,11 +178,10 @@ describe('execution environment conformance properties', () => {
               now: () => fixtureAttempt.updatedAt,
             }),
           ),
-          { readCurrentAggregate: () => aggregate },
+          { readCurrentAggregate: () => aggregate, now: () => fixtureAttempt.updatedAt },
         );
         const dispatch = await boundary.dispatch(aggregate, {
           action: 'start',
-          intentRef: `fence_property_${delta}`,
           control: null,
         });
         const nextGeneration = fixtureAttempt.fencingGeneration + delta;

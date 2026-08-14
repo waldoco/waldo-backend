@@ -1,30 +1,32 @@
 import { iso8601Schema } from '@waldo/contracts';
 import {
-  parseExecutionEnvironmentCommandV1,
   parseExecutionEnvironmentDescriptorV1,
   type ExecutionEnvironmentAction,
   type ExecutionEnvironmentCommandV1,
   type ExecutionEnvironmentDescriptorV1,
   type ExecutionEnvironmentPort,
 } from './port';
-
-type FakeIssueResult = Readonly<{
-  protocolVersion: '0.4';
-  category: 'execution_environment_issue_result';
-  operationId: string;
-  operationDigest: string;
-  status: 'observed' | 'indeterminate';
-  draft: unknown | null;
-}>;
+import { verifyExecutionEnvironmentCommandIdentity } from './binding';
+import {
+  parseExecutionEnvironmentIssueResult,
+  type ExecutionEnvironmentIssueResult,
+} from './conformance';
 
 type FakeReceipt = Readonly<{
   operationDigest: string;
-  result: FakeIssueResult;
+  result: ExecutionEnvironmentIssueResult;
   checkedAt: string;
+}>;
+
+type FakeAuthorityHighWater = Readonly<{
+  leaseId: string;
+  fencingGeneration: number;
+  cancellationGeneration: number;
 }>;
 
 export type DeterministicFakeExecutionEnvironmentStore = {
   readonly receipts: Map<string, FakeReceipt>;
+  readonly authorityHighWater: Map<string, FakeAuthorityHighWater>;
   physicalIssues: number;
   executeCalls: number;
   recoverCalls: number;
@@ -42,6 +44,7 @@ export function createDeterministicFakeExecutionEnvironmentStore():
 DeterministicFakeExecutionEnvironmentStore {
   return {
     receipts: new Map(),
+    authorityHighWater: new Map(),
     physicalIssues: 0,
     executeCalls: 0,
     recoverCalls: 0,
@@ -62,13 +65,21 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
   }>) {
     this.descriptor = parseExecutionEnvironmentDescriptorV1(input.descriptor);
     this.#store = input.store;
-    this.#script = Object.freeze({ ...input.script });
+    this.#script = Object.freeze(Object.fromEntries(
+      Object.entries(input.script).map(([action, script]) => [
+        action,
+        script === undefined ? undefined : Object.freeze({
+          ...script,
+          draft: structuredClone(script.draft),
+        }),
+      ]),
+    ));
     this.#now = input.now;
   }
 
   async execute(commandValue: ExecutionEnvironmentCommandV1): Promise<unknown> {
     this.#store.executeCalls += 1;
-    const command = parseExecutionEnvironmentCommandV1(commandValue);
+    const command = await verifyExecutionEnvironmentCommandIdentity(commandValue);
     this.#assertCommandBinding(command);
     const existing = this.#store.receipts.get(command.operationId);
     if (existing !== undefined) {
@@ -86,7 +97,7 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
     }
     this.#store.physicalIssues += 1;
     const checkedAt = iso8601Schema.parse(this.#now());
-    const result: FakeIssueResult = Object.freeze({
+    const result = parseExecutionEnvironmentIssueResult({
       protocolVersion: '0.4',
       category: 'execution_environment_issue_result',
       operationId: command.operationId,
@@ -107,7 +118,7 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
 
   async recover(commandValue: ExecutionEnvironmentCommandV1): Promise<unknown> {
     this.#store.recoverCalls += 1;
-    const command = parseExecutionEnvironmentCommandV1(commandValue);
+    const command = await verifyExecutionEnvironmentCommandIdentity(commandValue);
     this.#assertCommandBinding(command);
     const existing = this.#store.receipts.get(command.operationId);
     if (existing === undefined) {
@@ -122,7 +133,7 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
           throw new Error('deterministic fake reconciliation script is contradictory');
         }
         const checkedAt = iso8601Schema.parse(this.#now());
-        const result: FakeIssueResult = Object.freeze({
+        const result = parseExecutionEnvironmentIssueResult({
           protocolVersion: '0.4',
           category: 'execution_environment_issue_result',
           operationId: command.operationId,
@@ -178,6 +189,28 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
         command.capability.mode !== capability.mode ||
         command.capability.version !== capability.version) {
       throw new Error('execution environment command does not match adapter descriptor');
+    }
+    const now = iso8601Schema.parse(this.#now());
+    if (Date.parse(now) >= Date.parse(command.leaseExpiresAt)) {
+      throw new Error('execution environment fake rejected an expired lease');
+    }
+    const previous = this.#store.authorityHighWater.get(command.executionRequestId);
+    if (previous !== undefined &&
+        (command.fencingGeneration < previous.fencingGeneration ||
+          command.cancellationGeneration < previous.cancellationGeneration ||
+          (command.fencingGeneration === previous.fencingGeneration &&
+            command.cancellationGeneration === previous.cancellationGeneration &&
+            command.leaseId !== previous.leaseId))) {
+      throw new Error('execution environment fake rejected stale or conflicting authority');
+    }
+    if (previous === undefined ||
+        command.fencingGeneration > previous.fencingGeneration ||
+        command.cancellationGeneration > previous.cancellationGeneration) {
+      this.#store.authorityHighWater.set(command.executionRequestId, Object.freeze({
+        leaseId: command.leaseId,
+        fencingGeneration: command.fencingGeneration,
+        cancellationGeneration: command.cancellationGeneration,
+      }));
     }
   }
 }
