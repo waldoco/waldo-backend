@@ -36,13 +36,14 @@ At exact clean implementation SHA `1ec812076079b362154b1b0de83c24d3efd45826`:
 - **Standards:** PASS with no actionable finding.
 - **Spec:** PASS; no #87/#88/B2-B6 scope entered.
 - **Security:** PASS; prior caller-forged authority and stale-cancellation findings are closed, with no credential, health, transcript, prompt, inline-evidence, cross-product-write, unsafe-downgrade, or transaction/I/O finding remaining.
-- **Complete repository wall:** final PR-head `pnpm verify` is a required convergence gate and must be recorded on #80/#116 before merge.
+- **Complete repository wall:** Linux Node 22 `pnpm verify` with pinned pnpm 10.34.4 and Supabase CLI 2.109.1 — PASS at documentation head `01e1786adeafb300cbaa7e3ae3d929541d096deb`; workspace typechecks, contracts, Supabase reset/pgTAP/history, runtime, exact-token integration, and guards all passed.
+- **Native host attempt:** macOS/OrbStack `supabase start` — FAILED before verification while applying the unchanged first migration because `public.users` already existed. It is classified as environment failure and was neither hidden nor counted green; no migration source was changed.
 
 This is `module_implemented` local repository evidence. It is not adapter conformance, cross-surface acceptance, staging, deployment, production, or live-consumer proof.
 
 ## What Does Not Work Yet
 
-- **#80 is not landed:** severity HIGH; disposition converge [PR #125](https://github.com/Pin4sf/waldo-backend/pull/125), complete final exact-head wall/reviews, then merge; owner next #80 convergence session if this session ends first.
+- **#80 is not landed:** severity HIGH; disposition converge [PR #125](https://github.com/Pin4sf/waldo-backend/pull/125), confirm the documentation-only final delta and exact-head wall, then merge; owner next #80 convergence session if this session ends first.
 - **Execution-environment port and fake adapters:** severity HIGH; disposition blocked [#87](https://github.com/Pin4sf/waldo-backend/issues/87); dependency landed #80 runtime SHA.
 - **Public WorkUnit-to-trusted-execution bridge:** severity HIGH; disposition blocked [#88](https://github.com/Pin4sf/waldo-backend/issues/88); dependencies landed #80 and #87.
 - **Evidence/Verification/Acceptance/OpenLoop runtime:** severity CRITICAL; disposition B2 issues #82/#84/#85 after the B1 gate. Execution settlement is not product closure.

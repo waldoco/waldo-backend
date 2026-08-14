@@ -34,7 +34,7 @@ Release evidence observed 2026-08-14 at reviewed #81 head `df0abae`, whose Git t
 - QA breaker, Standards review, and Spec review: passed at the exact reviewed head;
 - GitHub Actions: unavailable for this user; Supabase Preview: skipped. Two unrelated runtime-alarm timing flakes and failed host setups were classified separately before the final same-SHA pass. No runtime-adapter, staging, deployment, live-consumer, or production inference follows.
 
-#80 evidence at exact reviewed implementation SHA `1ec812076079b362154b1b0de83c24d3efd45826`: contracts 67/1,560, runtime 39/1,030, both runtime typechecks, all guards, QA breaker, Security, Standards, and Spec passed. The complete final PR-head wall remains required until its exact evidence is posted to PR #125 and #116.
+#80 evidence at exact reviewed implementation SHA `1ec812076079b362154b1b0de83c24d3efd45826`: contracts 67/1,560, runtime 39/1,030, both runtime typechecks, all guards, QA breaker, Security, Standards, and Spec passed. Complete Linux Node 22 `pnpm verify` then passed at documentation head `01e1786adeafb300cbaa7e3ae3d929541d096deb`, including eight Supabase migrations from zero/reset, 53 pgTAP assertions, and five integration tests. Native macOS `supabase start` separately failed on the unchanged first migration because `public.users` already existed; it is classified as an environment failure and was not counted green.
 
 ## Ideal
 
