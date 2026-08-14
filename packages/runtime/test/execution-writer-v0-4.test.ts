@@ -65,14 +65,17 @@ const binding = Object.freeze({
   contextProjectionDigest: request.contextProjectionDigest,
 });
 
-function seedCanonicalProductState(storage: DurableObjectStorage): void {
+function seedCanonicalProductState(
+  storage: DurableObjectStorage,
+  requestValue: typeof request = request,
+): void {
   storage.sql.exec(
     `INSERT OR IGNORE INTO owner_roots (
       root_key, owner_id, created_at, authenticated_subject_ref, state,
       owner_policy_revision, owner_root_routing_version, updated_at
     ) VALUES (1, ?, ?, ?, 'active', ?, ?, ?)`,
-    request.ownerId,
-    request.requestedAt,
+    requestValue.ownerId,
+    requestValue.requestedAt,
     authorityRegistration.authenticatedSubjectRef,
     authorityRegistration.ownerPolicyRevision,
     authorityRegistration.ownerRootRoutingVersion,
@@ -92,11 +95,11 @@ function seedCanonicalProductState(storage: DurableObjectStorage): void {
     `INSERT OR IGNORE INTO outcomes (
       id, owner_id, revision, user_statement, state, created_at, updated_at
     ) VALUES (?, ?, ?, 'Canonical execution outcome.', 'captured', ?, ?)`,
-    request.outcome.id,
-    request.ownerId,
-    request.outcome.revision,
-    request.requestedAt,
-    request.requestedAt,
+    requestValue.outcome.id,
+    requestValue.ownerId,
+    requestValue.outcome.revision,
+    requestValue.requestedAt,
+    requestValue.requestedAt,
   );
   storage.sql.exec(
     `INSERT OR IGNORE INTO work_units (
@@ -109,13 +112,13 @@ function seedCanonicalProductState(storage: DurableObjectStorage): void {
       ?, '{"maxProviderTurns":0,"maxExternalEffects":0,"maxDurationMs":0}',
       '{"mode":"unassigned","egress":"deny_all","credentials":"none"}',
       '[]', NULL, '[]', 'planned', ?, ?)`,
-    request.workUnit.id,
-    request.ownerId,
-    request.outcome.id,
-    request.workUnit.revision,
-    JSON.stringify(request.authorityCeiling),
-    request.requestedAt,
-    request.requestedAt,
+    requestValue.workUnit.id,
+    requestValue.ownerId,
+    requestValue.outcome.id,
+    requestValue.workUnit.revision,
+    JSON.stringify(requestValue.authorityCeiling),
+    requestValue.requestedAt,
+    requestValue.requestedAt,
   );
 }
 
@@ -125,11 +128,28 @@ function writer(storage: DurableObjectStorage): PlanningExecutionModule {
   return new PlanningExecutionModule(storage, () => 'event_unused');
 }
 
+function productDigestProof(
+  module: PlanningExecutionModule,
+  requestValue: typeof request = request,
+) {
+  const productMaterial = module.readExecutionProductDigestMaterialV04(
+    requestValue.ownerId,
+    requestValue.outcome.id,
+    requestValue.workUnit.id,
+  );
+  return {
+    ...productMaterial,
+    outcomeDigest: requestValue.outcome.digest,
+    workUnitDigest: requestValue.workUnit.digest,
+  };
+}
+
 function admit(module: PlanningExecutionModule): void {
   module.admitExecutionRequestV04InCurrentTransaction({
     request,
     trustedBinding: binding,
     requestDigest: FIXTURE_DIGEST,
+    productDigestProof: productDigestProof(module),
   });
 }
 
@@ -163,11 +183,7 @@ describe('responsibility execution v0.4 sole writer', () => {
       const coordinator = new WaldoCoordinator(state.storage, {
         now: () => observation.observedAt,
         newId: (kind) => `${kind}_unused`,
-        async sha256Hex(value) {
-          const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
-          return Array.from(new Uint8Array(digest), (byte) =>
-            byte.toString(16).padStart(2, '0')).join('');
-        },
+        async sha256Hex() { return 'a'.repeat(64); },
       });
       const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
       await coordinator.admitExecutionRequestV04(request, binding, authority);
@@ -188,6 +204,12 @@ describe('responsibility execution v0.4 sole writer', () => {
         request,
         trustedBinding: binding,
         requestDigest: FIXTURE_DIGEST,
+        productDigestProof: {
+          outcomeMaterial: '{}',
+          workUnitMaterial: '{}',
+          outcomeDigest: request.outcome.digest,
+          workUnitDigest: request.workUnit.digest,
+        },
       })).toThrow(/canonical execution binding/i);
 
       seedCanonicalProductState(state.storage);
@@ -205,6 +227,16 @@ describe('responsibility execution v0.4 sole writer', () => {
       await expect(coordinator.admitExecutionRequestV04(
         { ...request, authorityCeiling: { ...request.authorityCeiling, tools: ['shell'] } },
         { ...binding, authorityCeiling: { ...request.authorityCeiling, tools: ['shell'] } },
+        authority,
+      )).rejects.toThrow(/canonical execution binding/i);
+      await expect(coordinator.admitExecutionRequestV04(
+        { ...request, outcome: { ...request.outcome, digest: `sha256:${'b'.repeat(64)}` } },
+        { ...binding, outcome: { ...request.outcome, digest: `sha256:${'b'.repeat(64)}` } },
+        authority,
+      )).rejects.toThrow(/canonical execution binding/i);
+      await expect(coordinator.admitExecutionRequestV04(
+        { ...request, workUnit: { ...request.workUnit, digest: `sha256:${'b'.repeat(64)}` } },
+        { ...binding, workUnit: { ...request.workUnit, digest: `sha256:${'b'.repeat(64)}` } },
         authority,
       )).rejects.toThrow(/canonical execution binding/i);
 
@@ -241,6 +273,7 @@ describe('responsibility execution v0.4 sole writer', () => {
           request,
           trustedBinding: binding,
           requestDigest: `sha256:${'b'.repeat(64)}`,
+          productDigestProof: productDigestProof(module),
         }))).toThrow(/digest conflict/i);
       return module.readExecutionAggregateV04(request.ownerId, request.id);
     });
@@ -259,6 +292,7 @@ describe('responsibility execution v0.4 sole writer', () => {
         request: changed,
         trustedBinding: { ...binding, contextProjectionRef: 'context_changed' },
         requestDigest: FIXTURE_DIGEST,
+        productDigestProof: productDigestProof(module),
       })).toThrow(/digest conflict/i);
       return state.storage.sql.exec<{ count: number }>(
         "SELECT COUNT(*) AS count FROM planning_execution_requests WHERE protocol_version = '0.4'",
@@ -295,6 +329,7 @@ describe('responsibility execution v0.4 sole writer', () => {
           request,
           trustedBinding,
           requestDigest: FIXTURE_DIGEST,
+          productDigestProof: productDigestProof(module),
         })).toThrow(/binding mismatch/i);
       }
       for (const trustedBinding of [
@@ -305,6 +340,7 @@ describe('responsibility execution v0.4 sole writer', () => {
           request,
           trustedBinding,
           requestDigest: FIXTURE_DIGEST,
+          productDigestProof: productDigestProof(module),
         })).toThrow();
       }
       return state.storage.sql.exec<{ count: number }>(
@@ -329,6 +365,7 @@ describe('responsibility execution v0.4 sole writer', () => {
           request: hostile,
           trustedBinding: binding,
           requestDigest: FIXTURE_DIGEST,
+          productDigestProof: productDigestProof(module),
         })).toThrow();
       }
       return state.storage.sql.exec<{ count: number }>(
@@ -596,6 +633,50 @@ describe('responsibility execution v0.4 sole writer', () => {
     expect(aggregate.reconciliations).toHaveLength(1);
   });
 
+  it('conflicts when one cancellation command ID is reused for another execution request', async () => {
+    const stub = freshStub();
+    const aggregate = await runInDurableObject(stub, (_instance, state) => {
+      const module = writer(state.storage);
+      const secondRequest = executionRequestV04Schema.parse({
+        ...request,
+        id: 'execution_request_second',
+        outcome: { ...request.outcome, id: 'outcome_second' },
+        workUnit: { ...request.workUnit, id: 'work_unit_second' },
+      });
+      const secondBinding = {
+        ...binding,
+        outcome: secondRequest.outcome,
+        workUnit: secondRequest.workUnit,
+      };
+      seedCanonicalProductState(state.storage, secondRequest);
+      admit(module);
+      module.admitExecutionRequestV04InCurrentTransaction({
+        request: secondRequest,
+        trustedBinding: secondBinding,
+        requestDigest: `sha256:${'b'.repeat(64)}`,
+        productDigestProof: productDigestProof(module, secondRequest),
+      });
+      module.cancelExecutionV04InCurrentTransaction({
+        ownerId: request.ownerId,
+        request: cancelRequest,
+        requestDigest: FIXTURE_DIGEST,
+        at: '2026-08-13T12:00:05.000Z',
+      });
+      expect(() => module.cancelExecutionV04InCurrentTransaction({
+        ownerId: request.ownerId,
+        request: {
+          ...cancelRequest,
+          executionRequestId: secondRequest.id,
+        },
+        requestDigest: `sha256:${'c'.repeat(64)}`,
+        at: '2026-08-13T12:00:05.000Z',
+      })).toThrow(/digest conflict/i);
+      return module.readExecutionAggregateV04(secondRequest.ownerId, secondRequest.id);
+    });
+
+    expect(aggregate.currentCancellationGeneration).toBe(1);
+  });
+
   it('represents running reconciliation without minting a new request state', async () => {
     const stub = freshStub();
     const aggregate = await runInDurableObject(stub, (_instance, state) => {
@@ -785,12 +866,20 @@ describe('responsibility execution v0.4 sole writer', () => {
         },
         reconciliationDigest: `sha256:${'e'.repeat(64)}`,
       })).toThrow(/reconciliation rejected/i);
+      module.cancelExecutionV04InCurrentTransaction({
+        ownerId: request.ownerId,
+        request: cancelRequest,
+        requestDigest: FIXTURE_DIGEST,
+        at: '2026-08-13T12:11:01.000Z',
+      });
       return module.readExecutionAggregateV04(request.ownerId, request.id);
     });
 
     expect(aggregate.attempts.map((value) => value.attemptNumber)).toEqual([1, 2]);
     expect(aggregate.leases.map((value) => value.fencingGeneration)).toEqual([1, 2]);
-    expect(aggregate.sessions.map((value) => value.state)).toEqual(['ended', 'starting']);
+    expect(aggregate.attempts.map((value) => value.cancellationGeneration)).toEqual([1, 2]);
+    expect(aggregate.leases.map((value) => value.cancellationGeneration)).toEqual([1, 2]);
+    expect(aggregate.sessions.map((value) => value.state)).toEqual(['ended', 'unknown']);
   });
 
   it('does not let cancellation regress a reconciled terminal attempt', async () => {

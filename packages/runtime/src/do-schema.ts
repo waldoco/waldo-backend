@@ -787,6 +787,9 @@ export const RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION: DoMigration = {
       cancellation_generation, created_at, updated_at, '0.3'
     FROM planning_execution_requests_v05;`,
     'DROP TABLE planning_execution_requests_v05;',
+    `CREATE UNIQUE INDEX planning_execution_requests_v04_cancel_request_unique
+       ON planning_execution_requests(cancellation_request_id)
+       WHERE protocol_version = '0.4' AND cancellation_request_id IS NOT NULL;`,
     'ALTER TABLE planning_agent_sessions RENAME TO planning_agent_sessions_v05;',
     `CREATE TABLE planning_agent_sessions (
       id                       TEXT PRIMARY KEY,

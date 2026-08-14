@@ -89,6 +89,16 @@ export type ExecutionAggregateV04 = Readonly<{
   reconciliations: readonly ExecutionReconciliationV04[];
 }>;
 
+export type ExecutionProductDigestMaterialV04 = Readonly<{
+  outcomeMaterial: string;
+  workUnitMaterial: string;
+}>;
+
+export type ExecutionProductDigestProofV04 = ExecutionProductDigestMaterialV04 & Readonly<{
+  outcomeDigest: string;
+  workUnitDigest: string;
+}>;
+
 function sameValidatedValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -123,40 +133,24 @@ export class PlanningExecutionModule {
     request: unknown;
     trustedBinding: ExecutionAdmissionBindingV04;
     requestDigest: string;
+    productDigestProof: ExecutionProductDigestProofV04;
   }>): ExecutionRequestV04 {
     const request = executionRequestV04Schema.parse(input.request);
     const trustedBinding = parseExecutionAdmissionBindingV04(input.trustedBinding);
-    const canonical = this.storage.sql.exec<{
-      owner_id: string;
-      outcome_revision: number;
-      work_unit_revision: number;
-      work_unit_outcome_id: string;
-      authority_ceiling_json: string;
-    }>(
-      `SELECT roots.owner_id, outcomes.revision AS outcome_revision,
-              work_units.revision AS work_unit_revision,
-              work_units.outcome_id AS work_unit_outcome_id,
-              work_units.authority_ceiling_json
-         FROM owner_roots AS roots
-         JOIN outcomes ON outcomes.owner_id = roots.owner_id AND outcomes.id = ?
-         JOIN work_units ON work_units.owner_id = roots.owner_id AND work_units.id = ?
-        WHERE roots.root_key = 1 AND roots.owner_id = ? AND roots.state = 'active'`,
+    const canonical = this.readExecutionProductBindingV04(
+      request.ownerId,
       request.outcome.id,
       request.workUnit.id,
-      request.ownerId,
-    ).toArray()[0];
-    const canonicalAuthorityCeiling = canonical === undefined
-      ? undefined
-      : executionAuthorityCeilingV04Schema.safeParse(
-        JSON.parse(canonical.authority_ceiling_json),
-      ).data;
+    );
     const canonicalMatches =
-      canonical !== undefined &&
-      canonicalAuthorityCeiling !== undefined &&
-      canonical.outcome_revision === request.outcome.revision &&
-      canonical.work_unit_revision === request.workUnit.revision &&
-      canonical.work_unit_outcome_id === request.outcome.id &&
-      sameValidatedValue(canonicalAuthorityCeiling, request.authorityCeiling);
+      canonical.outcomeRevision === request.outcome.revision &&
+      canonical.workUnitRevision === request.workUnit.revision &&
+      canonical.workUnitOutcomeId === request.outcome.id &&
+      sameValidatedValue(canonical.authorityCeiling, request.authorityCeiling) &&
+      input.productDigestProof.outcomeMaterial === canonical.outcomeMaterial &&
+      input.productDigestProof.workUnitMaterial === canonical.workUnitMaterial &&
+      input.productDigestProof.outcomeDigest === request.outcome.digest &&
+      input.productDigestProof.workUnitDigest === request.workUnit.digest;
     if (!canonicalMatches) throw new Error('canonical execution binding mismatch');
     const bindingMatches =
       request.ownerId === trustedBinding.routedOwnerId &&
@@ -222,6 +216,18 @@ export class PlanningExecutionModule {
       JSON.stringify(request),
     );
     return request;
+  }
+
+  readExecutionProductDigestMaterialV04(
+    ownerId: string,
+    outcomeId: string,
+    workUnitId: string,
+  ): ExecutionProductDigestMaterialV04 {
+    const binding = this.readExecutionProductBindingV04(ownerId, outcomeId, workUnitId);
+    return Object.freeze({
+      outcomeMaterial: binding.outcomeMaterial,
+      workUnitMaterial: binding.workUnitMaterial,
+    });
   }
 
   claimExecutionAttemptV04InCurrentTransaction(input: Readonly<{
@@ -516,16 +522,32 @@ export class PlanningExecutionModule {
         Date.parse(request.clientIssuedAt) < Date.parse(row.created_at)) {
       throw new Error('execution cancellation chronology mismatch');
     }
-    if (row.cancellation_request_id === request.requestId) {
-      if (row.cancellation_request_digest !== input.requestDigest ||
-          row.cancellation_request_json === null ||
+    const existingCommand = this.storage.sql.exec<{
+      owner_id: string;
+      execution_request_id: string;
+      cancellation_generation: number;
+      cancellation_request_digest: string;
+      cancellation_request_json: string;
+    }>(
+      `SELECT owner_id, id AS execution_request_id, cancellation_generation,
+              cancellation_request_digest, cancellation_request_json
+         FROM planning_execution_requests
+        WHERE protocol_version = '0.4' AND cancellation_request_id = ?`,
+      request.requestId,
+    ).toArray()[0];
+    if (existingCommand !== undefined) {
+      if (existingCommand.owner_id !== input.ownerId ||
+          existingCommand.execution_request_id !== request.executionRequestId ||
+          existingCommand.cancellation_request_digest !== input.requestDigest ||
           !sameValidatedValue(
-            executionCancelRequestV04Schema.parse(JSON.parse(row.cancellation_request_json)),
+            executionCancelRequestV04Schema.parse(
+              JSON.parse(existingCommand.cancellation_request_json),
+            ),
             request,
           )) {
         throw new ResponsibilityDigestConflictError();
       }
-      return row.cancellation_generation;
+      return existingCommand.cancellation_generation;
     }
     if (row.cancellation_request_id !== null ||
         row.cancellation_generation !== request.expectedCancellationGeneration) {
@@ -561,8 +583,14 @@ export class PlanningExecutionModule {
     );
     this.storage.sql.exec(
       `UPDATE planning_execution_leases SET cancellation_generation = ?
-        WHERE execution_request_id = ? AND owner_id = ? AND attempt_id IS NOT NULL`,
+        WHERE execution_request_id = ? AND owner_id = ?
+          AND attempt_id IN (
+            SELECT id FROM execution_attempts
+             WHERE execution_request_id = ? AND owner_id = ? AND state = 'cancelling'
+          )`,
       nextGeneration,
+      request.executionRequestId,
+      input.ownerId,
       request.executionRequestId,
       input.ownerId,
     );
@@ -809,6 +837,63 @@ export class PlanningExecutionModule {
     ).toArray()[0];
     if (row === undefined) throw new Error('execution attempt not found');
     return this.readExecutionAggregateV04(ownerId, row.execution_request_id);
+  }
+
+  private readExecutionProductBindingV04(
+    ownerId: string,
+    outcomeId: string,
+    workUnitId: string,
+  ): Readonly<{
+    outcomeRevision: number;
+    workUnitRevision: number;
+    workUnitOutcomeId: string;
+    authorityCeiling: ExecutionRequestV04['authorityCeiling'];
+    outcomeMaterial: string;
+    workUnitMaterial: string;
+  }> {
+    const row = this.storage.sql.exec<{
+      owner_id: string;
+      outcome_revision: number;
+      work_unit_revision: number;
+      work_unit_outcome_id: string;
+      authority_ceiling_json: string;
+    }>(
+      `SELECT roots.owner_id, outcomes.revision AS outcome_revision,
+              work_units.revision AS work_unit_revision,
+              work_units.outcome_id AS work_unit_outcome_id,
+              work_units.authority_ceiling_json
+         FROM owner_roots AS roots
+         JOIN outcomes ON outcomes.owner_id = roots.owner_id AND outcomes.id = ?
+         JOIN work_units ON work_units.owner_id = roots.owner_id AND work_units.id = ?
+        WHERE roots.root_key = 1 AND roots.owner_id = ? AND roots.state = 'active'`,
+      outcomeId,
+      workUnitId,
+      ownerId,
+    ).toArray()[0];
+    if (row === undefined) throw new Error('canonical execution binding mismatch');
+    const authorityCeiling = executionAuthorityCeilingV04Schema.parse(
+      JSON.parse(row.authority_ceiling_json),
+    );
+    return Object.freeze({
+      outcomeRevision: row.outcome_revision,
+      workUnitRevision: row.work_unit_revision,
+      workUnitOutcomeId: row.work_unit_outcome_id,
+      authorityCeiling,
+      outcomeMaterial: JSON.stringify({
+        category: 'outcome',
+        ownerId: row.owner_id,
+        id: outcomeId,
+        revision: row.outcome_revision,
+      }),
+      workUnitMaterial: JSON.stringify({
+        category: 'work_unit',
+        ownerId: row.owner_id,
+        id: workUnitId,
+        outcomeId: row.work_unit_outcome_id,
+        revision: row.work_unit_revision,
+        authorityCeiling,
+      }),
+    });
   }
 
   private readAttemptV04(attemptId: string): ExecutionAttemptV04 {

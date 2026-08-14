@@ -285,7 +285,30 @@ export class WaldoCoordinator {
     canonicalAuthority: ResponsibilityCanonicalAuthority,
   ): Promise<ExecutionAggregateV04> {
     const request = executionRequestV04Schema.parse(requestValue);
-    const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify(request))}`;
+    const preflightAuthority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+      canonicalAuthority,
+      this.#deps.now(),
+    );
+    if (preflightAuthority.ownerId !== request.ownerId ||
+        preflightAuthority.ownerId !== trustedBinding.routedOwnerId) {
+      throw new ResponsibilityOwnerRootMismatchError();
+    }
+    const productMaterial = this.#planning.readExecutionProductDigestMaterialV04(
+      request.ownerId,
+      request.outcome.id,
+      request.workUnit.id,
+    );
+    const [requestDigestHex, outcomeDigestHex, workUnitDigestHex] = await Promise.all([
+      this.#deps.sha256Hex(JSON.stringify(request)),
+      this.#deps.sha256Hex(productMaterial.outcomeMaterial),
+      this.#deps.sha256Hex(productMaterial.workUnitMaterial),
+    ]);
+    const requestDigest = `sha256:${requestDigestHex}`;
+    const productDigestProof = Object.freeze({
+      ...productMaterial,
+      outcomeDigest: `sha256:${outcomeDigestHex}`,
+      workUnitDigest: `sha256:${workUnitDigestHex}`,
+    });
     return this.#storage.transactionSync(() => {
       const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
         canonicalAuthority,
@@ -299,6 +322,7 @@ export class WaldoCoordinator {
         request,
         trustedBinding,
         requestDigest,
+        productDigestProof,
       });
       this.#deps.afterWrite?.('execution_request');
       return this.#planning.readExecutionAggregateV04(request.ownerId, request.id);
