@@ -580,7 +580,7 @@ describe('execution environment port conformance', () => {
   });
 
   it('rechecks cancellation and fence authority after recovery before issue', async () => {
-    let current = aggregate;
+    let current: Parameters<ExecutionEnvironmentBoundary['dispatch']>[0] = aggregate;
     let executeCalls = 0;
     const adapter = port();
     adapter.recover = async (command) => {
@@ -778,7 +778,7 @@ describe('execution environment port conformance', () => {
   });
 
   it('does not reissue indeterminate control work after an unrelated observation', async () => {
-    let current = aggregate;
+    let current: Parameters<ExecutionEnvironmentBoundary['dispatch']>[0] = aggregate;
     let operationIntent = {
       ref: 'server_intent_pause_pending',
       digest: `sha256:${'c'.repeat(64)}`,
@@ -795,7 +795,19 @@ describe('execution environment port conformance', () => {
       registerEnvironment(new DeterministicFakeExecutionEnvironment({
         descriptor,
         store,
-        script: { pause: { status: 'indeterminate', draft: null } },
+        script: {
+          pause: { status: 'indeterminate', draft: null },
+          reconcile: {
+            status: 'observed',
+            draft: {
+              category: 'execution_environment_reconciliation_draft',
+              id: 'pause_retry_resolution',
+              state: 'failed',
+              basisObservationIds: [],
+              checkedAt: lease.expiresAt,
+            },
+          },
+        },
         now: () => attempt.updatedAt,
       })),
       {
@@ -823,6 +835,50 @@ describe('execution environment port conformance', () => {
     await expect(boundary.dispatch(current, { action: 'pause', control: null }))
       .rejects.toThrow(/reconciliation before reissue/i);
     expect(store.physicalIssues).toBe(1);
+    const reconciled = await boundary.dispatch(current, {
+      action: 'reconcile',
+      control: null,
+    });
+    expect(reconciled).toMatchObject({
+      status: 'observed',
+      result: { draft: { state: 'failed' } },
+    });
+
+    const retryResolution = executionReconciliationV04Schema.parse({
+      ...reconciliation,
+      id: 'pause_retry_resolution',
+      state: 'failed',
+      basisObservationIds: [],
+      checkedAt: lease.expiresAt,
+    });
+
+    const retryAttempt = executionAttemptV04Schema.parse({
+      ...attempt,
+      id: 'retry_attempt_fixture',
+      leaseId: 'retry_lease_fixture',
+      fencingGeneration: attempt.fencingGeneration + 1,
+    });
+    const retryLease = executionLeaseV04Schema.parse({
+      ...lease,
+      id: retryAttempt.leaseId,
+      attemptId: retryAttempt.id,
+      fencingGeneration: retryAttempt.fencingGeneration,
+    });
+    const retrySession = executionSessionV04Schema.parse({
+      ...session,
+      id: 'retry_session_fixture',
+      attemptId: retryAttempt.id,
+    });
+    current = {
+      ...aggregate,
+      attempts: [attempt, retryAttempt],
+      leases: [lease, retryLease],
+      sessions: [session, retrySession],
+      reconciliations: [retryResolution],
+    };
+    const retried = await boundary.dispatch(current, { action: 'pause', control: null });
+    expect(retried.command.fencingGeneration).toBe(retryAttempt.fencingGeneration);
+    expect(store.physicalIssues).toBe(2);
   });
 
   it('enforces adapter-side generation high-water and one claimant per lease generation', async () => {
