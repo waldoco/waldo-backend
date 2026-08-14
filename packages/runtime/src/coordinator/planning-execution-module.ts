@@ -90,14 +90,21 @@ export type ExecutionAggregateV04 = Readonly<{
 }>;
 
 export type ExecutionProductDigestMaterialV04 = Readonly<{
+  outcome: Omit<ExecutionRequestV04['outcome'], 'digest'>;
+  workUnit: Omit<ExecutionRequestV04['workUnit'], 'digest'>;
+  authorityCeiling: ExecutionRequestV04['authorityCeiling'];
   outcomeMaterial: string;
   workUnitMaterial: string;
 }>;
 
-export type ExecutionProductDigestProofV04 = ExecutionProductDigestMaterialV04 & Readonly<{
+export type ExecutionProductDigestProofV04 = Readonly<{
+  outcomeMaterial: string;
+  workUnitMaterial: string;
   outcomeDigest: string;
   workUnitDigest: string;
 }>;
+
+export const EXECUTION_LEASE_MAX_DURATION_MS_V04 = 10 * 60 * 1_000;
 
 function sameValidatedValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
@@ -225,6 +232,9 @@ export class PlanningExecutionModule {
   ): ExecutionProductDigestMaterialV04 {
     const binding = this.readExecutionProductBindingV04(ownerId, outcomeId, workUnitId);
     return Object.freeze({
+      outcome: Object.freeze({ id: outcomeId, revision: binding.outcomeRevision }),
+      workUnit: Object.freeze({ id: workUnitId, revision: binding.workUnitRevision }),
+      authorityCeiling: binding.authorityCeiling,
       outcomeMaterial: binding.outcomeMaterial,
       workUnitMaterial: binding.workUnitMaterial,
     });
@@ -321,6 +331,7 @@ export class PlanningExecutionModule {
       attemptCreatedAt <= attemptUpdatedAt &&
       attemptUpdatedAt <= claimedAt &&
       claimedAt < expiresAt &&
+      expiresAt - acquiredAt <= EXECUTION_LEASE_MAX_DURATION_MS_V04 &&
       requestWriterState.status !== 'completed' &&
       requestWriterState.status !== 'cancelled' &&
       requestWriterState.cancellation_request_id === null &&
@@ -707,7 +718,9 @@ export class PlanningExecutionModule {
         stateMatches = !requestWasCancelled &&
           (attempt.state === 'queued' || attempt.state === 'running' ||
             attempt.state === 'indeterminate') &&
-          !hasTerminalObservation && checkedAt < Date.parse(lease.expiresAt);
+          !hasTerminalObservation &&
+          checkedAt < Date.parse(lease.expiresAt) &&
+          receivedAt < Date.parse(lease.expiresAt);
         break;
       case 'cancelled':
         stateMatches = requestWasCancelled && attempt.state === 'cancelling';
@@ -724,7 +737,9 @@ export class PlanningExecutionModule {
               receivedAt >= Date.parse(lease.expiresAt)));
         break;
       case 'indeterminate':
-        stateMatches = !requestWasCancelled && attempt.state !== 'cancelling';
+        stateMatches = !requestWasCancelled &&
+          (attempt.state === 'queued' || attempt.state === 'running' ||
+            attempt.state === 'indeterminate');
         break;
     }
     if (!stateMatches) throw new Error('execution reconciliation state mismatch');
@@ -824,6 +839,25 @@ export class PlanningExecutionModule {
       observations,
       reconciliations,
     });
+  }
+
+  readExecutionAggregateByRequestIdV04(executionRequestId: string): ExecutionAggregateV04 {
+    const aggregate = this.readExecutionAggregateByRequestIdV04IfExists(executionRequestId);
+    if (aggregate === null) throw new Error('execution request not found');
+    return aggregate;
+  }
+
+  readExecutionAggregateByRequestIdV04IfExists(
+    executionRequestId: string,
+  ): ExecutionAggregateV04 | null {
+    const requestId = protocolIdSchema.parse(executionRequestId);
+    const row = this.storage.sql.exec<{ owner_id: string }>(
+      `SELECT owner_id FROM planning_execution_requests
+        WHERE id = ? AND protocol_version = '0.4'`,
+      requestId,
+    ).toArray()[0];
+    if (row === undefined) return null;
+    return this.readExecutionAggregateV04(row.owner_id, requestId);
   }
 
   readExecutionAggregateForAttemptV04(

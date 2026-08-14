@@ -64,6 +64,24 @@ const binding = Object.freeze({
   contextProjectionRef: request.contextProjectionRef,
   contextProjectionDigest: request.contextProjectionDigest,
 });
+const admission = Object.freeze({
+  id: request.id,
+  outcomeId: request.outcome.id,
+  workUnitId: request.workUnit.id,
+});
+const resolvedBinding = Object.freeze({
+  provider: request.provider,
+  environment: request.environment,
+  contextProjectionRef: request.contextProjectionRef,
+  contextProjectionDigest: request.contextProjectionDigest,
+});
+const claimAdmission = Object.freeze({
+  executionRequestId: request.id,
+  attemptId: attempt.id,
+  leaseId: lease.id,
+  sessionId: session.id,
+  providerSessionRef: session.providerSessionRef,
+});
 
 function seedCanonicalProductState(
   storage: DurableObjectStorage,
@@ -180,19 +198,89 @@ describe('responsibility execution v0.4 sole writer', () => {
     const aggregate = await runInDurableObject(stub, async (_instance, state) => {
       provisionDoSchema(state.storage);
       seedCanonicalProductState(state.storage);
+      let now: string = request.requestedAt;
       const coordinator = new WaldoCoordinator(state.storage, {
-        now: () => observation.observedAt,
+        now: () => now,
         newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
         async sha256Hex() { return 'a'.repeat(64); },
       });
       const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
-      await coordinator.admitExecutionRequestV04(request, binding, authority);
-      coordinator.claimExecutionAttemptV04({ attempt, lease, session });
-      return coordinator.admitExecutorObservationV04(observation, observation.observedAt);
+      const admitted = await coordinator.admitExecutionRequestV04(admission, authority);
+      now = '2026-08-13T12:00:00.500Z';
+      expect(await coordinator.admitExecutionRequestV04(admission, authority)).toEqual(admitted);
+      now = attempt.updatedAt;
+      coordinator.claimExecutionAttemptV04(claimAdmission);
+      now = observation.observedAt;
+      return coordinator.admitExecutorObservationV04(observation);
     });
 
     expect(executionRequestV04Schema.parse(aggregate.request)).toEqual(request);
     expect(executorObservationV04Schema.parse(aggregate.observations[0])).toEqual(observation);
+  });
+
+  it('replays an admitted command without rebinding it to later product revisions', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      let now: string = request.requestedAt;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      const admitted = await coordinator.admitExecutionRequestV04(admission, authority);
+      state.storage.sql.exec(
+        'UPDATE outcomes SET revision = revision + 1 WHERE id = ?',
+        request.outcome.id,
+      );
+      state.storage.sql.exec(
+        'UPDATE work_units SET revision = revision + 1 WHERE id = ?',
+        request.workUnit.id,
+      );
+      now = '2026-08-13T12:00:00.500Z';
+      expect(await coordinator.admitExecutionRequestV04(admission, authority)).toEqual(admitted);
+    });
+  });
+
+  it('converges concurrent duplicate admission on one persisted command result', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      let clockReads = 0;
+      let hashCalls = 0;
+      let releaseHashes!: () => void;
+      const hashesReleased = new Promise<void>((resolve) => {
+        releaseHashes = resolve;
+      });
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => clockReads++ === 0
+          ? request.requestedAt
+          : '2026-08-13T12:00:00.500Z',
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() {
+          hashCalls += 1;
+          if (hashCalls === 4) releaseHashes();
+          await hashesReleased;
+          return 'a'.repeat(64);
+        },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      const results = await Promise.all([
+        coordinator.admitExecutionRequestV04(admission, authority),
+        coordinator.admitExecutionRequestV04(admission, authority),
+      ]);
+
+      expect(results[1]).toEqual(results[0]);
+      expect(state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM planning_execution_requests WHERE protocol_version = '0.4'",
+      ).one().count).toBe(1);
+    });
   });
 
   it('rejects caller-authored owner, product, authority, and cancellation presence', async () => {
@@ -213,35 +301,41 @@ describe('responsibility execution v0.4 sole writer', () => {
       })).toThrow(/canonical execution binding/i);
 
       seedCanonicalProductState(state.storage);
+      let now: string = request.requestedAt;
       const coordinator = new WaldoCoordinator(state.storage, {
-        now: () => '2026-08-13T12:00:05.000Z',
+        now: () => now,
         newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
         async sha256Hex() { return 'a'.repeat(64); },
       });
       const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
       await expect(coordinator.admitExecutionRequestV04(
-        { ...request, ownerId: 'owner_attacker' },
-        { ...binding, routedOwnerId: 'owner_attacker' },
+        { ...admission, ownerId: 'owner_attacker' } as never,
         authority,
-      )).rejects.toThrow(/authority|owner/i);
+      )).rejects.toThrow(/unrecognized/i);
       await expect(coordinator.admitExecutionRequestV04(
-        { ...request, authorityCeiling: { ...request.authorityCeiling, tools: ['shell'] } },
-        { ...binding, authorityCeiling: { ...request.authorityCeiling, tools: ['shell'] } },
+        {
+          ...admission,
+          authorityCeiling: { ...request.authorityCeiling, tools: ['shell'] },
+        } as never,
         authority,
-      )).rejects.toThrow(/canonical execution binding/i);
+      )).rejects.toThrow(/unrecognized/i);
       await expect(coordinator.admitExecutionRequestV04(
-        { ...request, outcome: { ...request.outcome, digest: `sha256:${'b'.repeat(64)}` } },
-        { ...binding, outcome: { ...request.outcome, digest: `sha256:${'b'.repeat(64)}` } },
+        { ...admission, outcome: { ...request.outcome, digest: `sha256:${'b'.repeat(64)}` } } as never,
         authority,
-      )).rejects.toThrow(/canonical execution binding/i);
+      )).rejects.toThrow(/unrecognized/i);
       await expect(coordinator.admitExecutionRequestV04(
-        { ...request, workUnit: { ...request.workUnit, digest: `sha256:${'b'.repeat(64)}` } },
-        { ...binding, workUnit: { ...request.workUnit, digest: `sha256:${'b'.repeat(64)}` } },
+        {
+          ...admission,
+          workUnit: { ...request.workUnit, digest: `sha256:${'b'.repeat(64)}` },
+        } as never,
         authority,
-      )).rejects.toThrow(/canonical execution binding/i);
+      )).rejects.toThrow(/unrecognized/i);
 
-      await coordinator.admitExecutionRequestV04(request, binding, authority);
-      coordinator.claimExecutionAttemptV04({ attempt, lease, session });
+      await coordinator.admitExecutionRequestV04(admission, authority);
+      now = attempt.updatedAt;
+      coordinator.claimExecutionAttemptV04(claimAdmission);
+      now = '2026-08-13T12:00:05.000Z';
       await expect(coordinator.cancelExecutionV04({
         request: { ...cancelRequest, presenceRegistrationId: 'presence_attacker' },
         canonicalAuthority: authority,
@@ -260,6 +354,191 @@ describe('responsibility execution v0.4 sole writer', () => {
     });
 
     expect(proof).toBe(1);
+  });
+
+  it('rejects a forged request even when the caller supplies a matching trusted binding', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => request.requestedAt,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      for (const forged of [
+        {
+          ...admission,
+          request: { ...request, provider: { ...request.provider, modelRef: 'model_attacker' } },
+          trustedBinding: {
+            ...binding,
+            provider: { ...binding.provider, modelRef: 'model_attacker' },
+          },
+        },
+        { ...admission, provider: { ...request.provider, modelRef: 'model_attacker' } },
+        {
+          ...admission,
+          environment: {
+            ...request.environment,
+            manifest: {
+              ...request.environment.manifest,
+              digest: `sha256:${'b'.repeat(64)}`,
+            },
+          },
+        },
+        { ...admission, contextProjectionDigest: `sha256:${'b'.repeat(64)}` },
+      ]) {
+        await expect(coordinator.admitExecutionRequestV04(
+          forged,
+          authority,
+        )).rejects.toThrow(/unrecognized/i);
+      }
+
+      const unavailable = new WaldoCoordinator(state.storage, {
+        now: () => request.requestedAt,
+        newId: (kind) => `${kind}_unused`,
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      await expect(unavailable.admitExecutionRequestV04(admission, authority))
+        .rejects.toThrow(/binding authority unavailable/i);
+
+      const categorySubstitution = new WaldoCoordinator(state.storage, {
+        now: () => request.requestedAt,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() {
+          return { ...resolvedBinding, provider: request.environment };
+        },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      await expect(categorySubstitution.admitExecutionRequestV04(admission, authority))
+        .rejects.toThrow();
+    });
+  });
+
+  it('reasserts current owner authority after asynchronous binding resolution', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      let now: string = request.requestedAt;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() {
+          now = authorityRegistration.authenticatedSessionExpiresAt;
+          return resolvedBinding;
+        },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+
+      await expect(coordinator.admitExecutionRequestV04(admission, authority))
+        .rejects.toThrow(/authority/i);
+      expect(state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM planning_execution_requests WHERE protocol_version = '0.4'",
+      ).one().count).toBe(0);
+    });
+  });
+
+  it('derives observation receipt time from the trusted clock', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      let now: string = attempt.updatedAt;
+      let advanceDuringHash = false;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() {
+          if (advanceDuringHash) now = '2026-08-13T12:10:02.000Z';
+          return 'a'.repeat(64);
+        },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      now = request.requestedAt;
+      await coordinator.admitExecutionRequestV04(admission, authority);
+      now = attempt.updatedAt;
+      coordinator.claimExecutionAttemptV04(claimAdmission);
+      now = observation.observedAt;
+      advanceDuringHash = true;
+      await expect(coordinator.admitExecutorObservationV04(observation))
+        .rejects.toThrow(/observation rejected/i);
+    });
+  });
+
+  it('rejects a running reconciliation received after lease expiry', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      let now: string = attempt.updatedAt;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      now = request.requestedAt;
+      await coordinator.admitExecutionRequestV04(admission, authority);
+      now = attempt.updatedAt;
+      coordinator.claimExecutionAttemptV04(claimAdmission);
+      now = '2026-08-13T12:10:02.000Z';
+      await expect(coordinator.reconcileExecutionAttemptV04({
+        ...reconciliation,
+        state: 'running',
+        basisObservationIds: [],
+        checkedAt: '2026-08-13T12:10:00.000Z',
+      })).rejects.toThrow(/reconciliation state mismatch/i);
+    });
+  });
+
+  it('rejects an unbounded caller-authored lease expiry', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      let now: string = request.requestedAt;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_unused`,
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      await coordinator.admitExecutionRequestV04(admission, authority);
+      now = attempt.updatedAt;
+      expect(() => coordinator.claimExecutionAttemptV04({
+        ...claimAdmission,
+        expiresAt: '2099-01-01T00:00:00.000Z',
+      })).toThrow(/unrecognized/i);
+      const aggregate = coordinator.claimExecutionAttemptV04(claimAdmission);
+      expect(aggregate.attempts[0]).toMatchObject({
+        ownerId: request.ownerId,
+        workUnit: request.workUnit,
+        provider: request.provider,
+        environment: request.environment,
+        attemptNumber: 1,
+        fencingGeneration: 1,
+        cancellationGeneration: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+      expect(aggregate.leases[0]).toMatchObject({
+        ownerId: request.ownerId,
+        holder: request.environment,
+        fencingGeneration: 1,
+        cancellationGeneration: 1,
+        acquiredAt: now,
+        expiresAt: '2026-08-13T12:10:02.000Z',
+      });
+      now = '2026-08-13T12:00:03.000Z';
+      expect(coordinator.claimExecutionAttemptV04(claimAdmission)).toEqual(aggregate);
+    });
   });
 
   it('atomically admits an exact trusted request and replays only the same digest', async () => {
@@ -465,6 +744,12 @@ describe('responsibility execution v0.4 sole writer', () => {
           session,
           claimedAt: lease.expiresAt,
         },
+        {
+          attempt,
+          lease: { ...lease, expiresAt: '2099-01-01T00:00:00.000Z' },
+          session,
+          claimedAt: attempt.updatedAt,
+        },
       ]) {
         expect(() => module.claimExecutionAttemptV04InCurrentTransaction(invalidClaim))
           .toThrow(/claim binding mismatch/i);
@@ -564,6 +849,33 @@ describe('responsibility execution v0.4 sole writer', () => {
 
     expect(aggregate.observations).toHaveLength(1);
     expect(aggregate.attempts[0]?.state).toBe('settling');
+  });
+
+  it('does not let indeterminate reconciliation overwrite terminal executor output', async () => {
+    const stub = freshStub();
+    const aggregate = await runInDurableObject(stub, (_instance, state) => {
+      const module = writer(state.storage);
+      admit(module);
+      claim(module);
+      module.admitExecutorObservationV04InCurrentTransaction({
+        observation,
+        observationDigest: FIXTURE_DIGEST,
+        receivedAt: observation.observedAt,
+      });
+      expect(() => reconcile(module, {
+        reconciliation: {
+          ...reconciliation,
+          state: 'indeterminate',
+          basisObservationIds: [],
+        },
+        reconciliationDigest: `sha256:${'b'.repeat(64)}`,
+      })).toThrow(/reconciliation state mismatch/i);
+      return module.readExecutionAggregateV04(request.ownerId, request.id);
+    });
+
+    expect(aggregate.attempts[0]?.state).toBe('settling');
+    expect(aggregate.sessions[0]?.state).toBe('ended');
+    expect(aggregate.reconciliations).toEqual([]);
   });
 
   it('fences late output after cancellation and settles only execution activity by reconciliation', async () => {
@@ -933,7 +1245,7 @@ describe('responsibility execution v0.4 sole writer', () => {
         receivedAt: observation.observedAt,
       });
       reconcile(module, {
-        reconciliation,
+        reconciliation: { ...reconciliation, state: 'settled' },
         reconciliationDigest: FIXTURE_DIGEST,
       });
       return {
@@ -984,7 +1296,7 @@ describe('responsibility execution v0.4 sole writer', () => {
         receivedAt: observation.observedAt,
       });
       reconcile(module, {
-        reconciliation,
+        reconciliation: { ...reconciliation, state: 'settled' },
         reconciliationDigest: FIXTURE_DIGEST,
       });
       return module.readExecutionAggregateV04(request.ownerId, request.id);

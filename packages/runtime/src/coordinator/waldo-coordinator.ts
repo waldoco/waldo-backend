@@ -5,11 +5,15 @@ import {
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
   executionAttemptV04Schema,
   executionCancelRequestV04Schema,
+  executionEnvironmentRefV04Schema,
   executionLeaseV04Schema,
   executionReconciliationV04Schema,
   executionRequestV04Schema,
   executionSessionV04Schema,
   executorObservationV04Schema,
+  protocolDigestSchema,
+  protocolIdSchema,
+  providerRefV04Schema,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureResultSchema,
@@ -54,6 +58,7 @@ import {
   type WorkUnitRecord,
 } from './outcome-module';
 import {
+  EXECUTION_LEASE_MAX_DURATION_MS_V04,
   PlanningExecutionModule,
   type ExecutionAdmissionBindingV04,
   type ExecutionAggregateV04,
@@ -101,6 +106,109 @@ export type WorkUnitPlanningProjectionRead = Readonly<{
   snapshotId?: string;
 }>;
 
+type CoordinatorExecutionRequestV04 = ReturnType<typeof executionRequestV04Schema.parse>;
+
+export type ExecutionAdmissionV04 = Readonly<{
+  id: string;
+  outcomeId: string;
+  workUnitId: string;
+}>;
+
+export type ExecutionBindingResolutionV04 = Readonly<{
+  provider: CoordinatorExecutionRequestV04['provider'];
+  environment: CoordinatorExecutionRequestV04['environment'];
+  contextProjectionRef: string;
+  contextProjectionDigest: string;
+}>;
+
+function parseExecutionAdmissionV04(value: unknown): ExecutionAdmissionV04 {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('execution admission must be a strict object');
+  }
+  const input = value as Record<string, unknown>;
+  const expectedKeys = [
+    'id',
+    'outcomeId',
+    'workUnitId',
+  ];
+  if (Object.keys(input).length !== expectedKeys.length ||
+      expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(input, key))) {
+    throw new Error('execution admission contains unrecognized fields');
+  }
+  return Object.freeze({
+    id: protocolIdSchema.parse(input.id),
+    outcomeId: protocolIdSchema.parse(input.outcomeId),
+    workUnitId: protocolIdSchema.parse(input.workUnitId),
+  });
+}
+
+function parseExecutionBindingResolutionV04(value: unknown): ExecutionBindingResolutionV04 {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('execution binding resolution must be a strict object');
+  }
+  const input = value as Record<string, unknown>;
+  const expectedKeys = [
+    'provider',
+    'environment',
+    'contextProjectionRef',
+    'contextProjectionDigest',
+  ];
+  if (Object.keys(input).length !== expectedKeys.length ||
+      expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(input, key))) {
+    throw new Error('execution binding resolution contains unrecognized fields');
+  }
+  return Object.freeze({
+    provider: providerRefV04Schema.parse(input.provider),
+    environment: executionEnvironmentRefV04Schema.parse(input.environment),
+    contextProjectionRef: protocolIdSchema.parse(input.contextProjectionRef),
+    contextProjectionDigest: protocolDigestSchema.parse(input.contextProjectionDigest),
+  });
+}
+
+function executionAdmissionMatchesRequestV04(
+  admission: ExecutionAdmissionV04,
+  request: CoordinatorExecutionRequestV04,
+): boolean {
+  return admission.id === request.id &&
+    admission.outcomeId === request.outcome.id &&
+    admission.workUnitId === request.workUnit.id;
+}
+
+export type ExecutionClaimV04 = Readonly<{
+  executionRequestId: string;
+  attemptId: string;
+  leaseId: string;
+  sessionId: string;
+  providerSessionRef: string | null;
+}>;
+
+function parseExecutionClaimV04(value: unknown): ExecutionClaimV04 {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('execution claim must be a strict object');
+  }
+  const input = value as Record<string, unknown>;
+  const expectedKeys = [
+    'executionRequestId',
+    'attemptId',
+    'leaseId',
+    'sessionId',
+    'providerSessionRef',
+  ];
+  if (Object.keys(input).length !== expectedKeys.length ||
+      expectedKeys.some((key) => !Object.prototype.hasOwnProperty.call(input, key))) {
+    throw new Error('execution claim contains unrecognized fields');
+  }
+  return Object.freeze({
+    executionRequestId: protocolIdSchema.parse(input.executionRequestId),
+    attemptId: protocolIdSchema.parse(input.attemptId),
+    leaseId: protocolIdSchema.parse(input.leaseId),
+    sessionId: protocolIdSchema.parse(input.sessionId),
+    providerSessionRef: input.providerSessionRef === null
+      ? null
+      : protocolIdSchema.parse(input.providerSessionRef),
+  });
+}
+
 export type CoordinatorWriteStage =
   | 'owner_root'
   | 'current_state'
@@ -124,6 +232,11 @@ export type CoordinatorDependencies = Readonly<{
       'execution_request' | 'agent_session',
   ) => string;
   sha256Hex: (value: string) => Promise<string>;
+  resolveExecutionBindingV04?: (input: Readonly<{
+    ownerId: string;
+    outcomeId: string;
+    workUnitId: string;
+  }>) => Promise<unknown>;
   afterWrite?: (stage: CoordinatorWriteStage) => void;
 }>;
 
@@ -280,43 +393,102 @@ export class WaldoCoordinator {
   }
 
   async admitExecutionRequestV04(
-    requestValue: unknown,
-    trustedBinding: ExecutionAdmissionBindingV04,
+    admissionValue: unknown,
     canonicalAuthority: ResponsibilityCanonicalAuthority,
   ): Promise<ExecutionAggregateV04> {
-    const request = executionRequestV04Schema.parse(requestValue);
+    const admission = parseExecutionAdmissionV04(admissionValue);
+    const admittedAt = this.#deps.now();
     const preflightAuthority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
       canonicalAuthority,
-      this.#deps.now(),
+      admittedAt,
     );
-    if (preflightAuthority.ownerId !== request.ownerId ||
-        preflightAuthority.ownerId !== trustedBinding.routedOwnerId) {
-      throw new ResponsibilityOwnerRootMismatchError();
+    const existing = this.#planning.readExecutionAggregateByRequestIdV04IfExists(admission.id);
+    if (existing !== null) {
+      if (existing.request.ownerId !== preflightAuthority.ownerId ||
+          !executionAdmissionMatchesRequestV04(admission, existing.request)) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      return this.#storage.transactionSync(() => {
+        const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+          canonicalAuthority,
+          this.#deps.now(),
+        );
+        if (authority.ownerId !== existing.request.ownerId) {
+          throw new ResponsibilityOwnerRootMismatchError();
+        }
+        return this.#planning.readExecutionAggregateV04(
+          existing.request.ownerId,
+          existing.request.id,
+        );
+      });
     }
-    const productMaterial = this.#planning.readExecutionProductDigestMaterialV04(
-      request.ownerId,
-      request.outcome.id,
-      request.workUnit.id,
+    const resolveExecutionBindingV04 = this.#deps.resolveExecutionBindingV04;
+    if (resolveExecutionBindingV04 === undefined) {
+      throw new Error('execution binding authority unavailable');
+    }
+    const resolvedBinding = parseExecutionBindingResolutionV04(
+      await resolveExecutionBindingV04({
+        ownerId: preflightAuthority.ownerId,
+        outcomeId: admission.outcomeId,
+        workUnitId: admission.workUnitId,
+      }),
     );
-    const [requestDigestHex, outcomeDigestHex, workUnitDigestHex] = await Promise.all([
-      this.#deps.sha256Hex(JSON.stringify(request)),
+    const requestedAt = admittedAt;
+    const productMaterial = this.#planning.readExecutionProductDigestMaterialV04(
+      preflightAuthority.ownerId,
+      admission.outcomeId,
+      admission.workUnitId,
+    );
+    const [outcomeDigestHex, workUnitDigestHex] = await Promise.all([
       this.#deps.sha256Hex(productMaterial.outcomeMaterial),
       this.#deps.sha256Hex(productMaterial.workUnitMaterial),
     ]);
-    const requestDigest = `sha256:${requestDigestHex}`;
+    const request = executionRequestV04Schema.parse({
+      protocolVersion: '0.4',
+      id: admission.id,
+      ownerId: preflightAuthority.ownerId,
+      outcome: { ...productMaterial.outcome, digest: `sha256:${outcomeDigestHex}` },
+      workUnit: { ...productMaterial.workUnit, digest: `sha256:${workUnitDigestHex}` },
+      provider: resolvedBinding.provider,
+      environment: resolvedBinding.environment,
+      authorityCeiling: productMaterial.authorityCeiling,
+      contextProjectionRef: resolvedBinding.contextProjectionRef,
+      contextProjectionDigest: resolvedBinding.contextProjectionDigest,
+      cancellationGeneration: 1,
+      requestedAt,
+    });
+    const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify(request))}`;
     const productDigestProof = Object.freeze({
-      ...productMaterial,
+      outcomeMaterial: productMaterial.outcomeMaterial,
+      workUnitMaterial: productMaterial.workUnitMaterial,
       outcomeDigest: `sha256:${outcomeDigestHex}`,
       workUnitDigest: `sha256:${workUnitDigestHex}`,
+    });
+    const trustedBinding: ExecutionAdmissionBindingV04 = Object.freeze({
+      routedOwnerId: preflightAuthority.ownerId,
+      outcome: request.outcome,
+      workUnit: request.workUnit,
+      provider: request.provider,
+      environment: request.environment,
+      authorityCeiling: request.authorityCeiling,
+      contextProjectionRef: request.contextProjectionRef,
+      contextProjectionDigest: request.contextProjectionDigest,
     });
     return this.#storage.transactionSync(() => {
       const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
         canonicalAuthority,
         this.#deps.now(),
       );
-      if (authority.ownerId !== request.ownerId ||
-          authority.ownerId !== trustedBinding.routedOwnerId) {
+      if (authority.ownerId !== request.ownerId) {
         throw new ResponsibilityOwnerRootMismatchError();
+      }
+      const concurrent = this.#planning.readExecutionAggregateByRequestIdV04IfExists(request.id);
+      if (concurrent !== null) {
+        if (concurrent.request.ownerId !== authority.ownerId ||
+            !executionAdmissionMatchesRequestV04(admission, concurrent.request)) {
+          throw new ResponsibilityDigestConflictError();
+        }
+        return concurrent;
       }
       this.#planning.admitExecutionRequestV04InCurrentTransaction({
         request,
@@ -329,20 +501,80 @@ export class WaldoCoordinator {
     });
   }
 
-  claimExecutionAttemptV04(input: Readonly<{
-    attempt: unknown;
-    lease: unknown;
-    session: unknown;
-  }>): ExecutionAggregateV04 {
-    const attempt = executionAttemptV04Schema.parse(input.attempt);
-    const lease = executionLeaseV04Schema.parse(input.lease);
-    const session = executionSessionV04Schema.parse(input.session);
+  claimExecutionAttemptV04(claimValue: unknown): ExecutionAggregateV04 {
+    const claim = parseExecutionClaimV04(claimValue);
     return this.#storage.transactionSync(() => {
+      const aggregate = this.#planning.readExecutionAggregateByRequestIdV04(
+        claim.executionRequestId,
+      );
+      const matchingIndex = aggregate.attempts.findIndex(
+        (value) => value.id === claim.attemptId,
+      );
+      if (matchingIndex >= 0) {
+        const existingLease = aggregate.leases[matchingIndex];
+        const existingSession = aggregate.sessions[matchingIndex];
+        if (existingLease?.id !== claim.leaseId ||
+            existingSession?.id !== claim.sessionId ||
+            existingSession.providerSessionRef !== claim.providerSessionRef) {
+          throw new Error('execution claim digest conflict');
+        }
+        return aggregate;
+      }
+      const claimedAt = this.#deps.now();
+      const previousAttempt = aggregate.attempts.at(-1);
+      const previousLease = aggregate.leases.at(-1);
+      const attemptNumber = previousAttempt === undefined
+        ? 1
+        : previousAttempt.attemptNumber + 1;
+      const fencingGeneration = previousLease === undefined
+        ? 1
+        : previousLease.fencingGeneration + 1;
+      const attempt = executionAttemptV04Schema.parse({
+        protocolVersion: '0.4',
+        id: claim.attemptId,
+        ownerId: aggregate.request.ownerId,
+        executionRequestId: aggregate.request.id,
+        workUnit: aggregate.request.workUnit,
+        attemptNumber,
+        provider: aggregate.request.provider,
+        environment: aggregate.request.environment,
+        leaseId: claim.leaseId,
+        fencingGeneration,
+        cancellationGeneration: aggregate.currentCancellationGeneration,
+        state: 'running',
+        createdAt: claimedAt,
+        updatedAt: claimedAt,
+      });
+      const lease = executionLeaseV04Schema.parse({
+        protocolVersion: '0.4',
+        id: claim.leaseId,
+        ownerId: aggregate.request.ownerId,
+        executionRequestId: aggregate.request.id,
+        attemptId: claim.attemptId,
+        holder: aggregate.request.environment,
+        fencingGeneration,
+        cancellationGeneration: aggregate.currentCancellationGeneration,
+        acquiredAt: claimedAt,
+        expiresAt: new Date(
+          Date.parse(claimedAt) + EXECUTION_LEASE_MAX_DURATION_MS_V04,
+        ).toISOString(),
+      });
+      const session = executionSessionV04Schema.parse({
+        protocolVersion: '0.4',
+        id: claim.sessionId,
+        ownerId: aggregate.request.ownerId,
+        attemptId: claim.attemptId,
+        provider: aggregate.request.provider,
+        environment: aggregate.request.environment,
+        providerSessionRef: claim.providerSessionRef,
+        state: 'active',
+        lastObservationSequence: 0,
+      });
       this.#planning.claimExecutionAttemptV04InCurrentTransaction({
         attempt,
         lease,
         session,
-        claimedAt: this.#deps.now(),
+        claimedAt,
       });
       this.#deps.afterWrite?.('execution_attempt');
       return this.#planning.readExecutionAggregateV04(
@@ -354,13 +586,13 @@ export class WaldoCoordinator {
 
   async admitExecutorObservationV04(
     observationValue: unknown,
-    receivedAt = this.#deps.now(),
   ): Promise<ExecutionAggregateV04> {
     const observation = executorObservationV04Schema.parse(observationValue);
     const observationDigest = `sha256:${await this.#deps.sha256Hex(
       JSON.stringify(observation),
     )}`;
     return this.#storage.transactionSync(() => {
+      const receivedAt = this.#deps.now();
       this.#planning.admitExecutorObservationV04InCurrentTransaction({
         observation,
         observationDigest,
