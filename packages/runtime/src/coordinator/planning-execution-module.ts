@@ -1,4 +1,12 @@
 import {
+  executionAttemptV04Schema,
+  executionCancelRequestV04Schema,
+  executionLeaseV04Schema,
+  executionObservationIsFreshV04,
+  executionReconciliationV04Schema,
+  executionRequestV04Schema,
+  executionSessionV04Schema,
+  executorObservationV04Schema,
   planningExecutionLeaseV03Schema,
   ROSTER,
   ROSTER_REFS,
@@ -47,6 +55,55 @@ type StoredPlanningCommandRow = {
   result_json: string;
 };
 
+type ExecutionRequestV04 = ReturnType<typeof executionRequestV04Schema.parse>;
+type ExecutionAttemptV04 = ReturnType<typeof executionAttemptV04Schema.parse>;
+type ExecutionLeaseV04 = ReturnType<typeof executionLeaseV04Schema.parse>;
+type ExecutionSessionV04 = ReturnType<typeof executionSessionV04Schema.parse>;
+type ExecutorObservationV04 = ReturnType<typeof executorObservationV04Schema.parse>;
+type ExecutionReconciliationV04 = ReturnType<typeof executionReconciliationV04Schema.parse>;
+
+export type ExecutionAdmissionBindingV04 = Readonly<{
+  routedOwnerId: string;
+  outcome: ExecutionRequestV04['outcome'];
+  workUnit: ExecutionRequestV04['workUnit'];
+  provider: ExecutionRequestV04['provider'];
+  environment: ExecutionRequestV04['environment'];
+  authorityCeiling: ExecutionRequestV04['authorityCeiling'];
+  contextProjectionRef: string;
+  contextProjectionDigest: string;
+}>;
+
+export type ExecutionAggregateV04 = Readonly<{
+  request: ExecutionRequestV04;
+  currentCancellationGeneration: number;
+  attempts: readonly ExecutionAttemptV04[];
+  leases: readonly ExecutionLeaseV04[];
+  sessions: readonly ExecutionSessionV04[];
+  observations: readonly ExecutorObservationV04[];
+  reconciliations: readonly ExecutionReconciliationV04[];
+}>;
+
+function canonicalizeExecutionProtocolValue(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalizeExecutionProtocolValue).join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record).sort().map((key) =>
+      `${JSON.stringify(key)}:${canonicalizeExecutionProtocolValue(record[key])}`).join(',')}}`;
+  }
+  throw new Error('execution protocol value is not JSON');
+}
+
+function sameProtocolValue(left: unknown, right: unknown): boolean {
+  return canonicalizeExecutionProtocolValue(left) ===
+    canonicalizeExecutionProtocolValue(right);
+}
+
 /** Owns execution-harness state; it never writes Outcome, Mission, or WorkUnit truth. */
 export class PlanningExecutionModule {
   private readonly events: OwnerEventLog;
@@ -56,6 +113,584 @@ export class PlanningExecutionModule {
     private readonly newId: (kind: 'event') => string,
   ) {
     this.events = new OwnerEventLog(storage);
+  }
+
+  admitExecutionRequestV04InCurrentTransaction(input: Readonly<{
+    request: unknown;
+    trustedBinding: ExecutionAdmissionBindingV04;
+    requestDigest: string;
+  }>): ExecutionRequestV04 {
+    const request = executionRequestV04Schema.parse(input.request);
+    const bindingMatches =
+      request.ownerId === input.trustedBinding.routedOwnerId &&
+      sameProtocolValue(request.outcome, input.trustedBinding.outcome) &&
+      sameProtocolValue(request.workUnit, input.trustedBinding.workUnit) &&
+      sameProtocolValue(request.provider, input.trustedBinding.provider) &&
+      sameProtocolValue(request.environment, input.trustedBinding.environment) &&
+      sameProtocolValue(request.authorityCeiling, input.trustedBinding.authorityCeiling) &&
+      request.contextProjectionRef === input.trustedBinding.contextProjectionRef &&
+      request.contextProjectionDigest === input.trustedBinding.contextProjectionDigest;
+    if (!bindingMatches) throw new Error('execution request binding mismatch');
+
+    const existing = this.storage.sql.exec<{
+      owner_id: string;
+      request_digest: string;
+    }>(
+      `SELECT owner_id, request_digest
+         FROM planning_execution_requests
+        WHERE id = ? AND protocol_version = '0.4'`,
+      request.id,
+    ).toArray()[0];
+    if (existing !== undefined) {
+      if (existing.owner_id !== request.ownerId || existing.request_digest !== input.requestDigest) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      const persisted = this.readExecutionAggregateV04(request.ownerId, request.id).request;
+      if (!sameProtocolValue(persisted, request)) throw new ResponsibilityDigestConflictError();
+      return persisted;
+    }
+
+    this.storage.sql.exec(
+      `INSERT INTO planning_execution_requests (
+        id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+        request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+        capability_manifest_json, authority_ceiling_json, status,
+        cancellation_generation, created_at, updated_at, protocol_version,
+        outcome_ref_json, work_unit_ref_json, environment_ref_json,
+        context_projection_ref, context_projection_digest, request_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, '0.4', ?, ?, ?, ?, ?, ?)`,
+      request.id,
+      request.ownerId,
+      request.outcome.id,
+      request.workUnit.id,
+      request.workUnit.revision,
+      request.id,
+      input.requestDigest,
+      JSON.stringify({
+        contextProjectionRef: request.contextProjectionRef,
+        contextProjectionDigest: request.contextProjectionDigest,
+      }),
+      JSON.stringify(request.provider),
+      JSON.stringify(request.environment),
+      JSON.stringify(request.environment.manifest),
+      JSON.stringify(request.authorityCeiling),
+      request.cancellationGeneration,
+      request.requestedAt,
+      request.requestedAt,
+      JSON.stringify(request.outcome),
+      JSON.stringify(request.workUnit),
+      JSON.stringify(request.environment),
+      request.contextProjectionRef,
+      request.contextProjectionDigest,
+      JSON.stringify(request),
+    );
+    return request;
+  }
+
+  claimExecutionAttemptV04InCurrentTransaction(input: Readonly<{
+    attempt: unknown;
+    lease: unknown;
+    session: unknown;
+  }>): Readonly<{
+    attempt: ExecutionAttemptV04;
+    lease: ExecutionLeaseV04;
+    session: ExecutionSessionV04;
+  }> {
+    const attempt = executionAttemptV04Schema.parse(input.attempt);
+    const lease = executionLeaseV04Schema.parse(input.lease);
+    const session = executionSessionV04Schema.parse(input.session);
+    const aggregate = this.readExecutionAggregateV04(attempt.ownerId, attempt.executionRequestId);
+    const request = aggregate.request;
+    const requestWriterState = this.storage.sql.exec<{
+      status: string;
+      cancellation_request_id: string | null;
+    }>(
+      `SELECT status, cancellation_request_id FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.4'`,
+      attempt.executionRequestId,
+      attempt.ownerId,
+    ).one();
+
+    const matchingIndex = aggregate.attempts.findIndex((value) => value.id === attempt.id);
+    if (matchingIndex >= 0) {
+      const persistedAttempt = aggregate.attempts[matchingIndex]!;
+      const persistedLease = aggregate.leases[matchingIndex]!;
+      const persistedSession = aggregate.sessions[matchingIndex]!;
+      const immutableClaimMatches =
+        persistedAttempt.ownerId === attempt.ownerId &&
+        persistedAttempt.executionRequestId === attempt.executionRequestId &&
+        sameProtocolValue(persistedAttempt.workUnit, attempt.workUnit) &&
+        persistedAttempt.attemptNumber === attempt.attemptNumber &&
+        sameProtocolValue(persistedAttempt.provider, attempt.provider) &&
+        sameProtocolValue(persistedAttempt.environment, attempt.environment) &&
+        persistedAttempt.leaseId === attempt.leaseId &&
+        persistedAttempt.fencingGeneration === attempt.fencingGeneration &&
+        persistedAttempt.cancellationGeneration === attempt.cancellationGeneration &&
+        persistedAttempt.createdAt === attempt.createdAt &&
+        sameProtocolValue(persistedLease, lease) &&
+        persistedSession.id === session.id &&
+        persistedSession.ownerId === session.ownerId &&
+        persistedSession.attemptId === session.attemptId &&
+        sameProtocolValue(persistedSession.provider, session.provider) &&
+        sameProtocolValue(persistedSession.environment, session.environment) &&
+        persistedSession.providerSessionRef === session.providerSessionRef;
+      if (!immutableClaimMatches) {
+        throw new ResponsibilityPlanningConflictError('execution claim digest conflict');
+      }
+      return Object.freeze({
+        attempt: persistedAttempt,
+        lease: persistedLease,
+        session: persistedSession,
+      });
+    }
+    if (aggregate.attempts.length > 0) {
+      const previousIndex = aggregate.attempts.length - 1;
+      const previous = aggregate.attempts[previousIndex]!;
+      const previousLease = aggregate.leases[previousIndex]!;
+      const priorReconciliation = aggregate.reconciliations
+        .filter((value) => value.attemptId === previous.id)
+        .at(-1);
+      const retryIsReconciled =
+        priorReconciliation !== undefined &&
+        priorReconciliation.state === 'failed' &&
+        attempt.attemptNumber === previous.attemptNumber + 1 &&
+        attempt.fencingGeneration === previousLease.fencingGeneration + 1;
+      if (!retryIsReconciled) {
+        throw new ResponsibilityPlanningConflictError('execution request already claimed');
+      }
+    }
+
+    const exact =
+      (attempt.state === 'queued' || attempt.state === 'running') &&
+      session.lastObservationSequence === 0 &&
+      requestWriterState.status !== 'completed' &&
+      requestWriterState.status !== 'cancelled' &&
+      requestWriterState.cancellation_request_id === null &&
+      attempt.ownerId === request.ownerId &&
+      attempt.executionRequestId === request.id &&
+      sameProtocolValue(attempt.workUnit, request.workUnit) &&
+      sameProtocolValue(attempt.provider, request.provider) &&
+      sameProtocolValue(attempt.environment, request.environment) &&
+      attempt.cancellationGeneration === aggregate.currentCancellationGeneration &&
+      lease.ownerId === attempt.ownerId &&
+      lease.executionRequestId === attempt.executionRequestId &&
+      lease.attemptId === attempt.id &&
+      lease.id === attempt.leaseId &&
+      lease.fencingGeneration === attempt.fencingGeneration &&
+      lease.cancellationGeneration === attempt.cancellationGeneration &&
+      sameProtocolValue(lease.holder, attempt.environment) &&
+      session.ownerId === attempt.ownerId &&
+      session.attemptId === attempt.id &&
+      sameProtocolValue(session.provider, attempt.provider) &&
+      sameProtocolValue(session.environment, attempt.environment);
+    if (!exact) throw new Error('execution claim binding mismatch');
+
+    this.storage.sql.exec(
+      `INSERT INTO execution_attempts (
+        id, owner_id, execution_request_id, work_unit_ref_json, attempt_number,
+        provider_ref_json, environment_ref_json, lease_id, fencing_generation,
+        cancellation_generation, state, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      attempt.id, attempt.ownerId, attempt.executionRequestId, JSON.stringify(attempt.workUnit),
+      attempt.attemptNumber, JSON.stringify(attempt.provider), JSON.stringify(attempt.environment),
+      attempt.leaseId, attempt.fencingGeneration, attempt.cancellationGeneration,
+      attempt.state, attempt.createdAt, attempt.updatedAt,
+    );
+    this.storage.sql.exec(
+      `INSERT INTO planning_execution_leases (
+        execution_request_id, owner_id, holder_id, fence, cancellation_generation,
+        acquired_at, expires_at, id, attempt_id, environment_ref_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      lease.executionRequestId, lease.ownerId, lease.holder.id, lease.fencingGeneration,
+      lease.cancellationGeneration, lease.acquiredAt, lease.expiresAt, lease.id,
+      lease.attemptId, JSON.stringify(lease.holder),
+    );
+    this.storage.sql.exec(
+      `INSERT INTO planning_agent_sessions (
+        id, owner_id, outcome_id, work_unit_id, execution_request_id, status,
+        provider_ref_json, executor_ref_json, capability_manifest_json,
+        cancellation_generation, created_at, updated_at, protocol_version,
+        attempt_id, environment_ref_json, provider_session_ref,
+        last_observation_sequence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '0.4', ?, ?, ?, ?)`,
+      session.id, session.ownerId, request.outcome.id, request.workUnit.id, request.id,
+      session.state, JSON.stringify(session.provider), JSON.stringify(session.environment),
+      JSON.stringify(session.environment.manifest), attempt.cancellationGeneration,
+      attempt.createdAt, attempt.updatedAt, session.attemptId, JSON.stringify(session.environment),
+      session.providerSessionRef, session.lastObservationSequence,
+    );
+    this.storage.sql.exec(
+      "UPDATE planning_execution_requests SET status = 'leased', updated_at = ? WHERE id = ?",
+      attempt.updatedAt,
+      request.id,
+    );
+    return Object.freeze({ attempt, lease, session });
+  }
+
+  admitExecutorObservationV04InCurrentTransaction(input: Readonly<{
+    observation: unknown;
+    observationDigest: string;
+    receivedAt: string;
+  }>): ExecutorObservationV04 {
+    const observation = executorObservationV04Schema.parse(input.observation);
+    const existing = this.storage.sql.exec<{ canonical_digest: string; observation_json: string }>(
+      'SELECT canonical_digest, observation_json FROM execution_observations WHERE id = ?',
+      observation.id,
+    ).toArray()[0];
+    if (existing !== undefined) {
+      if (existing.canonical_digest !== input.observationDigest) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      const persisted = executorObservationV04Schema.parse(JSON.parse(existing.observation_json));
+      if (!sameProtocolValue(persisted, observation)) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      return persisted;
+    }
+
+    const attempt = this.readAttemptV04(observation.attemptId);
+    const lease = this.readLeaseV04(attempt.leaseId);
+    const sessionRow = this.storage.sql.exec<{
+      id: string;
+      last_observation_sequence: number;
+    }>(
+      `SELECT id, last_observation_sequence FROM planning_agent_sessions
+        WHERE attempt_id = ? AND protocol_version = '0.4'`,
+      attempt.id,
+    ).toArray()[0];
+    const requestGeneration = this.storage.sql.exec<{ cancellation_generation: number }>(
+      `SELECT cancellation_generation FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.4'`,
+      attempt.executionRequestId,
+      attempt.ownerId,
+    ).toArray()[0]?.cancellation_generation;
+    if (
+      sessionRow === undefined ||
+      (attempt.state !== 'queued' && attempt.state !== 'running') ||
+      requestGeneration !== observation.cancellationGeneration ||
+      !executionObservationIsFreshV04(
+        attempt,
+        lease,
+        observation,
+        sessionRow.last_observation_sequence,
+        input.receivedAt,
+      )
+    ) {
+      throw new Error('execution observation rejected');
+    }
+
+    this.storage.sql.exec(
+      `INSERT INTO execution_observations (
+        id, owner_id, attempt_id, lease_id, fencing_generation,
+        cancellation_generation, sequence, kind, environment_ref_json,
+        payload_ref, payload_digest, observed_at, received_at, observation_json,
+        canonical_digest
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      observation.id, observation.ownerId, observation.attemptId, observation.leaseId,
+      observation.fencingGeneration, observation.cancellationGeneration,
+      observation.sequence, observation.kind, JSON.stringify(observation.environment),
+      observation.payloadRef, observation.payloadDigest, observation.observedAt,
+      input.receivedAt, JSON.stringify(observation), input.observationDigest,
+    );
+    const sessionState = observation.kind === 'ended' || observation.kind === 'failed'
+      ? 'ended'
+      : observation.kind === 'timed_out'
+        ? 'lost'
+        : observation.kind === 'unknown'
+          ? 'unknown'
+          : 'active';
+    this.storage.sql.exec(
+      `UPDATE planning_agent_sessions
+          SET status = ?, last_observation_sequence = ?, updated_at = ?
+        WHERE id = ?`,
+      sessionState, observation.sequence, input.receivedAt, sessionRow.id,
+    );
+    const attemptState = observation.kind === 'ended'
+      ? 'settling'
+      : observation.kind === 'failed' || observation.kind === 'timed_out'
+        ? 'failed'
+        : observation.kind === 'unknown'
+          ? 'indeterminate'
+          : 'running';
+    this.storage.sql.exec(
+      'UPDATE execution_attempts SET state = ?, updated_at = ? WHERE id = ?',
+      attemptState,
+      input.receivedAt,
+      attempt.id,
+    );
+    return observation;
+  }
+
+  cancelExecutionV04InCurrentTransaction(input: Readonly<{
+    ownerId: string;
+    request: unknown;
+    requestDigest: string;
+    at: string;
+  }>): number {
+    const request = executionCancelRequestV04Schema.parse(input.request);
+    const row = this.storage.sql.exec<{
+      cancellation_generation: number;
+      status: string;
+      cancellation_request_id: string | null;
+      cancellation_request_digest: string | null;
+      cancellation_request_json: string | null;
+    }>(
+      `SELECT cancellation_generation, status, cancellation_request_id,
+              cancellation_request_digest, cancellation_request_json
+         FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.4'`,
+      request.executionRequestId,
+      input.ownerId,
+    ).toArray()[0];
+    if (row?.cancellation_request_id === request.requestId) {
+      if (row.cancellation_request_digest !== input.requestDigest ||
+          row.cancellation_request_json === null ||
+          !sameProtocolValue(JSON.parse(row.cancellation_request_json), request)) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      return row.cancellation_generation;
+    }
+    if (row === undefined || row.cancellation_request_id !== null ||
+        row.cancellation_generation !== request.expectedCancellationGeneration) {
+      throw new ResponsibilityPlanningConflictError('execution cancellation generation mismatch');
+    }
+    if (row.status !== 'pending' && row.status !== 'leased' && row.status !== 'ambiguous') {
+      throw new ResponsibilityPlanningConflictError('execution cancellation rejected');
+    }
+    const nextGeneration = row.cancellation_generation + 1;
+    this.storage.sql.exec(
+      `UPDATE planning_execution_requests
+          SET cancellation_generation = ?, status = 'cancelled', updated_at = ?,
+              cancellation_request_id = ?, cancellation_request_digest = ?,
+              cancellation_request_json = ?
+        WHERE id = ? AND owner_id = ?`,
+      nextGeneration,
+      input.at,
+      request.requestId,
+      input.requestDigest,
+      JSON.stringify(request),
+      request.executionRequestId,
+      input.ownerId,
+    );
+    this.storage.sql.exec(
+      `UPDATE execution_attempts SET state = 'cancelling', updated_at = ?
+        WHERE execution_request_id = ? AND owner_id = ?
+          AND state IN ('queued', 'running', 'settling', 'indeterminate')`,
+      input.at,
+      request.executionRequestId,
+      input.ownerId,
+    );
+    return nextGeneration;
+  }
+
+  reconcileExecutionAttemptV04InCurrentTransaction(input: Readonly<{
+    reconciliation: unknown;
+    reconciliationDigest: string;
+  }>): ExecutionReconciliationV04 {
+    const reconciliation = executionReconciliationV04Schema.parse(input.reconciliation);
+    const existing = this.storage.sql.exec<{ canonical_digest: string; reconciliation_json: string }>(
+      'SELECT canonical_digest, reconciliation_json FROM execution_reconciliations WHERE id = ?',
+      reconciliation.id,
+    ).toArray()[0];
+    if (existing !== undefined) {
+      if (existing.canonical_digest !== input.reconciliationDigest) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      const persisted = executionReconciliationV04Schema.parse(
+        JSON.parse(existing.reconciliation_json),
+      );
+      if (!sameProtocolValue(persisted, reconciliation)) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      return persisted;
+    }
+    const attempt = this.readAttemptV04(reconciliation.attemptId);
+    const lease = this.readLeaseV04(reconciliation.leaseId);
+    const aggregate = this.readExecutionAggregateV04(attempt.ownerId, attempt.executionRequestId);
+    if (aggregate.attempts.at(-1)?.id !== attempt.id) {
+      throw new Error('execution reconciliation rejected');
+    }
+    const priorReconciliation = aggregate.reconciliations
+      .filter((value) => value.attemptId === attempt.id)
+      .at(-1);
+    if (priorReconciliation !== undefined &&
+        priorReconciliation.state !== 'running' &&
+        priorReconciliation.state !== 'indeterminate') {
+      throw new Error('execution reconciliation rejected');
+    }
+    if (aggregate.currentCancellationGeneration !== attempt.cancellationGeneration &&
+        reconciliation.state === 'running') {
+      throw new Error('execution reconciliation rejected');
+    }
+    const exact =
+      reconciliation.ownerId === attempt.ownerId &&
+      reconciliation.leaseId === attempt.leaseId &&
+      reconciliation.fencingGeneration === attempt.fencingGeneration &&
+      reconciliation.cancellationGeneration === attempt.cancellationGeneration &&
+      lease.attemptId === attempt.id &&
+      lease.fencingGeneration === attempt.fencingGeneration &&
+      lease.cancellationGeneration === attempt.cancellationGeneration;
+    if (!exact) throw new Error('execution reconciliation binding mismatch');
+    const knownObservationIds = new Set(
+      this.storage.sql.exec<{ id: string }>(
+        'SELECT id FROM execution_observations WHERE attempt_id = ?',
+        attempt.id,
+      ).toArray().map((row) => row.id),
+    );
+    if (reconciliation.basisObservationIds.some((id) => !knownObservationIds.has(id))) {
+      throw new Error('execution reconciliation basis mismatch');
+    }
+
+    this.storage.sql.exec(
+      `INSERT INTO execution_reconciliations (
+        id, owner_id, attempt_id, lease_id, fencing_generation,
+        cancellation_generation, state, basis_observation_ids_json, checked_at,
+        reconciliation_json, canonical_digest
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      reconciliation.id, reconciliation.ownerId, reconciliation.attemptId,
+      reconciliation.leaseId, reconciliation.fencingGeneration,
+      reconciliation.cancellationGeneration, reconciliation.state,
+      JSON.stringify(reconciliation.basisObservationIds), reconciliation.checkedAt,
+      JSON.stringify(reconciliation), input.reconciliationDigest,
+    );
+    this.storage.sql.exec(
+      'UPDATE execution_attempts SET state = ?, updated_at = ? WHERE id = ?',
+      reconciliation.state,
+      reconciliation.checkedAt,
+      attempt.id,
+    );
+    const requestStatus = reconciliation.state === 'settled'
+      ? 'completed'
+      : reconciliation.state === 'indeterminate'
+        ? 'ambiguous'
+        : reconciliation.state;
+    this.storage.sql.exec(
+      'UPDATE planning_execution_requests SET status = ?, updated_at = ? WHERE id = ?',
+      requestStatus,
+      reconciliation.checkedAt,
+      attempt.executionRequestId,
+    );
+    return reconciliation;
+  }
+
+  readExecutionAggregateV04(ownerId: string, executionRequestId: string): ExecutionAggregateV04 {
+    const row = this.storage.sql.exec<{
+      request_json: string;
+      cancellation_generation: number;
+    }>(
+      `SELECT request_json, cancellation_generation
+         FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.4'`,
+      executionRequestId,
+      ownerId,
+    ).toArray()[0];
+    if (row === undefined) throw new Error('execution request not found');
+    const request = executionRequestV04Schema.parse(JSON.parse(row.request_json));
+    const attempts = this.storage.sql.exec<{ id: string }>(
+      `SELECT id FROM execution_attempts
+        WHERE execution_request_id = ? AND owner_id = ? ORDER BY attempt_number`,
+      executionRequestId,
+      ownerId,
+    ).toArray().map((attemptRow) => this.readAttemptV04(attemptRow.id));
+    const leases = attempts.map((attemptValue) => this.readLeaseV04(attemptValue.leaseId));
+    const sessions = attempts.map((attemptValue) => this.readSessionV04(attemptValue.id));
+    const observations = this.storage.sql.exec<{ observation_json: string }>(
+      `SELECT observation_json FROM execution_observations
+        WHERE owner_id = ? AND attempt_id IN (
+          SELECT id FROM execution_attempts WHERE execution_request_id = ? AND owner_id = ?
+        ) ORDER BY attempt_id, sequence`,
+      ownerId,
+      executionRequestId,
+      ownerId,
+    ).toArray().map((item) => executorObservationV04Schema.parse(JSON.parse(item.observation_json)));
+    const reconciliations = this.storage.sql.exec<{ reconciliation_json: string }>(
+      `SELECT reconciliation_json FROM execution_reconciliations
+        WHERE owner_id = ? AND attempt_id IN (
+          SELECT id FROM execution_attempts WHERE execution_request_id = ? AND owner_id = ?
+        ) ORDER BY checked_at, id`,
+      ownerId,
+      executionRequestId,
+      ownerId,
+    ).toArray().map((item) =>
+      executionReconciliationV04Schema.parse(JSON.parse(item.reconciliation_json)));
+    return Object.freeze({
+      request,
+      currentCancellationGeneration: row.cancellation_generation,
+      attempts,
+      leases,
+      sessions,
+      observations,
+      reconciliations,
+    });
+  }
+
+  readExecutionAggregateForAttemptV04(
+    ownerId: string,
+    attemptId: string,
+  ): ExecutionAggregateV04 {
+    const row = this.storage.sql.exec<{ execution_request_id: string }>(
+      'SELECT execution_request_id FROM execution_attempts WHERE id = ? AND owner_id = ?',
+      attemptId,
+      ownerId,
+    ).toArray()[0];
+    if (row === undefined) throw new Error('execution attempt not found');
+    return this.readExecutionAggregateV04(ownerId, row.execution_request_id);
+  }
+
+  private readAttemptV04(attemptId: string): ExecutionAttemptV04 {
+    const row = this.storage.sql.exec<{
+      id: string; owner_id: string; execution_request_id: string; work_unit_ref_json: string;
+      attempt_number: number; provider_ref_json: string; environment_ref_json: string;
+      lease_id: string; fencing_generation: number; cancellation_generation: number;
+      state: ExecutionAttemptV04['state']; created_at: string; updated_at: string;
+    }>('SELECT * FROM execution_attempts WHERE id = ?', attemptId).toArray()[0];
+    if (row === undefined) throw new Error('execution attempt not found');
+    return executionAttemptV04Schema.parse({
+      protocolVersion: '0.4', id: row.id, ownerId: row.owner_id,
+      executionRequestId: row.execution_request_id, workUnit: JSON.parse(row.work_unit_ref_json),
+      attemptNumber: row.attempt_number, provider: JSON.parse(row.provider_ref_json),
+      environment: JSON.parse(row.environment_ref_json), leaseId: row.lease_id,
+      fencingGeneration: row.fencing_generation,
+      cancellationGeneration: row.cancellation_generation, state: row.state,
+      createdAt: row.created_at, updatedAt: row.updated_at,
+    });
+  }
+
+  private readLeaseV04(leaseId: string): ExecutionLeaseV04 {
+    const row = this.storage.sql.exec<{
+      id: string; owner_id: string; execution_request_id: string; attempt_id: string;
+      environment_ref_json: string; fence: number; cancellation_generation: number;
+      acquired_at: string; expires_at: string;
+    }>('SELECT * FROM planning_execution_leases WHERE id = ?', leaseId).toArray()[0];
+    if (row === undefined) throw new Error('execution lease not found');
+    return executionLeaseV04Schema.parse({
+      protocolVersion: '0.4', id: row.id, ownerId: row.owner_id,
+      executionRequestId: row.execution_request_id, attemptId: row.attempt_id,
+      holder: JSON.parse(row.environment_ref_json), fencingGeneration: row.fence,
+      cancellationGeneration: row.cancellation_generation,
+      acquiredAt: row.acquired_at, expiresAt: row.expires_at,
+    });
+  }
+
+  private readSessionV04(attemptId: string): ExecutionSessionV04 {
+    const row = this.storage.sql.exec<{
+      id: string; owner_id: string; attempt_id: string; provider_ref_json: string;
+      environment_ref_json: string; provider_session_ref: string | null;
+      status: ExecutionSessionV04['state']; last_observation_sequence: number;
+    }>(
+      `SELECT id, owner_id, attempt_id, provider_ref_json, environment_ref_json,
+              provider_session_ref, status, last_observation_sequence
+         FROM planning_agent_sessions
+        WHERE attempt_id = ? AND protocol_version = '0.4'`,
+      attemptId,
+    ).toArray()[0];
+    if (row === undefined) throw new Error('execution session not found');
+    return executionSessionV04Schema.parse({
+      protocolVersion: '0.4', id: row.id, ownerId: row.owner_id, attemptId: row.attempt_id,
+      provider: JSON.parse(row.provider_ref_json), environment: JSON.parse(row.environment_ref_json),
+      providerSessionRef: row.provider_session_ref, state: row.status,
+      lastObservationSequence: row.last_observation_sequence,
+    });
   }
 
   readIdempotentResult(
@@ -103,7 +738,8 @@ export class PlanningExecutionModule {
            AND outcomes.owner_id = requests.owner_id
          JOIN work_units ON work_units.id = requests.work_unit_id
            AND work_units.owner_id = requests.owner_id
-        WHERE requests.owner_id = ? AND requests.id = ?`,
+        WHERE requests.owner_id = ? AND requests.id = ?
+          AND requests.protocol_version = '0.3'`,
       ownerId, executionRequestId,
     ).toArray()[0];
     if (row === undefined || row.owner_id !== ownerId) throw new Error('planning execution not found');
@@ -146,7 +782,7 @@ export class PlanningExecutionModule {
     }>(
       `SELECT status, cancellation_generation
          FROM planning_execution_requests
-        WHERE id = ? AND owner_id = ?`,
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.3'`,
       executionRequestId, ownerId,
     ).toArray()[0];
     if (request === undefined || request.status !== 'leased') return null;
@@ -214,7 +850,7 @@ export class PlanningExecutionModule {
       status: string; cancellation_generation: number;
     }>(
       `SELECT owner_id, outcome_id, work_unit_id, status, cancellation_generation
-         FROM planning_execution_requests WHERE id = ?`,
+         FROM planning_execution_requests WHERE id = ? AND protocol_version = '0.3'`,
       input.executionRequestId,
     ).one();
     if (request.owner_id !== input.ownerId || request.status !== 'leased' ||
@@ -337,7 +973,7 @@ export class PlanningExecutionModule {
     }>(
       `SELECT owner_id, outcome_id, work_unit_id, status, cancellation_generation,
               provider_ref_json
-         FROM planning_execution_requests WHERE id = ?`,
+         FROM planning_execution_requests WHERE id = ? AND protocol_version = '0.3'`,
       input.executionRequestId,
     ).toArray()[0];
     if (requestRow === undefined || requestRow.owner_id !== input.ownerId) {
@@ -534,7 +1170,7 @@ export class PlanningExecutionModule {
     }>(
       `SELECT owner_id, outcome_id, work_unit_id, work_unit_revision, status,
               cancellation_generation
-         FROM planning_execution_requests WHERE id = ?`,
+         FROM planning_execution_requests WHERE id = ? AND protocol_version = '0.3'`,
       input.executionRequestId,
     ).one();
     if (request.owner_id !== input.ownerId || request.status !== 'leased' ||
@@ -641,7 +1277,7 @@ export class PlanningExecutionModule {
     }>(
       `SELECT outcome_id, work_unit_id, status
          FROM planning_execution_requests
-        WHERE id = ? AND owner_id = ?`,
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.3'`,
       input.executionRequestId, input.ownerId,
     ).toArray()[0];
     if (request === undefined || request.status !== 'leased') return;
@@ -705,7 +1341,8 @@ export class PlanningExecutionModule {
       cancellation_generation: number;
     }>(
       `SELECT owner_id, outcome_id, work_unit_id, status, cancellation_generation
-         FROM planning_execution_requests WHERE id = ? AND owner_id = ?`,
+         FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.3'`,
       input.executionRequestId, input.ownerId,
     ).toArray()[0];
     if (request === undefined) {

@@ -3,6 +3,13 @@ import {
   canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
   canonicalizeSurfaceCommandRequestForDigest,
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  executionAttemptV04Schema,
+  executionCancelRequestV04Schema,
+  executionLeaseV04Schema,
+  executionReconciliationV04Schema,
+  executionRequestV04Schema,
+  executionSessionV04Schema,
+  executorObservationV04Schema,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureResultSchema,
@@ -46,7 +53,11 @@ import {
   type ResponsibilityReplay,
   type WorkUnitRecord,
 } from './outcome-module';
-import { PlanningExecutionModule } from './planning-execution-module';
+import {
+  PlanningExecutionModule,
+  type ExecutionAdmissionBindingV04,
+  type ExecutionAggregateV04,
+} from './planning-execution-module';
 import type { LLMGatewayRequest, TrustedProviderEffect } from '../llm/provider';
 
 export type {
@@ -98,6 +109,10 @@ export type CoordinatorWriteStage =
   | 'idempotency'
   | 'work_unit_authority'
   | 'execution_request'
+  | 'execution_attempt'
+  | 'execution_observation'
+  | 'execution_cancellation'
+  | 'execution_reconciliation'
   | 'planning_projection'
   | 'provider_intent'
   | 'provider_result';
@@ -262,6 +277,112 @@ export class WaldoCoordinator {
       canonicalizeWorkUnitPlanningTurnRequestV03ForDigest(request),
     )}`;
     return this.#planning.readIdempotentResult(ownerId, request.requestId, requestDigest);
+  }
+
+  async admitExecutionRequestV04(
+    requestValue: unknown,
+    trustedBinding: ExecutionAdmissionBindingV04,
+  ): Promise<ExecutionAggregateV04> {
+    const request = executionRequestV04Schema.parse(requestValue);
+    const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify(request))}`;
+    return this.#storage.transactionSync(() => {
+      this.#planning.admitExecutionRequestV04InCurrentTransaction({
+        request,
+        trustedBinding,
+        requestDigest,
+      });
+      this.#deps.afterWrite?.('execution_request');
+      return this.#planning.readExecutionAggregateV04(request.ownerId, request.id);
+    });
+  }
+
+  claimExecutionAttemptV04(input: Readonly<{
+    attempt: unknown;
+    lease: unknown;
+    session: unknown;
+  }>): ExecutionAggregateV04 {
+    const attempt = executionAttemptV04Schema.parse(input.attempt);
+    const lease = executionLeaseV04Schema.parse(input.lease);
+    const session = executionSessionV04Schema.parse(input.session);
+    return this.#storage.transactionSync(() => {
+      this.#planning.claimExecutionAttemptV04InCurrentTransaction({ attempt, lease, session });
+      this.#deps.afterWrite?.('execution_attempt');
+      return this.#planning.readExecutionAggregateV04(
+        attempt.ownerId,
+        attempt.executionRequestId,
+      );
+    });
+  }
+
+  async admitExecutorObservationV04(
+    observationValue: unknown,
+    receivedAt = this.#deps.now(),
+  ): Promise<ExecutionAggregateV04> {
+    const observation = executorObservationV04Schema.parse(observationValue);
+    const observationDigest = `sha256:${await this.#deps.sha256Hex(
+      JSON.stringify(observation),
+    )}`;
+    return this.#storage.transactionSync(() => {
+      this.#planning.admitExecutorObservationV04InCurrentTransaction({
+        observation,
+        observationDigest,
+        receivedAt,
+      });
+      this.#deps.afterWrite?.('execution_observation');
+      return this.#planning.readExecutionAggregateForAttemptV04(
+        observation.ownerId,
+        observation.attemptId,
+      );
+    });
+  }
+
+  async cancelExecutionV04(input: Readonly<{
+    ownerId: string;
+    request: unknown;
+    at?: string;
+  }>): Promise<ExecutionAggregateV04> {
+    const request = executionCancelRequestV04Schema.parse(input.request);
+    const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify(request))}`;
+    return this.#storage.transactionSync(() => {
+      this.#planning.cancelExecutionV04InCurrentTransaction({
+        ownerId: input.ownerId,
+        request,
+        requestDigest,
+        at: input.at ?? this.#deps.now(),
+      });
+      this.#deps.afterWrite?.('execution_cancellation');
+      return this.#planning.readExecutionAggregateV04(
+        input.ownerId,
+        request.executionRequestId,
+      );
+    });
+  }
+
+  async reconcileExecutionAttemptV04(
+    reconciliationValue: unknown,
+  ): Promise<ExecutionAggregateV04> {
+    const reconciliation = executionReconciliationV04Schema.parse(reconciliationValue);
+    const reconciliationDigest = `sha256:${await this.#deps.sha256Hex(
+      JSON.stringify(reconciliation),
+    )}`;
+    return this.#storage.transactionSync(() => {
+      this.#planning.reconcileExecutionAttemptV04InCurrentTransaction({
+        reconciliation,
+        reconciliationDigest,
+      });
+      this.#deps.afterWrite?.('execution_reconciliation');
+      return this.#planning.readExecutionAggregateForAttemptV04(
+        reconciliation.ownerId,
+        reconciliation.attemptId,
+      );
+    });
+  }
+
+  readExecutionAggregateV04(
+    ownerId: string,
+    executionRequestId: string,
+  ): ExecutionAggregateV04 {
+    return this.#planning.readExecutionAggregateV04(ownerId, executionRequestId);
   }
 
   readPlanningPromptMaterial(ownerId: string, executionRequestId: string) {

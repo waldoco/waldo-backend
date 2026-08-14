@@ -11,6 +11,7 @@ import {
   HEY144_GOALS_SCHEMA_MIGRATION,
   RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
   RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
+  RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
@@ -50,6 +51,18 @@ function listProductColumns(sql: SqlStorage): TableColumn[] {
   );
 }
 
+function provisionThroughV5(storage: DurableObjectStorage): void {
+  for (const migration of [
+    HEY10_BASE_SCHEMA_MIGRATION,
+    HEY144_GOALS_SCHEMA_MIGRATION,
+    RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
+    RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
+    RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
+  ]) {
+    applyDoMigration(storage, migration);
+  }
+}
+
 describe('HEY-10 DO SQLite schema root', () => {
   it('reports an empty DO SQLite database as missing required product tables', async () => {
     const stub = freshStub();
@@ -86,7 +99,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(5);
+    expect(result.version).toBe(6);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -155,7 +168,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(5);
+    expect(result.version).toBe(6);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
     expect(result.draft).toEqual({
@@ -187,7 +200,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 5, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 6, description: 'Preserve this row.' });
   });
 
   it('migrates the merged V3 responsibility schema to current without changing responsibility state', async () => {
@@ -282,7 +295,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.before.version).toBe(3);
-    expect(result.after).toEqual({ ...result.before, version: 5 });
+    expect(result.after).toEqual({ ...result.before, version: 6 });
     expect(result.authority).toEqual({
       authenticated_subject_ref: null,
       state: null,
@@ -394,7 +407,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(5);
+    expect(result.version).toBe(6);
     expect(result.after).toEqual(result.preserved);
     expect(result.newState).toEqual({ state: 'planning_authorized', revision: 2 });
   });
@@ -434,10 +447,188 @@ describe('HEY-10 DO SQLite schema root', () => {
     expect(result.leakedV5Tables).toEqual([]);
   });
 
-  it('refuses an unsafe V5 downgrade after planning authorization and preserves all V5 state', async () => {
+  it('migrates V5 planning rows in place and adds only the v0.4 execution aggregate tables', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionThroughV5(state.storage);
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO planning_execution_requests (
+          id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+          request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+          capability_manifest_json, authority_ceiling_json, status,
+          cancellation_generation, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'execution-v03', 'owner-v03', 'outcome-v03', 'work-unit-v03', 2,
+        'request-v03', 'digest-v03', '{"inputs":[]}', '{"category":"provider"}',
+        '{"category":"executor"}', '{"version":"v03"}', '{"externalEffects":"none"}',
+        'pending', 0, '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z',
+      );
+      const before = sql.exec('SELECT * FROM planning_execution_requests').one();
+
+      provisionDoSchema(state.storage);
+
+      return {
+        version: getSchemaVersion(sql),
+        before,
+        preserved: sql.exec(
+          `SELECT id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+                  request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+                  capability_manifest_json, authority_ceiling_json, status,
+                  cancellation_generation, created_at, updated_at
+             FROM planning_execution_requests WHERE id = 'execution-v03'`,
+        ).one(),
+        protocolVersion: sql.exec<{ protocol_version: string }>(
+          "SELECT protocol_version FROM planning_execution_requests WHERE id = 'execution-v03'",
+        ).one().protocol_version,
+        executionTables: listTables(sql).filter((table) => [
+          'execution_attempts', 'execution_observations', 'execution_reconciliations',
+        ].includes(table)),
+      };
+    });
+
+    expect(result.version).toBe(6);
+    expect(result.preserved).toEqual(result.before);
+    expect(result.protocolVersion).toBe('0.3');
+    expect(result.executionTables).toEqual([
+      'execution_attempts', 'execution_observations', 'execution_reconciliations',
+    ]);
+  });
+
+  it('leaves the legacy runtime_runs substrate byte-stable across V6', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionThroughV5(state.storage);
+      const sql = state.storage.sql;
+      sql.exec('CREATE TABLE runtime_runs (id TEXT PRIMARY KEY, state_json TEXT NOT NULL)');
+      sql.exec(
+        'INSERT INTO runtime_runs (id, state_json) VALUES (?, ?)',
+        'legacy-run',
+        '{"legacy":true}',
+      );
+      const before = {
+        schema: sql.exec<{ sql: string }>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runtime_runs'",
+        ).one().sql,
+        row: sql.exec('SELECT * FROM runtime_runs').one(),
+      };
+      applyDoMigration(state.storage, RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION);
+      return {
+        before,
+        after: {
+          schema: sql.exec<{ sql: string }>(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runtime_runs'",
+          ).one().sql,
+          row: sql.exec('SELECT * FROM runtime_runs').one(),
+        },
+      };
+    });
+
+    expect(result.after).toEqual(result.before);
+  });
+
+  it('rolls back a failed V6 upgrade without altering V5 planning state', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionThroughV5(state.storage);
+      const sql = state.storage.sql;
+      sql.exec('CREATE TABLE execution_attempts (legacy TEXT)');
+      const requestSql = sql.exec<{ sql: string }>(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'planning_execution_requests'",
+      ).one().sql;
+
+      expect(() => provisionDoSchema(state.storage)).toThrow();
+
+      return {
+        version: getSchemaVersion(sql),
+        requestUnchanged: sql.exec<{ sql: string }>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'planning_execution_requests'",
+        ).one().sql === requestSql,
+        attemptColumns: sql.exec<{ name: string }>('PRAGMA table_info(execution_attempts)')
+          .toArray().map((row) => row.name),
+        leakedTables: listTables(sql).filter((table) =>
+          table === 'execution_observations' || table === 'execution_reconciliations'),
+      };
+    });
+
+    expect(result).toEqual({
+      version: 5,
+      requestUnchanged: true,
+      attemptColumns: ['legacy'],
+      leakedTables: [],
+    });
+  });
+
+  it('downgrades V6 to exact V5 while only legacy planning rows exist', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionThroughV5(state.storage);
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO planning_execution_leases (
+          execution_request_id, owner_id, holder_id, fence, cancellation_generation,
+          acquired_at, expires_at
+        ) VALUES ('execution-v03', 'owner-v03', 'holder-v03', 1, 0, ?, ?)`,
+        '2026-08-14T00:00:00.000Z', '2026-08-14T00:05:00.000Z',
+      );
+      const legacyLease = sql.exec('SELECT * FROM planning_execution_leases').one();
+      applyDoMigration(state.storage, RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION);
+      applyDoMigration(state.storage, RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION, 'down');
+      return {
+        version: getSchemaVersion(sql),
+        lease: sql.exec('SELECT * FROM planning_execution_leases').one(),
+        leaseColumns: sql.exec<{ name: string }>('PRAGMA table_info(planning_execution_leases)')
+          .toArray().map((row) => row.name),
+        executionTables: listTables(sql).filter((table) => [
+          'execution_attempts', 'execution_observations', 'execution_reconciliations',
+        ].includes(table)),
+        legacyLease,
+      };
+    });
+
+    expect(result.version).toBe(5);
+    expect(result.lease).toEqual(result.legacyLease);
+    expect(result.leaseColumns).toEqual([
+      'execution_request_id', 'owner_id', 'holder_id', 'fence',
+      'cancellation_generation', 'acquired_at', 'expires_at',
+    ]);
+    expect(result.executionTables).toEqual([]);
+  });
+
+  it('refuses a V6 downgrade once native execution state exists and preserves that state', async () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
       provisionDoSchema(state.storage);
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO execution_attempts (
+          id, owner_id, execution_request_id, work_unit_ref_json, attempt_number,
+          provider_ref_json, environment_ref_json, lease_id, fencing_generation,
+          cancellation_generation, state, created_at, updated_at
+        ) VALUES ('attempt-v04', 'owner-v04', 'request-v04', '{}', 1, '{}', '{}',
+          'lease-v04', 1, 0, 'queued', ?, ?)`,
+        '2026-08-14T00:00:00.000Z', '2026-08-14T00:00:00.000Z',
+      );
+
+      expect(() => applyDoMigration(
+        state.storage,
+        RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
+        'down',
+      )).toThrow();
+
+      return {
+        version: getSchemaVersion(sql),
+        attempt: sql.exec<{ id: string }>('SELECT id FROM execution_attempts').one().id,
+      };
+    });
+
+    expect(result).toEqual({ version: 6, attempt: 'attempt-v04' });
+  });
+
+  it('refuses an unsafe V5 downgrade after planning authorization and preserves all V5 state', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionThroughV5(state.storage);
       const sql = state.storage.sql;
       sql.exec(
         `INSERT INTO owner_roots (root_key, owner_id, created_at)
@@ -640,7 +831,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 5,
+        version: 7,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -662,8 +853,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 5,
-      afterVersion: 5,
+      beforeVersion: 6,
+      afterVersion: 6,
       outcomesPresent: true,
       probeTables: [],
     });
