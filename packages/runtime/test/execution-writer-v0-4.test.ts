@@ -16,6 +16,9 @@ import { PlanningExecutionModule } from '../src/coordinator/planning-execution-m
 import { WaldoCoordinator } from '../src/coordinator/waldo-coordinator';
 import { provisionDoSchema } from '../src/do-schema';
 import type { RuntimeProbeDO } from '../src/index';
+import type {
+  ResponsibilityCanonicalAuthorityRegistration,
+} from '../src/coordinator/identity-presence-module';
 
 const FIXTURE_DIGEST = `sha256:${'a'.repeat(64)}`;
 const bundle = buildResponsibilityExecutionV04Bundle(() => 'a'.repeat(64));
@@ -32,6 +35,18 @@ const reconciliation = executionReconciliationV04Schema.parse(
 const cancelRequest = executionCancelRequestV04Schema.parse(
   JSON.parse(bundle['execution-cancel-request.valid.json']!),
 );
+const authorityRegistration: ResponsibilityCanonicalAuthorityRegistration = Object.freeze({
+  ownerId: request.ownerId,
+  authenticatedSubjectRef: `supabase_subject_${'a'.repeat(64)}`,
+  presenceId: 'presence_fixture',
+  presenceRegistrationId: cancelRequest.presenceRegistrationId,
+  authenticatedSessionId: `authenticated_session_${'b'.repeat(64)}`,
+  ownerPolicyRevision: 1,
+  ownerRootRoutingVersion: 2,
+  authenticatedSessionExpiresAt: '2026-08-13T13:00:00.000Z',
+  presenceState: 'active',
+  at: '2026-08-13T11:59:00.000Z',
+});
 
 let sequence = 0;
 function freshStub(): DurableObjectStub<RuntimeProbeDO> {
@@ -50,8 +65,63 @@ const binding = Object.freeze({
   contextProjectionDigest: request.contextProjectionDigest,
 });
 
+function seedCanonicalProductState(storage: DurableObjectStorage): void {
+  storage.sql.exec(
+    `INSERT OR IGNORE INTO owner_roots (
+      root_key, owner_id, created_at, authenticated_subject_ref, state,
+      owner_policy_revision, owner_root_routing_version, updated_at
+    ) VALUES (1, ?, ?, ?, 'active', ?, ?, ?)`,
+    request.ownerId,
+    request.requestedAt,
+    authorityRegistration.authenticatedSubjectRef,
+    authorityRegistration.ownerPolicyRevision,
+    authorityRegistration.ownerRootRoutingVersion,
+    authorityRegistration.at,
+  );
+  storage.sql.exec(
+    `INSERT OR IGNORE INTO presence_registrations (
+      presence_registration_id, owner_id, presence_id, state, created_at, updated_at
+    ) VALUES (?, ?, ?, 'active', ?, ?)`,
+    cancelRequest.presenceRegistrationId,
+    request.ownerId,
+    authorityRegistration.presenceId,
+    authorityRegistration.at,
+    authorityRegistration.at,
+  );
+  storage.sql.exec(
+    `INSERT OR IGNORE INTO outcomes (
+      id, owner_id, revision, user_statement, state, created_at, updated_at
+    ) VALUES (?, ?, ?, 'Canonical execution outcome.', 'captured', ?, ?)`,
+    request.outcome.id,
+    request.ownerId,
+    request.outcome.revision,
+    request.requestedAt,
+    request.requestedAt,
+  );
+  storage.sql.exec(
+    `INSERT OR IGNORE INTO work_units (
+      id, owner_id, outcome_id, mission_id, position, revision, responsibility,
+      inputs_json, dependency_ids_json, expected_evidence_json,
+      required_capabilities_json, authority_ceiling_json, budget_json,
+      isolation_json, stop_conditions_json, assignee, session_ids_json,
+      state, created_at, updated_at
+    ) VALUES (?, ?, ?, NULL, 0, ?, 'Canonical execution work.', '[]', '[]', '[]', '[]',
+      ?, '{"maxProviderTurns":0,"maxExternalEffects":0,"maxDurationMs":0}',
+      '{"mode":"unassigned","egress":"deny_all","credentials":"none"}',
+      '[]', NULL, '[]', 'planned', ?, ?)`,
+    request.workUnit.id,
+    request.ownerId,
+    request.outcome.id,
+    request.workUnit.revision,
+    JSON.stringify(request.authorityCeiling),
+    request.requestedAt,
+    request.requestedAt,
+  );
+}
+
 function writer(storage: DurableObjectStorage): PlanningExecutionModule {
   provisionDoSchema(storage);
+  seedCanonicalProductState(storage);
   return new PlanningExecutionModule(storage, () => 'event_unused');
 }
 
@@ -64,7 +134,24 @@ function admit(module: PlanningExecutionModule): void {
 }
 
 function claim(module: PlanningExecutionModule): void {
-  module.claimExecutionAttemptV04InCurrentTransaction({ attempt, lease, session });
+  module.claimExecutionAttemptV04InCurrentTransaction({
+    attempt,
+    lease,
+    session,
+    claimedAt: attempt.updatedAt,
+  });
+}
+
+function reconcile(
+  module: PlanningExecutionModule,
+  input: Readonly<{ reconciliation: unknown; reconciliationDigest: string }>,
+  receivedAt?: string,
+): void {
+  const parsed = executionReconciliationV04Schema.parse(input.reconciliation);
+  module.reconcileExecutionAttemptV04InCurrentTransaction({
+    ...input,
+    receivedAt: receivedAt ?? parsed.checkedAt,
+  });
 }
 
 describe('responsibility execution v0.4 sole writer', () => {
@@ -72,6 +159,7 @@ describe('responsibility execution v0.4 sole writer', () => {
     const stub = freshStub();
     const aggregate = await runInDurableObject(stub, async (_instance, state) => {
       provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
       const coordinator = new WaldoCoordinator(state.storage, {
         now: () => observation.observedAt,
         newId: (kind) => `${kind}_unused`,
@@ -81,13 +169,65 @@ describe('responsibility execution v0.4 sole writer', () => {
             byte.toString(16).padStart(2, '0')).join('');
         },
       });
-      await coordinator.admitExecutionRequestV04(request, binding);
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      await coordinator.admitExecutionRequestV04(request, binding, authority);
       coordinator.claimExecutionAttemptV04({ attempt, lease, session });
       return coordinator.admitExecutorObservationV04(observation, observation.observedAt);
     });
 
     expect(executionRequestV04Schema.parse(aggregate.request)).toEqual(request);
     expect(executorObservationV04Schema.parse(aggregate.observations[0])).toEqual(observation);
+  });
+
+  it('rejects caller-authored owner, product, authority, and cancellation presence', async () => {
+    const stub = freshStub();
+    const proof = await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      const untrustedModule = new PlanningExecutionModule(state.storage, () => 'event_unused');
+      expect(() => untrustedModule.admitExecutionRequestV04InCurrentTransaction({
+        request,
+        trustedBinding: binding,
+        requestDigest: FIXTURE_DIGEST,
+      })).toThrow(/canonical execution binding/i);
+
+      seedCanonicalProductState(state.storage);
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-13T12:00:05.000Z',
+        newId: (kind) => `${kind}_unused`,
+        async sha256Hex() { return 'a'.repeat(64); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      await expect(coordinator.admitExecutionRequestV04(
+        { ...request, ownerId: 'owner_attacker' },
+        { ...binding, routedOwnerId: 'owner_attacker' },
+        authority,
+      )).rejects.toThrow(/authority|owner/i);
+      await expect(coordinator.admitExecutionRequestV04(
+        { ...request, authorityCeiling: { ...request.authorityCeiling, tools: ['shell'] } },
+        { ...binding, authorityCeiling: { ...request.authorityCeiling, tools: ['shell'] } },
+        authority,
+      )).rejects.toThrow(/canonical execution binding/i);
+
+      await coordinator.admitExecutionRequestV04(request, binding, authority);
+      coordinator.claimExecutionAttemptV04({ attempt, lease, session });
+      await expect(coordinator.cancelExecutionV04({
+        request: { ...cancelRequest, presenceRegistrationId: 'presence_attacker' },
+        canonicalAuthority: authority,
+      })).rejects.toThrow(/authority/i);
+      state.storage.sql.exec(
+        "UPDATE presence_registrations SET state = 'revoked' WHERE presence_registration_id = ?",
+        authority.presenceRegistrationId,
+      );
+      await expect(coordinator.cancelExecutionV04({
+        request: cancelRequest,
+        canonicalAuthority: authority,
+      })).rejects.toThrow(/authority/i);
+      return state.storage.sql.exec<{ count: number }>(
+        "SELECT COUNT(*) AS count FROM planning_execution_requests WHERE protocol_version = '0.4'",
+      ).one().count;
+    });
+
+    expect(proof).toBe(1);
   });
 
   it('atomically admits an exact trusted request and replays only the same digest', async () => {
@@ -132,6 +272,8 @@ describe('responsibility execution v0.4 sole writer', () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
       const module = writer(state.storage);
+      const cyclicProvider = { ...binding.provider } as Record<string, unknown>;
+      cyclicProvider.cycle = cyclicProvider;
       const drifts = [
         { ...binding, routedOwnerId: 'owner_attacker' },
         { ...binding, outcome: { ...binding.outcome, revision: 2 } },
@@ -154,6 +296,16 @@ describe('responsibility execution v0.4 sole writer', () => {
           trustedBinding,
           requestDigest: FIXTURE_DIGEST,
         })).toThrow(/binding mismatch/i);
+      }
+      for (const trustedBinding of [
+        { ...binding, provider: cyclicProvider as typeof binding.provider },
+        { ...binding, contextProjectionRef: 'context_\ud800' },
+      ]) {
+        expect(() => module.admitExecutionRequestV04InCurrentTransaction({
+          request,
+          trustedBinding,
+          requestDigest: FIXTURE_DIGEST,
+        })).toThrow();
       }
       return state.storage.sql.exec<{ count: number }>(
         "SELECT COUNT(*) AS count FROM planning_execution_requests WHERE protocol_version = '0.4'",
@@ -217,6 +369,7 @@ describe('responsibility execution v0.4 sole writer', () => {
           attempt: { ...attempt, id: 'attempt_attacker' },
           lease: { ...lease, attemptId: 'attempt_attacker', id: 'lease_attacker' },
           session: { ...session, id: 'session_attacker', attemptId: 'attempt_attacker' },
+          claimedAt: attempt.updatedAt,
         }))).toThrow(/already claimed/i);
       return module.readExecutionAggregateV04(request.ownerId, request.id);
     });
@@ -236,12 +389,49 @@ describe('responsibility execution v0.4 sole writer', () => {
         attempt: { ...attempt, state: 'settled' },
         lease,
         session,
+        claimedAt: attempt.updatedAt,
       })).toThrow(/claim binding mismatch/i);
       expect(() => module.claimExecutionAttemptV04InCurrentTransaction({
         attempt,
         lease,
         session: { ...session, lastObservationSequence: 9 },
+        claimedAt: attempt.updatedAt,
       })).toThrow(/claim binding mismatch/i);
+    });
+  });
+
+  it('rejects inactive sessions and incoherent or expired claim chronology', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, (_instance, state) => {
+      const module = writer(state.storage);
+      admit(module);
+      for (const invalidClaim of [
+        {
+          attempt,
+          lease,
+          session: { ...session, state: 'ended' as const },
+          claimedAt: attempt.updatedAt,
+        },
+        {
+          attempt,
+          lease: {
+            ...lease,
+            acquiredAt: '2026-08-13T11:59:00.000Z',
+            expiresAt: '2026-08-13T12:09:00.000Z',
+          },
+          session,
+          claimedAt: attempt.updatedAt,
+        },
+        {
+          attempt,
+          lease,
+          session,
+          claimedAt: lease.expiresAt,
+        },
+      ]) {
+        expect(() => module.claimExecutionAttemptV04InCurrentTransaction(invalidClaim))
+          .toThrow(/claim binding mismatch/i);
+      }
     });
   });
 
@@ -350,28 +540,50 @@ describe('responsibility execution v0.4 sole writer', () => {
           ownerId: request.ownerId,
           request: cancelRequest,
           requestDigest: FIXTURE_DIGEST,
-          at: '2026-08-13T12:00:03.000Z',
+          at: '2026-08-13T12:00:04.000Z',
         });
       });
       expect(module.cancelExecutionV04InCurrentTransaction({
         ownerId: request.ownerId,
         request: cancelRequest,
         requestDigest: FIXTURE_DIGEST,
-        at: '2026-08-13T12:00:03.000Z',
+        at: '2026-08-13T12:00:04.000Z',
       })).toBe(2);
+      const cancelled = module.readExecutionAggregateV04(request.ownerId, request.id);
+      expect(cancelled.attempts[0]?.cancellationGeneration).toBe(2);
+      expect(cancelled.leases[0]?.cancellationGeneration).toBe(2);
+      expect(cancelled.sessions[0]?.state).toBe('unknown');
       expect(() => module.cancelExecutionV04InCurrentTransaction({
         ownerId: request.ownerId,
         request: cancelRequest,
         requestDigest: `sha256:${'b'.repeat(64)}`,
-        at: '2026-08-13T12:00:03.000Z',
+        at: '2026-08-13T12:00:04.000Z',
       })).toThrow(/digest conflict/i);
       expect(() => module.admitExecutorObservationV04InCurrentTransaction({
         observation,
         observationDigest: FIXTURE_DIGEST,
         receivedAt: observation.observedAt,
       })).toThrow(/observation rejected/i);
-      module.reconcileExecutionAttemptV04InCurrentTransaction({
-        reconciliation: { ...reconciliation, state: 'cancelled', basisObservationIds: [] },
+      expect(() => reconcile(module, {
+        reconciliation: { ...reconciliation, state: 'settled', basisObservationIds: [] },
+        reconciliationDigest: `sha256:${'e'.repeat(64)}`,
+      })).toThrow(/reconciliation binding mismatch/i);
+      expect(() => reconcile(module, {
+        reconciliation: {
+          ...reconciliation,
+          state: 'indeterminate',
+          cancellationGeneration: 2,
+          basisObservationIds: [],
+        },
+        reconciliationDigest: `sha256:${'e'.repeat(64)}`,
+      })).toThrow(/reconciliation state mismatch/i);
+      reconcile(module, {
+        reconciliation: {
+          ...reconciliation,
+          state: 'cancelled',
+          cancellationGeneration: 2,
+          basisObservationIds: [],
+        },
         reconciliationDigest: FIXTURE_DIGEST,
       });
       return module.readExecutionAggregateV04(request.ownerId, request.id);
@@ -380,7 +592,104 @@ describe('responsibility execution v0.4 sole writer', () => {
     expect(aggregate.request.cancellationGeneration).toBe(1);
     expect(aggregate.currentCancellationGeneration).toBe(2);
     expect(aggregate.attempts[0]?.state).toBe('cancelled');
+    expect(aggregate.sessions[0]?.state).toBe('ended');
     expect(aggregate.reconciliations).toHaveLength(1);
+  });
+
+  it('represents running reconciliation without minting a new request state', async () => {
+    const stub = freshStub();
+    const aggregate = await runInDurableObject(stub, (_instance, state) => {
+      const module = writer(state.storage);
+      admit(module);
+      claim(module);
+      reconcile(module, {
+        reconciliation: { ...reconciliation, state: 'running', basisObservationIds: [] },
+        reconciliationDigest: FIXTURE_DIGEST,
+      });
+      return module.readExecutionAggregateV04(request.ownerId, request.id);
+    });
+
+    expect(aggregate.attempts[0]?.state).toBe('running');
+    expect(aggregate.reconciliations[0]?.state).toBe('running');
+  });
+
+  it('keeps timeout indeterminate until reconciliation proves a terminal state', async () => {
+    const stub = freshStub();
+    const aggregate = await runInDurableObject(stub, (_instance, state) => {
+      const module = writer(state.storage);
+      admit(module);
+      claim(module);
+      module.admitExecutorObservationV04InCurrentTransaction({
+        observation: { ...observation, kind: 'timed_out' },
+        observationDigest: FIXTURE_DIGEST,
+        receivedAt: observation.observedAt,
+      });
+      return module.readExecutionAggregateV04(request.ownerId, request.id);
+    });
+
+    expect(aggregate.attempts[0]?.state).toBe('indeterminate');
+    expect(aggregate.sessions[0]?.state).toBe('lost');
+  });
+
+  it('rejects unsupported or time-travelling reconciliation and never reopens terminal output', async () => {
+    const stub = freshStub();
+    const aggregate = await runInDurableObject(stub, (_instance, state) => {
+      const module = writer(state.storage);
+      admit(module);
+      claim(module);
+      expect(() => reconcile(module, {
+        reconciliation: {
+          ...reconciliation,
+          state: 'failed',
+          basisObservationIds: [],
+          checkedAt: '2026-08-13T12:00:03.000Z',
+        },
+        reconciliationDigest: FIXTURE_DIGEST,
+      })).toThrow(/reconciliation (state|basis)/i);
+      expect(() => reconcile(module, {
+        reconciliation: {
+          ...reconciliation,
+          id: 'reconciliation_before_attempt',
+          state: 'running',
+          basisObservationIds: [],
+          checkedAt: '2026-08-13T12:00:00.000Z',
+        },
+        reconciliationDigest: `sha256:${'b'.repeat(64)}`,
+      })).toThrow(/reconciliation chronology/i);
+      expect(() => reconcile(module, {
+        reconciliation: {
+          ...reconciliation,
+          id: 'reconciliation_future_expiry_claim',
+          state: 'failed',
+          basisObservationIds: [],
+          checkedAt: '2026-08-13T12:10:30.000Z',
+        },
+        reconciliationDigest: `sha256:${'b'.repeat(64)}`,
+      }, '2026-08-13T12:00:04.000Z')).toThrow(/reconciliation chronology/i);
+
+      module.admitExecutorObservationV04InCurrentTransaction({
+        observation,
+        observationDigest: FIXTURE_DIGEST,
+        receivedAt: observation.observedAt,
+      });
+      expect(() => reconcile(module, {
+        reconciliation: {
+          ...reconciliation,
+          id: 'reconciliation_reopens_ended',
+          state: 'running',
+          basisObservationIds: [],
+        },
+        reconciliationDigest: `sha256:${'c'.repeat(64)}`,
+      })).toThrow(/reconciliation state/i);
+      reconcile(module, {
+        reconciliation: { ...reconciliation, state: 'settled' },
+        reconciliationDigest: `sha256:${'d'.repeat(64)}`,
+      });
+      return module.readExecutionAggregateV04(request.ownerId, request.id);
+    });
+
+    expect(aggregate.attempts[0]?.state).toBe('settled');
+    expect(aggregate.sessions[0]?.state).toBe('ended');
   });
 
   it('does not let the legacy v0.3 control path mutate a v0.4 aggregate', async () => {
@@ -438,8 +747,9 @@ describe('responsibility execution v0.4 sole writer', () => {
         attempt: attempt2,
         lease: lease2,
         session: session2,
+        claimedAt: attempt2.updatedAt,
       })).toThrow(/already claimed/i);
-      module.reconcileExecutionAttemptV04InCurrentTransaction({
+      reconcile(module, {
         reconciliation: { ...reconciliation, state: 'indeterminate', basisObservationIds: [] },
         reconciliationDigest: FIXTURE_DIGEST,
       });
@@ -447,8 +757,9 @@ describe('responsibility execution v0.4 sole writer', () => {
         attempt: attempt2,
         lease: lease2,
         session: session2,
+        claimedAt: attempt2.updatedAt,
       })).toThrow(/already claimed/i);
-      module.reconcileExecutionAttemptV04InCurrentTransaction({
+      reconcile(module, {
         reconciliation: {
           ...reconciliation,
           id: 'reconciliation_failed',
@@ -462,8 +773,9 @@ describe('responsibility execution v0.4 sole writer', () => {
         attempt: attempt2,
         lease: lease2,
         session: session2,
+        claimedAt: attempt2.updatedAt,
       });
-      expect(() => module.reconcileExecutionAttemptV04InCurrentTransaction({
+      expect(() => reconcile(module, {
         reconciliation: {
           ...reconciliation,
           id: 'reconciliation_late_old_attempt',
@@ -478,6 +790,7 @@ describe('responsibility execution v0.4 sole writer', () => {
 
     expect(aggregate.attempts.map((value) => value.attemptNumber)).toEqual([1, 2]);
     expect(aggregate.leases.map((value) => value.fencingGeneration)).toEqual([1, 2]);
+    expect(aggregate.sessions.map((value) => value.state)).toEqual(['ended', 'starting']);
   });
 
   it('does not let cancellation regress a reconciled terminal attempt', async () => {
@@ -486,11 +799,16 @@ describe('responsibility execution v0.4 sole writer', () => {
       const module = writer(state.storage);
       admit(module);
       claim(module);
-      module.reconcileExecutionAttemptV04InCurrentTransaction({
-        reconciliation: { ...reconciliation, state: 'settled', basisObservationIds: [] },
+      module.admitExecutorObservationV04InCurrentTransaction({
+        observation,
+        observationDigest: FIXTURE_DIGEST,
+        receivedAt: observation.observedAt,
+      });
+      reconcile(module, {
+        reconciliation: { ...reconciliation, state: 'settled' },
         reconciliationDigest: FIXTURE_DIGEST,
       });
-      expect(() => module.reconcileExecutionAttemptV04InCurrentTransaction({
+      expect(() => reconcile(module, {
         reconciliation: {
           ...reconciliation,
           id: 'reconciliation_reopen_terminal',
@@ -514,39 +832,6 @@ describe('responsibility execution v0.4 sole writer', () => {
     const result = await runInDurableObject(stub, (_instance, state) => {
       const module = writer(state.storage);
       const sql = state.storage.sql;
-      sql.exec(
-        `INSERT INTO owner_roots (root_key, owner_id, created_at)
-         VALUES (1, ?, ?)`,
-        request.ownerId,
-        request.requestedAt,
-      );
-      sql.exec(
-        `INSERT INTO outcomes (
-          id, owner_id, revision, user_statement, state, created_at, updated_at
-        ) VALUES (?, ?, 1, 'Unchanged product truth.', 'captured', ?, ?)`,
-        request.outcome.id,
-        request.ownerId,
-        request.requestedAt,
-        request.requestedAt,
-      );
-      sql.exec(
-        `INSERT INTO work_units (
-          id, owner_id, outcome_id, mission_id, position, revision, responsibility,
-          inputs_json, dependency_ids_json, expected_evidence_json,
-          required_capabilities_json, authority_ceiling_json, budget_json,
-          isolation_json, stop_conditions_json, assignee, session_ids_json,
-          state, created_at, updated_at
-        ) VALUES (?, ?, ?, NULL, 0, 1, 'Remain unresolved.', '[]', '[]', '[]', '[]',
-          '{"externalEffects":"none","acceptance":"none","closure":"none"}',
-          '{"maxProviderTurns":0,"maxExternalEffects":0,"maxDurationMs":0}',
-          '{"mode":"unassigned","egress":"deny_all","credentials":"none"}',
-          '[]', NULL, '[]', 'planned', ?, ?)`,
-        request.workUnit.id,
-        request.ownerId,
-        request.outcome.id,
-        request.requestedAt,
-        request.requestedAt,
-      );
       const before = {
         outcome: sql.exec('SELECT * FROM outcomes').one(),
         workUnit: sql.exec('SELECT * FROM work_units').one(),
@@ -558,7 +843,7 @@ describe('responsibility execution v0.4 sole writer', () => {
         observationDigest: FIXTURE_DIGEST,
         receivedAt: observation.observedAt,
       });
-      module.reconcileExecutionAttemptV04InCurrentTransaction({
+      reconcile(module, {
         reconciliation,
         reconciliationDigest: FIXTURE_DIGEST,
       });
@@ -609,7 +894,7 @@ describe('responsibility execution v0.4 sole writer', () => {
         observationDigest: FIXTURE_DIGEST,
         receivedAt: observation.observedAt,
       });
-      module.reconcileExecutionAttemptV04InCurrentTransaction({
+      reconcile(module, {
         reconciliation,
         reconciliationDigest: FIXTURE_DIGEST,
       });

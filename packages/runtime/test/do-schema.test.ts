@@ -141,8 +141,26 @@ describe('HEY-10 DO SQLite schema root', () => {
 
       provisionDoSchema(state.storage);
 
+      let legacyRevisionOneRejected = false;
+      try {
+        sql.exec(
+          `INSERT INTO planning_execution_requests (
+            id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+            request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+            capability_manifest_json, authority_ceiling_json, status,
+            cancellation_generation, created_at, updated_at, protocol_version
+          ) VALUES ('execution-v03-invalid', 'owner-v03', 'outcome-v03',
+            'work-unit-v03-invalid', 1, 'request-v03-invalid', 'digest-v03', '{}', '{}', '{}',
+            '{}', '{}', 'pending', 0, '2026-08-14T00:00:00.000Z',
+            '2026-08-14T00:00:00.000Z', '0.3')`,
+        );
+      } catch {
+        legacyRevisionOneRejected = true;
+      }
+
       return {
         version: getSchemaVersion(sql),
+        legacyRevisionOneRejected,
         tables: listTables(sql),
         explicitGoalsIndexes: sql
           .exec<{ name: string }>(
@@ -169,6 +187,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.version).toBe(6);
+    expect(result.legacyRevisionOneRejected).toBe(true);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
     expect(result.draft).toEqual({

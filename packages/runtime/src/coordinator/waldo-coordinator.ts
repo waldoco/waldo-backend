@@ -282,10 +282,19 @@ export class WaldoCoordinator {
   async admitExecutionRequestV04(
     requestValue: unknown,
     trustedBinding: ExecutionAdmissionBindingV04,
+    canonicalAuthority: ResponsibilityCanonicalAuthority,
   ): Promise<ExecutionAggregateV04> {
     const request = executionRequestV04Schema.parse(requestValue);
     const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify(request))}`;
     return this.#storage.transactionSync(() => {
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      if (authority.ownerId !== request.ownerId ||
+          authority.ownerId !== trustedBinding.routedOwnerId) {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
       this.#planning.admitExecutionRequestV04InCurrentTransaction({
         request,
         trustedBinding,
@@ -305,7 +314,12 @@ export class WaldoCoordinator {
     const lease = executionLeaseV04Schema.parse(input.lease);
     const session = executionSessionV04Schema.parse(input.session);
     return this.#storage.transactionSync(() => {
-      this.#planning.claimExecutionAttemptV04InCurrentTransaction({ attempt, lease, session });
+      this.#planning.claimExecutionAttemptV04InCurrentTransaction({
+        attempt,
+        lease,
+        session,
+        claimedAt: this.#deps.now(),
+      });
       this.#deps.afterWrite?.('execution_attempt');
       return this.#planning.readExecutionAggregateV04(
         attempt.ownerId,
@@ -337,22 +351,29 @@ export class WaldoCoordinator {
   }
 
   async cancelExecutionV04(input: Readonly<{
-    ownerId: string;
     request: unknown;
-    at?: string;
+    canonicalAuthority: ResponsibilityCanonicalAuthority;
   }>): Promise<ExecutionAggregateV04> {
     const request = executionCancelRequestV04Schema.parse(input.request);
     const requestDigest = `sha256:${await this.#deps.sha256Hex(JSON.stringify(request))}`;
     return this.#storage.transactionSync(() => {
+      const at = this.#deps.now();
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        input.canonicalAuthority,
+        at,
+      );
+      if (authority.presenceRegistrationId !== request.presenceRegistrationId) {
+        throw new Error('execution cancellation authority mismatch');
+      }
       this.#planning.cancelExecutionV04InCurrentTransaction({
-        ownerId: input.ownerId,
+        ownerId: authority.ownerId,
         request,
         requestDigest,
-        at: input.at ?? this.#deps.now(),
+        at,
       });
       this.#deps.afterWrite?.('execution_cancellation');
       return this.#planning.readExecutionAggregateV04(
-        input.ownerId,
+        authority.ownerId,
         request.executionRequestId,
       );
     });
@@ -369,6 +390,7 @@ export class WaldoCoordinator {
       this.#planning.reconcileExecutionAttemptV04InCurrentTransaction({
         reconciliation,
         reconciliationDigest,
+        receivedAt: this.#deps.now(),
       });
       this.#deps.afterWrite?.('execution_reconciliation');
       return this.#planning.readExecutionAggregateForAttemptV04(

@@ -1,12 +1,18 @@
 import {
+  executionAuthorityCeilingV04Schema,
   executionAttemptV04Schema,
   executionCancelRequestV04Schema,
+  executionEnvironmentRefV04Schema,
   executionLeaseV04Schema,
   executionObservationIsFreshV04,
   executionReconciliationV04Schema,
   executionRequestV04Schema,
   executionSessionV04Schema,
   executorObservationV04Schema,
+  protocolDigestSchema,
+  protocolIdSchema,
+  protocolReferenceV04Schema,
+  providerRefV04Schema,
   planningExecutionLeaseV03Schema,
   ROSTER,
   ROSTER_REFS,
@@ -83,25 +89,23 @@ export type ExecutionAggregateV04 = Readonly<{
   reconciliations: readonly ExecutionReconciliationV04[];
 }>;
 
-function canonicalizeExecutionProtocolValue(value: unknown): string {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-    return JSON.stringify(value);
-  }
-  if (typeof value === 'number') return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalizeExecutionProtocolValue).join(',')}]`;
-  }
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record).sort().map((key) =>
-      `${JSON.stringify(key)}:${canonicalizeExecutionProtocolValue(record[key])}`).join(',')}}`;
-  }
-  throw new Error('execution protocol value is not JSON');
+function sameValidatedValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function sameProtocolValue(left: unknown, right: unknown): boolean {
-  return canonicalizeExecutionProtocolValue(left) ===
-    canonicalizeExecutionProtocolValue(right);
+function parseExecutionAdmissionBindingV04(
+  value: ExecutionAdmissionBindingV04,
+): ExecutionAdmissionBindingV04 {
+  return Object.freeze({
+    routedOwnerId: protocolIdSchema.parse(value.routedOwnerId),
+    outcome: protocolReferenceV04Schema.parse(value.outcome),
+    workUnit: protocolReferenceV04Schema.parse(value.workUnit),
+    provider: providerRefV04Schema.parse(value.provider),
+    environment: executionEnvironmentRefV04Schema.parse(value.environment),
+    authorityCeiling: executionAuthorityCeilingV04Schema.parse(value.authorityCeiling),
+    contextProjectionRef: protocolIdSchema.parse(value.contextProjectionRef),
+    contextProjectionDigest: protocolDigestSchema.parse(value.contextProjectionDigest),
+  });
 }
 
 /** Owns execution-harness state; it never writes Outcome, Mission, or WorkUnit truth. */
@@ -121,15 +125,48 @@ export class PlanningExecutionModule {
     requestDigest: string;
   }>): ExecutionRequestV04 {
     const request = executionRequestV04Schema.parse(input.request);
+    const trustedBinding = parseExecutionAdmissionBindingV04(input.trustedBinding);
+    const canonical = this.storage.sql.exec<{
+      owner_id: string;
+      outcome_revision: number;
+      work_unit_revision: number;
+      work_unit_outcome_id: string;
+      authority_ceiling_json: string;
+    }>(
+      `SELECT roots.owner_id, outcomes.revision AS outcome_revision,
+              work_units.revision AS work_unit_revision,
+              work_units.outcome_id AS work_unit_outcome_id,
+              work_units.authority_ceiling_json
+         FROM owner_roots AS roots
+         JOIN outcomes ON outcomes.owner_id = roots.owner_id AND outcomes.id = ?
+         JOIN work_units ON work_units.owner_id = roots.owner_id AND work_units.id = ?
+        WHERE roots.root_key = 1 AND roots.owner_id = ? AND roots.state = 'active'`,
+      request.outcome.id,
+      request.workUnit.id,
+      request.ownerId,
+    ).toArray()[0];
+    const canonicalAuthorityCeiling = canonical === undefined
+      ? undefined
+      : executionAuthorityCeilingV04Schema.safeParse(
+        JSON.parse(canonical.authority_ceiling_json),
+      ).data;
+    const canonicalMatches =
+      canonical !== undefined &&
+      canonicalAuthorityCeiling !== undefined &&
+      canonical.outcome_revision === request.outcome.revision &&
+      canonical.work_unit_revision === request.workUnit.revision &&
+      canonical.work_unit_outcome_id === request.outcome.id &&
+      sameValidatedValue(canonicalAuthorityCeiling, request.authorityCeiling);
+    if (!canonicalMatches) throw new Error('canonical execution binding mismatch');
     const bindingMatches =
-      request.ownerId === input.trustedBinding.routedOwnerId &&
-      sameProtocolValue(request.outcome, input.trustedBinding.outcome) &&
-      sameProtocolValue(request.workUnit, input.trustedBinding.workUnit) &&
-      sameProtocolValue(request.provider, input.trustedBinding.provider) &&
-      sameProtocolValue(request.environment, input.trustedBinding.environment) &&
-      sameProtocolValue(request.authorityCeiling, input.trustedBinding.authorityCeiling) &&
-      request.contextProjectionRef === input.trustedBinding.contextProjectionRef &&
-      request.contextProjectionDigest === input.trustedBinding.contextProjectionDigest;
+      request.ownerId === trustedBinding.routedOwnerId &&
+      sameValidatedValue(request.outcome, trustedBinding.outcome) &&
+      sameValidatedValue(request.workUnit, trustedBinding.workUnit) &&
+      sameValidatedValue(request.provider, trustedBinding.provider) &&
+      sameValidatedValue(request.environment, trustedBinding.environment) &&
+      sameValidatedValue(request.authorityCeiling, trustedBinding.authorityCeiling) &&
+      request.contextProjectionRef === trustedBinding.contextProjectionRef &&
+      request.contextProjectionDigest === trustedBinding.contextProjectionDigest;
     if (!bindingMatches) throw new Error('execution request binding mismatch');
 
     const existing = this.storage.sql.exec<{
@@ -146,7 +183,7 @@ export class PlanningExecutionModule {
         throw new ResponsibilityDigestConflictError();
       }
       const persisted = this.readExecutionAggregateV04(request.ownerId, request.id).request;
-      if (!sameProtocolValue(persisted, request)) throw new ResponsibilityDigestConflictError();
+      if (!sameValidatedValue(persisted, request)) throw new ResponsibilityDigestConflictError();
       return persisted;
     }
 
@@ -191,6 +228,7 @@ export class PlanningExecutionModule {
     attempt: unknown;
     lease: unknown;
     session: unknown;
+    claimedAt: string;
   }>): Readonly<{
     attempt: ExecutionAttemptV04;
     lease: ExecutionLeaseV04;
@@ -219,20 +257,20 @@ export class PlanningExecutionModule {
       const immutableClaimMatches =
         persistedAttempt.ownerId === attempt.ownerId &&
         persistedAttempt.executionRequestId === attempt.executionRequestId &&
-        sameProtocolValue(persistedAttempt.workUnit, attempt.workUnit) &&
+        sameValidatedValue(persistedAttempt.workUnit, attempt.workUnit) &&
         persistedAttempt.attemptNumber === attempt.attemptNumber &&
-        sameProtocolValue(persistedAttempt.provider, attempt.provider) &&
-        sameProtocolValue(persistedAttempt.environment, attempt.environment) &&
+        sameValidatedValue(persistedAttempt.provider, attempt.provider) &&
+        sameValidatedValue(persistedAttempt.environment, attempt.environment) &&
         persistedAttempt.leaseId === attempt.leaseId &&
         persistedAttempt.fencingGeneration === attempt.fencingGeneration &&
         persistedAttempt.cancellationGeneration === attempt.cancellationGeneration &&
         persistedAttempt.createdAt === attempt.createdAt &&
-        sameProtocolValue(persistedLease, lease) &&
+        sameValidatedValue(persistedLease, lease) &&
         persistedSession.id === session.id &&
         persistedSession.ownerId === session.ownerId &&
         persistedSession.attemptId === session.attemptId &&
-        sameProtocolValue(persistedSession.provider, session.provider) &&
-        sameProtocolValue(persistedSession.environment, session.environment) &&
+        sameValidatedValue(persistedSession.provider, session.provider) &&
+        sameValidatedValue(persistedSession.environment, session.environment) &&
         persistedSession.providerSessionRef === session.providerSessionRef;
       if (!immutableClaimMatches) {
         throw new ResponsibilityPlanningConflictError('execution claim digest conflict');
@@ -254,23 +292,37 @@ export class PlanningExecutionModule {
         priorReconciliation !== undefined &&
         priorReconciliation.state === 'failed' &&
         attempt.attemptNumber === previous.attemptNumber + 1 &&
-        attempt.fencingGeneration === previousLease.fencingGeneration + 1;
+        attempt.fencingGeneration === previousLease.fencingGeneration + 1 &&
+        Date.parse(attempt.createdAt) >= Date.parse(previousLease.expiresAt);
       if (!retryIsReconciled) {
         throw new ResponsibilityPlanningConflictError('execution request already claimed');
       }
     }
 
+    const requestedAt = Date.parse(request.requestedAt);
+    const acquiredAt = Date.parse(lease.acquiredAt);
+    const expiresAt = Date.parse(lease.expiresAt);
+    const attemptCreatedAt = Date.parse(attempt.createdAt);
+    const attemptUpdatedAt = Date.parse(attempt.updatedAt);
+    const claimedAt = Date.parse(input.claimedAt);
     const exact =
       (attempt.state === 'queued' || attempt.state === 'running') &&
+      (session.state === 'starting' || session.state === 'active') &&
       session.lastObservationSequence === 0 &&
+      Number.isFinite(claimedAt) &&
+      requestedAt <= acquiredAt &&
+      acquiredAt <= attemptCreatedAt &&
+      attemptCreatedAt <= attemptUpdatedAt &&
+      attemptUpdatedAt <= claimedAt &&
+      claimedAt < expiresAt &&
       requestWriterState.status !== 'completed' &&
       requestWriterState.status !== 'cancelled' &&
       requestWriterState.cancellation_request_id === null &&
       attempt.ownerId === request.ownerId &&
       attempt.executionRequestId === request.id &&
-      sameProtocolValue(attempt.workUnit, request.workUnit) &&
-      sameProtocolValue(attempt.provider, request.provider) &&
-      sameProtocolValue(attempt.environment, request.environment) &&
+      sameValidatedValue(attempt.workUnit, request.workUnit) &&
+      sameValidatedValue(attempt.provider, request.provider) &&
+      sameValidatedValue(attempt.environment, request.environment) &&
       attempt.cancellationGeneration === aggregate.currentCancellationGeneration &&
       lease.ownerId === attempt.ownerId &&
       lease.executionRequestId === attempt.executionRequestId &&
@@ -278,11 +330,13 @@ export class PlanningExecutionModule {
       lease.id === attempt.leaseId &&
       lease.fencingGeneration === attempt.fencingGeneration &&
       lease.cancellationGeneration === attempt.cancellationGeneration &&
-      sameProtocolValue(lease.holder, attempt.environment) &&
+      sameValidatedValue(lease.holder, attempt.environment) &&
       session.ownerId === attempt.ownerId &&
       session.attemptId === attempt.id &&
-      sameProtocolValue(session.provider, attempt.provider) &&
-      sameProtocolValue(session.environment, attempt.environment);
+      sameValidatedValue(session.provider, attempt.provider) &&
+      sameValidatedValue(session.environment, attempt.environment) &&
+      (aggregate.attempts.length > 0 ||
+        (attempt.attemptNumber === 1 && attempt.fencingGeneration === 1));
     if (!exact) throw new Error('execution claim binding mismatch');
 
     this.storage.sql.exec(
@@ -342,7 +396,7 @@ export class PlanningExecutionModule {
         throw new ResponsibilityDigestConflictError();
       }
       const persisted = executorObservationV04Schema.parse(JSON.parse(existing.observation_json));
-      if (!sameProtocolValue(persisted, observation)) {
+      if (!sameValidatedValue(persisted, observation)) {
         throw new ResponsibilityDigestConflictError();
       }
       return persisted;
@@ -407,11 +461,13 @@ export class PlanningExecutionModule {
     );
     const attemptState = observation.kind === 'ended'
       ? 'settling'
-      : observation.kind === 'failed' || observation.kind === 'timed_out'
+      : observation.kind === 'failed'
         ? 'failed'
-        : observation.kind === 'unknown'
+        : observation.kind === 'timed_out'
           ? 'indeterminate'
-          : 'running';
+          : observation.kind === 'unknown'
+            ? 'indeterminate'
+            : 'running';
     this.storage.sql.exec(
       'UPDATE execution_attempts SET state = ?, updated_at = ? WHERE id = ?',
       attemptState,
@@ -434,23 +490,44 @@ export class PlanningExecutionModule {
       cancellation_request_id: string | null;
       cancellation_request_digest: string | null;
       cancellation_request_json: string | null;
+      created_at: string;
     }>(
       `SELECT cancellation_generation, status, cancellation_request_id,
-              cancellation_request_digest, cancellation_request_json
+              cancellation_request_digest, cancellation_request_json, created_at
          FROM planning_execution_requests
         WHERE id = ? AND owner_id = ? AND protocol_version = '0.4'`,
       request.executionRequestId,
       input.ownerId,
     ).toArray()[0];
-    if (row?.cancellation_request_id === request.requestId) {
+    if (row === undefined) {
+      throw new ResponsibilityPlanningConflictError('execution cancellation generation mismatch');
+    }
+    const presence = this.storage.sql.exec<{ owner_id: string; state: string }>(
+      `SELECT owner_id, state FROM presence_registrations
+        WHERE presence_registration_id = ?`,
+      request.presenceRegistrationId,
+    ).toArray()[0];
+    if (presence?.owner_id !== input.ownerId || presence.state !== 'active') {
+      throw new Error('execution cancellation authority mismatch');
+    }
+    const cancellationAt = Date.parse(input.at);
+    if (!Number.isFinite(cancellationAt) ||
+        Date.parse(request.clientIssuedAt) > cancellationAt ||
+        Date.parse(request.clientIssuedAt) < Date.parse(row.created_at)) {
+      throw new Error('execution cancellation chronology mismatch');
+    }
+    if (row.cancellation_request_id === request.requestId) {
       if (row.cancellation_request_digest !== input.requestDigest ||
           row.cancellation_request_json === null ||
-          !sameProtocolValue(JSON.parse(row.cancellation_request_json), request)) {
+          !sameValidatedValue(
+            executionCancelRequestV04Schema.parse(JSON.parse(row.cancellation_request_json)),
+            request,
+          )) {
         throw new ResponsibilityDigestConflictError();
       }
       return row.cancellation_generation;
     }
-    if (row === undefined || row.cancellation_request_id !== null ||
+    if (row.cancellation_request_id !== null ||
         row.cancellation_generation !== request.expectedCancellationGeneration) {
       throw new ResponsibilityPlanningConflictError('execution cancellation generation mismatch');
     }
@@ -473,9 +550,28 @@ export class PlanningExecutionModule {
       input.ownerId,
     );
     this.storage.sql.exec(
-      `UPDATE execution_attempts SET state = 'cancelling', updated_at = ?
+      `UPDATE execution_attempts
+          SET cancellation_generation = ?, state = 'cancelling', updated_at = ?
         WHERE execution_request_id = ? AND owner_id = ?
           AND state IN ('queued', 'running', 'settling', 'indeterminate')`,
+      nextGeneration,
+      input.at,
+      request.executionRequestId,
+      input.ownerId,
+    );
+    this.storage.sql.exec(
+      `UPDATE planning_execution_leases SET cancellation_generation = ?
+        WHERE execution_request_id = ? AND owner_id = ? AND attempt_id IS NOT NULL`,
+      nextGeneration,
+      request.executionRequestId,
+      input.ownerId,
+    );
+    this.storage.sql.exec(
+      `UPDATE planning_agent_sessions
+          SET cancellation_generation = ?, status = 'unknown', updated_at = ?
+        WHERE execution_request_id = ? AND owner_id = ? AND protocol_version = '0.4'
+          AND status IN ('starting', 'active', 'lost', 'unknown')`,
+      nextGeneration,
       input.at,
       request.executionRequestId,
       input.ownerId,
@@ -486,6 +582,7 @@ export class PlanningExecutionModule {
   reconcileExecutionAttemptV04InCurrentTransaction(input: Readonly<{
     reconciliation: unknown;
     reconciliationDigest: string;
+    receivedAt: string;
   }>): ExecutionReconciliationV04 {
     const reconciliation = executionReconciliationV04Schema.parse(input.reconciliation);
     const existing = this.storage.sql.exec<{ canonical_digest: string; reconciliation_json: string }>(
@@ -499,7 +596,7 @@ export class PlanningExecutionModule {
       const persisted = executionReconciliationV04Schema.parse(
         JSON.parse(existing.reconciliation_json),
       );
-      if (!sameProtocolValue(persisted, reconciliation)) {
+      if (!sameValidatedValue(persisted, reconciliation)) {
         throw new ResponsibilityDigestConflictError();
       }
       return persisted;
@@ -507,6 +604,15 @@ export class PlanningExecutionModule {
     const attempt = this.readAttemptV04(reconciliation.attemptId);
     const lease = this.readLeaseV04(reconciliation.leaseId);
     const aggregate = this.readExecutionAggregateV04(attempt.ownerId, attempt.executionRequestId);
+    const requestWriterState = this.storage.sql.exec<{
+      status: string;
+      cancellation_request_id: string | null;
+    }>(
+      `SELECT status, cancellation_request_id FROM planning_execution_requests
+        WHERE id = ? AND owner_id = ? AND protocol_version = '0.4'`,
+      attempt.executionRequestId,
+      attempt.ownerId,
+    ).one();
     if (aggregate.attempts.at(-1)?.id !== attempt.id) {
       throw new Error('execution reconciliation rejected');
     }
@@ -518,28 +624,82 @@ export class PlanningExecutionModule {
         priorReconciliation.state !== 'indeterminate') {
       throw new Error('execution reconciliation rejected');
     }
-    if (aggregate.currentCancellationGeneration !== attempt.cancellationGeneration &&
-        reconciliation.state === 'running') {
-      throw new Error('execution reconciliation rejected');
-    }
     const exact =
       reconciliation.ownerId === attempt.ownerId &&
       reconciliation.leaseId === attempt.leaseId &&
       reconciliation.fencingGeneration === attempt.fencingGeneration &&
       reconciliation.cancellationGeneration === attempt.cancellationGeneration &&
+      aggregate.currentCancellationGeneration === attempt.cancellationGeneration &&
       lease.attemptId === attempt.id &&
       lease.fencingGeneration === attempt.fencingGeneration &&
       lease.cancellationGeneration === attempt.cancellationGeneration;
     if (!exact) throw new Error('execution reconciliation binding mismatch');
-    const knownObservationIds = new Set(
-      this.storage.sql.exec<{ id: string }>(
-        'SELECT id FROM execution_observations WHERE attempt_id = ?',
-        attempt.id,
-      ).toArray().map((row) => row.id),
-    );
-    if (reconciliation.basisObservationIds.some((id) => !knownObservationIds.has(id))) {
+    const observations = this.storage.sql.exec<{
+      id: string;
+      kind: ExecutorObservationV04['kind'];
+      observed_at: string;
+      received_at: string;
+    }>(
+      `SELECT id, kind, observed_at, received_at
+         FROM execution_observations WHERE attempt_id = ?`,
+      attempt.id,
+    ).toArray();
+    const observationsById = new Map(observations.map((value) => [value.id, value]));
+    const basis = reconciliation.basisObservationIds.map((id) => observationsById.get(id));
+    if (new Set(reconciliation.basisObservationIds).size !==
+          reconciliation.basisObservationIds.length ||
+        basis.some((value) => value === undefined)) {
       throw new Error('execution reconciliation basis mismatch');
     }
+    const checkedAt = Date.parse(reconciliation.checkedAt);
+    const receivedAt = Date.parse(input.receivedAt);
+    const priorCheckedAt = priorReconciliation === undefined
+      ? Number.NEGATIVE_INFINITY
+      : Date.parse(priorReconciliation.checkedAt);
+    const chronologyMatches =
+      checkedAt >= Date.parse(attempt.updatedAt) &&
+      checkedAt >= Date.parse(lease.acquiredAt) &&
+      checkedAt <= receivedAt &&
+      receivedAt >= Date.parse(attempt.updatedAt) &&
+      checkedAt >= priorCheckedAt &&
+      basis.every((value) => value !== undefined &&
+        checkedAt >= Date.parse(value.observed_at) &&
+        checkedAt >= Date.parse(value.received_at));
+    if (!chronologyMatches) throw new Error('execution reconciliation chronology mismatch');
+
+    const basisKinds = new Set(basis.flatMap((value) => value?.kind ?? []));
+    const hasTerminalObservation = observations.some((value) =>
+      value.kind === 'ended' || value.kind === 'failed');
+    const requestWasCancelled =
+      requestWriterState.status === 'cancelled' &&
+      requestWriterState.cancellation_request_id !== null;
+    let stateMatches: boolean;
+    switch (reconciliation.state) {
+      case 'running':
+        stateMatches = !requestWasCancelled &&
+          (attempt.state === 'queued' || attempt.state === 'running' ||
+            attempt.state === 'indeterminate') &&
+          !hasTerminalObservation && checkedAt < Date.parse(lease.expiresAt);
+        break;
+      case 'cancelled':
+        stateMatches = requestWasCancelled && attempt.state === 'cancelling';
+        break;
+      case 'settled':
+        stateMatches = !requestWasCancelled && attempt.state === 'settling' &&
+          basisKinds.has('ended');
+        break;
+      case 'failed':
+        stateMatches = !requestWasCancelled && attempt.state !== 'settling' &&
+          attempt.state !== 'cancelling' &&
+          (basisKinds.has('failed') ||
+            (checkedAt >= Date.parse(lease.expiresAt) &&
+              receivedAt >= Date.parse(lease.expiresAt)));
+        break;
+      case 'indeterminate':
+        stateMatches = !requestWasCancelled && attempt.state !== 'cancelling';
+        break;
+    }
+    if (!stateMatches) throw new Error('execution reconciliation state mismatch');
 
     this.storage.sql.exec(
       `INSERT INTO execution_reconciliations (
@@ -559,11 +719,25 @@ export class PlanningExecutionModule {
       reconciliation.checkedAt,
       attempt.id,
     );
+    const sessionState = reconciliation.state === 'running'
+      ? 'active'
+      : reconciliation.state === 'indeterminate'
+        ? 'unknown'
+        : 'ended';
+    this.storage.sql.exec(
+      `UPDATE planning_agent_sessions SET status = ?, updated_at = ?
+        WHERE attempt_id = ? AND protocol_version = '0.4'`,
+      sessionState,
+      reconciliation.checkedAt,
+      attempt.id,
+    );
     const requestStatus = reconciliation.state === 'settled'
       ? 'completed'
-      : reconciliation.state === 'indeterminate'
-        ? 'ambiguous'
-        : reconciliation.state;
+      : reconciliation.state === 'running'
+        ? 'leased'
+        : reconciliation.state === 'indeterminate'
+          ? 'ambiguous'
+          : reconciliation.state;
     this.storage.sql.exec(
       'UPDATE planning_execution_requests SET status = ?, updated_at = ? WHERE id = ?',
       requestStatus,

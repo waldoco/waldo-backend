@@ -736,7 +736,10 @@ export const RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION: DoMigration = {
       owner_id                 TEXT NOT NULL,
       outcome_id               TEXT NOT NULL,
       work_unit_id             TEXT NOT NULL,
-      work_unit_revision       INTEGER NOT NULL CHECK (work_unit_revision > 0),
+      work_unit_revision       INTEGER NOT NULL CHECK (
+        (protocol_version = '0.3' AND work_unit_revision >= 2) OR
+        (protocol_version = '0.4' AND work_unit_revision > 0)
+      ),
       request_id               TEXT NOT NULL,
       request_digest           TEXT NOT NULL,
       governed_inputs_json     TEXT NOT NULL,
