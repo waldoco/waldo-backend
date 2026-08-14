@@ -140,6 +140,20 @@ export function currentExecutionBinding(value: ExecutionAggregateV04): CurrentEx
   });
 }
 
+export function currentExecutionOperationBasis(
+  current: CurrentExecutionBinding,
+  action: ExecutionEnvironmentAction,
+): ExecutionEnvironmentCommandV1['operationBasis'] {
+  return Object.freeze({
+    observationHighWater: action === 'resume' || action === 'pause' || action === 'reconcile'
+      ? current.session.lastObservationSequence
+      : 0,
+    reconciliationHighWater: action === 'reconcile'
+      ? current.aggregate.reconciliations.length
+      : 0,
+  });
+}
+
 async function operationIdentityFor(
   material: Omit<ExecutionEnvironmentCommandV1, 'operationId' | 'operationDigest'>,
 ): Promise<Readonly<{ operationId: string; operationDigest: string }>> {
@@ -171,6 +185,7 @@ function operationIdentityMaterial(
     fencingGeneration: command.fencingGeneration,
     cancellationGeneration: command.cancellationGeneration,
     leaseExpiresAt: command.leaseExpiresAt,
+    operationBasis: command.operationBasis,
     provider: command.provider,
     environment: command.environment,
     contextProjectionRef: command.contextProjectionRef,
@@ -222,6 +237,7 @@ export async function buildExecutionEnvironmentCommand(
     fencingGeneration: current.attempt.fencingGeneration,
     cancellationGeneration: current.attempt.cancellationGeneration,
     leaseExpiresAt: current.lease.expiresAt,
+    operationBasis: currentExecutionOperationBasis(current, action),
     provider: current.aggregate.request.provider,
     environment: current.aggregate.request.environment,
     contextProjectionRef: current.aggregate.request.contextProjectionRef,
@@ -257,6 +273,10 @@ function assertDispatchMatchesCurrent(
       command.fencingGeneration !== current.attempt.fencingGeneration ||
       command.cancellationGeneration !== current.attempt.cancellationGeneration ||
       command.leaseExpiresAt !== current.lease.expiresAt ||
+      command.operationBasis.observationHighWater !==
+        currentExecutionOperationBasis(current, command.action).observationHighWater ||
+      command.operationBasis.reconciliationHighWater !==
+        currentExecutionOperationBasis(current, command.action).reconciliationHighWater ||
       command.contextProjectionRef !== current.aggregate.request.contextProjectionRef ||
       command.contextProjectionDigest !== current.aggregate.request.contextProjectionDigest ||
       !sameValue(command.provider, current.aggregate.request.provider) ||

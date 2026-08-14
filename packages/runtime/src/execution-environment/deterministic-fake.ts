@@ -1,5 +1,6 @@
 import { iso8601Schema } from '@waldo/contracts';
 import {
+  parseExecutionEnvironmentCommandV1,
   parseExecutionEnvironmentDescriptorV1,
   type ExecutionEnvironmentAction,
   type ExecutionEnvironmentCommandV1,
@@ -24,9 +25,15 @@ type FakeAuthorityHighWater = Readonly<{
   cancellationGeneration: number;
 }>;
 
+type FakeVerifiedCommand = Readonly<{
+  operationDigest: string;
+  canonicalCommand: string;
+}>;
+
 export type DeterministicFakeExecutionEnvironmentStore = {
   readonly receipts: Map<string, FakeReceipt>;
   readonly authorityHighWater: Map<string, FakeAuthorityHighWater>;
+  readonly verifiedCommands: Map<string, FakeVerifiedCommand>;
   physicalIssues: number;
   executeCalls: number;
   recoverCalls: number;
@@ -45,6 +52,7 @@ DeterministicFakeExecutionEnvironmentStore {
   return {
     receipts: new Map(),
     authorityHighWater: new Map(),
+    verifiedCommands: new Map(),
     physicalIssues: 0,
     executeCalls: 0,
     recoverCalls: 0,
@@ -79,7 +87,12 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
 
   async execute(commandValue: ExecutionEnvironmentCommandV1): Promise<unknown> {
     this.#store.executeCalls += 1;
-    const command = await verifyExecutionEnvironmentCommandIdentity(commandValue);
+    const command = parseExecutionEnvironmentCommandV1(commandValue);
+    const verified = this.#store.verifiedCommands.get(command.operationId);
+    if (verified === undefined || verified.operationDigest !== command.operationDigest ||
+        verified.canonicalCommand !== JSON.stringify(command)) {
+      throw new Error('execution environment execute requires matching recovered command identity');
+    }
     this.#assertCommandBinding(command, true);
     const existing = this.#store.receipts.get(command.operationId);
     if (existing !== undefined) {
@@ -120,6 +133,17 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
     this.#store.recoverCalls += 1;
     const command = await verifyExecutionEnvironmentCommandIdentity(commandValue);
     this.#assertCommandBinding(command, false);
+    const canonicalCommand = JSON.stringify(command);
+    const verified = this.#store.verifiedCommands.get(command.operationId);
+    if (verified !== undefined &&
+        (verified.operationDigest !== command.operationDigest ||
+          verified.canonicalCommand !== canonicalCommand)) {
+      throw new Error('execution environment recovered command identity conflict');
+    }
+    this.#store.verifiedCommands.set(command.operationId, Object.freeze({
+      operationDigest: command.operationDigest,
+      canonicalCommand,
+    }));
     const existing = this.#store.receipts.get(command.operationId);
     if (existing === undefined) {
       const reconcileScript = command.action === 'reconcile'

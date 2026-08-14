@@ -7,6 +7,7 @@ import {
 import {
   buildExecutionEnvironmentCommand,
   currentExecutionBinding,
+  currentExecutionOperationBasis,
   parseExecutionEnvironmentDispatchInput,
   type ExecutionEnvironmentDispatchInput,
 } from './binding';
@@ -297,6 +298,7 @@ export class ExecutionEnvironmentBoundary {
       command.executionRequestId,
     );
     const current = currentExecutionBinding(aggregate);
+    const operationBasis = currentExecutionOperationBasis(current, command.action);
     if (current.aggregate.request.id !== command.executionRequestId ||
         current.attempt.id !== command.attemptId ||
         current.lease.id !== command.leaseId ||
@@ -305,6 +307,9 @@ export class ExecutionEnvironmentBoundary {
         current.attempt.cancellationGeneration !== command.cancellationGeneration ||
         current.aggregate.currentCancellationGeneration !== command.cancellationGeneration ||
         current.lease.expiresAt !== command.leaseExpiresAt ||
+        operationBasis.observationHighWater !== command.operationBasis.observationHighWater ||
+        operationBasis.reconciliationHighWater !==
+          command.operationBasis.reconciliationHighWater ||
         executionEnvironmentIdentityKey(current.aggregate.request.environment) !==
           executionEnvironmentIdentityKey(command.environment) ||
         JSON.stringify(current.aggregate.request.provider) !== JSON.stringify(command.provider) ||

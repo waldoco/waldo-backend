@@ -55,6 +55,10 @@ export type ExecutionEnvironmentCommandV1 = Readonly<{
   fencingGeneration: number;
   cancellationGeneration: number;
   leaseExpiresAt: string;
+  operationBasis: Readonly<{
+    observationHighWater: number;
+    reconciliationHighWater: number;
+  }>;
   provider: ProviderRefV04;
   environment: EnvironmentRefV04;
   contextProjectionRef: string;
@@ -67,6 +71,8 @@ export interface ExecutionEnvironmentPort {
   /**
    * Adapters must durably deduplicate operation identity and reject expired,
    * lower-generation, or conflicting-lease commands before external apply.
+   * Invocation is the issue linearization point: the final local check and
+   * target-side fenced apply must not have an unfenced asynchronous gap.
    */
   execute(command: ExecutionEnvironmentCommandV1): Promise<unknown>;
   /** Receipt recovery is read-only and must never issue the operation. */
@@ -178,7 +184,7 @@ export function parseExecutionEnvironmentCommandV1(
     'executionRequestId',
     'attemptId', 'sessionId', 'leaseId', 'fencingGeneration',
     'cancellationGeneration', 'leaseExpiresAt', 'provider', 'environment',
-    'contextProjectionRef', 'contextProjectionDigest', 'control',
+    'operationBasis', 'contextProjectionRef', 'contextProjectionDigest', 'control',
     'operationId', 'operationDigest',
   ], 'execution environment command');
   if (input.protocolVersion !== '0.4' ||
@@ -219,6 +225,15 @@ export function parseExecutionEnvironmentCommandV1(
   }
   const provider = providerRefV04Schema.parse(input.provider);
   const environment = executionEnvironmentRefV04Schema.parse(input.environment);
+  const operationBasisInput = strictRecord(
+    input.operationBasis,
+    'execution environment command operation basis',
+  );
+  requireExactKeys(
+    operationBasisInput,
+    ['observationHighWater', 'reconciliationHighWater'],
+    'execution environment command operation basis',
+  );
   return Object.freeze({
     protocolVersion: '0.4',
     category: 'execution_environment_command',
@@ -241,6 +256,14 @@ export function parseExecutionEnvironmentCommandV1(
     fencingGeneration: exactRevisionV04Schema.parse(input.fencingGeneration),
     cancellationGeneration: protocolRevisionSchema.parse(input.cancellationGeneration),
     leaseExpiresAt: iso8601Schema.parse(input.leaseExpiresAt),
+    operationBasis: Object.freeze({
+      observationHighWater: protocolRevisionSchema.parse(
+        operationBasisInput.observationHighWater,
+      ),
+      reconciliationHighWater: protocolRevisionSchema.parse(
+        operationBasisInput.reconciliationHighWater,
+      ),
+    }),
     provider: Object.freeze({
       ...provider,
       manifest: Object.freeze({ ...provider.manifest }),

@@ -3,6 +3,7 @@ import {
   executionAttemptV04Schema,
   executionLeaseV04Schema,
   executionRequestV04Schema,
+  executionReconciliationV04Schema,
   executionSessionV04Schema,
   executorObservationV04Schema,
 } from '@waldo/contracts';
@@ -29,6 +30,9 @@ const lease = executionLeaseV04Schema.parse(
 );
 const session = executionSessionV04Schema.parse(
   JSON.parse(bundle['execution-session.valid.json']!),
+);
+const reconciliation = executionReconciliationV04Schema.parse(
+  JSON.parse(bundle['execution-reconciliation.valid.json']!),
 );
 const aggregate = Object.freeze({
   request,
@@ -262,11 +266,11 @@ describe('execution environment port conformance', () => {
     await expect(reconstructedAdapter.execute({
       ...recovered.command,
       operationDigest: `sha256:${'f'.repeat(64)}`,
-    })).rejects.toThrow(/operation identity|digest conflict/i);
+    })).rejects.toThrow(/operation identity|command identity|digest conflict/i);
     await expect(reconstructedAdapter.execute({
       ...recovered.command,
       contextProjectionDigest: `sha256:${'f'.repeat(64)}`,
-    })).rejects.toThrow(/operation identity/i);
+    })).rejects.toThrow(/operation identity|command identity/i);
     expect(store.physicalIssues).toBe(1);
   });
 
@@ -688,6 +692,61 @@ describe('execution environment port conformance', () => {
     expect(store.physicalIssues).toBe(1);
   });
 
+  it('advances repeatable operation identity only after canonical progress', async () => {
+    const adapter = port().descriptor.adapter;
+    const binding = (action: 'start' | 'pause' | 'reconcile') => ({
+      adapter,
+      capability: {
+        action,
+        mode: 'native' as const,
+        version: `${action}-v1`,
+      },
+    });
+    const input = (action: 'start' | 'pause' | 'reconcile') => ({ action, control: null } as const);
+    const initialPause = await buildExecutionEnvironmentCommand(
+      aggregate,
+      input('pause'),
+      binding('pause'),
+    );
+    const initialReconcile = await buildExecutionEnvironmentCommand(
+      aggregate,
+      input('reconcile'),
+      binding('reconcile'),
+    );
+    const initialStart = await buildExecutionEnvironmentCommand(
+      aggregate,
+      input('start'),
+      binding('start'),
+    );
+    const progressed = {
+      ...aggregate,
+      sessions: [executionSessionV04Schema.parse({
+        ...session,
+        lastObservationSequence: session.lastObservationSequence + 1,
+      })],
+      reconciliations: [reconciliation],
+    };
+    const repeatedPause = await buildExecutionEnvironmentCommand(
+      progressed,
+      input('pause'),
+      binding('pause'),
+    );
+    const repeatedReconcile = await buildExecutionEnvironmentCommand(
+      progressed,
+      input('reconcile'),
+      binding('reconcile'),
+    );
+    const replayedStart = await buildExecutionEnvironmentCommand(
+      progressed,
+      input('start'),
+      binding('start'),
+    );
+
+    expect(repeatedPause.operationId).not.toBe(initialPause.operationId);
+    expect(repeatedReconcile.operationId).not.toBe(initialReconcile.operationId);
+    expect(replayedStart.operationId).toBe(initialStart.operationId);
+  });
+
   it('enforces adapter-side generation high-water and one claimant per lease generation', async () => {
     const descriptor = port().descriptor;
     const store = createDeterministicFakeExecutionEnvironmentStore();
@@ -735,8 +794,11 @@ describe('execution environment port conformance', () => {
       operationBinding('cancel'),
     );
 
-    await fake.execute(cancel);
-    await expect(fake.execute(staleStart)).rejects.toThrow(/stale|authority/i);
+    await fake.recover(cancel);
+    const cancelIssue = fake.execute(cancel);
+    expect(store.physicalIssues).toBe(1);
+    await cancelIssue;
+    await expect(fake.recover(staleStart)).rejects.toThrow(/stale|authority/i);
 
     const conflictingLease = executionLeaseV04Schema.parse({
       ...nextLease,
