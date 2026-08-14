@@ -27,6 +27,9 @@ export const DO_PRODUCT_TABLES = [
   'planning_agent_sessions',
   'planning_execution_leases',
   'planning_provider_invocations',
+  'execution_attempts',
+  'execution_observations',
+  'execution_reconciliations',
   'work_unit_candidate_plans',
   'work_unit_planning_commands',
   'work_unit_planning_controls',
@@ -723,12 +726,293 @@ export const RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+export const RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION: DoMigration = {
+  version: 6,
+  name: 'responsibility-execution-writer-v0-4',
+  up: [
+    'ALTER TABLE planning_execution_requests RENAME TO planning_execution_requests_v05;',
+    `CREATE TABLE planning_execution_requests (
+      id                       TEXT PRIMARY KEY,
+      owner_id                 TEXT NOT NULL,
+      outcome_id               TEXT NOT NULL,
+      work_unit_id             TEXT NOT NULL,
+      work_unit_revision       INTEGER NOT NULL CHECK (
+        (protocol_version = '0.3' AND work_unit_revision >= 2) OR
+        (protocol_version = '0.4' AND work_unit_revision > 0)
+      ),
+      request_id               TEXT NOT NULL,
+      request_digest           TEXT NOT NULL,
+      governed_inputs_json     TEXT NOT NULL,
+      provider_ref_json        TEXT NOT NULL,
+      executor_ref_json        TEXT NOT NULL,
+      capability_manifest_json TEXT NOT NULL,
+      authority_ceiling_json   TEXT NOT NULL,
+      status                   TEXT NOT NULL CHECK (
+        status IN ('pending', 'leased', 'completed', 'cancelled', 'failed', 'ambiguous')
+      ),
+      cancellation_generation  INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      created_at               TEXT NOT NULL,
+      updated_at               TEXT NOT NULL,
+      protocol_version         TEXT NOT NULL DEFAULT '0.3' CHECK (protocol_version IN ('0.3', '0.4')),
+      outcome_ref_json         TEXT,
+      work_unit_ref_json       TEXT,
+      environment_ref_json     TEXT,
+      context_projection_ref   TEXT,
+      context_projection_digest TEXT,
+      request_json             TEXT,
+      cancellation_request_id  TEXT,
+      cancellation_request_digest TEXT,
+      cancellation_request_json TEXT,
+      UNIQUE (owner_id, request_id),
+      UNIQUE (owner_id, work_unit_id),
+      CHECK (
+        protocol_version = '0.3' OR (
+          outcome_ref_json IS NOT NULL AND work_unit_ref_json IS NOT NULL AND
+          environment_ref_json IS NOT NULL AND context_projection_ref IS NOT NULL AND
+          context_projection_digest IS NOT NULL AND request_json IS NOT NULL AND
+          ((cancellation_request_id IS NULL) = (cancellation_request_digest IS NULL)) AND
+          ((cancellation_request_id IS NULL) = (cancellation_request_json IS NULL))
+        )
+      )
+    );`,
+    `INSERT INTO planning_execution_requests (
+      id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+      request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+      capability_manifest_json, authority_ceiling_json, status,
+      cancellation_generation, created_at, updated_at, protocol_version
+    ) SELECT
+      id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+      request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+      capability_manifest_json, authority_ceiling_json, status,
+      cancellation_generation, created_at, updated_at, '0.3'
+    FROM planning_execution_requests_v05;`,
+    'DROP TABLE planning_execution_requests_v05;',
+    `CREATE UNIQUE INDEX planning_execution_requests_v04_cancel_request_unique
+       ON planning_execution_requests(cancellation_request_id)
+       WHERE protocol_version = '0.4' AND cancellation_request_id IS NOT NULL;`,
+    'ALTER TABLE planning_agent_sessions RENAME TO planning_agent_sessions_v05;',
+    `CREATE TABLE planning_agent_sessions (
+      id                       TEXT PRIMARY KEY,
+      owner_id                 TEXT NOT NULL,
+      outcome_id               TEXT NOT NULL,
+      work_unit_id             TEXT NOT NULL,
+      execution_request_id     TEXT NOT NULL,
+      status                   TEXT NOT NULL CHECK (
+        status IN (
+          'authorized', 'running', 'completed', 'cancelled', 'failed', 'ambiguous',
+          'starting', 'active', 'ended', 'lost', 'unknown'
+        )
+      ),
+      provider_ref_json        TEXT NOT NULL,
+      executor_ref_json        TEXT NOT NULL,
+      capability_manifest_json TEXT NOT NULL,
+      cancellation_generation  INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      created_at               TEXT NOT NULL,
+      updated_at               TEXT NOT NULL,
+      protocol_version         TEXT NOT NULL DEFAULT '0.3' CHECK (protocol_version IN ('0.3', '0.4')),
+      attempt_id               TEXT,
+      environment_ref_json     TEXT,
+      provider_session_ref     TEXT,
+      last_observation_sequence INTEGER NOT NULL DEFAULT 0 CHECK (last_observation_sequence >= 0),
+      CHECK (
+        protocol_version = '0.3' OR (attempt_id IS NOT NULL AND environment_ref_json IS NOT NULL)
+      )
+    );`,
+    `INSERT INTO planning_agent_sessions (
+      id, owner_id, outcome_id, work_unit_id, execution_request_id, status,
+      provider_ref_json, executor_ref_json, capability_manifest_json,
+      cancellation_generation, created_at, updated_at, protocol_version
+    ) SELECT
+      id, owner_id, outcome_id, work_unit_id, execution_request_id, status,
+      provider_ref_json, executor_ref_json, capability_manifest_json,
+      cancellation_generation, created_at, updated_at, '0.3'
+    FROM planning_agent_sessions_v05;`,
+    'DROP TABLE planning_agent_sessions_v05;',
+    `CREATE UNIQUE INDEX planning_agent_sessions_v03_request_unique
+       ON planning_agent_sessions(execution_request_id) WHERE protocol_version = '0.3';`,
+    `CREATE UNIQUE INDEX planning_agent_sessions_v04_attempt_unique
+       ON planning_agent_sessions(attempt_id) WHERE attempt_id IS NOT NULL;`,
+    'ALTER TABLE planning_execution_leases RENAME TO planning_execution_leases_v05;',
+    `CREATE TABLE planning_execution_leases (
+      execution_request_id    TEXT NOT NULL,
+      owner_id                TEXT NOT NULL,
+      holder_id               TEXT NOT NULL,
+      fence                   INTEGER NOT NULL CHECK (fence > 0),
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      acquired_at             TEXT NOT NULL,
+      expires_at              TEXT NOT NULL,
+      id                      TEXT,
+      attempt_id              TEXT,
+      environment_ref_json    TEXT,
+      CHECK ((id IS NULL AND attempt_id IS NULL) OR (id IS NOT NULL AND attempt_id IS NOT NULL))
+    );`,
+    `INSERT INTO planning_execution_leases (
+      execution_request_id, owner_id, holder_id, fence, cancellation_generation,
+      acquired_at, expires_at
+    ) SELECT
+      execution_request_id, owner_id, holder_id, fence, cancellation_generation,
+      acquired_at, expires_at
+    FROM planning_execution_leases_v05;`,
+    'DROP TABLE planning_execution_leases_v05;',
+    `CREATE UNIQUE INDEX planning_execution_leases_v03_request_unique
+       ON planning_execution_leases(execution_request_id) WHERE attempt_id IS NULL;`,
+    `CREATE UNIQUE INDEX planning_execution_leases_v04_id_unique
+       ON planning_execution_leases(id) WHERE id IS NOT NULL;`,
+    `CREATE UNIQUE INDEX planning_execution_leases_v04_attempt_unique
+       ON planning_execution_leases(attempt_id) WHERE attempt_id IS NOT NULL;`,
+    `CREATE TABLE execution_attempts (
+      id                      TEXT PRIMARY KEY,
+      owner_id                TEXT NOT NULL,
+      execution_request_id    TEXT NOT NULL,
+      work_unit_ref_json      TEXT NOT NULL,
+      attempt_number          INTEGER NOT NULL CHECK (attempt_number BETWEEN 1 AND 8),
+      provider_ref_json       TEXT NOT NULL,
+      environment_ref_json    TEXT NOT NULL,
+      lease_id                TEXT NOT NULL UNIQUE,
+      fencing_generation      INTEGER NOT NULL CHECK (fencing_generation > 0),
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      state                   TEXT NOT NULL CHECK (
+        state IN ('queued', 'running', 'cancelling', 'cancelled', 'settling',
+                  'settled', 'failed', 'indeterminate')
+      ),
+      created_at              TEXT NOT NULL,
+      updated_at              TEXT NOT NULL,
+      UNIQUE (execution_request_id, attempt_number)
+    );`,
+    `CREATE TABLE execution_observations (
+      id                      TEXT PRIMARY KEY,
+      owner_id                TEXT NOT NULL,
+      attempt_id              TEXT NOT NULL,
+      lease_id                TEXT NOT NULL,
+      fencing_generation      INTEGER NOT NULL CHECK (fencing_generation > 0),
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      sequence                INTEGER NOT NULL CHECK (sequence > 0),
+      kind                    TEXT NOT NULL CHECK (
+        kind IN ('started', 'activity', 'candidate_artifact', 'candidate_evidence',
+                 'ended', 'failed', 'timed_out', 'unknown')
+      ),
+      environment_ref_json    TEXT NOT NULL,
+      payload_ref             TEXT,
+      payload_digest          TEXT,
+      observed_at             TEXT NOT NULL,
+      received_at             TEXT NOT NULL,
+      observation_json        TEXT NOT NULL,
+      canonical_digest        TEXT NOT NULL,
+      UNIQUE (attempt_id, sequence),
+      CHECK ((payload_ref IS NULL) = (payload_digest IS NULL))
+    );`,
+    `CREATE TABLE execution_reconciliations (
+      id                      TEXT PRIMARY KEY,
+      owner_id                TEXT NOT NULL,
+      attempt_id              TEXT NOT NULL,
+      lease_id                TEXT NOT NULL,
+      fencing_generation      INTEGER NOT NULL CHECK (fencing_generation > 0),
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      state                   TEXT NOT NULL CHECK (
+        state IN ('running', 'cancelled', 'settled', 'failed', 'indeterminate')
+      ),
+      basis_observation_ids_json TEXT NOT NULL,
+      checked_at              TEXT NOT NULL,
+      reconciliation_json     TEXT NOT NULL,
+      canonical_digest        TEXT NOT NULL,
+      UNIQUE (attempt_id, id)
+    );`,
+  ],
+  down: [
+    `CREATE TABLE execution_writer_rollback_guard (
+      eligible INTEGER NOT NULL CHECK (eligible = 1)
+    );`,
+    `INSERT INTO execution_writer_rollback_guard (eligible)
+     SELECT CASE WHEN
+       NOT EXISTS (SELECT 1 FROM execution_attempts) AND
+       NOT EXISTS (SELECT 1 FROM execution_observations) AND
+       NOT EXISTS (SELECT 1 FROM execution_reconciliations) AND
+       NOT EXISTS (SELECT 1 FROM planning_execution_requests WHERE protocol_version != '0.3') AND
+       NOT EXISTS (SELECT 1 FROM planning_agent_sessions WHERE protocol_version != '0.3') AND
+       NOT EXISTS (SELECT 1 FROM planning_execution_leases WHERE id IS NOT NULL OR attempt_id IS NOT NULL)
+     THEN 1 ELSE 0 END;`,
+    'DROP TABLE execution_writer_rollback_guard;',
+    'DROP TABLE execution_reconciliations;',
+    'DROP TABLE execution_observations;',
+    'DROP TABLE execution_attempts;',
+    'ALTER TABLE planning_execution_requests RENAME TO planning_execution_requests_v06;',
+    `CREATE TABLE planning_execution_requests (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, outcome_id TEXT NOT NULL,
+      work_unit_id TEXT NOT NULL, work_unit_revision INTEGER NOT NULL CHECK (work_unit_revision >= 2),
+      request_id TEXT NOT NULL, request_digest TEXT NOT NULL, governed_inputs_json TEXT NOT NULL,
+      provider_ref_json TEXT NOT NULL, executor_ref_json TEXT NOT NULL,
+      capability_manifest_json TEXT NOT NULL, authority_ceiling_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (
+        status IN ('pending', 'leased', 'completed', 'cancelled', 'failed', 'ambiguous')
+      ),
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (owner_id, request_id), UNIQUE (owner_id, work_unit_id)
+    );`,
+    `INSERT INTO planning_execution_requests (
+      id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+      request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+      capability_manifest_json, authority_ceiling_json, status,
+      cancellation_generation, created_at, updated_at
+    ) SELECT
+      id, owner_id, outcome_id, work_unit_id, work_unit_revision, request_id,
+      request_digest, governed_inputs_json, provider_ref_json, executor_ref_json,
+      capability_manifest_json, authority_ceiling_json, status,
+      cancellation_generation, created_at, updated_at
+    FROM planning_execution_requests_v06;`,
+    'DROP TABLE planning_execution_requests_v06;',
+    'DROP INDEX planning_agent_sessions_v04_attempt_unique;',
+    'DROP INDEX planning_agent_sessions_v03_request_unique;',
+    'ALTER TABLE planning_agent_sessions RENAME TO planning_agent_sessions_v06;',
+    `CREATE TABLE planning_agent_sessions (
+      id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, outcome_id TEXT NOT NULL,
+      work_unit_id TEXT NOT NULL, execution_request_id TEXT NOT NULL UNIQUE,
+      status TEXT NOT NULL CHECK (
+        status IN ('authorized', 'running', 'completed', 'cancelled', 'failed', 'ambiguous')
+      ),
+      provider_ref_json TEXT NOT NULL, executor_ref_json TEXT NOT NULL,
+      capability_manifest_json TEXT NOT NULL,
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );`,
+    `INSERT INTO planning_agent_sessions (
+      id, owner_id, outcome_id, work_unit_id, execution_request_id, status,
+      provider_ref_json, executor_ref_json, capability_manifest_json,
+      cancellation_generation, created_at, updated_at
+    ) SELECT
+      id, owner_id, outcome_id, work_unit_id, execution_request_id, status,
+      provider_ref_json, executor_ref_json, capability_manifest_json,
+      cancellation_generation, created_at, updated_at
+    FROM planning_agent_sessions_v06;`,
+    'DROP TABLE planning_agent_sessions_v06;',
+    'DROP INDEX planning_execution_leases_v04_attempt_unique;',
+    'DROP INDEX planning_execution_leases_v04_id_unique;',
+    'DROP INDEX planning_execution_leases_v03_request_unique;',
+    'ALTER TABLE planning_execution_leases RENAME TO planning_execution_leases_v06;',
+    `CREATE TABLE planning_execution_leases (
+      execution_request_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, holder_id TEXT NOT NULL,
+      fence INTEGER NOT NULL CHECK (fence > 0),
+      cancellation_generation INTEGER NOT NULL CHECK (cancellation_generation >= 0),
+      acquired_at TEXT NOT NULL, expires_at TEXT NOT NULL
+    );`,
+    `INSERT INTO planning_execution_leases (
+      execution_request_id, owner_id, holder_id, fence, cancellation_generation,
+      acquired_at, expires_at
+    ) SELECT
+      execution_request_id, owner_id, holder_id, fence, cancellation_generation,
+      acquired_at, expires_at
+    FROM planning_execution_leases_v06;`,
+    'DROP TABLE planning_execution_leases_v06;',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
   RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
   RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
+  RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -960,20 +1244,43 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'request_id', 'request_digest', 'governed_inputs_json', 'provider_ref_json',
     'executor_ref_json', 'capability_manifest_json', 'authority_ceiling_json',
     'status', 'cancellation_generation', 'created_at', 'updated_at',
+    'protocol_version', 'outcome_ref_json', 'work_unit_ref_json',
+    'environment_ref_json', 'context_projection_ref', 'context_projection_digest',
+    'request_json', 'cancellation_request_id', 'cancellation_request_digest',
+    'cancellation_request_json',
   ],
   planning_agent_sessions: [
     'id', 'owner_id', 'outcome_id', 'work_unit_id', 'execution_request_id',
     'status', 'provider_ref_json', 'executor_ref_json', 'capability_manifest_json',
-    'cancellation_generation', 'created_at', 'updated_at',
+    'cancellation_generation', 'created_at', 'updated_at', 'protocol_version',
+    'attempt_id', 'environment_ref_json', 'provider_session_ref',
+    'last_observation_sequence',
   ],
   planning_execution_leases: [
     'execution_request_id', 'owner_id', 'holder_id', 'fence',
-    'cancellation_generation', 'acquired_at', 'expires_at',
+    'cancellation_generation', 'acquired_at', 'expires_at', 'id', 'attempt_id',
+    'environment_ref_json',
   ],
   planning_provider_invocations: [
     'execution_request_id', 'owner_id', 'invocation_key', 'effect_ref',
     'request_digest', 'execution_json', 'provider_ref_json',
     'status', 'result_digest', 'started_at', 'completed_at',
+  ],
+  execution_attempts: [
+    'id', 'owner_id', 'execution_request_id', 'work_unit_ref_json', 'attempt_number',
+    'provider_ref_json', 'environment_ref_json', 'lease_id', 'fencing_generation',
+    'cancellation_generation', 'state', 'created_at', 'updated_at',
+  ],
+  execution_observations: [
+    'id', 'owner_id', 'attempt_id', 'lease_id', 'fencing_generation',
+    'cancellation_generation', 'sequence', 'kind', 'environment_ref_json',
+    'payload_ref', 'payload_digest', 'observed_at', 'received_at',
+    'observation_json', 'canonical_digest',
+  ],
+  execution_reconciliations: [
+    'id', 'owner_id', 'attempt_id', 'lease_id', 'fencing_generation',
+    'cancellation_generation', 'state', 'basis_observation_ids_json', 'checked_at',
+    'reconciliation_json', 'canonical_digest',
   ],
   work_unit_candidate_plans: [
     'execution_request_id', 'owner_id', 'outcome_id', 'work_unit_id',
@@ -1046,8 +1353,15 @@ export function applyDoMigration(
 
   storage.transactionSync(() => {
     ensureMigrationMetadata(sql);
-    for (const statement of statements) {
-      sql.exec(statement);
+    for (const [index, statement] of statements.entries()) {
+      try {
+        sql.exec(statement);
+      } catch (cause) {
+        throw new Error(
+          `DO migration ${migration.name} ${direction} statement ${index + 1} failed`,
+          { cause },
+        );
+      }
     }
     if (direction === 'up') {
       sql.exec(

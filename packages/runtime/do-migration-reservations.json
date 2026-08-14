@@ -20,6 +20,10 @@
     {
       "version": 5,
       "name": "responsibility-planning-harness-v0-3"
+    },
+    {
+      "version": 6,
+      "name": "responsibility-execution-writer-v0-4"
     }
   ]
 }
