@@ -820,9 +820,9 @@ describe('execution environment port conformance', () => {
       ref: 'server_intent_pause_next',
       digest: `sha256:${'d'.repeat(64)}`,
     };
-    const next = await boundary.dispatch(current, { action: 'pause', control: null });
-    expect(next.command.operationId).not.toBe(first.command.operationId);
-    expect(store.physicalIssues).toBe(2);
+    await expect(boundary.dispatch(current, { action: 'pause', control: null }))
+      .rejects.toThrow(/reconciliation before reissue/i);
+    expect(store.physicalIssues).toBe(1);
   });
 
   it('enforces adapter-side generation high-water and one claimant per lease generation', async () => {

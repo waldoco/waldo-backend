@@ -37,6 +37,7 @@ export type DeterministicFakeExecutionEnvironmentStore = {
   readonly receipts: Map<string, FakeReceipt>;
   readonly authorityHighWater: Map<string, FakeAuthorityHighWater>;
   readonly verifiedCommands: Map<string, FakeVerifiedCommand>;
+  readonly unresolvedOperations: Map<string, Map<ExecutionEnvironmentAction, string>>;
   physicalIssues: number;
   executeCalls: number;
   recoverCalls: number;
@@ -56,6 +57,7 @@ DeterministicFakeExecutionEnvironmentStore {
     receipts: new Map(),
     authorityHighWater: new Map(),
     verifiedCommands: new Map(),
+    unresolvedOperations: new Map(),
     physicalIssues: 0,
     executeCalls: 0,
     recoverCalls: 0,
@@ -126,6 +128,19 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
       result,
       checkedAt,
     }));
+    let unresolved = this.#store.unresolvedOperations.get(command.executionRequestId);
+    if (result.status === 'indeterminate') {
+      if (unresolved === undefined) {
+        unresolved = new Map();
+        this.#store.unresolvedOperations.set(command.executionRequestId, unresolved);
+      }
+      unresolved.set(command.action, command.operationId);
+    } else if (unresolved?.get(command.action) === command.operationId) {
+      unresolved.delete(command.action);
+      if (unresolved.size === 0) {
+        this.#store.unresolvedOperations.delete(command.executionRequestId);
+      }
+    }
     if (script.disconnectAfterApply === true) {
       throw new Error('deterministic fake disconnected after external apply');
     }
@@ -136,6 +151,16 @@ export class DeterministicFakeExecutionEnvironment implements ExecutionEnvironme
     this.#store.recoverCalls += 1;
     const command = await verifyExecutionEnvironmentCommandIdentity(commandValue);
     this.#assertCommandBinding(command, false);
+    const unresolved = this.#store.unresolvedOperations.get(command.executionRequestId);
+    const unresolvedForAction = unresolved?.get(command.action);
+    if (unresolvedForAction !== undefined && unresolvedForAction !== command.operationId) {
+      throw new Error('execution environment fake requires reconciliation before reissue');
+    }
+    if (command.action !== 'cancel' && command.action !== 'reconcile' &&
+        unresolved !== undefined &&
+        [...unresolved.values()].some((operationId) => operationId !== command.operationId)) {
+      throw new Error('execution environment fake requires reconciliation before new effect');
+    }
     const canonicalCommand = JSON.stringify(command);
     const verified = this.#store.verifiedCommands.get(command.operationId);
     if (verified !== undefined &&
