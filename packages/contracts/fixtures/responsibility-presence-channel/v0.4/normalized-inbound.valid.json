@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "0.4",
+  "trust": "untrusted_content",
+  "adapter": {
+    "category": "channel_adapter",
+    "id": "fake_channel_fixture",
+    "version": "1.0.0",
+    "manifest": {
+      "id": "channel_manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "sourceAccountRef": "external_account_fixture",
+  "conversationRef": "conversation_fixture",
+  "messageRef": "message_fixture",
+  "dedupeKey": "dedupe_fixture",
+  "content": "Handle this fixture.",
+  "contentDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+  "receivedAt": "2026-08-13T12:00:00.000Z"
+}

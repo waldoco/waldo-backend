@@ -1,0 +1,42 @@
+{
+  "protocolVersion": "0.4",
+  "id": "acceptance_check_semantic_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "revision": 1,
+  "subject": {
+    "kind": "outcome",
+    "id": "outcome_fixture_01",
+    "revision": 3
+  },
+  "criterion": "The release note communicates the approved decision and remaining limitation.",
+  "verificationMethod": {
+    "kind": "declared_semantic_check",
+    "capability": "artifact.semantic.verify",
+    "targetRef": "artifact_release_fixture_01",
+    "model": {
+      "id": "semantic_model_fixture_01",
+      "version": "2026-08-08"
+    },
+    "harness": {
+      "id": "semantic_harness_fixture_01",
+      "version": "0.4.0"
+    },
+    "grader": {
+      "id": "release_grader_fixture_01",
+      "version": "1.0.0"
+    },
+    "evidence": {
+      "ref": "evidence_bundle_fixture_01",
+      "version": "1.0.0",
+      "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "independenceDisclosure": {
+      "independentFromProducer": true,
+      "disclosure": {
+        "ref": "independence_disclosure_fixture_01",
+        "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    }
+  },
+  "createdAt": "2026-08-08T18:00:00.000Z"
+}

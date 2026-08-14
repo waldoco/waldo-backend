@@ -1,0 +1,87 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "provider-done-closes-loop",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "loop_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture",
+          "revision": 1
+        },
+        "workUnit": null,
+        "unresolvedConsequence": {
+          "kind": "unverified",
+          "ref": "consequence_fixture"
+        },
+        "responsibleParty": {
+          "kind": "waldo",
+          "ref": null
+        },
+        "nextTrigger": {
+          "kind": "manual",
+          "ref": "trigger_fixture"
+        },
+        "evidenceGapRefs": [
+          "gap_fixture"
+        ],
+        "reEntryPointId": "reentry_fixture",
+        "attentionClass": "normal",
+        "state": "open",
+        "updatedAt": "2026-08-13T12:00:00.000Z",
+        "providerDone": true
+      }
+    },
+    {
+      "name": "inline-context",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "reentry_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "revision": 1
+        },
+        "mode": "verification",
+        "summary": "Verify the remaining consequence.",
+        "lastStableEventId": "event_fixture",
+        "nextAction": {
+          "kind": "verify",
+          "ref": "check_fixture"
+        },
+        "requiredContextRecipeRef": "recipe_fixture",
+        "requiredContextRecipeDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "evidenceGapRefs": [
+          "gap_fixture"
+        ],
+        "artifactRefs": [],
+        "eventCursor": 1,
+        "expiresAt": null,
+        "context": "full transcript"
+      }
+    },
+    {
+      "name": "resolve-without-acceptance",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "disposition_fixture",
+        "commandType": "open_loop.disposition",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "open_loop",
+          "id": "loop_fixture",
+          "expectedRevision": 1
+        },
+        "clientIssuedAt": "2026-08-13T12:01:00.000Z",
+        "disposition": "resolve",
+        "acceptanceId": null,
+        "reEntryPointId": null
+      }
+    }
+  ]
+}

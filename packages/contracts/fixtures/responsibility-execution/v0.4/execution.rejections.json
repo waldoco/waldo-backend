@@ -1,0 +1,533 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "provider-environment-confusion",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "execution_request_fixture",
+        "ownerId": "owner_fixture",
+        "outcome": {
+          "id": "aggregate_fixture",
+          "revision": 1,
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "workUnit": {
+          "id": "aggregate_fixture",
+          "revision": 1,
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "provider": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "environment": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "authorityCeiling": {
+          "tools": [],
+          "connectors": [],
+          "externalEffects": "none",
+          "outcomeMutation": "none",
+          "evidenceAdmission": "none",
+          "verification": "none",
+          "acceptance": "none",
+          "closure": "none"
+        },
+        "contextProjectionRef": "context_fixture",
+        "contextProjectionDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "cancellationGeneration": 1,
+        "requestedAt": "2026-08-13T12:00:00.000Z"
+      }
+    },
+    {
+      "name": "stale-fence-observation",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "observation_fixture",
+        "ownerId": "owner_fixture",
+        "attemptId": "attempt_fixture",
+        "environment": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "leaseId": "lease_fixture",
+        "fencingGeneration": 2,
+        "cancellationGeneration": 1,
+        "sequence": 1,
+        "kind": "ended",
+        "payloadRef": null,
+        "payloadDigest": null,
+        "observedAt": "2026-08-13T12:00:03.000Z"
+      }
+    },
+    {
+      "name": "executor-done-closes-outcome",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "observation_fixture",
+        "ownerId": "owner_fixture",
+        "attemptId": "attempt_fixture",
+        "environment": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "leaseId": "lease_fixture",
+        "fencingGeneration": 1,
+        "cancellationGeneration": 1,
+        "sequence": 1,
+        "kind": "ended",
+        "payloadRef": null,
+        "payloadDigest": null,
+        "observedAt": "2026-08-13T12:00:03.000Z",
+        "outcomeState": "completed"
+      }
+    },
+    {
+      "name": "environment-manifest-drift",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "observation_fixture",
+        "ownerId": "owner_fixture",
+        "attemptId": "attempt_fixture",
+        "environment": {
+          "category": "execution_environment",
+          "id": "environment_fixture",
+          "version": "1.0.0",
+          "environmentKind": "local",
+          "manifest": {
+            "id": "manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        },
+        "leaseId": "lease_fixture",
+        "fencingGeneration": 1,
+        "cancellationGeneration": 1,
+        "sequence": 1,
+        "kind": "ended",
+        "payloadRef": null,
+        "payloadDigest": null,
+        "observedAt": "2026-08-13T12:00:03.000Z"
+      }
+    },
+    {
+      "name": "expired-lease-observation",
+      "value": {
+        "attempt": {
+          "protocolVersion": "0.4",
+          "id": "attempt_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "execution_request_fixture",
+          "workUnit": {
+            "id": "aggregate_fixture",
+            "revision": 1,
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          },
+          "attemptNumber": 1,
+          "provider": {
+            "category": "provider",
+            "id": "provider_fixture",
+            "version": "1.0.0",
+            "modelRef": "model_fixture",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "state": "running",
+          "createdAt": "2026-08-13T12:00:01.000Z",
+          "updatedAt": "2026-08-13T12:00:02.000Z"
+        },
+        "lease": {
+          "protocolVersion": "0.4",
+          "id": "lease_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "execution_request_fixture",
+          "attemptId": "attempt_fixture",
+          "holder": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "acquiredAt": "2026-08-13T12:00:01.000Z",
+          "expiresAt": "2026-08-13T12:10:01.000Z"
+        },
+        "observation": {
+          "protocolVersion": "0.4",
+          "id": "observation_fixture",
+          "ownerId": "owner_fixture",
+          "attemptId": "attempt_fixture",
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "sequence": 1,
+          "kind": "ended",
+          "payloadRef": null,
+          "payloadDigest": null,
+          "observedAt": "2026-08-13T12:00:03.000Z"
+        },
+        "lastAdmittedSequence": 0,
+        "receivedAt": "2026-08-13T12:10:01.000Z"
+      }
+    },
+    {
+      "name": "replayed-observation",
+      "value": {
+        "attempt": {
+          "protocolVersion": "0.4",
+          "id": "attempt_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "execution_request_fixture",
+          "workUnit": {
+            "id": "aggregate_fixture",
+            "revision": 1,
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          },
+          "attemptNumber": 1,
+          "provider": {
+            "category": "provider",
+            "id": "provider_fixture",
+            "version": "1.0.0",
+            "modelRef": "model_fixture",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "state": "running",
+          "createdAt": "2026-08-13T12:00:01.000Z",
+          "updatedAt": "2026-08-13T12:00:02.000Z"
+        },
+        "lease": {
+          "protocolVersion": "0.4",
+          "id": "lease_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "execution_request_fixture",
+          "attemptId": "attempt_fixture",
+          "holder": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "acquiredAt": "2026-08-13T12:00:01.000Z",
+          "expiresAt": "2026-08-13T12:10:01.000Z"
+        },
+        "observation": {
+          "protocolVersion": "0.4",
+          "id": "observation_fixture",
+          "ownerId": "owner_fixture",
+          "attemptId": "attempt_fixture",
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "sequence": 1,
+          "kind": "ended",
+          "payloadRef": null,
+          "payloadDigest": null,
+          "observedAt": "2026-08-13T12:00:03.000Z"
+        },
+        "lastAdmittedSequence": 1,
+        "receivedAt": "2026-08-13T12:00:03.000Z"
+      }
+    },
+    {
+      "name": "lease-request-mismatch",
+      "value": {
+        "attempt": {
+          "protocolVersion": "0.4",
+          "id": "attempt_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "execution_request_fixture",
+          "workUnit": {
+            "id": "aggregate_fixture",
+            "revision": 1,
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          },
+          "attemptNumber": 1,
+          "provider": {
+            "category": "provider",
+            "id": "provider_fixture",
+            "version": "1.0.0",
+            "modelRef": "model_fixture",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "state": "running",
+          "createdAt": "2026-08-13T12:00:01.000Z",
+          "updatedAt": "2026-08-13T12:00:02.000Z"
+        },
+        "lease": {
+          "protocolVersion": "0.4",
+          "id": "lease_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "request_other",
+          "attemptId": "attempt_fixture",
+          "holder": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "acquiredAt": "2026-08-13T12:00:01.000Z",
+          "expiresAt": "2026-08-13T12:10:01.000Z"
+        },
+        "observation": {
+          "protocolVersion": "0.4",
+          "id": "observation_fixture",
+          "ownerId": "owner_fixture",
+          "attemptId": "attempt_fixture",
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "sequence": 1,
+          "kind": "ended",
+          "payloadRef": null,
+          "payloadDigest": null,
+          "observedAt": "2026-08-13T12:00:03.000Z"
+        },
+        "lastAdmittedSequence": 0,
+        "receivedAt": "2026-08-13T12:00:03.000Z"
+      }
+    },
+    {
+      "name": "observation-after-receipt",
+      "value": {
+        "attempt": {
+          "protocolVersion": "0.4",
+          "id": "attempt_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "execution_request_fixture",
+          "workUnit": {
+            "id": "aggregate_fixture",
+            "revision": 1,
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          },
+          "attemptNumber": 1,
+          "provider": {
+            "category": "provider",
+            "id": "provider_fixture",
+            "version": "1.0.0",
+            "modelRef": "model_fixture",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "state": "running",
+          "createdAt": "2026-08-13T12:00:01.000Z",
+          "updatedAt": "2026-08-13T12:00:02.000Z"
+        },
+        "lease": {
+          "protocolVersion": "0.4",
+          "id": "lease_fixture",
+          "ownerId": "owner_fixture",
+          "executionRequestId": "execution_request_fixture",
+          "attemptId": "attempt_fixture",
+          "holder": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "acquiredAt": "2026-08-13T12:00:01.000Z",
+          "expiresAt": "2026-08-13T12:10:01.000Z"
+        },
+        "observation": {
+          "protocolVersion": "0.4",
+          "id": "observation_fixture",
+          "ownerId": "owner_fixture",
+          "attemptId": "attempt_fixture",
+          "environment": {
+            "category": "execution_environment",
+            "id": "environment_fixture",
+            "version": "1.0.0",
+            "environmentKind": "local",
+            "manifest": {
+              "id": "manifest_fixture",
+              "version": "1.0.0",
+              "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+            }
+          },
+          "leaseId": "lease_fixture",
+          "fencingGeneration": 1,
+          "cancellationGeneration": 1,
+          "sequence": 1,
+          "kind": "ended",
+          "payloadRef": null,
+          "payloadDigest": null,
+          "observedAt": "2026-08-13T12:00:04.001Z"
+        },
+        "lastAdmittedSequence": 0,
+        "receivedAt": "2026-08-13T12:00:04.000Z"
+      }
+    },
+    {
+      "name": "cancel-client-owned-owner",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "cancel_request_fixture",
+        "commandType": "execution.cancel",
+        "presenceRegistrationId": "presence_fixture",
+        "executionRequestId": "execution_request_fixture",
+        "expectedCancellationGeneration": 1,
+        "clientIssuedAt": "2026-08-13T12:00:04.000Z",
+        "ownerId": "owner_attacker"
+      }
+    }
+  ]
+}

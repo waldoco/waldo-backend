@@ -1,0 +1,559 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "reconciliationKey": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "attempt": {
+          "type": "number",
+          "const": 1
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "type": "string",
+          "const": "issue"
+        },
+        "basis": {
+          "type": "string",
+          "const": "no_prior_issue"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "intentId",
+        "intentDigest",
+        "reconciliationKey",
+        "revision",
+        "attempt",
+        "checkedAt",
+        "state",
+        "basis"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "reconciliationKey": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "attempt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "type": "string",
+          "const": "authoritative_not_applied"
+        },
+        "receiptId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "observation": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "authoritative_read_back"
+            }
+          },
+          "required": [
+            "ref",
+            "digest",
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "intentId",
+        "intentDigest",
+        "reconciliationKey",
+        "revision",
+        "attempt",
+        "checkedAt",
+        "state",
+        "receiptId",
+        "observation"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "reconciliationKey": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "attempt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "type": "string",
+          "const": "applied"
+        },
+        "receiptId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "externalEffectRef": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "observation": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "applied_found"
+            }
+          },
+          "required": [
+            "ref",
+            "digest",
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "intentId",
+        "intentDigest",
+        "reconciliationKey",
+        "revision",
+        "attempt",
+        "checkedAt",
+        "state",
+        "receiptId",
+        "externalEffectRef",
+        "observation"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "reconciliationKey": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "attempt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "type": "string",
+          "const": "unavailable"
+        },
+        "receiptId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "observation": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "read_back_unavailable"
+            }
+          },
+          "required": [
+            "ref",
+            "digest",
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "intentId",
+        "intentDigest",
+        "reconciliationKey",
+        "revision",
+        "attempt",
+        "checkedAt",
+        "state",
+        "receiptId",
+        "observation"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "reconciliationKey": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "attempt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "type": "string",
+          "const": "unknown"
+        },
+        "receiptId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "observation": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "kind": {
+              "type": "string",
+              "const": "application_unknown"
+            }
+          },
+          "required": [
+            "ref",
+            "digest",
+            "kind"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "intentId",
+        "intentDigest",
+        "reconciliationKey",
+        "revision",
+        "attempt",
+        "checkedAt",
+        "state",
+        "receiptId",
+        "observation"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "reconciliationKey": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "attempt": {
+          "type": "number",
+          "const": 1
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "type": "string",
+          "const": "retry_admitted"
+        },
+        "basis": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "authoritative_not_applied"
+            },
+            "reconciliationId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema2"
+            }
+          },
+          "required": [
+            "kind",
+            "reconciliationId",
+            "digest"
+          ],
+          "additionalProperties": false
+        },
+        "retryOwner": {
+          "type": "string",
+          "const": "effect_engine"
+        },
+        "nextAttempt": {
+          "type": "number",
+          "const": 2
+        },
+        "remainingAttempts": {
+          "type": "number",
+          "const": 0
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "intentId",
+        "intentDigest",
+        "reconciliationKey",
+        "revision",
+        "attempt",
+        "checkedAt",
+        "state",
+        "basis",
+        "retryOwner",
+        "nextAttempt",
+        "remainingAttempts"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "intentDigest": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "reconciliationKey": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "attempt": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "checkedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "type": "string",
+          "const": "terminal_ambiguity"
+        },
+        "basis": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "unavailable",
+                "unknown"
+              ]
+            },
+            "reconciliationId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema2"
+            }
+          },
+          "required": [
+            "kind",
+            "reconciliationId",
+            "digest"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "intentId",
+        "intentDigest",
+        "reconciliationKey",
+        "revision",
+        "attempt",
+        "checkedAt",
+        "state",
+        "basis"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "__schema3": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema4": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema5": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-effect:0.4:effect-reconciliation",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}

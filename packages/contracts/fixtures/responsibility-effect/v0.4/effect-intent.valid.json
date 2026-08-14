@@ -1,0 +1,52 @@
+{
+  "protocolVersion": "0.4",
+  "id": "effect_intent_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "revision": 1,
+  "outcome": {
+    "id": "outcome_fixture_01",
+    "revision": 3
+  },
+  "workUnit": {
+    "id": "work_unit_fixture_01",
+    "revision": 4
+  },
+  "judgment": {
+    "requestId": "judgment_request_fixture_01",
+    "requestRevision": 2,
+    "decisionId": "judgment_decision_fixture_01",
+    "decisionRevision": 1
+  },
+  "authority": {
+    "grantId": "authority_grant_fixture_01",
+    "grantRevision": 1,
+    "useIndex": 1,
+    "revocationGeneration": 0
+  },
+  "purpose": "calendar.follow_up.schedule",
+  "effectFamily": "calendar.event.create",
+  "argumentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "contextDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "artifactDigest": null,
+  "capability": {
+    "id": "capability_calendar_event_create_fixture_01",
+    "version": "1.0.0",
+    "manifestDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "eligibilityRevision": 1
+  },
+  "adapter": {
+    "id": "effect_adapter_fixture_01",
+    "version": "1.0.0",
+    "manifestDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "reconciliationKey": "effect_reconciliation_fixture_01",
+  "lease": {
+    "id": "execution_lease_fixture_01",
+    "fencingGeneration": 1
+  },
+  "cancellationGeneration": 0,
+  "expiresAt": "2026-08-08T18:30:00.000Z",
+  "frozenAt": "2026-08-08T18:11:00.000Z",
+  "state": "frozen",
+  "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89"
+}

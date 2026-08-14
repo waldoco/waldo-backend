@@ -1,0 +1,14 @@
+{
+  "protocolVersion": "0.4",
+  "id": "surface_fixture",
+  "version": "1.0.0",
+  "commands": [
+    "conversation.send",
+    "responsibility.capture"
+  ],
+  "projections": [
+    "conversation",
+    "responsibility_status"
+  ],
+  "offlineCommands": "none"
+}

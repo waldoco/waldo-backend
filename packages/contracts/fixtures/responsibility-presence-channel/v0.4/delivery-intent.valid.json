@@ -1,0 +1,28 @@
+{
+  "protocolVersion": "0.4",
+  "id": "delivery_fixture",
+  "ownerId": "owner_fixture",
+  "revision": 1,
+  "presence": {
+    "category": "presence",
+    "id": "presence_fixture",
+    "registrationRevision": 1
+  },
+  "adapter": {
+    "category": "channel_adapter",
+    "id": "fake_channel_fixture",
+    "version": "1.0.0",
+    "manifest": {
+      "id": "channel_manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "projectionRef": "projection_fixture",
+  "projectionDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+  "contentRef": "content_fixture",
+  "contentDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+  "dedupeKey": "delivery_dedupe_fixture",
+  "state": "pending_delivery",
+  "createdAt": "2026-08-13T12:01:00.000Z"
+}

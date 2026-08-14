@@ -1,0 +1,17 @@
+{
+  "protocolVersion": "0.4",
+  "requestId": "answer_judgment_fixture_01",
+  "commandType": "judgment.answer",
+  "presenceRegistrationId": "presence_registration_fixture_01",
+  "aggregate": {
+    "kind": "judgment_request",
+    "id": "judgment_request_fixture_01",
+    "expectedRevision": 2
+  },
+  "correlationId": "correlation_judgment_fixture_01",
+  "clientIssuedAt": "2026-08-08T18:10:00.000Z",
+  "payload": {
+    "selectedOptionId": "option_approve",
+    "displayedRequestDigest": "sha256:b0fcec3497ebd61f2cb436f02ae734529bd8d86dd0b21c706e4c305cb31b9435"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "0.4",
+  "submissionId": "submission_fixture",
+  "source": {
+    "kind": "provider",
+    "id": "provider_fixture",
+    "version": "1.0.0"
+  },
+  "subject": {
+    "kind": "work_unit",
+    "id": "work_fixture",
+    "revision": 1
+  },
+  "acceptanceCheckId": "check_fixture",
+  "claim": {
+    "ref": "claim_fixture",
+    "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+  },
+  "artifactRefs": [],
+  "observedAt": "2026-08-13T12:00:00.000Z"
+}

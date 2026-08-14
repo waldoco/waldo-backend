@@ -1,0 +1,40 @@
+{
+  "protocolVersion": "0.4",
+  "id": "attempt_fixture",
+  "ownerId": "owner_fixture",
+  "executionRequestId": "execution_request_fixture",
+  "workUnit": {
+    "id": "aggregate_fixture",
+    "revision": 1,
+    "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+  },
+  "attemptNumber": 1,
+  "provider": {
+    "category": "provider",
+    "id": "provider_fixture",
+    "version": "1.0.0",
+    "modelRef": "model_fixture",
+    "manifest": {
+      "id": "manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "environment": {
+    "category": "execution_environment",
+    "id": "environment_fixture",
+    "version": "1.0.0",
+    "environmentKind": "local",
+    "manifest": {
+      "id": "manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "leaseId": "lease_fixture",
+  "fencingGeneration": 1,
+  "cancellationGeneration": 1,
+  "state": "running",
+  "createdAt": "2026-08-13T12:00:01.000Z",
+  "updatedAt": "2026-08-13T12:00:02.000Z"
+}

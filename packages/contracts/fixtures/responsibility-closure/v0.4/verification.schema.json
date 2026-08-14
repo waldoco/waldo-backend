@@ -1,0 +1,527 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "outcome": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheck": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "evidence": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "evidenceSetDigest": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "methodVersion": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "findings": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "verifier": {
+          "$ref": "#/$defs/__schema9"
+        },
+        "state": {
+          "type": "string",
+          "const": "pending"
+        },
+        "verifiedAt": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "outcome",
+        "acceptanceCheck",
+        "evidence",
+        "evidenceSetDigest",
+        "methodVersion",
+        "findings",
+        "verifier",
+        "state",
+        "verifiedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "outcome": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheck": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "evidence": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "evidenceSetDigest": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "methodVersion": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "findings": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "verifier": {
+          "$ref": "#/$defs/__schema10"
+        },
+        "state": {
+          "type": "string",
+          "const": "passed"
+        },
+        "verifiedAt": {
+          "$ref": "#/$defs/__schema11"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "outcome",
+        "acceptanceCheck",
+        "evidence",
+        "evidenceSetDigest",
+        "methodVersion",
+        "findings",
+        "verifier",
+        "state",
+        "verifiedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "outcome": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheck": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "evidence": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "evidenceSetDigest": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "methodVersion": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "findings": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "verifier": {
+          "$ref": "#/$defs/__schema10"
+        },
+        "state": {
+          "type": "string",
+          "const": "failed"
+        },
+        "verifiedAt": {
+          "$ref": "#/$defs/__schema11"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "outcome",
+        "acceptanceCheck",
+        "evidence",
+        "evidenceSetDigest",
+        "methodVersion",
+        "findings",
+        "verifier",
+        "state",
+        "verifiedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "outcome": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheck": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "evidence": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "evidenceSetDigest": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "methodVersion": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "findings": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema9"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/$defs/__schema1"
+                },
+                "version": {
+                  "$ref": "#/$defs/__schema1"
+                },
+                "availability": {
+                  "type": "string",
+                  "enum": [
+                    "unavailable",
+                    "unsupported"
+                  ]
+                },
+                "independentFromProducer": {
+                  "type": "boolean"
+                },
+                "disclosureRef": {
+                  "$ref": "#/$defs/__schema1"
+                }
+              },
+              "required": [
+                "id",
+                "version",
+                "availability",
+                "independentFromProducer",
+                "disclosureRef"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "state": {
+          "type": "string",
+          "const": "indeterminate"
+        },
+        "verifiedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema11"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "outcome",
+        "acceptanceCheck",
+        "evidence",
+        "evidenceSetDigest",
+        "methodVersion",
+        "findings",
+        "verifier",
+        "state",
+        "verifiedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "outcome": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheck": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "evidence": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "evidenceSetDigest": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "methodVersion": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "findings": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "verifier": {
+          "$ref": "#/$defs/__schema9"
+        },
+        "state": {
+          "type": "string",
+          "const": "stale"
+        },
+        "verifiedAt": {
+          "$ref": "#/$defs/__schema11"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "outcome",
+        "acceptanceCheck",
+        "evidence",
+        "evidenceSetDigest",
+        "methodVersion",
+        "findings",
+        "verifier",
+        "state",
+        "verifiedAt"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema4": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema5": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "__schema6": {
+      "minItems": 1,
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema7"
+      }
+    },
+    "__schema7": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema8": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "$ref": "#/$defs/__schema5"
+            }
+          },
+          "required": [
+            "ref",
+            "digest"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema9": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "version": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "availability": {
+          "type": "string",
+          "const": "available"
+        },
+        "independentFromProducer": {
+          "type": "boolean"
+        },
+        "disclosureRef": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "availability",
+        "independentFromProducer",
+        "disclosureRef"
+      ],
+      "additionalProperties": false
+    },
+    "__schema10": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "version": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "availability": {
+          "type": "string",
+          "const": "available"
+        },
+        "independentFromProducer": {
+          "type": "boolean",
+          "const": true
+        },
+        "disclosureRef": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "availability",
+        "independentFromProducer",
+        "disclosureRef"
+      ],
+      "additionalProperties": false
+    },
+    "__schema11": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-closure:0.4:verification",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
+}
