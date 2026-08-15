@@ -603,6 +603,25 @@ describe('responsibility judgment and authority v0.5', () => {
       ...granted,
       decision: { ...decision, ownerPolicyRevision: 8 },
     }).success).toBe(false);
+    for (const level of ['top', 'aggregate', 'payload'] as const) {
+      const hostileAnswer = {
+        ...answer,
+        aggregate: { ...answer.aggregate },
+        payload: { ...answer.payload },
+      };
+      Object.defineProperty(
+        level === 'top' ? hostileAnswer : hostileAnswer[level],
+        '__proto__',
+        {
+          value: 'forbidden_prototype_value',
+          enumerable: true,
+        },
+      );
+      expect(judgmentAuthorityBindingV05Schema.safeParse({
+        ...granted,
+        answer: hostileAnswer,
+      }).success, `binding answer ${level}`).toBe(false);
+    }
 
     const refusedAnswer = {
       ...answer,

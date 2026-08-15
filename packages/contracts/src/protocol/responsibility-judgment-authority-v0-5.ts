@@ -520,7 +520,16 @@ const judgmentAuthorityBindingBaseV05Shape = {
   decision: judgmentDecisionV05Schema,
 } as const;
 
-export const judgmentAuthorityBindingV05Schema = z
+function rejectOwnPrototypeKeysFromJudgmentAuthorityBindingV05(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value;
+  const candidate = value as Record<string, unknown>;
+  if (rejectOwnPrototypeKeysFromJudgmentAnswerV05(candidate.answer) !== candidate.answer) {
+    return { rejectedBindingAnswerPrototypeKey: true };
+  }
+  return value;
+}
+
+const judgmentAuthorityBindingV05StructuralSchema = z
   .discriminatedUnion('authorityDisposition', [
     z.strictObject({
       ...judgmentAuthorityBindingBaseV05Shape,
@@ -683,6 +692,11 @@ export const judgmentAuthorityBindingV05Schema = z
       );
     }
   });
+
+export const judgmentAuthorityBindingV05Schema = z.preprocess(
+  rejectOwnPrototypeKeysFromJudgmentAuthorityBindingV05,
+  judgmentAuthorityBindingV05StructuralSchema,
+);
 
 export type JudgmentAuthorityBindingV05 = z.infer<typeof judgmentAuthorityBindingV05Schema>;
 

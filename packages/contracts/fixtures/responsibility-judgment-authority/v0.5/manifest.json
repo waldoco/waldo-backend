@@ -6,7 +6,7 @@
   "proofLevel": "adapter_conformance_fixture",
   "source": {
     "path": "packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts",
-    "sha256": "sha256:772452e03de15fe0097bdddb6ada4421cf7cc760985564ae4f519ad851f712cc"
+    "sha256": "sha256:dc53cef12b1d04341e93324a9b744635be8568e55e021a1c41019c8359916cd4"
   },
   "fixturePayloadRootSha256": "sha256:0f448d0119ab9924b48f323c5e61ea3860418330bb8a0ccf705e079abbd3b239",
   "compatibilityWindow": {
