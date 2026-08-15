@@ -20,10 +20,10 @@ The source order followed the repository research contract:
 
 1. Local Waldo backend and waldo-brain records identified the canonical benchmark set and Waldo's intended boundaries.
 2. Every material external claim below was rechecked against an official repository, official documentation, or source file.
-3. Default-branch heads were resolved read-only with `git ls-remote` on 2026-08-15. Pins make this audit reproducible; live state after these pins outranks this file.
+3. Default-branch heads were resolved read-only with `git ls-remote` on 2026-08-15. Commit pins make repository-source claims reproducible. Claims backed by mutable official documentation or product pages are checked-date evidence and may drift; live state outranks this file.
 4. No benchmark was installed, credentialed, penetration-tested, or run end to end. “Not observed” means absent from the inspected first-party surface, not proof that the capability cannot exist elsewhere.
 
-### Reproducible source pins
+### Pinned repository sources and checked-date documentation
 
 | System | Exact project and inspected head | Primary role in Waldo's benchmark set |
 | --- | --- | --- |

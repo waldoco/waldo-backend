@@ -1,6 +1,6 @@
 # Waldo Backend B2–B6 Goal Execution Contract
 
-**Status:** proposed operating contract for the next human-authorized implementation goal
+**Status:** accepted operating contract; activates after the reviewed documentation convergence lands and the human-authorized root registers on #116
 **Date:** 2026-08-15
 **Current base:** `origin/main@883ef9138df0bdbad70fcbc4d45cfec203d942ad`
 **Umbrella / coordination:** [#78](https://github.com/Pin4sf/waldo-backend/issues/78) / [#116](https://github.com/Pin4sf/waldo-backend/issues/116)
@@ -9,7 +9,7 @@
 **Capability comparison:** [Benchmark Agent Capability Audit](../research/2026-08-15-benchmark-agent-capability-audit.md)
 **Thesis authority:** [Waldo Emerging AI Problem Pool and Company Philosophy](https://github.com/Pin4sf/waldo-brain/blob/b5362ac4d052814a4c4265dece95835706607799/03-References/research/waldo-emerging-ai-problem-pool-and-company-philosophy-2026-08-09.md)
 
-This contract plans a future root goal. It does not create or mutate a runtime `GoalRecord`, start B2–B6 implementation, authorize real credentials, deploy, or establish product parity.
+This contract governs the human-authorized root goal after its activation conditions pass. It does not create or mutate a runtime `GoalRecord`, authorize real credentials, deploy, or establish product parity.
 
 ## Current
 
@@ -161,6 +161,8 @@ Never parallel-write shared contracts or protocol barrels, generators/OpenAPI/go
 
 The root owns the live DAG and frontier in #78/#116; exact base and clean-worktree checks; issue promotion; file/module/writer arbitration; schema/migration allocation; contract release pins; merge order; cross-repository consumer notification; source spotchecks; review orchestration; landed-tree verification; gate integration walls; and durable checkpointing.
 
+Before any write-capable implementation or consolidation, the root posts its own `SESSION START` record on #116 with the goal, branch/worktree, base, scope, ownership, roster, dependencies, criteria, verification, rollback, and active frontier. Before the root pauses, transfers ownership, opens a PR, or ends, it posts `SESSION HANDOFF` with exact SHAs, evidence classifications, decisions, blockers, next owner/action, and worktree disposition. Child registrations supplement this root record; they do not replace it.
+
 The root does not edit a running child worktree. To take over, stop the child, receive `SESSION HANDOFF`, transfer ownership explicitly, then write. Child output is evidence to inspect, not proof to trust.
 
 ## Child source packet
@@ -224,4 +226,4 @@ Use synthetic/test accounts until credential custody, privacy, retention, deleti
 
 At each issue and gate boundary, record the smallest failed assumption, the test or source that exposed it, whether the lesson belongs in a guard/fixture/skill/ADR, and the exact consumer affected. Use `/compound-learning-capture` only when the lesson is reusable; do not turn one failure into broad policy by assertion.
 
-This documentation contract is accepted when it is internally consistent with live issues, the architecture lock, the capability matrix, and the benchmark audit; `git diff --check` and `pnpm@10.34.4 verify:guards` pass; and an independent Spec/Standards review finds no sequencing or truth-classification blocker.
+Acceptance requires internal consistency with live issues, the architecture lock, the capability matrix, and the benchmark audit; passing `git diff --check` and `pnpm@10.34.4 verify:guards`; and independent Spec/Standards review with no sequencing or truth-classification blocker. Any later edit invalidates the affected review evidence and must be rechecked before activation or continued use.
