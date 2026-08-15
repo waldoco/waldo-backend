@@ -6,12 +6,14 @@ import {
   canonicalizeSurfaceCommandRequestForDigest,
   canonicalizeWorkUnitPlanningTurnRequestV03ForDigest,
   canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
+  canonicalizeWorkUnitExecutionStartRequestV04ForDigest,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureTrustedEnvelopeSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureTrustedEnvelopeV02Schema,
   workUnitPlanningTurnRequestV03Schema,
   workUnitPlanningTurnTrustedEnvelopeV03Schema,
+  workUnitExecutionStartRequestV04Schema,
 } from '@waldo/contracts';
 import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
@@ -23,6 +25,12 @@ import {
   type SignedResponsibilityIngressContext,
 } from '../src/responsibility/ingress-signature';
 import type { RunLoopDO } from '../src/run-loop/do';
+import { localWorkUnitExecutionProofStats } from '../src/run-loop/work-unit-execution';
+import {
+  createResponsibilityWorkerAdapter,
+  type ResponsibilityOwnerRoot,
+  type TrustedResponsibilityContext,
+} from '../src/responsibility/worker-adapter';
 
 let sequence = 0;
 const TEST_INGRESS_SECRET = 'test-responsibility-ingress-hmac-secret-000000000000';
@@ -71,6 +79,160 @@ async function stubFor(ownerId: string): Promise<DurableObjectStub<RunLoopDO>> {
 }
 
 describe('production responsibility RunLoopDO RPC', () => {
+  it('starts one canonical WorkUnit through signed owner RPC and recovers after eviction', async () => {
+    const ownerId = 'owner_public_execution_rpc_01';
+    const stub = await stubFor(ownerId);
+    const captureRequest = responsibilityCaptureRequestV02Schema.parse({
+      protocolVersion: '0.2',
+      requestId: 'capture_public_execution_rpc_01',
+      commandType: 'responsibility.capture',
+      presenceRegistrationId: 'presence_registration_01',
+      clientIssuedAt: '2026-08-14T17:00:00.000Z',
+      payload: {
+        userStatement: 'Prepare one bounded local execution proof.',
+        workUnits: [{
+          responsibility: 'Start the bounded proof executor.',
+          inputs: [], dependencyPositions: [], expectedEvidence: [],
+          requiredCapabilities: [], stopConditions: ['Do not publish.'],
+        }],
+      },
+    });
+    const captureDigest = `sha256:${await sha256Hex(
+      canonicalizeResponsibilityCaptureRequestV02ForDigest(captureRequest),
+    )}` as const;
+    const captureEnvelope = responsibilityCaptureTrustedEnvelopeV02Schema.parse({
+      protocolVersion: '0.2', commandId: 'command_public_execution_capture_01',
+      commandType: 'responsibility.capture', ownerId,
+      actor: { kind: 'presence', id: 'presence_01' }, presenceId: 'presence_01',
+      authenticatedSessionId: ingress.authenticatedSessionId,
+      ownerPolicyRevision: ingress.ownerPolicyRevision,
+      authAssurance: 'supabase_verified_session', ownerRootRoutingVersion: 2,
+      requestDigest: captureDigest, correlationId: 'correlation_public_execution_capture_01',
+      receivedAt: '2026-08-14T17:00:01.000Z', payload: captureRequest.payload,
+    });
+    const captureInput = {
+      routedOwnerId: ownerId, request: captureRequest, trustedEnvelope: captureEnvelope,
+    };
+    const captured = await stub.captureResponsibilityFromWorker(
+      captureInput,
+      await signedCaptureIngress(ownerId, captureInput),
+    );
+    const workUnit = captured.workUnits[0]!;
+    const request = workUnitExecutionStartRequestV04Schema.parse({
+      protocolVersion: '0.4',
+      requestId: 'public_execution_start_rpc_01',
+      commandType: 'work_unit.start_execution',
+      presenceRegistrationId: 'presence_registration_01',
+      aggregate: { kind: 'work_unit', id: workUnit.id, expectedRevision: workUnit.revision },
+      clientIssuedAt: '2026-08-14T17:00:02.000Z',
+    });
+    const trustedContext: TrustedResponsibilityContext = Object.freeze({
+      ownerId,
+      authenticatedSubjectRef: ingress.authenticatedSubjectRef,
+      actor: { kind: 'presence' as const, id: 'presence_01' },
+      presenceId: 'presence_01',
+      presenceRegistrationId: 'presence_registration_01',
+      authenticatedSessionId: ingress.authenticatedSessionId,
+      authenticatedSessionExpiresAt: ingress.authenticatedSessionExpiresAt,
+      ownerPolicyRevision: ingress.ownerPolicyRevision,
+      authAssurance: 'supabase_verified_session',
+      ownerRootRoutingVersion: 2,
+    });
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async startExecution(input) {
+        const admittedRequest = workUnitExecutionStartRequestV04Schema.parse(input.request);
+        return stub.startExecutionFromWorker(
+          input,
+          await signedExecutionStartIngress(ownerId, admittedRequest),
+        );
+      },
+    };
+    const adapter = createResponsibilityWorkerAdapter({
+      authority: { authenticate: async () => trustedContext },
+      edgeRateLimit: { admit: async () => true },
+      failureReporter: { report() {} },
+      ownerRootFor: async () => ownerRoot,
+      now: () => '2026-08-14T17:00:03.000Z',
+      newId: (kind) => `${kind}_public_execution_01`,
+    });
+    const publicRequest = (body: unknown = request) => new Request(
+      'https://api.heywaldo.com/public/responsibilities/work-units/executions',
+      {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer session-token',
+          accept: 'application/vnd.waldo.responsibility.v0.4+json',
+          'content-type': 'application/vnd.waldo.responsibility.v0.4+json',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    const beforeStats = localWorkUnitExecutionProofStats();
+    const firstResponse = await adapter.fetch(publicRequest());
+    expect(firstResponse.status).toBe(200);
+    const first = await firstResponse.json();
+    expect(first).toMatchObject({
+      protocolVersion: '0.4', requestId: request.requestId,
+      workUnit: { id: workUnit.id, revision: workUnit.revision }, status: 'started',
+    });
+    await evictDurableObject(stub);
+    const retryResponse = await adapter.fetch(publicRequest());
+    expect(retryResponse.status).toBe(200);
+    expect(await retryResponse.json()).toEqual(first);
+    const changedIssuedAt = await adapter.fetch(publicRequest({
+      ...request,
+      clientIssuedAt: '2026-08-14T17:00:02.001Z',
+    }));
+    expect(changedIssuedAt.status).toBe(409);
+    expect(await changedIssuedAt.json()).toEqual({
+      type: 'https://api.heywaldo.com/problems/request-conflict',
+      title: 'Request conflict', status: 409, code: 'request_conflict',
+    });
+    const changedCorrelation = await adapter.fetch(publicRequest({
+      ...request,
+      correlationId: 'correlation_public_execution_changed_01',
+    }));
+    expect(changedCorrelation.status).toBe(409);
+    expect(await changedCorrelation.json()).toEqual({
+      type: 'https://api.heywaldo.com/problems/request-conflict',
+      title: 'Request conflict', status: 409, code: 'request_conflict',
+    });
+    const afterStats = localWorkUnitExecutionProofStats();
+    expect(afterStats.physicalIssues - beforeStats.physicalIssues).toBe(1);
+    const stale = await adapter.fetch(publicRequest({
+      ...request,
+      requestId: 'public_execution_start_stale_01',
+      aggregate: { ...request.aggregate, expectedRevision: request.aggregate.expectedRevision + 1 },
+    }));
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({
+      type: 'https://api.heywaldo.com/problems/request-conflict',
+      title: 'Request conflict', status: 409, code: 'request_conflict',
+    });
+    const missing = await adapter.fetch(publicRequest({
+      ...request,
+      requestId: 'public_execution_start_missing_01',
+      aggregate: { ...request.aggregate, id: 'work_unit_not_owned_01' },
+    }));
+    expect(missing.status).toBe(404);
+    await runInDurableObject(stub, (_instance, state) => {
+      expect(state.storage.sql.exec<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM planning_execution_requests',
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM execution_attempts',
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM execution_observations',
+      ).one().count).toBe(1);
+      expect(state.storage.sql.exec<{ state: string }>(
+        'SELECT state FROM work_units WHERE id = ?', workUnit.id,
+      ).one().state).toBe('planned');
+    });
+  });
+
   it('persists capture/idempotency/projection through the non-test Worker RPC', async () => {
     const ownerId = 'owner_public_rpc_01';
     const stub = await stubFor(ownerId);
@@ -599,6 +761,23 @@ async function signedPlanningIngress(
     operationDigest: `sha256:${await sha256Hex(
       canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest(input.trustedEnvelope),
     )}`,
+    issuedAt: Date.now(), secret: TEST_INGRESS_SECRET,
+  });
+}
+
+async function signedExecutionStartIngress(
+  ownerId: string,
+  request: ReturnType<typeof workUnitExecutionStartRequestV04Schema.parse>,
+): Promise<SignedResponsibilityIngressContext> {
+  const digest = `sha256:${await sha256Hex(
+    canonicalizeWorkUnitExecutionStartRequestV04ForDigest(request),
+  )}` as const;
+  return signResponsibilityIngress({
+    context: {
+      ownerId, presenceId: 'presence_01', presenceRegistrationId: 'presence_registration_01',
+      ownerRootRoutingVersion: 2, ...ingress,
+    },
+    operation: 'execution_start', requestDigest: digest, operationDigest: digest,
     issuedAt: Date.now(), secret: TEST_INGRESS_SECRET,
   });
 }

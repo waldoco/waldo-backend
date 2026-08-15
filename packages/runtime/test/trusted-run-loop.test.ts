@@ -1178,6 +1178,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           'replayFixture',
           'scheduleFakeRun',
           'scoreRun',
+          'startExecutionFromWorker',
         ].sort(),
       );
     });

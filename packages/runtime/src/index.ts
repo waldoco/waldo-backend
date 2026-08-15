@@ -4,6 +4,7 @@ import {
   canonicalizeResponsibilityCaptureTrustedEnvelopeV02ForDigest,
   canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
   canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
+  canonicalizeWorkUnitExecutionStartRequestV04ForDigest,
   responsibilityHttpProblemV01,
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
@@ -243,6 +244,19 @@ async function ownerRootFor(
         context: { ...ingress, ...authorityForIngress(context) },
         operation: 'planning_projection', requestDigest: digest, operationDigest: digest,
         issuedAt: Date.now(), secret: ingressSecret,
+      }));
+    },
+    async startExecution(input, ingress) {
+      const digest = `sha256:${await sha256Hex(
+        canonicalizeWorkUnitExecutionStartRequestV04ForDigest(input.request),
+      )}` as const;
+      return stub.startExecutionFromWorker(input, await signResponsibilityIngress({
+        context: { ...ingress, ...authorityForIngress(context) },
+        operation: 'execution_start',
+        requestDigest: digest,
+        operationDigest: digest,
+        issuedAt: Date.now(),
+        secret: ingressSecret,
       }));
     },
   };

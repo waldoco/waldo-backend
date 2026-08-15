@@ -5,6 +5,7 @@ import {
   executionRequestV04Schema,
   executionSessionV04Schema,
   executorObservationV04Schema,
+  workUnitExecutionStartResultV04Schema,
 } from '@waldo/contracts';
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
@@ -26,6 +27,7 @@ import {
   type ExecutionEnvironmentPort,
 } from '../src/execution-environment';
 import type { RuntimeProbeDO } from '../src/index';
+import { WorkUnitExecutionBridge } from '../src/run-loop/work-unit-execution';
 
 function registerEnvironment(adapter: ExecutionEnvironmentPort) {
   return new ExecutionEnvironmentRegistry().register(adapter.descriptor, adapter);
@@ -162,6 +164,169 @@ function seedCanonicalProductState(storage: DurableObjectStorage): void {
 }
 
 describe('execution environment to sole-writer conformance', () => {
+  it('composes public start through commit, recover-first issue, and public observation admission', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      const timeline: string[] = [];
+      const now = request.requestedAt;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_unused`,
+        async sha256Hex() { return 'a'.repeat(64); },
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+        afterWrite(stage) { timeline.push(stage); },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      const productBefore = JSON.stringify({
+        outcome: state.storage.sql.exec('SELECT * FROM outcomes').toArray(),
+        workUnit: state.storage.sql.exec('SELECT * FROM work_units').toArray(),
+      });
+      const store = createDeterministicFakeExecutionEnvironmentStore();
+      const bridge = new WorkUnitExecutionBridge({
+        coordinator,
+        now: () => now,
+        newId: (kind) => `${kind}_public_01`,
+        async sha256Hex() { return 'a'.repeat(64); },
+        registeredEnvironmentFor() {
+          const fake = new DeterministicFakeExecutionEnvironment({
+            descriptor,
+            store,
+            script: {
+              start: {
+                status: 'observed',
+                draft: {
+                  category: 'execution_environment_observation_draft',
+                  id: 'execution_observation_public_01',
+                  sequence: 1,
+                  kind: 'started',
+                  payloadRef: null,
+                  payloadDigest: null,
+                  observedAt: now,
+                },
+              },
+            },
+            now: () => now,
+          });
+          return registerEnvironment({
+            descriptor: fake.descriptor,
+            async recover(command) {
+              timeline.push('adapter_recover');
+              return fake.recover(command);
+            },
+            async execute(command) {
+              timeline.push('adapter_execute');
+              return fake.execute(command);
+            },
+          });
+        },
+      });
+      const admission = {
+        requestId: 'public_execution_start_01',
+        publicCommandDigest: `sha256:${'b'.repeat(64)}`,
+        workUnitId: request.workUnit.id,
+        expectedWorkUnitRevision: request.workUnit.revision,
+      };
+      const [result, concurrent] = await Promise.all([
+        bridge.start(admission, authority),
+        bridge.start(admission, authority),
+      ]);
+      expect(concurrent).toEqual(result);
+      expect(workUnitExecutionStartResultV04Schema.parse(result)).toEqual(result);
+      expect(result).toMatchObject({
+        requestId: admission.requestId,
+        executionRequestId: expect.stringMatching(/^er_[A-Za-z0-9_-]{43}_[A-Za-z0-9_-]{43}$/),
+        attemptId: 'execution_attempt_public_01',
+        status: 'started',
+      });
+      expect(timeline.indexOf('execution_attempt')).toBeLessThan(
+        timeline.indexOf('adapter_recover'),
+      );
+      expect(timeline.indexOf('adapter_execute')).toBeLessThan(
+        timeline.indexOf('execution_observation'),
+      );
+      expect(store.physicalIssues).toBe(1);
+      expect(await bridge.start(admission, authority)).toEqual(result);
+      expect(store.physicalIssues).toBe(1);
+      expect(JSON.stringify({
+        outcome: state.storage.sql.exec('SELECT * FROM outcomes').toArray(),
+        workUnit: state.storage.sql.exec('SELECT * FROM work_units').toArray(),
+      })).toBe(productBefore);
+    });
+  });
+
+  it('blocks physical issue when canonical WorkUnit state changes after recovery', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedCanonicalProductState(state.storage);
+      const now = request.requestedAt;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_unused`,
+        async sha256Hex() { return 'a'.repeat(64); },
+        async resolveExecutionBindingV04() { return resolvedBinding; },
+      });
+      const authority = coordinator.admitCanonicalAuthority(authorityRegistration);
+      const store = createDeterministicFakeExecutionEnvironmentStore();
+      let mutated = false;
+      const bridge = new WorkUnitExecutionBridge({
+        coordinator,
+        now: () => now,
+        newId: (kind) => `${kind}_stale_product_01`,
+        async sha256Hex() { return 'a'.repeat(64); },
+        registeredEnvironmentFor() {
+          const fake = new DeterministicFakeExecutionEnvironment({
+            descriptor,
+            store,
+            script: {
+              start: {
+                status: 'observed',
+                draft: {
+                  category: 'execution_environment_observation_draft',
+                  id: 'execution_observation_stale_product_01',
+                  sequence: 1,
+                  kind: 'started',
+                  payloadRef: null,
+                  payloadDigest: null,
+                  observedAt: now,
+                },
+              },
+            },
+            now: () => now,
+          });
+          return registerEnvironment({
+            descriptor: fake.descriptor,
+            async recover(command) {
+              const recovered = await fake.recover(command);
+              if (!mutated) {
+                mutated = true;
+                state.storage.sql.exec(
+                  'UPDATE work_units SET revision = revision + 1 WHERE id = ?',
+                  request.workUnit.id,
+                );
+              }
+              return recovered;
+            },
+            execute: (command) => fake.execute(command),
+          });
+        },
+      });
+      await expect(bridge.start({
+        requestId: 'public_execution_stale_product_01',
+        publicCommandDigest: `sha256:${'b'.repeat(64)}`,
+        workUnitId: request.workUnit.id,
+        expectedWorkUnitRevision: request.workUnit.revision,
+      }, authority)).rejects.toThrow('digest conflict');
+      expect(store).toMatchObject({ physicalIssues: 0, executeCalls: 0, recoverCalls: 1 });
+      expect(state.storage.sql.exec<{ count: number }>(
+        'SELECT COUNT(*) AS count FROM execution_observations',
+      ).one().count).toBe(0);
+    });
+  });
+
+
   it('claims before I/O and admits only a canonically bound observation through Coordinator', async () => {
     const stub = freshStub();
     await runInDurableObject(stub, async (_instance, state) => {

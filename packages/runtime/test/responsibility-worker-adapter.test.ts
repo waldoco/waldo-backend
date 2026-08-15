@@ -75,6 +75,18 @@ function planningCancelRequest(body: string | object): Request {
   });
 }
 
+function executionStartRequest(body: string | object): Request {
+  return new Request('https://api.heywaldo.com/public/responsibilities/work-units/executions', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer session-token',
+      accept: 'application/vnd.waldo.responsibility.v0.4+json',
+      'content-type': 'application/vnd.waldo.responsibility.v0.4+json',
+    },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+}
+
 function harness(options: {
   authority?: ResponsibilityAuthority;
   ownerRoot?: ResponsibilityOwnerRoot;
@@ -116,6 +128,59 @@ function harness(options: {
 }
 
 describe('responsibility Worker adapter', () => {
+  it('admits one bounded execution start command without caller-owned authority', async () => {
+    const body = {
+      protocolVersion: '0.4',
+      requestId: 'execution_start_request_01',
+      commandType: 'work_unit.start_execution',
+      presenceRegistrationId: trustedContext.presenceRegistrationId,
+      aggregate: { kind: 'work_unit', id: 'work_unit_01', expectedRevision: 3 },
+      clientIssuedAt: '2026-08-06T12:00:00.000Z',
+    };
+    let admitted: unknown;
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async startExecution(input) {
+        admitted = input;
+        return {
+          protocolVersion: '0.4',
+          requestId: body.requestId,
+          workUnit: { id: body.aggregate.id, revision: body.aggregate.expectedRevision },
+          executionRequestId: 'execution_request_server_01',
+          attemptId: 'execution_attempt_server_01',
+          status: 'started',
+          observation: {
+            id: 'execution_observation_server_01', sequence: 1, kind: 'started',
+          },
+        };
+      },
+    };
+    const { adapter } = harness({ ownerRoot });
+    const response = await adapter.fetch(executionStartRequest(body));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(
+      'application/vnd.waldo.responsibility.v0.4+json; charset=utf-8',
+    );
+    expect(await response.json()).toMatchObject({
+      requestId: body.requestId,
+      executionRequestId: 'execution_request_server_01',
+      status: 'started',
+    });
+    expect(admitted).toEqual({ routedOwnerId: trustedContext.ownerId, request: body });
+
+    for (const hostile of [
+      { ownerId: 'owner_attacker' },
+      { provider: { id: 'provider_attacker' } },
+      { operationIntent: { ref: 'intent_attacker' } },
+      { leaseId: 'lease_attacker' },
+      { payload: { prompt: 'private prompt' } },
+    ]) {
+      const rejected = await adapter.fetch(executionStartRequest({ ...body, ...hostile }));
+      expect(rejected.status).toBe(400);
+    }
+  });
+
   it('exposes authenticated idempotent planning cancellation without client-owned authority', async () => {
     const body = {
       protocolVersion: '0.3', requestId: 'planning_cancel_01',

@@ -47,11 +47,17 @@ export class ResponsibilityPlanningConflictError extends ResponsibilityBoundaryE
   }
 }
 
+export class ResponsibilityExecutionUnavailableError extends ResponsibilityBoundaryError {
+  constructor() {
+    super('ResponsibilityExecutionUnavailableError', 'execution environment unavailable');
+  }
+}
+
 export function responsibilityBoundaryStatus(
   error: unknown,
-): 401 | 404 | 409 | 429 | null {
+): 401 | 404 | 409 | 429 | 503 | null {
   if (!(error instanceof Error)) return null;
-  const statuses: Readonly<Record<string, 401 | 404 | 409 | 429>> = {
+  const statuses: Readonly<Record<string, 401 | 404 | 409 | 429 | 503>> = {
     ResponsibilityAuthorityDeniedError: 401,
     ResponsibilityOwnerRootMismatchError: 404,
     ResponsibilityProjectionMissingError: 404,
@@ -59,6 +65,7 @@ export function responsibilityBoundaryStatus(
     ResponsibilityProjectionCursorError: 409,
     ResponsibilityPlanningConflictError: 409,
     ResponsibilityIngressRateLimitError: 429,
+    ResponsibilityExecutionUnavailableError: 503,
   };
   return statuses[error.name] ?? null;
 }
