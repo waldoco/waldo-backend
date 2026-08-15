@@ -18,28 +18,23 @@
   "consumers": [
     {
       "name": "waldo-backend-runtime",
-      "status": "required_next",
-      "issue": "#82"
+      "contractRole": "canonical_runtime"
     },
     {
       "name": "kennel",
-      "status": "deferred",
-      "gate": "B3"
+      "contractRole": "owner_surface"
     },
     {
       "name": "waldo-mobile",
-      "status": "deferred",
-      "gate": "B3"
+      "contractRole": "owner_surface"
     },
     {
       "name": "telegram",
-      "status": "deferred",
-      "gate": "B4"
+      "contractRole": "messaging_presence"
     },
     {
       "name": "discord",
-      "status": "deferred",
-      "gate": "B4"
+      "contractRole": "messaging_presence"
     }
   ],
   "bytePreservation": {

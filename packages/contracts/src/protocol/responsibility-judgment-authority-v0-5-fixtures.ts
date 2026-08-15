@@ -629,11 +629,11 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
         removal: 'none_authorized',
       },
       consumers: [
-        { name: 'waldo-backend-runtime', status: 'required_next', issue: '#82' },
-        { name: 'kennel', status: 'deferred', gate: 'B3' },
-        { name: 'waldo-mobile', status: 'deferred', gate: 'B3' },
-        { name: 'telegram', status: 'deferred', gate: 'B4' },
-        { name: 'discord', status: 'deferred', gate: 'B4' },
+        { name: 'waldo-backend-runtime', contractRole: 'canonical_runtime' },
+        { name: 'kennel', contractRole: 'owner_surface' },
+        { name: 'waldo-mobile', contractRole: 'owner_surface' },
+        { name: 'telegram', contractRole: 'messaging_presence' },
+        { name: 'discord', contractRole: 'messaging_presence' },
       ],
       bytePreservation: {
         throughVersion: '0.4',
