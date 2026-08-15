@@ -10,7 +10,9 @@ This is the complete live documentation set. It governs one launch across Electr
 4. [Product capability matrix](./planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) — whole-product envelope and capability-status authority.
 5. [Architecture lock](./planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) — placement, single writers, trust boundaries, and invariants.
 6. [Next backend session prompt](./foundation/NEXT-BACKEND-SESSION-PROMPT.md) — durable B0–B6 run contract, issue map, acceptance criteria, and verification wall.
-7. [Contributor onboarding](./foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](./foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](./foundation/LOCAL-DEV-TESTING-PIPELINE.md) — how work is shaped, built, reviewed, and proved.
+7. [B2–B6 goal execution contract](./planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md) — dependency-frontier worktrees, source/return packets, promotion barriers, real-API ladder, and exact-SHA convergence.
+8. [Benchmark agent capability audit](./research/2026-08-15-benchmark-agent-capability-audit.md) — source-pinned Pi, Hermes Agent, OpenClaw, QM, Think, orchestrator, and provider comparison; benchmark breadth is not Waldo parity.
+9. [Contributor onboarding](./foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](./foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](./foundation/LOCAL-DEV-TESTING-PIPELINE.md) — how work is shaped, built, reviewed, and proved.
 
 ## Reference-only documents
 

@@ -5,6 +5,7 @@
 **Product-experience refresh:** 2026-08-12
 **Launch-execution refresh:** 2026-08-13; the [production run contract](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) and [umbrella issue #78](https://github.com/Pin4sf/waldo-backend/issues/78) own B0-B6 sequencing
 **Primary-surface refresh:** 2026-08-13; launch requires Electron Kennel, Waldo mobile, Telegram, and Discord; WhatsApp remains approval-dependent and non-blocking
+**B1 evidence refresh:** 2026-08-15; B0 and bounded B1 are landed at `origin/main@883ef913`; B2 #82 is the next candidate implementation frontier after documentation/tracker convergence
 **Scope:** Waldo Cloud, Kennel, mobile, messaging presence, durable continuity, agent orchestration, Mission Control, execution, evidence, verification, privacy, and launch sequencing
 **Pre-existing investigation ledger (read-only):** `waldo-brain/04-Sessions/weekly/2026-08-11-waldo-product-architecture-ledger.md`
 
@@ -53,7 +54,7 @@ This synthesis plus its three linked audits is the durable resumption artifact f
 
 | Repository | Evidence pin used | Lineage warning |
 | --- | --- | --- |
-| `waldo-backend` | product-boundary evidence `dd434e9`; B0 implementation `c37956a`; B1 v0.4 contract release `df0abae` / fixture tree `adff7e5`; #80 sole writer landed at `cffae3b`; #87 port/fake landed at `9a2b11b`; #88 review branch based on `origin/main@4e1695c`, implementation `3731e2c`, digest-replay correction `27ed9e8`, PR #128, checked 2026-08-14 | The landed SHAs prove the baseline, released v0.4 families, sole writer, and deterministic environment boundary. PR #128 adds a strict default-disabled public start-only WorkUnit bridge with full-command durable idempotency, immutable-request intent reconstruction, and local/fake composition through #80/#87. Until authorized merge it is review evidence only. None of these pins prove a real adapter, v0.3-planned WorkUnit upgrade, resume/steer/pause intent durability, cross-surface acceptance, closure runtime, staging, deployment, or production. Re-pin before later implementation claims. |
+| `waldo-backend` | B0 implementation `c37956a`; B1 v0.4 contract release `df0abae` / fixture tree `adff7e5`; #80 sole writer landed at `cffae3b`; #87 port/fake landed at `9a2b11b`; #88 public bridge reviewed at `85e59e6`, landed as `origin/main@883ef913` with identical tree `2d2b0ec`, checked 2026-08-15 | The landed SHAs prove the baseline, released v0.4 families, sole execution writer, deterministic environment seam, and one strict default-disabled public start-only WorkUnit bridge with full-command durable idempotency and local/fake composition through #80/#87. They do not prove a real adapter, v0.3-planned WorkUnit upgrade, resume/steer/pause intent durability, cross-surface acceptance, closure runtime, staging, deployment, or production. Re-pin before later implementation claims. |
 | `waldo-brain` | active local `main@d778402` | Remote `main` was `9f280abe` when checked. The local research commits and untracked convergence ledger were read-only evidence, not silently promoted to remote canonical truth. |
 | `kennel` | canonical Electron `main@367c484` | A read-only `ls-remote` confirmed the remote pin. Per founder direction, Electron is the only implementation lineage used for product and build decisions. |
 | `waldo-app` | active local `main@d9578e6`; remote `main@ed255869` as a separate evidence pin | A read-only `ls-remote` confirmed `main@ed255869`. Active HEAD is a source-empty scaffold and 66 commits behind its recorded remote. The richer Expo audit describes remote `main`, not the active checkout. Canonical implementation revision is **[Unknown]**. |
@@ -178,8 +179,8 @@ The matrix compares product primitives, not feature counts.
 | Reference | Strongest primitive | Missing or unsafe for Waldo | Waldo disposition |
 | --- | --- | --- | --- |
 | Waldo target | Consented longitudinal body context joined to daily planning, durable Outcome ownership, local execution, evidence, acceptance, and Open Loops. | Health foundations, product kernel, trusted RunLoop, mobile, and Kennel are not yet connected in one operationally proved loop. | **Build shared Home → Work → verified closure before breadth and prove both Health First connected and health-declined paths.** |
-| Dimension | Connected workday loop: Morning Briefing, Catch Up, action, artifacts, recap. | No public durable Outcome/verification contract; product availability is time-bounded. | **Adapt** the daily loop and calm projections. |
-| Folk | Persistent relational presence, editable memory, routines, messaging, cloud execution, Crew. | Memory provenance/authority and general verified completion are not public at Waldo depth. | **Adapt** relationship continuity; keep memory correctable and non-authoritative. |
+| Dimension | Connected workday loop: Morning Briefing, Catch Up, action, artifacts, recap. | No public durable Outcome/verification contract; homepage wind-down and later docs/status signals make live availability unknown. | **Adapt** the daily loop and calm projections. |
+| Folk | Persistent relational presence, editable memory, routines, messaging, cloud execution, and current group chats with room-scoped memory/scheduling. | Memory provenance/authority and general verified completion are not public at Waldo depth; the older Crew agent-to-agent protocol is not current first-party evidence. | **Adapt** relationship continuity; keep memory correctable and non-authoritative. |
 | Poke | Messaging-native delegation, Recipes, MCP, event/API ingress, human fallback. | Broad command/integration access does not prove exact authority or effect reconciliation. | **Adapt** distribution and concise interaction; reject arbitrary JSON as trusted commands. |
 | Grok Bot | Messaging-style named agents, short role setup, service-first Plugins, persistent user-scoped cloud computer, desktop/iPhone continuity, scheduled routines, teach-by-demonstration drafts, parallel Bots, and Bot handoffs. | Public sources do not prove per-Bot security isolation, multi-human shared sessions, general local/cloud migration, verified Outcome closure, or the reel's “hundreds of tools” claim; all Bots for one user share cloud files/browser/logins. | **Adapt urgently** the complexity compression, account presence, connections, cloud continuity, demonstration-to-draft behavior, and visible handoffs. **Reject** shared ambient authority and session-done-as-Outcome. |
 | Paxel | Local multi-provider transcript analysis and cross-session behavioral/session patterns. | Builder scores and archetypes are not Outcome truth; excerpts and derived payloads cross privacy boundaries. | **Adapt** deterministic extraction and provenance; reject personality scoring and raw-upload defaults. |
@@ -918,9 +919,9 @@ Add WhatsApp when approved, further admitted channel/connector families, voice p
 
 ### Observed in the current investigation
 
-- Backend source contains responsibility handshake fixtures v0.1/v0.2, planning-turn fixtures v0.3, `WaldoCoordinator`, `OutcomeModule`, planning execution state, and the older trusted RunLoop/effect substrate.
+- Backend source contains responsibility handshake fixtures v0.1/v0.2, planning-turn fixtures v0.3, released responsibility fixtures v0.4, `WaldoCoordinator`, `OutcomeModule`, the canonical v0.4 execution writer, a recover-before-issue execution-environment seam, and the trusted RunLoop/effect substrate.
 - Health First has preserved consent/RLS, CRS/Form, derived-source, safety, and Morning Brief foundations in the broader Waldo evidence set; current production ingestion, computation, Spots/Constellation-to-Home projection, care-action runtime, and app-to-response acceptance remain unproved.
-- The durable product path currently stops at capture and zero-tool planning authorization; the target execution/evidence/acceptance loop is not operationally proved.
+- The durable product path now reaches one authenticated, default-disabled, start-only WorkUnit command through deterministic local/fake RunLoop composition. It still stops before a real execution adapter, Judgment/Evidence/Verification/Acceptance/OpenLoop/ReEntry, cross-surface acceptance, staging, and operations.
 - Kennel's canonical product/runtime lineage is Electron `main@367c484`; all Kennel conclusions and build recommendations now use that lineage exclusively.
 - Waldo mobile's active checkout is a source-empty scaffold 66 commits behind its recorded remote; richer Expo/mobile findings belong to that recorded remote lineage, not active HEAD.
 - Current Waldo Brain contains the product architecture ledger and a dedicated current Spotify Xirp + Portal public-source dissection.
@@ -963,7 +964,7 @@ Add WhatsApp when approved, further admitted channel/connector families, voice p
 ### Current external sources checked 2026-08-11–2026-08-12
 
 - [Dimension](https://dimension.dev/) and [Dimension docs](https://docs.dimension.dev/llms.txt)
-- [Folk memory](https://www.folk.com/docs/memory) and [Folk Crew](https://www.folk.com/docs/crew)
+- [Folk memory](https://www.folk.com/docs/memory), [Folk Groups](https://www.folk.com/docs/groups), and the current [benchmark capability audit](../research/2026-08-15-benchmark-agent-capability-audit.md)
 - [Poke docs](https://poke.com/docs)
 - [Paxel](https://paxel.ycombinator.com/)
 - [Agent Orchestrator at `aab4c973`](https://github.com/Untrivial-ai/agent-orchestrator/tree/aab4c973d0f309e796807f6f5ebce9767872f6e6)

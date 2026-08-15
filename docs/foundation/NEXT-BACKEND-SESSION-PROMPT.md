@@ -1,7 +1,7 @@
 # Waldo Backend Production Run Contract — B0 to B6
 
 **Status:** current durable backend build and launch handoff
-**Updated:** 2026-08-14
+**Updated:** 2026-08-15
 **GitHub milestone:** [Waldo Backend Production Launch](https://github.com/Pin4sf/waldo-backend/milestone/1)
 **Umbrella:** [#78](https://github.com/Pin4sf/waldo-backend/issues/78)
 **Execution ledger:** [#116](https://github.com/Pin4sf/waldo-backend/issues/116) and [protocol](./EXECUTION-LEDGER.md)
@@ -13,7 +13,7 @@ This file is the repository's single persistent run contract. GitHub issues carr
 
 ## Current
 
-At landed pin `origin/main@4e1695c`, B0 baseline convergence, #81's additive B1 contract/fixture release, #80's sole v0.4 execution writer, #87's backend execution-environment boundary, and the #88 frontier handoff are landed. [#80](https://github.com/Pin4sf/waldo-backend/issues/80), [#81](https://github.com/Pin4sf/waldo-backend/issues/81), and [#87](https://github.com/Pin4sf/waldo-backend/issues/87) are closed; PRs #125-#127 are merged. [#88](https://github.com/Pin4sf/waldo-backend/issues/88) is implemented for review in [PR #128](https://github.com/Pin4sf/waldo-backend/pull/128), based on `4e1695c`; it is not merged or deployed:
+At landed pin `origin/main@883ef9138df0bdbad70fcbc4d45cfec203d942ad`, B0 and the bounded B1 start-only gate are complete. [#80](https://github.com/Pin4sf/waldo-backend/issues/80), [#81](https://github.com/Pin4sf/waldo-backend/issues/81), [#87](https://github.com/Pin4sf/waldo-backend/issues/87), and [#88](https://github.com/Pin4sf/waldo-backend/issues/88) are closed; PRs #123 and #125–#128 are merged. Reviewed #128 head `85e59e68377037043290ec1657262742c9f0ba3a` and the landed merge have the identical tree `2d2b0ec2505fbdfd5370b44bf74014589d00f973`. No deployment exists:
 
 - implemented: authenticated owner-routed responsibility ingress; v0.1/v0.2 capture/projection contracts; v0.3 planning turn; `IdentityPresenceModule`, `WaldoCoordinator`, `OutcomeModule`, `PlanningExecutionModule`; one owner/presence path; events/projections; one leased/fenced/cancellable zero-tool planning turn;
 - separate foundations: the existing trusted `RunLoopDO`/RunLoopEngine composition and I/O shell, journal/outbox, leases/fences/cancellation, ContextComposer, DeliveryGate, scheduler, governor/safety, provider gateway, contract adapters and fakes;
@@ -22,8 +22,8 @@ At landed pin `origin/main@4e1695c`, B0 baseline convergence, #81's additive B1 
 - released contract boundary: strict additive v0.4 schemas, generated JSON Schemas, valid/rejection fixtures, manifests, generators and freshness guards for presence/channel, execution, acceptance-check, judgment-authority, closure, continuity, effect and Outcome-bound obligation context; v0.1-v0.3 fixture bytes are unchanged;
 - landed #80 runtime boundary: one additive v0.4 writer owns ExecutionRequest/Attempt/Session/Lease/Observation/Reconciliation state; canonical authority and server-derived Outcome/WorkUnit digests bind admission; cancellation/retry/reconciliation are fenced; v0.3 reads and distinct provider/environment seams remain intact;
 - landed #87 boundary: one backend execution-environment port plus deterministic fake conformance around #80, with private trusted operation intent, recover-before-issue, external I/O outside SQLite transactions, and target-side adapter fencing; it is not a public WorkUnit route or real-adapter proof;
-- review-ready #88 boundary: one authenticated, strict, default-disabled public start command carries only a WorkUnit reference plus expected-revision precondition; the owner Durable Object and Coordinator derive and re-read canonical revision/digests, Outcome, authority, provider/environment/context, committed start intent, lease/fence/cancellation, and route through #80/#87. Full-command digest conflicts fail closed and local deterministic proof cannot imply product closure;
-- missing or unproved: authorized #88 merge; resume/steer/pause intent durability; upgrade of WorkUnits already claimed by the legacy v0.3 planning row; every real adapter; canonical Judgment/Evidence/Verification/Acceptance/OpenLoop/ReEntry; multi-presence Home and channel gateway; service-first Connections; real effects; governed context/routines/cloud execution; Kennel/mobile/Telegram/Discord acceptance; staging; and production.
+- landed #88 boundary: one authenticated, strict, default-disabled public start command carries only a WorkUnit reference plus expected-revision precondition; the owner Durable Object and Coordinator derive and re-read canonical revision/digests, Outcome, authority, provider/environment/context, committed start intent, lease/fence/cancellation, and route through #80/#87. Full-command digest conflicts fail closed and local deterministic proof cannot imply product closure;
+- missing or unproved: resume/steer/pause intent durability; upgrade of WorkUnits already claimed by the legacy v0.3 planning row; every real adapter; canonical Judgment/Evidence/Verification/Acceptance/OpenLoop/ReEntry; multi-presence Home and channel gateway; service-first Connections; real effects; governed context/routines/cloud execution; Kennel/mobile/Telegram/Discord acceptance; staging; and production.
 
 Released #81 contract evidence observed 2026-08-14 at reviewed head `df0abae`; its fixture tree is `adff7e5` and its released contract families remain unchanged by #87:
 
@@ -40,6 +40,8 @@ Released #81 contract evidence observed 2026-08-14 at reviewed head `df0abae`; i
 
 #87 evidence at reviewed head `5b3d9f510a8aaa8243a476d2ba97abef08fc8da8`, landed as merge `9a2b11bb2527e0c15dcbfb5f32f86bafe99301d9` with identical tree `8a202c5ee6d96a297ce203a2036279557b05291a`: focused port/fake/Coordinator/#80-writer proof passed 4 files / 54 tests; the clean Linux/Docker wall passed contracts 67/1,560, eight migrations plus 53 pgTAP, runtime 42/1,060, integration 2/5, both runtime typechecks, every guard, and `git diff --check`; independent QA breaker, Security, Standards, and Spec passed. Contracts, fixtures, migrations, DO schema, dependencies, root runtime export, and the sole writer are unchanged. This is `module_implemented` plus deterministic backend contract/fake proof, not `adapter_conformance_passed`, staging, deployment, or live acceptance.
 
+#88 evidence at reviewed head `85e59e68377037043290ec1657262742c9f0ba3a`, landed as merge `883ef9138df0bdbad70fcbc4d45cfec203d942ad` with identical tree `2d2b0ec2505fbdfd5370b44bf74014589d00f973`: focused public/bridge proof passed 4 runtime files / 86 tests; the clean Linux/Docker wall passed contracts 68/1,563, eight migrations plus 53 pgTAP, runtime 42/1,066, integration 2/5, both runtime typechecks, every guard, and `git diff --check`; independent QA breaker, Security/authority, Standards, and Spec passed. Supabase Preview was skipped, GitHub-hosted Actions were unavailable, native macOS Supabase bootstrap failed as environment evidence, and deployment was not run. This is `module_implemented` plus deterministic local/fake vertical proof, not real adapter conformance or product acceptance.
+
 ## Ideal
 
 The backend is complete when one owner-authenticated path carries responsibility from intent through bounded execution, candidate Evidence, independent Verification, conscious Acceptance/reopen/release, OpenLoop/ReEntry, and ordered projection across the three primary launch surfaces: Electron Kennel, Waldo mobile, and messaging. Telegram and Discord must pass real adapter and production acceptance; WhatsApp remains a tracked primary target but vendor approval cannot block launch. The backend must also safely perform and read back one real reversible effect, govern context/credentials/routines/workspace/deletion, and pass staging plus production operating proof without making health or agent infrastructure prerequisites.
@@ -47,7 +49,7 @@ The backend is complete when one owner-authenticated path carries responsibility
 ## Stable criteria
 
 - [x] **ISC-1 — Baseline truth:** current main has reproducible contracts, runtime, Supabase integration, guards, OpenAPI/route parity, and classified failures. Landed proof: implementation `main@c37956a`, fresh detached checkout, merged PR #119; test-isolation follow-up #121 at `main@182a775`. **Falsifier:** expired fixtures, unavailable prerequisites, stale generated routes, or cross-test alarm leakage are called green.
-- [ ] **ISC-2 — One execution writer:** #80's reviewed writer and #87's execution-environment boundary are landed, but this criterion remains open until #88 proves the public WorkUnit bridge. **Falsifier:** two writers, adapter-local canonical truth, a Coordinator bypass, or local/fake proof called live integration.
+- [x] **ISC-2 — One execution writer:** #80's canonical v0.4 writer, #87's execution-environment seam, and #88's public start-only bridge are landed at tree `2d2b0ec`; deterministic local/fake proof covers replay and recovery, not a real adapter. **Falsifier:** two writers, adapter-local canonical truth, a Coordinator bypass, or local/fake proof called live integration.
 - [ ] **ISC-3 — Closure truth:** provider/session/effect completion cannot imply Verification, Acceptance, Outcome completion, or OpenLoop closure. **Falsifier:** any external `done` changes product truth without the named reducers.
 - [ ] **ISC-4 — One Waldo across launch presences:** enrolled Mobile, Kennel, Telegram, Discord, and test presences receive capability-appropriate views of the same ordered owner truth with link/revoke/gap/account-switch/cross-owner proof. **Falsifier:** a surface becomes a writer, a channel payload becomes owner authority, or state crosses owner boundaries.
 - [ ] **ISC-5 — Optional Health First:** health-connected may improve planning; health-declined retains Home, capture, Connections, Outcomes, execution, verification, Open Loops, and Close. **Falsifier:** missing health disables or penalizes a core path.
@@ -63,7 +65,7 @@ The backend is complete when one owner-authenticated path carries responsibility
 | Gate | Outcome | Issues | Gate completion |
 |---|---|---|---|
 | **B0** | trustworthy baseline | completed [#107](https://github.com/Pin4sf/waldo-backend/issues/107); merged PR #119; test-only follow-up [#120](https://github.com/Pin4sf/waldo-backend/issues/120)/#121; #99/#100/#117 closed superseded | complete: ISC-1 passed at `c37956a`; verification harness hardened at `182a775` |
-| **B1** | shared command primitives and WorkUnit to one trusted execution writer | completed [#81](https://github.com/Pin4sf/waldo-backend/issues/81) → landed [#80](https://github.com/Pin4sf/waldo-backend/issues/80)/[PR #125](https://github.com/Pin4sf/waldo-backend/pull/125) → landed [#87](https://github.com/Pin4sf/waldo-backend/issues/87)/[PR #126](https://github.com/Pin4sf/waldo-backend/pull/126) → review-ready [#88](https://github.com/Pin4sf/waldo-backend/issues/88)/[PR #128](https://github.com/Pin4sf/waldo-backend/pull/128) | #88 start-only bridge is review evidence until explicit merge authorization and landed-tree verification; resume/steer/pause and v0.3-row upgrade remain architecture stops; #86 specializes shared command primitives into the B3 channel envelope |
+| **B1** | shared command primitives and WorkUnit to one trusted execution writer | completed [#81](https://github.com/Pin4sf/waldo-backend/issues/81) → [#80](https://github.com/Pin4sf/waldo-backend/issues/80)/[PR #125](https://github.com/Pin4sf/waldo-backend/pull/125) → [#87](https://github.com/Pin4sf/waldo-backend/issues/87)/[PR #126](https://github.com/Pin4sf/waldo-backend/pull/126) → [#88](https://github.com/Pin4sf/waldo-backend/issues/88)/[PR #128](https://github.com/Pin4sf/waldo-backend/pull/128) | complete for the bounded start-only path at `883ef91`; resume/steer/pause and v0.3-row upgrade remain architecture stops; #86 specializes the B3 channel envelope |
 | **B2** | Judgment, Evidence, Verification, Acceptance, OpenLoop/ReEntry | [#82](https://github.com/Pin4sf/waldo-backend/issues/82), [#84](https://github.com/Pin4sf/waldo-backend/issues/84), [#85](https://github.com/Pin4sf/waldo-backend/issues/85) | ISC-3 passes through public commands/projections |
 | **B3** | daily interaction and ordered desktop/mobile/messaging presences | [#95](https://github.com/Pin4sf/waldo-backend/issues/95), [#104](https://github.com/Pin4sf/waldo-backend/issues/104), [#108](https://github.com/Pin4sf/waldo-backend/issues/108), [#86](https://github.com/Pin4sf/waldo-backend/issues/86) | ISC-4–ISC-6 pass with Kennel/mobile/fake-channel presences and both health states |
 | **B4** | capability admission, credentials, Connections, first effects, Telegram and Discord | [#90](https://github.com/Pin4sf/waldo-backend/issues/90) → [#91](https://github.com/Pin4sf/waldo-backend/issues/91) → [#109](https://github.com/Pin4sf/waldo-backend/issues/109) + [#82](https://github.com/Pin4sf/waldo-backend/issues/82) → [#83](https://github.com/Pin4sf/waldo-backend/issues/83) → [#89](https://github.com/Pin4sf/waldo-backend/issues/89) + [#112](https://github.com/Pin4sf/waldo-backend/issues/112) + [#113](https://github.com/Pin4sf/waldo-backend/issues/113) | ISC-7 passes with Calendar/inbox test accounts and credentialed Telegram/Discord staging |
@@ -102,7 +104,7 @@ Surface teams may work in parallel only against released contracts and golden fi
 | #125 | merged B1 sole execution writer for closed #80 | landed at `cffae3b`; reviewed runtime `eebe931` has the same tree `43aa5b9`; contains no adapter or deployment proof |
 | #126 | merged B1 execution-environment port/fake boundary for closed #87 | landed at `9a2b11b`; reviewed head `5b3d9f5` has the same tree `8a202c5`; contains no public #88 route, real adapter, deployment, or live proof |
 | #127 | merged #88 frontier handoff | documentation/coordination only; landed in base `4e1695c` |
-| #128 | review-ready #88 public start-only bridge | additive public v0.4 route and local/fake composition through #80/#87; no merge/deploy authorization, real adapter, closure runtime, or live proof |
+| #128 | merged #88 public start-only bridge | landed as `883ef91` with the reviewed tree; additive public v0.4 route and local/fake composition through #80/#87; no deployment, real adapter, closure runtime, or live proof |
 | #98 | B1 single-writer decision evidence | preserve as source-pinned design evidence; re-check every claim against current source; implementation belongs to #80/#88 |
 | #103 | stale B1/B2 contract draft | #81 supersedes its released B1 families; do not merge wholesale; review any remaining B2 evidence independently |
 | #105 | B3 delivery persona/privacy hardening | review under #104 and B3 security acceptance |
@@ -124,15 +126,23 @@ No open PR is launch authority by itself. Closing, rebasing, merging, or superse
 | ISC-9 | export/delete/pre-deletion-backup restore adversarial test | no resurrection across named stores |
 | ISC-10–11 | Electron/mobile/Telegram/Discord staging matrix, load/cost, observability, incident/rollback, canonical live verification | every claim tied to the proof level exercised |
 
-## Next session
+## Next implementation goal
 
-Review only B1 issue #88 in PR #128:
+Use the [B2–B6 goal execution contract](../planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md):
 
-1. fetch current `origin/main` and the PR head; inspect #88/#116/#78, the [#88 review handoff](../ledger/2026-08-14-b1-workunit-execution-bridge-review.md), exact diff, mergeability, checks, and absence of a later conflicting owner;
-2. confirm full-command digest replay behavior, canonical owner/Outcome/WorkUnit/authority derivation, #80 sole-writer transactions, immutable start-intent reconstruction, commit-before-I/O, #87 recover-before-execute, strict observation admission, and no implied Evidence/Verification/Acceptance/Outcome/OpenLoop completion;
-3. verify released #81 execution source/fixtures, migrations, Durable Object schema, dependencies, and lockfiles remain unchanged; run `/check-contract`, `/break-feature`, `/code-review`, mandatory Security/authority, independent QA/Standards/Spec, and the exact-SHA wall;
-4. treat resume/steer/pause and v0.3-planned WorkUnit upgrade as `NEEDS DIRECTION`. Do not add a writer, migration, row-upgrade rule, or adapter-local durability in review;
-5. do not merge, close #88, start B2-B6, add real adapters, decide Supabase-versus-D1, stage, deploy, or claim live/product acceptance without explicit human authorization.
+1. fetch current `origin/main`; inspect #78/#116 and the owning issue; verify no later conflicting owner and re-pin all sources;
+2. create one persistent root goal only with explicit human instruction; a gate is a checkpoint, while one issue or bounded vertical slice is the worktree unit;
+3. start with #82 after recording its released B2 fixture pin, canonical writer/migration ownership, first failing test, acceptance, falsifier, rollback, and review roster;
+4. keep #84/#85 and B3–B6 write lanes blocked until their named dependency barriers land; later lanes may perform read-only research, threat modeling, and acceptance planning;
+5. use `/waldo-isa-run-contract`, planner/workflow mapping, TDD, `/check-contract`, `/break-feature`, `/code-review`, Security/authority where triggered, independent QA/Standards/Spec, and the exact-SHA wall for each implementation issue;
+6. resolve the #104/#86 dependency cycle before B3 implementation; treat resume/steer/pause and the v0.3-row upgrade as `NEEDS DIRECTION`;
+7. start credentialed real-API proof only at the named B4 staging barrier with synthetic/test accounts. Production deployment remains a separate explicit action.
+
+### Copy-ready root-session ask
+
+> Create one persistent goal with the exact objective in the B2–B6 goal execution contract and coordinate it through B6. Start only the current dependency frontier as write-capable work: first #82, then promote later issues only after their named barriers pass. Use separate clean worktrees for bounded, disjoint issue slices; keep shared contracts, migrations, schema lineages, composition roots and canonical writers single-owned. Run the required planning, TDD, adversarial QA, Security/authority, Standards, Spec and exact-SHA verification loop for every slice. Unblock children by deciding ownership and release order from evidence; do not let children widen authority or reconcile shared seams privately. Begin real credentialed API testing only at the B4 staging barrier with synthetic/test accounts and reversible effects. Preserve provider/tool success as evidence rather than Waldo Acceptance. Do not deploy, perform destructive drills, or use production credentials without a separate explicit approval.
+
+This ask authorizes the future session to create the Codex session goal. It does not create a Waldo product `GoalRecord`, pre-authorize external mutations, or make all five gates independent concurrent writers.
 
 ## Verification wall
 

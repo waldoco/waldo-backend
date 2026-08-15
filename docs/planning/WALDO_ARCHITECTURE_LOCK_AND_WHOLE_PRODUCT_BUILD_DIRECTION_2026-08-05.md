@@ -5,6 +5,7 @@
 **Convergence refresh:** 2026-08-12
 **Launch-execution refresh:** 2026-08-13; the [production run contract](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) owns B0-B6 sequencing
 **Primary-surface refresh:** 2026-08-13; Electron Kennel, Waldo mobile, Telegram, and Discord are required launch presences; WhatsApp is approval-dependent and non-blocking
+**B1 evidence refresh:** 2026-08-15; bounded B1 is landed at `origin/main@883ef913`, and the definitive writer matrix is reconciled to the implemented #80/#87/#88 split
 **Scope:** Waldo backend agent, Kennel desktop presence/executor, mobile Health/Care presence, messaging presences, governed execution, continuity, workspace, connectors, and distribution contracts
 **Primary design:** [`WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md`](./WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md)
 **Product envelope:** [`WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md`](./WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md)
@@ -37,11 +38,11 @@ Architecture exists to preserve that relationship. A module, contract, provider,
 
 ### 1.2 Current implementation boundary at the convergence refresh
 
-**[Observed at `waldo-backend@dd434e9`]** Responsibility capture v0.1/v0.2, bounded planning-turn v0.3, authenticated public ingress, owner routing, `IdentityPresenceModule`, `WaldoCoordinator`, `OutcomeModule`, owner events/projections, and one leased/fenced/cancellable zero-tool planning turn are implemented locally. The trusted RunLoop, ContextComposer, DeliveryGate, scheduling, journal/outbox, safety, and effect foundations also exist as a separate substrate.
+**[Observed at landed `waldo-backend@883ef913`]** Responsibility capture v0.1/v0.2, bounded planning-turn v0.3, authenticated public ingress, owner routing, `IdentityPresenceModule`, `WaldoCoordinator`, `OutcomeModule`, owner events/projections, and one leased/fenced/cancellable zero-tool planning turn are implemented. B1 adds released v0.4 responsibility contracts, `PlanningExecutionModule` as the canonical writer for execution request/attempt/session/lease/observation/reconciliation state, one recover-before-issue execution-environment seam, and one strict authenticated start-only WorkUnit bridge through the existing trusted RunLoop composition. The reviewed #128 tree and landed merge tree are identical. The trusted RunLoop, ContextComposer, DeliveryGate, scheduling, journal/outbox, safety, and effect foundations remain the physical execution/I/O substrate.
 
-**[Not yet proved]** No product WorkUnit enters that general trusted execution path. Evidence/Verification/Acceptance/OpenLoop/ReEntry reducers, multi-presence/Home/channel synchronization, service-first Connections, real Calendar/inbox product effects, Telegram/Discord adapters, reviewed routine promotion, persistent cloud execution, Electron Kennel consumption, mobile acceptance, staging, and production proof remain missing or unproved. The capability matrix carries the row-level status; this lock must not be cited as implementation proof.
+**[Not yet proved]** The public bridge is default-disabled and has deterministic local/fake proof only; non-local composition has no real execution-environment adapter. Evidence/Verification/Acceptance/OpenLoop/ReEntry reducers, multi-presence/Home/channel synchronization, service-first Connections, real Calendar/inbox product effects, Telegram/Discord adapters, reviewed routine promotion, persistent cloud execution, Electron Kennel consumption, mobile acceptance, staging, and production proof remain missing or unproved. Resume/steer/pause intent durability and upgrade of a WorkUnit already occupying the v0.3 planning row remain architecture stops. The capability matrix carries the row-level status; this lock must not be cited as implementation proof.
 
-**[Observed 2026-08-14 after #81]** Baseline convergence landed through PR #119; test-only PR #121 hardened tracer alarm isolation; PR #123 then released additive v0.4 responsibility contracts and fixtures at reviewed `df0abae`, landed `origin/main@7067f15` with the identical Git tree. The canonical wall passed contracts (1,560), runtime (1,001), eight Supabase migrations from zero, 53 pgTAP assertions, five exact-token/session-revocation integration tests, and every guard/generated-artifact check. This proves ISC-1 plus `contract_defined` for the released B1 families only: no general execution writer, adapter conformance, closure runtime, Worker deployment, or production behavior follows. #80 is the next sole-writer implementation frontier; #87 and #88 remain dependency-blocked.
+**[Observed 2026-08-15 after #88]** Baseline convergence landed through PR #119; PR #123 released additive v0.4 responsibility contracts; PRs #125, #126, and #128 landed the sole execution writer, execution-environment seam, and public start-only bridge. At the final reviewed #128 head, contracts passed 68 files / 1,563 tests, runtime passed 42 files / 1,066 tests, integration passed 2 files / 5 tests, eight Supabase migrations plus 53 pgTAP assertions passed, and QA/Security/Standards/Spec passed. This proves ISC-1 and bounded ISC-2 at `module_implemented` plus deterministic local/fake composition. It does not prove a real adapter, closure runtime, staging, deployment, or production behavior. B2 #82 is the next implementation frontier after documentation/tracker convergence.
 
 ## 2. Whole-product thesis checksum
 
@@ -67,7 +68,8 @@ flowchart LR
   Surface["Kennel · mobile · web · messaging · voice"] -->|"SurfaceCommandRequest"| Gateway["Authenticated gateway"]
   Gateway -->|"TrustedCommandEnvelope"| Root["Per-owner Durable Object"]
   Root --> Coord["WaldoCoordinator"]
-  Coord --> Run["RunLoopEngine"]
+  Coord --> PlanExec["PlanningExecutionModule · #80 sole writer"]
+  PlanExec -->|"Committed execution claim"| Run["RunLoopEngine"]
   Run --> Effect["EffectEngine"]
   Run --> Exec["Kennel · provider · cloud executor"]
   Effect --> Connector["Connector adapters"]
@@ -77,7 +79,7 @@ flowchart LR
 
 1. Waldo backend owns identity binding, canonical product state, admission, context policy, authority, acceptance, Open Loop closure, and ordered projections.
 2. Kennel is Waldo's Electron desktop presence and local executor with synchronized Home and Xirp-informed Work. **Kennel proposes; the owner Durable Object admits.** Kennel owns local operation durability and workspace processes, never canonical Outcome, authority, memory, acceptance, or closure.
-3. `WaldoCoordinator` is logically above provider/executor adapters and is physically hosted with `RunLoopEngine` in the per-owner Durable Object and SQLite transaction boundary until measured evidence requires another placement.
+3. `WaldoCoordinator` is logically above canonical writer Modules and provider/executor adapters. It admits execution through `PlanningExecutionModule`; only a committed claim enters `RunLoopEngine`. These components are physically hosted in the per-owner Durable Object and SQLite boundary until measured evidence requires another placement.
 4. Providers, harnesses, connectors, people, and execution environments return untrusted observations, receipts, and candidate evidence. Their `done` state changes no Waldo product truth by implication.
 5. No transitive delegation exists. A downstream executor receives the intersection of the owner's current grant, WorkUnit ceiling, adapter capability, purpose, resource, audience, lease, expiry, and revocation generation.
 
@@ -193,7 +195,8 @@ One named reducer is the only durable writer for each aggregate. `WaldoCoordinat
 | WaldoIdentity, Presence | `IdentityPresenceModule` | Per-owner DO SQLite | Authenticated account/presence lifecycle command |
 | Capture, Outcome, Mission, WorkUnit | `OutcomeModule` | Per-owner DO SQLite | Trusted owner command or authorized internal command |
 | JudgmentRequest, JudgmentDecision, AuthorityGrant, SensitiveHandoff | `JudgmentAuthorityModule` | Per-owner DO SQLite | Trusted answer/handoff lifecycle plus current policy/revision checks |
-| ExecutionRequest, RuntimeRun, AgentSession, ExecutionLease | `RunLoopEngine` | Per-owner DO SQLite | Authorized Coordinator outbox command |
+| ExecutionRequest, ExecutionAttempt, ExecutionSession, ExecutionLease, ExecutorObservation, ExecutionReconciliation | `PlanningExecutionModule` | Per-owner DO SQLite | Authorized Coordinator admission derived from current Outcome/WorkUnit state |
+| Trusted operation journal/outbox and physical provider/environment issue state | `RunLoopEngine` | Per-owner DO SQLite | Committed execution claim plus private operation intent through the Coordinator/RunLoop composition |
 | EffectIntent, EffectReceipt, reconciliation state | `EffectEngine` | Per-owner DO SQLite | Admitted effect command and adapter observation |
 | Evidence, Verification | `EvidenceVerifier` | Per-owner DO SQLite plus bounded evidence refs | Attributable candidate evidence or verifier result |
 | Acceptance | `AcceptanceModule` | Per-owner DO SQLite | Explicit/delegated decision bound to revision and evidence digest |
@@ -501,4 +504,4 @@ Provider choice, connector choice, local/cloud placement, object-store vendor, f
 
 ## 14. Start decision
 
-**Continue building now, backend first.** Responsibility capture v0.1/v0.2 and the bounded planning-turn v0.3 are already implemented locally at the current evidence pin. Use the [next backend session prompt](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) to repair the current verification/documented-route baseline, join canonical WorkUnits to the trusted RunLoop, and add the Evidence → Verification → Acceptance/OpenLoop/ReEntry spine. Then publish the multi-presence/Home/Connection/execution contracts that Electron Kennel consumes. Mobile integration starts after the intended app lineage is selected and the same public fixtures are stable. This sequence does not remove any committed product capability.
+**Continue building now, backend first.** B0 and the bounded B1 start-only WorkUnit path are landed at the B1 evidence pin. First merge the documentation convergence with explicit authorization and verify #78/#116 have not drifted; then use the [next backend session prompt](../foundation/NEXT-BACKEND-SESSION-PROMPT.md) to advance bounded B2 #82 and the Evidence → Verification → Acceptance/OpenLoop/ReEntry spine through dependency-frontier barriers. Publish the multi-presence/Home/Connection/execution contracts that Electron Kennel consumes only after their named upstream releases. Mobile integration starts after the intended app lineage is selected and the same public fixtures are stable. This sequence does not remove any committed product capability.
