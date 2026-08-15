@@ -1,13 +1,13 @@
 # Waldo Backend Contributor Onboarding
 
 **Status:** current onboarding entrypoint
-**Updated:** 2026-08-13
+**Updated:** 2026-08-15
 
 ## What you are joining
 
 Waldo is one private, user-owned agent account across personal assistance and work/agent orchestration. The three primary launch surfaces are Electron Kennel desktop, Waldo mobile with optional Health/Care, and messaging presence. Telegram and Discord are required launch adapters; WhatsApp remains a primary target but vendor approval is non-blocking. Named helpers are bounded roles beneath the account, not separate identities or truth stores. Providers, tools, channels, connectors, people, and local/cloud environments execute bounded capabilities; none owns Waldo identity, canonical personal context, Outcome truth, authority, Acceptance, or Open Loop closure.
 
-The repository contains owner-routed responsibility capture, an Outcome/Mission/WorkUnit graph, a guarded public adapter, a bounded zero-tool planning turn, and a separate trusted Durable Object RunLoop with broad contract/runtime foundations. The missing responsibility-to-execution, Evidence/Verification/Acceptance/OpenLoop/ReEntry, multi-presence/Home, real Connection/effect, context/routine, and cloud-workspace bridges prevent any claim that the target product is shipped.
+The repository contains owner-routed responsibility capture, an Outcome/Mission/WorkUnit graph, a guarded public adapter, a bounded zero-tool planning turn, released v0.4 responsibility contracts, one canonical execution writer, a recover-before-issue execution-environment seam, and one authenticated start-only WorkUnit bridge through the trusted Durable Object RunLoop composition. The missing real execution adapters, Evidence/Verification/Acceptance/OpenLoop/ReEntry, multi-presence/Home, real Connection/effect, context/routine, cloud-workspace, deletion, staging, and operations paths prevent any claim that the target product is shipped.
 
 ## Read before changing code
 
@@ -20,7 +20,7 @@ The repository contains owner-routed responsibility capture, an Outcome/Mission/
 7. [Execution ledger](./EXECUTION-LEDGER.md), [agent operating workflow](./AGENT-OPERATING-WORKFLOW.md), and [local verification pipeline](./LOCAL-DEV-TESTING-PIPELINE.md).
 8. [Production run contract](./NEXT-BACKEND-SESSION-PROMPT.md), then fresh source, tests, issue/PR state, and accepted ADRs for the touched seam.
 
-The [production-launch milestone](https://github.com/Pin4sf/waldo-backend/milestone/1) and [umbrella issue #78](https://github.com/Pin4sf/waldo-backend/issues/78) carry the current B0-B6 work map. [Execution ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116) carries live session/worktree ownership and links durable handoffs. GitHub issues, labels, milestones, PRs and linked evidence are the current workflow; Linear/HEY identifiers are historical evidence only. Only B0 is ready to start. Retired plans and ticket handoffs remain in Git history for archaeology. They cannot establish current work order, ownership, product scope, or shipped behavior.
+The [production-launch milestone](https://github.com/Pin4sf/waldo-backend/milestone/1) and [umbrella issue #78](https://github.com/Pin4sf/waldo-backend/issues/78) carry the current B0-B6 work map. [Execution ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116) carries live session/worktree ownership and links durable handoffs. GitHub issues, labels, milestones, PRs and linked evidence are the current workflow; Linear/HEY identifiers are historical evidence only. B0 and bounded B1 are complete; #82 is the next candidate frontier after documentation/tracker convergence. Use the [B2–B6 goal execution contract](../planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md); do not start one write-capable worktree per gate. Retired plans and ticket handoffs remain in Git history for archaeology. They cannot establish current work order, ownership, product scope, or shipped behavior.
 
 ## Architecture boundaries
 
