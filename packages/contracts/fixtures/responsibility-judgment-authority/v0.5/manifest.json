@@ -4,6 +4,49 @@
   "mediaType": "application/vnd.waldo.responsibility.v0.5+json",
   "offlineCommands": "none",
   "proofLevel": "adapter_conformance_fixture",
+  "source": {
+    "path": "packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts",
+    "sha256": "sha256:ea39d03cf3c6e4b64a099c73942485a0c7286103fcb85f06e8f01c461d4299c1"
+  },
+  "fixturePayloadRootSha256": "sha256:120797ba58bafb7d589ccbbc1fcd1a78e268efa219ecc713361f9304b87a9a4e",
+  "compatibilityWindow": {
+    "predecessor": "0.4",
+    "mode": "parallel_additive",
+    "promise": "v0.4 source, tests, and fixture bytes remain preserved",
+    "removal": "none_authorized"
+  },
+  "consumers": [
+    {
+      "name": "waldo-backend-runtime",
+      "status": "required_next",
+      "issue": "#82"
+    },
+    {
+      "name": "kennel",
+      "status": "deferred",
+      "gate": "B3"
+    },
+    {
+      "name": "waldo-mobile",
+      "status": "deferred",
+      "gate": "B3"
+    },
+    {
+      "name": "telegram",
+      "status": "deferred",
+      "gate": "B4"
+    },
+    {
+      "name": "discord",
+      "status": "deferred",
+      "gate": "B4"
+    }
+  ],
+  "bytePreservation": {
+    "throughVersion": "0.4",
+    "guard": "scripts/guards/guard-responsibility-released-v0-1-v0-4-bytes.mjs",
+    "compositeSha256": "sha256:e2674177d5852b15b83ae59d6f9faef62f13ff03b99b89ebb33cee14e491a0ca"
+  },
   "retrySemantics": {
     "identity": "requestId",
     "exactDuplicate": "return_persisted_result_byte_for_byte",
@@ -52,7 +95,7 @@
     },
     {
       "path": "judgment-authority.rejections.json",
-      "sha256": "sha256:50686cd76eb6e1a0c62bfb863db74bd2dae2e5305b7b8a3380408b1375f9ea84"
+      "sha256": "sha256:0dab44ecf83094e1c421e98dabba1b415e58cc463f8cc12de5a8d0d084c7759b"
     },
     {
       "path": "judgment-decision.schema.json",

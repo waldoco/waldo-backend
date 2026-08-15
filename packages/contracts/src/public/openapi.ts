@@ -113,6 +113,9 @@ const operationMetadata = Object.freeze({
     summary: 'Read the owner-bound Needs You judgment projection',
     successStatus: '200',
     responseSchemas: { '0.5': 'JudgmentProjectionPageV05' },
+    runtimeValidation: [
+      'displayedRequestDigest equals SHA-256 of canonical embedded JudgmentRequestV05',
+    ],
   },
   judgment_answer: {
     operationId: 'answerJudgment',
@@ -219,6 +222,9 @@ function operationFor(route: PublicResponsibilityRoute): JsonRecord {
   const retrySemantics = 'retrySemantics' in metadata
     ? metadata.retrySemantics
     : undefined;
+  const runtimeValidation = 'runtimeValidation' in metadata
+    ? metadata.runtimeValidation
+    : undefined;
   return {
     operationId: metadata.operationId,
     summary: metadata.summary,
@@ -235,6 +241,9 @@ function operationFor(route: PublicResponsibilityRoute): JsonRecord {
     ...(retrySemantics === undefined
       ? {}
       : { 'x-waldo-retry-semantics': retrySemantics }),
+    ...(runtimeValidation === undefined
+      ? {}
+      : { 'x-waldo-runtime-validation': runtimeValidation }),
     parameters: [
       {
         name: 'Accept', in: 'header', required: true,

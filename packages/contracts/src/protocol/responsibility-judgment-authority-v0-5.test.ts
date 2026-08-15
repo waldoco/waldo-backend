@@ -6,12 +6,15 @@ import {
   canonicalizeJudgmentAnswerRequestV05ForDigest,
   canonicalizeJudgmentRequestV05ForDigest,
   createJudgmentAuthorityBindingVerifierV05,
+  createJudgmentProjectionPageVerifierV05,
   judgmentAnswerRequestV05Schema,
   judgmentAnswerResultV05Schema,
   judgmentAnswerRetrySemanticsV05,
   judgmentAuthorityBindingV05Schema,
   judgmentDecisionV05Schema,
+  MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05,
   judgmentProjectionPageV05Schema,
+  judgmentProjectionPageUtf8ByteLengthV05,
   judgmentProjectionQueryV05Schema,
   judgmentRequestV05Schema,
 } from './responsibility-judgment-authority-v0-5';
@@ -399,6 +402,10 @@ describe('responsibility judgment and authority v0.5', () => {
   });
 
   it('projects ordered owner-bound JudgmentRequests through a bounded cursor page', () => {
+    const sha256Hex = (value: string) => createHash('sha256').update(value).digest('hex');
+    const displayedRequestDigest = `sha256:${sha256Hex(
+      canonicalizeJudgmentRequestV05ForDigest(validRequest),
+    )}`;
     const query = {
       protocolVersion: '0.5',
       fromExclusiveCursor: 26,
@@ -418,14 +425,23 @@ describe('responsibility judgment and authority v0.5', () => {
         cursor: 27,
         itemType: 'judgment_request',
         request: validRequest,
-        displayedRequestDigest: `sha256:${'d'.repeat(64)}`,
+        displayedRequestDigest,
       }],
       hasMore: true,
       generatedAt: '2026-08-15T18:10:00.000Z',
     } as const;
 
     expect(judgmentProjectionQueryV05Schema.parse(query)).toEqual(query);
-    expect(judgmentProjectionPageV05Schema.parse(page)).toEqual(page);
+    const parsedPage = judgmentProjectionPageV05Schema.parse(page);
+    expect(parsedPage).toEqual(page);
+    expect(createJudgmentProjectionPageVerifierV05(sha256Hex)(page)).toEqual(page);
+    expect(() => createJudgmentProjectionPageVerifierV05(sha256Hex)({
+      ...page,
+      items: [{
+        ...page.items[0],
+        displayedRequestDigest: `sha256:${'d'.repeat(64)}`,
+      }],
+    })).toThrow('displayedRequestDigest must equal SHA-256 of the canonical embedded request');
     for (const invalid of [
       { ...page, ownerId: 'owner_other' },
       { ...page, nextCursor: 28 },
@@ -445,6 +461,55 @@ describe('responsibility judgment and authority v0.5', () => {
     ]) {
       expect(judgmentProjectionPageV05Schema.safeParse(invalid).success).toBe(false);
     }
+
+    const utf8Bytes = judgmentProjectionPageUtf8ByteLengthV05;
+    let boundaryPage = judgmentProjectionPageV05Schema.parse({
+      ...parsedPage,
+      highWaterCursor: page.fromExclusiveCursor,
+      nextCursor: page.fromExclusiveCursor,
+      items: [],
+      hasMore: false,
+    });
+    for (let index = 0; index < 256; index += 1) {
+      const cursor = page.fromExclusiveCursor + index + 1;
+      const candidate = {
+        ...boundaryPage,
+        highWaterCursor: cursor,
+        nextCursor: cursor,
+        items: [
+          ...boundaryPage.items,
+          { ...parsedPage.items[0]!, cursor },
+        ],
+      };
+      if (utf8Bytes(candidate) > MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05) break;
+      boundaryPage = candidate;
+    }
+    let remaining = MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05 - utf8Bytes(boundaryPage);
+    for (const item of boundaryPage.items) {
+      const ref = item.request.question.ref;
+      const added = Math.min(remaining, 128 - ref.length);
+      item.request = {
+        ...item.request,
+        question: { ...item.request.question, ref: `${ref}${'x'.repeat(added)}` },
+      };
+      item.displayedRequestDigest = `sha256:${sha256Hex(
+        canonicalizeJudgmentRequestV05ForDigest(item.request),
+      )}`;
+      remaining -= added;
+      if (remaining === 0) break;
+    }
+    expect(remaining).toBe(0);
+    expect(utf8Bytes(boundaryPage)).toBe(MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05);
+    expect(judgmentProjectionPageV05Schema.safeParse(boundaryPage).success).toBe(true);
+    expect(createJudgmentProjectionPageVerifierV05(sha256Hex)(boundaryPage)).toEqual(boundaryPage);
+    const smallestOverLimit = {
+      ...boundaryPage,
+      snapshotId: `${boundaryPage.snapshotId}x`,
+    };
+    expect(utf8Bytes(smallestOverLimit)).toBe(
+      MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05 + 1,
+    );
+    expect(judgmentProjectionPageV05Schema.safeParse(smallestOverLimit).success).toBe(false);
   });
 
   it('records the authenticated decision and server-created grant as separate strict aggregates', () => {

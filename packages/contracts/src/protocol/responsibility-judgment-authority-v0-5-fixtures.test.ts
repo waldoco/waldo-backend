@@ -6,6 +6,7 @@ import {
   authorityGrantV05Schema,
   canonicalizeJudgmentRequestV05ForDigest,
   createJudgmentAuthorityBindingVerifierV05,
+  createJudgmentProjectionPageVerifierV05,
   judgmentAnswerRequestV05Schema,
   judgmentAnswerResultV05Schema,
   judgmentAuthorityBindingV05Schema,
@@ -79,6 +80,7 @@ const REQUIRED_REJECTIONS_V05 = [
   'refused-result-with-grant',
   'projection-missing-displayed-digest',
   'projection-owner-mismatch',
+  'projection-coordinated-request-digest-mismatch',
   'binding-grantee-mismatch',
   'binding-policy-mismatch',
   'binding-decision-at-expiry',
@@ -94,9 +96,11 @@ function fixtureAjv(): Ajv2020 {
 }
 
 describe('responsibility judgment and authority v0.5 fixtures', () => {
+  const sourceSha256 = 'f'.repeat(64);
+
   it('publishes one digest-coherent valid fixture family and pins every byte', () => {
     const hashHex = (value: string) => createHash('sha256').update(value).digest('hex');
-    const bundle = buildResponsibilityJudgmentAuthorityV05Bundle(hashHex);
+    const bundle = buildResponsibilityJudgmentAuthorityV05Bundle(hashHex, sourceSha256);
 
     for (const [path, schema] of Object.entries(validFixtureSchemas)) {
       const value = JSON.parse(bundle[path]!);
@@ -132,6 +136,23 @@ describe('responsibility judgment and authority v0.5 fixtures', () => {
       mediaType: 'application/vnd.waldo.responsibility.v0.5+json',
       offlineCommands: 'none',
       proofLevel: 'adapter_conformance_fixture',
+      source: {
+        path: 'packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts',
+        sha256: `sha256:${sourceSha256}`,
+      },
+      compatibilityWindow: {
+        predecessor: '0.4',
+        mode: 'parallel_additive',
+        promise: 'v0.4 source, tests, and fixture bytes remain preserved',
+        removal: 'none_authorized',
+      },
+      consumers: [
+        { name: 'waldo-backend-runtime', status: 'required_next', issue: '#82' },
+        { name: 'kennel', status: 'deferred', gate: 'B3' },
+        { name: 'waldo-mobile', status: 'deferred', gate: 'B3' },
+        { name: 'telegram', status: 'deferred', gate: 'B4' },
+        { name: 'discord', status: 'deferred', gate: 'B4' },
+      ],
       retrySemantics: {
         identity: 'requestId',
         exactDuplicate: 'return_persisted_result_byte_for_byte',
@@ -144,11 +165,18 @@ describe('responsibility judgment and authority v0.5 fixtures', () => {
         .sort()
         .map((path) => ({ path, sha256: `sha256:${hashHex(bundle[path]!)}` })),
     );
+    expect(manifest.fixturePayloadRootSha256).toBe(
+      `sha256:${hashHex(
+        manifest.files.map(
+          ({ path, sha256 }: { path: string; sha256: string }) => `${path}\u0000${sha256}\n`,
+        ).join(''),
+      )}`,
+    );
   });
 
   it('catalogues structural, semantic, stale, and coordinated-digest attacks', () => {
     const hashHex = (value: string) => createHash('sha256').update(value).digest('hex');
-    const bundle = buildResponsibilityJudgmentAuthorityV05Bundle(hashHex);
+    const bundle = buildResponsibilityJudgmentAuthorityV05Bundle(hashHex, sourceSha256);
     const catalogue = responsibilityJudgmentAuthorityRejectionCatalogueV05Schema.parse(
       JSON.parse(bundle['judgment-authority.rejections.json']!),
     );
@@ -173,6 +201,12 @@ describe('responsibility judgment and authority v0.5 fixtures', () => {
       if (rejection.name === 'binding-coordinated-request-digest-mismatch') {
         expect(() => createJudgmentAuthorityBindingVerifierV05(hashHex)(rejection.value))
           .toThrow('requestDigest must equal SHA-256 of the canonical embedded request');
+      }
+      if (rejection.name === 'projection-coordinated-request-digest-mismatch') {
+        expect(() => createJudgmentProjectionPageVerifierV05(hashHex)(rejection.value))
+          .toThrow(
+            'displayedRequestDigest must equal SHA-256 of the canonical embedded request',
+          );
       }
     }
   });

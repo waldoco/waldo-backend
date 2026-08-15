@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildResponsibilityJudgmentAuthorityV05Bundle,
@@ -19,8 +19,16 @@ describe('generate responsibility judgment and authority v0.5 fixtures', () => {
       import.meta.url,
     );
     mkdirSync(directory, { recursive: true });
-    const bundle = buildResponsibilityJudgmentAuthorityV05Bundle((value) =>
-      createHash('sha256').update(value).digest('hex'));
+    const sourceSha256 = createHash('sha256')
+      .update(readFileSync(new URL(
+        '../packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts',
+        import.meta.url,
+      )))
+      .digest('hex');
+    const bundle = buildResponsibilityJudgmentAuthorityV05Bundle(
+      (value) => createHash('sha256').update(value).digest('hex'),
+      sourceSha256,
+    );
     const request = judgmentRequestV05Schema.parse(
       JSON.parse(bundle['judgment-request.valid.json']!),
     );

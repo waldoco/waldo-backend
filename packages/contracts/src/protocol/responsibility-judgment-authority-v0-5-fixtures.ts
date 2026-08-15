@@ -46,6 +46,7 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V05 = [
   'refused-result-with-grant',
   'projection-missing-displayed-digest',
   'projection-owner-mismatch',
+  'projection-coordinated-request-digest-mismatch',
   'binding-grantee-mismatch',
   'binding-policy-mismatch',
   'binding-decision-at-expiry',
@@ -93,6 +94,7 @@ export const responsibilityJudgmentAuthorityRejectionCatalogueV05Schema = z.stri
 
 export function buildResponsibilityJudgmentAuthorityV05Bundle(
   hashHex: HashHex,
+  sourceSha256: string,
 ): Record<string, string> {
   const judgmentRequest = judgmentRequestV05Schema.parse({
     protocolVersion: '0.5',
@@ -497,6 +499,16 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
         value: { ...projectionPage, ownerId: 'owner_other' },
       },
       {
+        name: 'projection-coordinated-request-digest-mismatch',
+        schema: 'judgment-projection-page.schema.json',
+        layer: 'runtime',
+        zodOutcome: 'accept',
+        value: {
+          ...projectionPage,
+          items: [{ ...projectionItem, displayedRequestDigest: coordinatedFalseDigest }],
+        },
+      },
+      {
         name: 'binding-grantee-mismatch',
         schema: 'judgment-authority-binding.schema.json',
         layer: 'runtime',
@@ -587,6 +599,16 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
     'judgment-authority.rejections.json': file(rejectionCatalogue),
   };
 
+  const filePins = Object.keys(files)
+    .sort()
+    .map((path) => ({
+      path,
+      sha256: `sha256:${hashHex(files[path]!)}`,
+    }));
+  const fixturePayloadRootSha256 = `sha256:${hashHex(
+    filePins.map(({ path, sha256 }) => `${path}\u0000${sha256}\n`).join(''),
+  )}`;
+
   return {
     ...files,
     'manifest.json': file({
@@ -595,13 +617,31 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
       mediaType: 'application/vnd.waldo.responsibility.v0.5+json',
       offlineCommands: 'none',
       proofLevel: 'adapter_conformance_fixture',
+      source: {
+        path: 'packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts',
+        sha256: `sha256:${sourceSha256}`,
+      },
+      fixturePayloadRootSha256,
+      compatibilityWindow: {
+        predecessor: '0.4',
+        mode: 'parallel_additive',
+        promise: 'v0.4 source, tests, and fixture bytes remain preserved',
+        removal: 'none_authorized',
+      },
+      consumers: [
+        { name: 'waldo-backend-runtime', status: 'required_next', issue: '#82' },
+        { name: 'kennel', status: 'deferred', gate: 'B3' },
+        { name: 'waldo-mobile', status: 'deferred', gate: 'B3' },
+        { name: 'telegram', status: 'deferred', gate: 'B4' },
+        { name: 'discord', status: 'deferred', gate: 'B4' },
+      ],
+      bytePreservation: {
+        throughVersion: '0.4',
+        guard: 'scripts/guards/guard-responsibility-released-v0-1-v0-4-bytes.mjs',
+        compositeSha256: 'sha256:e2674177d5852b15b83ae59d6f9faef62f13ff03b99b89ebb33cee14e491a0ca',
+      },
       retrySemantics: judgmentAnswerRetrySemanticsV05,
-      files: Object.keys(files)
-        .sort()
-        .map((path) => ({
-          path,
-          sha256: `sha256:${hashHex(files[path]!)}`,
-        })),
+      files: filePins,
     }),
   };
 }

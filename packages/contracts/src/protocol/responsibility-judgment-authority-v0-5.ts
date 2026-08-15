@@ -383,7 +383,7 @@ export const judgmentAnswerRetrySemanticsV05 = Object.freeze({
 
 export const MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05 = 262_144;
 
-function utf8ByteLength(value: unknown): number {
+export function judgmentProjectionPageUtf8ByteLengthV05(value: unknown): number {
   let bytes = 0;
   for (const character of JSON.stringify(value)) {
     const codePoint = character.codePointAt(0);
@@ -460,7 +460,10 @@ export const judgmentProjectionPageV05Schema = z
         message: 'projection cursor envelope is inconsistent',
       });
     }
-    if (utf8ByteLength(page) > MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05) {
+    if (
+      judgmentProjectionPageUtf8ByteLengthV05(page) >
+      MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05
+    ) {
       context.addIssue({
         code: 'custom',
         message: 'judgment projection page exceeds byte limit',
@@ -469,6 +472,13 @@ export const judgmentProjectionPageV05Schema = z
   });
 
 export type JudgmentProjectionPageV05 = z.infer<typeof judgmentProjectionPageV05Schema>;
+
+export class JudgmentProjectionDigestMismatchErrorV05 extends Error {
+  constructor() {
+    super('displayedRequestDigest must equal SHA-256 of the canonical embedded request');
+    this.name = 'JudgmentProjectionDigestMismatchErrorV05';
+  }
+}
 
 function sameProtocolValue(left: unknown, right: unknown): boolean {
   return canonicalizeProtocolJson(left) === canonicalizeProtocolJson(right);
@@ -649,6 +659,33 @@ export type JudgmentAuthorityBindingV05 = z.infer<typeof judgmentAuthorityBindin
 
 export type JudgmentAuthoritySha256HexV05 = (canonicalUtf8: string) => string;
 
+function assertTrustedSha256HexV05(digestHex: string): void {
+  if (!/^[a-f0-9]{64}$/.test(digestHex)) {
+    throw new TypeError('trusted SHA-256 implementation must return 64 lowercase hex characters');
+  }
+}
+
+/**
+ * Verifies the byte-stable snapshot returned by a projection adapter. Runtime
+ * admission must still re-read current owner, presence, session, policy,
+ * subject, grantee, revocation, revision, and clock state before deciding.
+ */
+export function createJudgmentProjectionPageVerifierV05(
+  sha256Hex: JudgmentAuthoritySha256HexV05,
+): (value: unknown) => JudgmentProjectionPageV05 {
+  return (value) => {
+    const page = judgmentProjectionPageV05Schema.parse(value);
+    for (const item of page.items) {
+      const digestHex = sha256Hex(canonicalizeJudgmentRequestV05ForDigest(item.request));
+      assertTrustedSha256HexV05(digestHex);
+      if (item.displayedRequestDigest !== `sha256:${digestHex}`) {
+        throw new JudgmentProjectionDigestMismatchErrorV05();
+      }
+    }
+    return page;
+  };
+}
+
 export class JudgmentAuthorityBindingDigestMismatchErrorV05 extends Error {
   constructor() {
     super('requestDigest must equal SHA-256 of the canonical embedded request');
@@ -656,15 +693,19 @@ export class JudgmentAuthorityBindingDigestMismatchErrorV05 extends Error {
   }
 }
 
+/**
+ * Verifies coherence of one stored request/answer/decision/grant snapshot.
+ * It does not prove current identity, presence, session, policy, subject,
+ * grantee, revocation, revision, or clock state; runtime admission must re-read
+ * and validate those authoritative values.
+ */
 export function createJudgmentAuthorityBindingVerifierV05(
   sha256Hex: JudgmentAuthoritySha256HexV05,
 ): (value: unknown) => JudgmentAuthorityBindingV05 {
   return (value) => {
     const binding = judgmentAuthorityBindingV05Schema.parse(value);
     const digestHex = sha256Hex(canonicalizeJudgmentRequestV05ForDigest(binding.request));
-    if (!/^[a-f0-9]{64}$/.test(digestHex)) {
-      throw new TypeError('trusted SHA-256 implementation must return 64 lowercase hex characters');
-    }
+    assertTrustedSha256HexV05(digestHex);
     if (binding.requestDigest !== `sha256:${digestHex}`) {
       throw new JudgmentAuthorityBindingDigestMismatchErrorV05();
     }

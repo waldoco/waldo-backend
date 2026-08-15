@@ -1792,6 +1792,9 @@
         "x-waldo-protocol-versions": [
           "0.5"
         ],
+        "x-waldo-runtime-validation": [
+          "displayedRequestDigest equals SHA-256 of canonical embedded JudgmentRequestV05"
+        ],
         "parameters": [
           {
             "name": "Accept",

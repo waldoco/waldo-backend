@@ -117,6 +117,9 @@ describe('public OpenAPI artifact', () => {
         schema: { $ref: '#/components/schemas/JudgmentProjectionPageV05' },
       },
     });
+    expect(judgmentProjection['x-waldo-runtime-validation']).toEqual([
+      'displayedRequestDigest equals SHA-256 of canonical embedded JudgmentRequestV05',
+    ]);
     expect(judgmentAnswer.requestBody!.content).toEqual({
       'application/vnd.waldo.responsibility.v0.5+json': {
         schema: { $ref: '#/components/schemas/JudgmentAnswerRequestV05' },
@@ -172,4 +175,5 @@ type PublicOperation = {
   'x-waldo-feature-gate': Record<string, unknown>;
   'x-waldo-protocol-versions': readonly string[];
   'x-waldo-retry-semantics'?: Record<string, unknown>;
+  'x-waldo-runtime-validation'?: readonly string[];
 };
