@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { responsibilityHttpRouteManifestV01 } from '../protocol/responsibility-http-adapter-v0-1';
+import { responsibilityJudgmentAuthorityHttpRouteManifestV05 } from '../protocol/responsibility-judgment-authority-http-v0-5';
 import { responsibilityExecutionHttpRouteManifestV04 } from '../protocol/responsibility-workunit-execution-http-v0-4';
 import { buildPublicOpenApiDocument } from './openapi';
 
@@ -18,6 +19,13 @@ const forbiddenFragments = [
   'working_memory',
   'session_state',
   'durable_object',
+  '"authenticatedSessionId":',
+  '"ownerRootRoutingVersion":',
+  '"providerId":',
+  '"modelId":',
+  '"executorRef":',
+  '"credential":',
+  '"transcript":',
 ];
 
 describe('public OpenAPI artifact', () => {
@@ -27,6 +35,7 @@ describe('public OpenAPI artifact', () => {
     const publicRoutes = [
       ...responsibilityHttpRouteManifestV01,
       ...responsibilityExecutionHttpRouteManifestV04,
+      ...responsibilityJudgmentAuthorityHttpRouteManifestV05,
     ];
     expect(Object.keys(paths).sort()).toEqual(
       [...new Set(publicRoutes.map((route) => route.path))].sort(),
@@ -89,12 +98,56 @@ describe('public OpenAPI artifact', () => {
     expect(Object.keys(execution.responses['200']!.content!)).toEqual([
       'application/vnd.waldo.responsibility.v0.4+json',
     ]);
+    const judgmentProjection = paths[
+      '/public/responsibilities/judgments/projection'
+    ]!.get!;
+    const judgmentAnswer = paths['/public/responsibilities/judgments/answers']!.post!;
+    expect(judgmentProjection).not.toHaveProperty('requestBody');
+    expect(Object.keys(judgmentProjection.responses['200']!.content!)).toEqual([
+      'application/vnd.waldo.responsibility.v0.5+json',
+    ]);
+    expect(Object.keys(judgmentAnswer.requestBody!.content)).toEqual([
+      'application/vnd.waldo.responsibility.v0.5+json',
+    ]);
+    expect(Object.keys(judgmentAnswer.responses['200']!.content!)).toEqual([
+      'application/vnd.waldo.responsibility.v0.5+json',
+    ]);
+    expect(judgmentProjection.responses['200']!.content).toEqual({
+      'application/vnd.waldo.responsibility.v0.5+json': {
+        schema: { $ref: '#/components/schemas/JudgmentProjectionPageV05' },
+      },
+    });
+    expect(judgmentAnswer.requestBody!.content).toEqual({
+      'application/vnd.waldo.responsibility.v0.5+json': {
+        schema: { $ref: '#/components/schemas/JudgmentAnswerRequestV05' },
+      },
+    });
+    expect(judgmentAnswer.responses['200']!.content).toEqual({
+      'application/vnd.waldo.responsibility.v0.5+json': {
+        schema: { $ref: '#/components/schemas/JudgmentAnswerResultV05' },
+      },
+    });
+    expect(judgmentAnswer['x-waldo-retry-semantics']).toEqual({
+      identity: 'requestId',
+      exactDuplicate: 'return_persisted_result_byte_for_byte',
+      changedDuplicate: 'reject_request_conflict',
+    });
+    expect(paths).not.toHaveProperty('/public/responsibilities/judgments');
     expect(paths['/public/responsibilities/projection']!.get).not.toHaveProperty('requestBody');
     expect(paths['/public/responsibilities/planning-turns/projection']!.get)
       .not.toHaveProperty('requestBody');
     const components = generated.components as { schemas: Record<string, Record<string, unknown>> };
     expect(components.schemas.WorkUnitPlanningTurnResultV03!['x-waldo-presentation'])
       .toBe('inspectable-provenance');
+    for (const internal of [
+      'JudgmentDecisionV05',
+      'AuthorityGrantV05',
+      'JudgmentAuthorityBindingV05',
+      'AuthorityAdmissionV05',
+      'JudgmentRequestV05',
+    ]) {
+      expect(components.schemas).not.toHaveProperty(internal);
+    }
   });
 
   it('does not leak internal-only contract names or sensitive label fragments', () => {
@@ -118,4 +171,5 @@ type PublicOperation = {
   >;
   'x-waldo-feature-gate': Record<string, unknown>;
   'x-waldo-protocol-versions': readonly string[];
+  'x-waldo-retry-semantics'?: Record<string, unknown>;
 };

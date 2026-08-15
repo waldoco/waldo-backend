@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Waldo Public API",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "paths": {
     "/public/responsibilities": {
@@ -1564,6 +1564,600 @@
               "application/vnd.waldo.responsibility.v0.4+json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkUnitExecutionStartResultV04"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem400V01"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem401V01"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Content-free not-found problem, or an indistinguishable plain 404 while the route gate is disabled",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem404V01"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "not found"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem406V01"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem409V01"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              },
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "const": "60"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem429V01"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem500V01"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem503V01"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/responsibilities/judgments/projection": {
+      "get": {
+        "operationId": "readJudgmentProjection",
+        "summary": "Read the owner-bound Needs You judgment projection",
+        "description": "Available only when RESPONSIBILITY_PUBLIC_API_ENABLED is exactly true. Authentication, admission, owner routing, and response validation fail closed.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-waldo-feature-gate": {
+          "environmentVariable": "RESPONSIBILITY_PUBLIC_API_ENABLED",
+          "enabledValue": "true",
+          "default": "disabled"
+        },
+        "x-waldo-protocol-versions": [
+          "0.5"
+        ],
+        "parameters": [
+          {
+            "name": "Accept",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/vnd.waldo.responsibility.v0.5+json"
+              ]
+            }
+          },
+          {
+            "name": "fromExclusiveCursor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 256
+            }
+          },
+          {
+            "name": "snapshotId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Schema-validated owner-bound result",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "private, no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              },
+              "Waldo-Offline-Commands": {
+                "required": true,
+                "schema": {
+                  "const": "none"
+                }
+              },
+              "Waldo-Protocol-Version": {
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "0.5"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/vnd.waldo.responsibility.v0.5+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgmentProjectionPageV05"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem400V01"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem401V01"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Content-free not-found problem, or an indistinguishable plain 404 while the route gate is disabled",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem404V01"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "const": "not found"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem406V01"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem409V01"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              },
+              "Retry-After": {
+                "required": true,
+                "schema": {
+                  "const": "60"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem429V01"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem500V01"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Content-free responsibility problem",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsibilityHttpProblem503V01"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/responsibilities/judgments/answers": {
+      "post": {
+        "operationId": "answerJudgment",
+        "summary": "Answer one exact owner-bound JudgmentRequest revision",
+        "description": "Available only when RESPONSIBILITY_PUBLIC_API_ENABLED is exactly true. Authentication, admission, owner routing, and response validation fail closed.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-waldo-feature-gate": {
+          "environmentVariable": "RESPONSIBILITY_PUBLIC_API_ENABLED",
+          "enabledValue": "true",
+          "default": "disabled"
+        },
+        "x-waldo-protocol-versions": [
+          "0.5"
+        ],
+        "x-waldo-retry-semantics": {
+          "identity": "requestId",
+          "exactDuplicate": "return_persisted_result_byte_for_byte",
+          "changedDuplicate": "reject_request_conflict"
+        },
+        "parameters": [
+          {
+            "name": "Accept",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "enum": [
+                "application/vnd.waldo.responsibility.v0.5+json"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/vnd.waldo.responsibility.v0.5+json": {
+              "schema": {
+                "$ref": "#/components/schemas/JudgmentAnswerRequestV05"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Schema-validated owner-bound result",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "const": "private, no-store"
+                }
+              },
+              "Vary": {
+                "required": true,
+                "schema": {
+                  "const": "Authorization, Accept"
+                }
+              },
+              "Waldo-Offline-Commands": {
+                "required": true,
+                "schema": {
+                  "const": "none"
+                }
+              },
+              "Waldo-Protocol-Version": {
+                "required": true,
+                "schema": {
+                  "enum": [
+                    "0.5"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/vnd.waldo.responsibility.v0.5+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgmentAnswerResultV05"
                 }
               }
             }
@@ -4073,6 +4667,912 @@
             "additionalProperties": false
           }
         ]
+      },
+      "JudgmentAnswerRequestV05": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "type": "string",
+            "const": "0.5"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "commandType": {
+            "type": "string",
+            "const": "judgment.answer"
+          },
+          "presenceRegistrationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "aggregate": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "judgment_request"
+              },
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "expectedRevision": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "kind",
+              "id",
+              "expectedRevision"
+            ],
+            "additionalProperties": false
+          },
+          "correlationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "clientIssuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          "payload": {
+            "type": "object",
+            "properties": {
+              "selectedOptionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "displayedRequestDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            },
+            "required": [
+              "selectedOptionId",
+              "displayedRequestDigest"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "requestId",
+          "commandType",
+          "presenceRegistrationId",
+          "aggregate",
+          "clientIssuedAt",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "JudgmentAnswerResultV05": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "protocolVersion": {
+                "type": "string",
+                "const": "0.5"
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "judgmentRequest": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "additionalProperties": false
+              },
+              "judgmentDecision": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "additionalProperties": false
+              },
+              "selectedOptionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "projectionCursor": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "authorityDisposition": {
+                "type": "string",
+                "const": "granted"
+              },
+              "grant": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "grantee": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "service",
+                          "presence",
+                          "person"
+                        ]
+                      },
+                      "id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      }
+                    },
+                    "required": [
+                      "kind",
+                      "id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "state": {
+                    "type": "string",
+                    "const": "active"
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  "revocationGeneration": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision",
+                  "grantee",
+                  "state",
+                  "expiresAt",
+                  "revocationGeneration"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "protocolVersion",
+              "requestId",
+              "judgmentRequest",
+              "judgmentDecision",
+              "selectedOptionId",
+              "projectionCursor",
+              "authorityDisposition",
+              "grant"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "protocolVersion": {
+                "type": "string",
+                "const": "0.5"
+              },
+              "requestId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "judgmentRequest": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "additionalProperties": false
+              },
+              "judgmentDecision": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "revision"
+                ],
+                "additionalProperties": false
+              },
+              "selectedOptionId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+              },
+              "projectionCursor": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "authorityDisposition": {
+                "type": "string",
+                "const": "refused"
+              }
+            },
+            "required": [
+              "protocolVersion",
+              "requestId",
+              "judgmentRequest",
+              "judgmentDecision",
+              "selectedOptionId",
+              "projectionCursor",
+              "authorityDisposition"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "JudgmentProjectionPageV05": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "type": "string",
+            "const": "0.5"
+          },
+          "ownerId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "projectionName": {
+            "type": "string",
+            "const": "judgment.needs_you"
+          },
+          "snapshotId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+          },
+          "snapshotBaseCursor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "fromExclusiveCursor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "highWaterCursor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "nextCursor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "items": {
+            "maxItems": 256,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "itemType": {
+                  "type": "string",
+                  "const": "judgment_request"
+                },
+                "request": {
+                  "type": "object",
+                  "properties": {
+                    "protocolVersion": {
+                      "type": "string",
+                      "const": "0.5"
+                    },
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "ownerId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                    },
+                    "revision": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "subject": {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "outcome",
+                            "work_unit"
+                          ]
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "id",
+                        "revision"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "question": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^sha256:[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "options": {
+                      "minItems": 2,
+                      "maxItems": 8,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                          },
+                          "authorityDisposition": {
+                            "type": "string",
+                            "enum": [
+                              "grant",
+                              "refuse"
+                            ]
+                          },
+                          "content": {
+                            "type": "object",
+                            "properties": {
+                              "ref": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                              },
+                              "digest": {
+                                "type": "string",
+                                "pattern": "^sha256:[a-f0-9]{64}$"
+                              }
+                            },
+                            "required": [
+                              "ref",
+                              "digest"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "authorityDisposition",
+                          "content"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "recommendation": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "uncertainty": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^sha256:[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "evidence": {
+                      "maxItems": 16,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "ref": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                          },
+                          "digest": {
+                            "type": "string",
+                            "pattern": "^sha256:[a-f0-9]{64}$"
+                          }
+                        },
+                        "required": [
+                          "ref",
+                          "digest"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "costOfWaiting": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^sha256:[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "risk": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^sha256:[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "reversibility": {
+                      "type": "object",
+                      "properties": {
+                        "ref": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^sha256:[a-f0-9]{64}$"
+                        }
+                      },
+                      "required": [
+                        "ref",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "affectedDigest": {
+                      "type": "string",
+                      "pattern": "^sha256:[a-f0-9]{64}$"
+                    },
+                    "requestedAuthority": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "purpose": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                            },
+                            "effectFamily": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 128,
+                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                            },
+                            "resources": {
+                              "minItems": 1,
+                              "maxItems": 16,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                  },
+                                  "ref": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 128,
+                                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "ref"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "scopes": {
+                              "minItems": 1,
+                              "maxItems": 32,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                              }
+                            },
+                            "audiences": {
+                              "minItems": 1,
+                              "maxItems": 16,
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 128,
+                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                              }
+                            },
+                            "argumentDigest": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            },
+                            "contextDigest": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            },
+                            "artifactDigest": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "^sha256:[a-f0-9]{64}$"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "useLimit": {
+                              "type": "number",
+                              "const": 1
+                            },
+                            "validUntil": {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                            }
+                          },
+                          "required": [
+                            "purpose",
+                            "effectFamily",
+                            "resources",
+                            "scopes",
+                            "audiences",
+                            "argumentDigest",
+                            "contextDigest",
+                            "artifactDigest",
+                            "useLimit",
+                            "validUntil"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "authorityAdmission": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "grantee": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "service",
+                                    "presence",
+                                    "person"
+                                  ]
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 128,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                                }
+                              },
+                              "required": [
+                                "kind",
+                                "id"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "ownerPolicyRevision": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "admissionContextDigest": {
+                              "type": "string",
+                              "pattern": "^sha256:[a-f0-9]{64}$"
+                            }
+                          },
+                          "required": [
+                            "grantee",
+                            "ownerPolicyRevision",
+                            "admissionContextDigest"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "reEntryPointId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    "decisionId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "answered",
+                        "expired",
+                        "withdrawn",
+                        "superseded"
+                      ]
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                    }
+                  },
+                  "required": [
+                    "protocolVersion",
+                    "id",
+                    "ownerId",
+                    "revision",
+                    "subject",
+                    "question",
+                    "options",
+                    "recommendation",
+                    "uncertainty",
+                    "evidence",
+                    "costOfWaiting",
+                    "risk",
+                    "reversibility",
+                    "affectedDigest",
+                    "requestedAuthority",
+                    "authorityAdmission",
+                    "reEntryPointId",
+                    "expiresAt",
+                    "decisionId",
+                    "state",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                "displayedRequestDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              },
+              "required": [
+                "cursor",
+                "itemType",
+                "request",
+                "displayedRequestDigest"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "ownerId",
+          "projectionName",
+          "snapshotId",
+          "snapshotBaseCursor",
+          "fromExclusiveCursor",
+          "highWaterCursor",
+          "nextCursor",
+          "items",
+          "hasMore",
+          "generatedAt"
+        ],
+        "additionalProperties": false
       },
       "ResponsibilityHttpProblem400V01": {
         "type": "object",

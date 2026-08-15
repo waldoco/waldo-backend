@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.5"
+    },
+    "requestId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "commandType": {
+      "type": "string",
+      "const": "judgment.answer"
+    },
+    "presenceRegistrationId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "aggregate": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "judgment_request"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "expectedRevision"
+      ],
+      "additionalProperties": false
+    },
+    "correlationId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "clientIssuedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "selectedOptionId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "displayedRequestDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "selectedOptionId",
+        "displayedRequestDigest"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "requestId",
+    "commandType",
+    "presenceRegistrationId",
+    "aggregate",
+    "clientIssuedAt",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-judgment-authority:0.5:judgment-answer",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}
