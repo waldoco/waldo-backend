@@ -6,9 +6,9 @@
   "proofLevel": "adapter_conformance_fixture",
   "source": {
     "path": "packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts",
-    "sha256": "sha256:ea39d03cf3c6e4b64a099c73942485a0c7286103fcb85f06e8f01c461d4299c1"
+    "sha256": "sha256:772452e03de15fe0097bdddb6ada4421cf7cc760985564ae4f519ad851f712cc"
   },
-  "fixturePayloadRootSha256": "sha256:120797ba58bafb7d589ccbbc1fcd1a78e268efa219ecc713361f9304b87a9a4e",
+  "fixturePayloadRootSha256": "sha256:0f448d0119ab9924b48f323c5e61ea3860418330bb8a0ccf705e079abbd3b239",
   "compatibilityWindow": {
     "predecessor": "0.4",
     "mode": "parallel_additive",
@@ -90,7 +90,7 @@
     },
     {
       "path": "judgment-authority.rejections.json",
-      "sha256": "sha256:0dab44ecf83094e1c421e98dabba1b415e58cc463f8cc12de5a8d0d084c7759b"
+      "sha256": "sha256:40df017a0ffe62596beda315a6f0c8a2ac5c26fcd5a12411fa927e585c7c4bbe"
     },
     {
       "path": "judgment-decision.schema.json",

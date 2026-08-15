@@ -161,6 +161,13 @@ export const judgmentRequestV05Schema = z
           message: 'requested authority requires at least one grant option',
         });
       }
+      if (!request.options.some((option) => option.authorityDisposition === 'refuse')) {
+        context.addIssue({
+          code: 'custom',
+          path: ['options'],
+          message: 'requested authority requires at least one refusal option',
+        });
+      }
       const validUntil = Date.parse(request.requestedAuthority.validUntil);
       if (validUntil <= createdAt || validUntil > Date.parse(request.expiresAt)) {
         context.addIssue({
@@ -193,7 +200,22 @@ export function canonicalizeJudgmentRequestV05ForDigest(value: unknown): string 
   return canonicalizeProtocolJson(judgmentRequestV05Schema.parse(value));
 }
 
-export const judgmentAnswerRequestV05Schema = z.strictObject({
+function rejectOwnPrototypeKeysFromJudgmentAnswerV05(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) return value;
+  const candidate = value as Record<string, unknown>;
+  for (const object of [candidate, candidate.aggregate, candidate.payload]) {
+    if (
+      typeof object === 'object' &&
+      object !== null &&
+      Object.prototype.hasOwnProperty.call(object, '__proto__')
+    ) {
+      return { rejectedPrototypeKey: true };
+    }
+  }
+  return value;
+}
+
+const judgmentAnswerRequestV05StructuralSchema = z.strictObject({
   protocolVersion: protocolVersionV05Schema,
   requestId: protocolIdSchema,
   commandType: z.literal('judgment.answer'),
@@ -210,6 +232,11 @@ export const judgmentAnswerRequestV05Schema = z.strictObject({
     displayedRequestDigest: protocolDigestSchema,
   }),
 });
+
+export const judgmentAnswerRequestV05Schema = z.preprocess(
+  rejectOwnPrototypeKeysFromJudgmentAnswerV05,
+  judgmentAnswerRequestV05StructuralSchema,
+);
 
 export type JudgmentAnswerRequestV05 = z.infer<typeof judgmentAnswerRequestV05Schema>;
 
@@ -433,7 +460,7 @@ export const judgmentProjectionPageV05Schema = z
     }
     let cursor = page.fromExclusiveCursor;
     for (const [index, item] of page.items.entries()) {
-      if (item.cursor <= cursor || item.cursor > page.highWaterCursor) {
+      if (item.cursor <= cursor || item.cursor > page.nextCursor) {
         context.addIssue({
           code: 'custom',
           path: ['items', index, 'cursor'],
@@ -450,8 +477,10 @@ export const judgmentProjectionPageV05Schema = z
       cursor = item.cursor;
     }
     if (
-      page.nextCursor !== cursor ||
+      page.nextCursor < page.fromExclusiveCursor ||
       page.nextCursor > page.highWaterCursor ||
+      (page.nextCursor === page.fromExclusiveCursor &&
+        page.highWaterCursor > page.fromExclusiveCursor) ||
       page.hasMore !== (page.nextCursor < page.highWaterCursor)
     ) {
       context.addIssue({
@@ -487,7 +516,7 @@ function sameProtocolValue(left: unknown, right: unknown): boolean {
 const judgmentAuthorityBindingBaseV05Shape = {
   requestDigest: protocolDigestSchema,
   request: judgmentRequestV05Schema,
-  answer: judgmentAnswerRequestV05Schema,
+  answer: judgmentAnswerRequestV05StructuralSchema,
   decision: judgmentDecisionV05Schema,
 } as const;
 

@@ -37,15 +37,20 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_REJECTION_NAMES_V05 = [
   'client-provider-selector',
   'client-credential',
   'client-private-context',
+  'client-prototype-key-top',
+  'client-prototype-key-aggregate',
+  'client-prototype-key-payload',
   'request-inline-sensitive-content',
   'request-missing-uncertainty',
   'request-missing-cost-of-waiting',
+  'request-missing-refusal-option',
   'stale-answer-revision',
   'stale-displayed-request-digest',
   'unknown-selected-option',
   'refused-result-with-grant',
   'projection-missing-displayed-digest',
   'projection-owner-mismatch',
+  'projection-non-advancing-cursor',
   'projection-coordinated-request-digest-mismatch',
   'binding-grantee-mismatch',
   'binding-policy-mismatch',
@@ -307,12 +312,27 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
 
   const { uncertainty: _uncertainty, ...requestWithoutUncertainty } = judgmentRequest;
   const { costOfWaiting: _costOfWaiting, ...requestWithoutCostOfWaiting } = judgmentRequest;
+  const requestWithoutRefusalOption = {
+    ...judgmentRequest,
+    options: judgmentRequest.options.map((option) => ({
+      ...option,
+      authorityDisposition: 'grant' as const,
+    })),
+  };
   const projectionItem = projectionPage.items[0]!;
   const {
     displayedRequestDigest: _projectionDigest,
     ...projectionItemWithoutDisplayedDigest
   } = projectionItem;
   const coordinatedFalseDigest = `sha256:${'d'.repeat(64)}`;
+  const withOwnPrototypeKey = <Value extends Record<string, unknown>>(value: Value): Value => {
+    const result = { ...value };
+    Object.defineProperty(result, '__proto__', {
+      value: 'forbidden_prototype_value',
+      enumerable: true,
+    });
+    return result;
+  };
 
   const rejectionCatalogue = responsibilityJudgmentAuthorityRejectionCatalogueV05Schema.parse({
     protocolVersion: '0.5',
@@ -421,6 +441,33 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
         },
       },
       {
+        name: 'client-prototype-key-top',
+        schema: 'judgment-answer.schema.json',
+        layer: 'schema',
+        zodOutcome: 'reject',
+        value: withOwnPrototypeKey(judgmentAnswer),
+      },
+      {
+        name: 'client-prototype-key-aggregate',
+        schema: 'judgment-answer.schema.json',
+        layer: 'schema',
+        zodOutcome: 'reject',
+        value: {
+          ...judgmentAnswer,
+          aggregate: withOwnPrototypeKey(judgmentAnswer.aggregate),
+        },
+      },
+      {
+        name: 'client-prototype-key-payload',
+        schema: 'judgment-answer.schema.json',
+        layer: 'schema',
+        zodOutcome: 'reject',
+        value: {
+          ...judgmentAnswer,
+          payload: withOwnPrototypeKey(judgmentAnswer.payload),
+        },
+      },
+      {
         name: 'request-inline-sensitive-content',
         schema: 'judgment-request.schema.json',
         layer: 'schema',
@@ -443,6 +490,13 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
         layer: 'schema',
         zodOutcome: 'reject',
         value: requestWithoutCostOfWaiting,
+      },
+      {
+        name: 'request-missing-refusal-option',
+        schema: 'judgment-request.schema.json',
+        layer: 'runtime',
+        zodOutcome: 'reject',
+        value: requestWithoutRefusalOption,
       },
       {
         name: 'stale-answer-revision',
@@ -497,6 +551,18 @@ export function buildResponsibilityJudgmentAuthorityV05Bundle(
         layer: 'runtime',
         zodOutcome: 'reject',
         value: { ...projectionPage, ownerId: 'owner_other' },
+      },
+      {
+        name: 'projection-non-advancing-cursor',
+        schema: 'judgment-projection-page.schema.json',
+        layer: 'runtime',
+        zodOutcome: 'reject',
+        value: {
+          ...projectionPage,
+          nextCursor: projectionPage.fromExclusiveCursor,
+          items: [],
+          hasMore: true,
+        },
       },
       {
         name: 'projection-coordinated-request-digest-mismatch',

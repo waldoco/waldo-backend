@@ -153,11 +153,6 @@ describe('responsibility judgment and authority v0.5', () => {
         recommendation: null,
       },
       {
-        options: validRequest.options.map((option) => option.id === 'option_reject'
-          ? { ...option, authorityDisposition: 'grant' as const }
-          : option),
-      },
-      {
         options: validRequest.options.map((option) => option.id === 'option_approve'
           ? { ...option, content: { ...option.content, ref: 'option_content_approve_02' } }
           : option),
@@ -277,6 +272,13 @@ describe('responsibility judgment and authority v0.5', () => {
       ...validRequest,
       transcript: 'private transcript',
     }).success).toBe(false);
+    expect(judgmentRequestV05Schema.safeParse({
+      ...validRequest,
+      options: validRequest.options.map((option) => ({
+        ...option,
+        authorityDisposition: 'grant' as const,
+      })),
+    }).success).toBe(false);
   });
 
   it('accepts only an exact authenticated surface answer and rejects every authority-bearing client field', () => {
@@ -354,6 +356,18 @@ describe('responsibility judgment and authority v0.5', () => {
         ...answer,
         payload: { ...answer.payload, [field]: value },
       }).success, `payload ${field}`).toBe(false);
+    }
+    for (const level of ['top', 'aggregate', 'payload'] as const) {
+      const candidate = {
+        ...answer,
+        aggregate: { ...answer.aggregate },
+        payload: { ...answer.payload },
+      };
+      Object.defineProperty(level === 'top' ? candidate : candidate[level], '__proto__', {
+        value: 'forbidden_prototype_value',
+        enumerable: true,
+      });
+      expect(judgmentAnswerRequestV05Schema.safeParse(candidate).success, level).toBe(false);
     }
   });
 
@@ -442,6 +456,23 @@ describe('responsibility judgment and authority v0.5', () => {
         displayedRequestDigest: `sha256:${'d'.repeat(64)}`,
       }],
     })).toThrow('displayedRequestDigest must equal SHA-256 of the canonical embedded request');
+    const filteredGapPage = {
+      ...page,
+      nextCursor: 28,
+      items: [],
+      hasMore: false,
+    } as const;
+    expect(judgmentProjectionPageV05Schema.safeParse(filteredGapPage).success).toBe(true);
+    expect(judgmentProjectionPageV05Schema.safeParse({
+      ...page,
+      nextCursor: 28,
+      hasMore: false,
+    }).success).toBe(true);
+    expect(judgmentProjectionPageV05Schema.safeParse({
+      ...filteredGapPage,
+      nextCursor: page.fromExclusiveCursor,
+      hasMore: true,
+    }).success).toBe(false);
     for (const invalid of [
       { ...page, ownerId: 'owner_other' },
       { ...page, nextCursor: 28 },
