@@ -1,8 +1,12 @@
 import {
+  authorityGrantV05Schema,
+  canonicalizeJudgmentAnswerRequestV05ForDigest,
   canonicalizeWorkUnitPlanningTurnRequestV03ForDigest,
+  canonicalizeJudgmentRequestV05ForDigest,
   canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
   canonicalizeSurfaceCommandRequestForDigest,
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
+  createJudgmentAuthorityBindingVerifierV05,
   executionAttemptV04Schema,
   executionCancelRequestV04Schema,
   executionEnvironmentRefV04Schema,
@@ -12,6 +16,11 @@ import {
   executionSessionV04Schema,
   executorObservationV04Schema,
   exactRevisionV04Schema,
+  judgmentAnswerRequestV05Schema,
+  judgmentDecisionV05Schema,
+  judgmentProjectionQueryV05Schema,
+  judgmentRequestV05Schema,
+  requestedAuthorityV05Schema,
   protocolDigestSchema,
   protocolIdSchema,
   providerRefV04Schema,
@@ -39,14 +48,22 @@ import {
   type WorkUnitPlanningTurnRequestV03,
   type WorkUnitPlanningTurnTrustedEnvelopeV03,
   type WorkUnitPlanningProjectionPageV03,
+  type JudgmentAnswerRequestV05,
+  type JudgmentAnswerResultV05,
+  type JudgmentDecisionV05,
+  type JudgmentProjectionPageV05,
+  type JudgmentProjectionQueryV05,
+  type JudgmentRequestV05,
 } from '@waldo/contracts';
 import {
   IdentityPresenceModule,
   type ResponsibilityCanonicalAuthority,
   type ResponsibilityCanonicalAuthorityRegistration,
+  type ResponsibilityCanonicalAuthorityWithAssurance,
 } from './identity-presence-module';
 import {
   ResponsibilityDigestConflictError,
+  ResponsibilityJudgmentConflictError,
   ResponsibilityOwnerRootMismatchError,
   ResponsibilityProjectionCursorError,
 } from '../responsibility/errors';
@@ -65,6 +82,15 @@ import {
   type ExecutionAggregateV04,
 } from './planning-execution-module';
 import type { LLMGatewayRequest, TrustedProviderEffect } from '../llm/provider';
+import {
+  JudgmentAuthorityModule,
+  type JudgmentAdmissionBasisV05,
+} from './judgment-authority-module';
+import {
+  ProjectionPublisher as JudgmentProjectionPublisher,
+  type JudgmentRequestDigestProofV05,
+  type JudgmentProjectionItemV05,
+} from './projection-publisher';
 
 export type {
   MissionRecord,
@@ -79,6 +105,22 @@ export type ResponsibilityCaptureAdmission = Readonly<{
   routedOwnerId: string;
   request: unknown;
   trustedEnvelope: unknown;
+}>;
+
+export type JudgmentAnswerAdmissionV05 = Readonly<{
+  routedOwnerId: string;
+  request: unknown;
+}>;
+
+export type JudgmentProjectionReadV05 = Readonly<{
+  routedOwnerId: string;
+  query: JudgmentProjectionQueryV05;
+}>;
+
+export type CurrentJudgmentAdmissionV05 = Readonly<{
+  grantee: Exclude<JudgmentRequestV05['authorityAdmission'], null>['grantee'] | null;
+  revocationGeneration: number;
+  admissionContextMaterial: string | null;
 }>;
 
 export type ResponsibilityProjectionRead = Readonly<{
@@ -105,6 +147,30 @@ export type WorkUnitPlanningProjectionRead = Readonly<{
   fromExclusiveCursor: number;
   limit: number;
   snapshotId?: string;
+}>;
+
+type RequestedAuthorityProposalV05 = Omit<
+  Exclude<JudgmentRequestV05['requestedAuthority'], null>,
+  'validUntil'
+> & Readonly<{ validUntil: string }>;
+
+export type TrustedJudgmentRequestProposalV05 = Readonly<{
+  subject: Readonly<{
+    kind: 'outcome' | 'work_unit';
+    id: string;
+    expectedRevision: number;
+  }>;
+  question: JudgmentRequestV05['question'];
+  options: JudgmentRequestV05['options'];
+  recommendation: JudgmentRequestV05['recommendation'];
+  uncertainty: JudgmentRequestV05['uncertainty'];
+  evidence: JudgmentRequestV05['evidence'];
+  costOfWaiting: JudgmentRequestV05['costOfWaiting'];
+  risk: JudgmentRequestV05['risk'];
+  reversibility: JudgmentRequestV05['reversibility'];
+  requestedAuthority: RequestedAuthorityProposalV05 | null;
+  reEntryPointId: string | null;
+  expiresAt: string;
 }>;
 
 type CoordinatorExecutionRequestV04 = ReturnType<typeof executionRequestV04Schema.parse>;
@@ -261,9 +327,20 @@ export type CoordinatorDependencies = Readonly<{
   now: () => string;
   newId: (
     kind: 'outcome' | 'mission' | 'work_unit' | 'event' | 'snapshot' |
-      'execution_request' | 'agent_session',
+      'execution_request' | 'agent_session' | 'judgment_request' |
+      'judgment_decision' | 'authority_grant',
   ) => string;
   sha256Hex: (value: string) => Promise<string>;
+  judgmentReplayEventLimit?: number;
+  judgmentReplayDecodedByteLimit?: number;
+  afterJudgmentProjectionRebuildWrite?: () => void;
+  resolveJudgmentAdmissionV05?: (input: Readonly<{
+    ownerId: string;
+    subject: JudgmentRequestV05['subject'];
+    affectedDigest: `sha256:${string}`;
+    requestedAuthority: JudgmentRequestV05['requestedAuthority'];
+    ownerPolicyRevision: number;
+  }>) => CurrentJudgmentAdmissionV05;
   resolveExecutionBindingV04?: (input: Readonly<{
     ownerId: string;
     outcomeId: string;
@@ -291,6 +368,36 @@ function defaultDependencies(): CoordinatorDependencies {
   };
 }
 
+function defaultResolveJudgmentAdmissionV05(input: Readonly<{
+  ownerId: string;
+  subject: JudgmentRequestV05['subject'];
+  affectedDigest: `sha256:${string}`;
+  requestedAuthority: JudgmentRequestV05['requestedAuthority'];
+  ownerPolicyRevision: number;
+}>): CurrentJudgmentAdmissionV05 {
+  if (input.requestedAuthority === null) {
+    return Object.freeze({
+      grantee: null,
+      revocationGeneration: 0,
+      admissionContextMaterial: null,
+    });
+  }
+  const grantee = Object.freeze({ kind: 'service' as const, id: 'effect_engine' });
+  return Object.freeze({
+    grantee,
+    revocationGeneration: 0,
+    admissionContextMaterial: JSON.stringify([
+      'judgment-authority-admission-v0.5',
+      input.ownerId,
+      input.subject,
+      input.affectedDigest,
+      grantee,
+      input.ownerPolicyRevision,
+      0,
+    ]),
+  });
+}
+
 export class WaldoCoordinator {
   readonly #storage: DurableObjectStorage;
   readonly #deps: CoordinatorDependencies;
@@ -298,6 +405,8 @@ export class WaldoCoordinator {
   readonly #events: OwnerEventLog;
   readonly #outcomes: OutcomeModule;
   readonly #planning: PlanningExecutionModule;
+  readonly #judgmentProjections: JudgmentProjectionPublisher;
+  readonly #judgments: JudgmentAuthorityModule;
 
   constructor(
     storage: DurableObjectStorage,
@@ -309,12 +418,23 @@ export class WaldoCoordinator {
     this.#events = new OwnerEventLog(storage);
     this.#outcomes = new OutcomeModule(storage, dependencies.newId);
     this.#planning = new PlanningExecutionModule(storage, dependencies.newId);
+    this.#judgmentProjections = new JudgmentProjectionPublisher(
+      storage,
+      () => dependencies.newId('snapshot'),
+      dependencies.judgmentReplayEventLimit,
+      dependencies.judgmentReplayDecodedByteLimit,
+    );
+    this.#judgments = new JudgmentAuthorityModule(
+      storage,
+      dependencies.newId,
+      this.#judgmentProjections,
+    );
   }
 
   admitCanonicalAuthority(
     registration: ResponsibilityCanonicalAuthorityRegistration,
     beforeCommit?: () => void,
-  ): ResponsibilityCanonicalAuthority {
+  ): ResponsibilityCanonicalAuthorityWithAssurance {
     return this.#storage.transactionSync(() => {
       const authority = this.#identity
         .bootstrapOrRefreshCanonicalAuthorityInCurrentTransaction(registration);
@@ -343,6 +463,498 @@ export class WaldoCoordinator {
     canonicalAuthority: ResponsibilityCanonicalAuthority,
   ): Promise<ResponsibilityCaptureResult> {
     return this.#captureResponsibility(admission, canonicalAuthority);
+  }
+
+  async createTrustedJudgmentRequestV05(
+    proposal: TrustedJudgmentRequestProposalV05,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ): Promise<JudgmentProjectionItemV05> {
+    const preflightAt = this.#deps.now();
+    const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+      canonicalAuthority,
+      preflightAt,
+    );
+    if (authority.authAssurance === 'legacy_unverified') {
+      throw new ResponsibilityOwnerRootMismatchError();
+    }
+    const material = this.#outcomes.readExactJudgmentSubjectMaterialInCurrentTransaction({
+      ownerId: authority.ownerId,
+      ...proposal.subject,
+      expectedRevision: proposal.subject.expectedRevision,
+    });
+    const affectedDigest = `sha256:${await this.#deps.sha256Hex(material.canonicalMaterial)}` as const;
+    const requestedAuthority = proposal.requestedAuthority === null
+      ? null
+      : requestedAuthorityV05Schema.parse(proposal.requestedAuthority);
+    const currentAdmission = (this.#deps.resolveJudgmentAdmissionV05 ??
+      defaultResolveJudgmentAdmissionV05)({
+      ownerId: authority.ownerId,
+      subject: material.subject,
+      affectedDigest,
+      requestedAuthority,
+      ownerPolicyRevision: authority.ownerPolicyRevision,
+    });
+    const { grantee, revocationGeneration } = currentAdmission;
+    const admissionContextDigest = currentAdmission.admissionContextMaterial === null
+      ? null
+      : `sha256:${await this.#deps.sha256Hex(
+        currentAdmission.admissionContextMaterial,
+      )}` as const;
+    const request = judgmentRequestV05Schema.parse({
+      ...proposal,
+      requestedAuthority,
+      protocolVersion: '0.5',
+      id: this.#deps.newId('judgment_request'),
+      ownerId: authority.ownerId,
+      revision: 1,
+      subject: material.subject,
+      affectedDigest,
+      authorityAdmission: grantee === null ? null : {
+        grantee,
+        ownerPolicyRevision: authority.ownerPolicyRevision,
+        admissionContextDigest,
+      },
+      decisionId: null,
+      state: 'open',
+      createdAt: preflightAt,
+      updatedAt: preflightAt,
+    });
+    const displayedRequestDigest = `sha256:${await this.#deps.sha256Hex(
+      canonicalizeJudgmentRequestV05ForDigest(request),
+    )}` as const;
+
+    return this.#storage.transactionSync(() => {
+      const commitAt = this.#deps.now();
+      const currentAuthority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        commitAt,
+      );
+      if (currentAuthority.authAssurance !== authority.authAssurance ||
+          Date.parse(commitAt) >= Date.parse(request.expiresAt)) {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      if (request.requestedAuthority !== null &&
+          Date.parse(commitAt) >= Date.parse(request.requestedAuthority.validUntil)) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      const currentMaterial = this.#outcomes.readExactJudgmentSubjectMaterialInCurrentTransaction({
+        ownerId: currentAuthority.ownerId,
+        ...proposal.subject,
+        expectedRevision: proposal.subject.expectedRevision,
+      });
+      if (currentMaterial.canonicalMaterial !== material.canonicalMaterial) {
+        throw new ResponsibilityDigestConflictError();
+      }
+      const commitAdmission = (this.#deps.resolveJudgmentAdmissionV05 ??
+        defaultResolveJudgmentAdmissionV05)({
+        ownerId: currentAuthority.ownerId,
+        subject: request.subject,
+        affectedDigest,
+        requestedAuthority,
+        ownerPolicyRevision: currentAuthority.ownerPolicyRevision,
+      });
+      if (JSON.stringify(commitAdmission) !== JSON.stringify(currentAdmission)) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      const item = this.#judgments.persistRequestInCurrentTransaction({
+        request,
+        displayedRequestDigest,
+        admissionBasis: {
+          ownerId: currentAuthority.ownerId,
+          subject: request.subject,
+          affectedDigest,
+          grantee,
+          ownerPolicyRevision: currentAuthority.ownerPolicyRevision,
+          admissionContextDigest,
+          revocationGeneration,
+        },
+      });
+      this.#deps.afterWrite?.('current_state');
+      this.#deps.afterWrite?.('events');
+      this.#deps.afterWrite?.('projection');
+      return item;
+    });
+  }
+
+  async answerAuthorizedJudgmentV05(
+    admission: JudgmentAnswerAdmissionV05,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ): Promise<JudgmentAnswerResultV05> {
+    const answer = judgmentAnswerRequestV05Schema.parse(admission.request);
+    const answerRequestMaterial = canonicalizeJudgmentAnswerRequestV05ForDigest(answer);
+    const answerRequestDigest = `sha256:${await this.#deps.sha256Hex(
+      answerRequestMaterial,
+    )}` as const;
+    const answerTrigger = Object.freeze({
+      requestId: answer.requestId,
+      requestMaterial: answerRequestMaterial,
+      requestDigest: answerRequestDigest,
+    });
+
+    const duplicate = this.#storage.transactionSync(() => {
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      this.#assertJudgmentAnswerAuthority(admission, answer, authority);
+      return this.#judgments.readCommandResultInCurrentTransaction({
+        ownerId: authority.ownerId,
+        requestId: answer.requestId,
+        requestDigest: answerRequestDigest,
+      });
+    });
+    if (duplicate !== undefined) return duplicate;
+
+    const decidedAt = this.#deps.now();
+    const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+      canonicalAuthority,
+      decidedAt,
+    );
+    this.#assertJudgmentAnswerAuthority(admission, answer, authority);
+    const stored = this.#judgments.readRequestInCurrentTransaction(
+      authority.ownerId,
+      answer.aggregate.id,
+    );
+    const request = stored.request;
+    if (
+      request.state !== 'open' ||
+      request.revision !== answer.aggregate.expectedRevision ||
+      request.decisionId !== null ||
+      stored.displayedRequestDigest !== answer.payload.displayedRequestDigest
+    ) {
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    if (Date.parse(decidedAt) >= Date.parse(request.expiresAt)) {
+      await this.#terminalizeJudgmentRequestV05(
+        request,
+        'expired',
+        answerTrigger,
+        canonicalAuthority,
+      );
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    const requestHashHex = await this.#deps.sha256Hex(
+      canonicalizeJudgmentRequestV05ForDigest(request),
+    );
+    if (stored.displayedRequestDigest !== `sha256:${requestHashHex}`) {
+      throw new ResponsibilityDigestConflictError();
+    }
+    const selectedOption = request.options.find(
+      (option) => option.id === answer.payload.selectedOptionId,
+    );
+    if (selectedOption === undefined) throw new ResponsibilityJudgmentConflictError();
+    let material;
+    try {
+      material = this.#outcomes.readExactJudgmentSubjectMaterialInCurrentTransaction({
+        ownerId: authority.ownerId,
+        kind: request.subject.kind,
+        id: request.subject.id,
+        expectedRevision: request.subject.revision,
+      });
+    } catch (error) {
+      if (!(error instanceof ResponsibilityJudgmentConflictError)) throw error;
+      await this.#terminalizeJudgmentRequestV05(
+        request,
+        'superseded',
+        answerTrigger,
+        canonicalAuthority,
+      );
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    const affectedDigest = `sha256:${await this.#deps.sha256Hex(
+      material.canonicalMaterial,
+    )}` as const;
+    if (affectedDigest !== request.affectedDigest ||
+        affectedDigest !== stored.admissionBasis.affectedDigest) {
+      await this.#terminalizeJudgmentRequestV05(
+        request,
+        'superseded',
+        answerTrigger,
+        canonicalAuthority,
+      );
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    const currentAdmission = (this.#deps.resolveJudgmentAdmissionV05 ??
+      defaultResolveJudgmentAdmissionV05)({
+      ownerId: authority.ownerId,
+      subject: request.subject,
+      affectedDigest,
+      requestedAuthority: request.requestedAuthority,
+      ownerPolicyRevision: authority.ownerPolicyRevision,
+    });
+    const currentAdmissionDigest = currentAdmission.admissionContextMaterial === null
+      ? null
+      : `sha256:${await this.#deps.sha256Hex(currentAdmission.admissionContextMaterial)}`;
+    if (!this.#isCurrentJudgmentAdmission(
+      request,
+      stored.admissionBasis,
+      authority,
+      currentAdmission,
+      currentAdmissionDigest,
+    )) {
+      await this.#terminalizeJudgmentRequestV05(
+        request,
+        'superseded',
+        answerTrigger,
+        canonicalAuthority,
+      );
+      throw new ResponsibilityJudgmentConflictError();
+    }
+
+    const decision = judgmentDecisionV05Schema.parse({
+      protocolVersion: '0.5',
+      id: this.#deps.newId('judgment_decision'),
+      ownerId: authority.ownerId,
+      revision: 1,
+      judgmentRequestId: request.id,
+      judgmentRequestRevision: request.revision,
+      subject: request.subject,
+      selectedOptionId: selectedOption.id,
+      displayedRequestDigest: stored.displayedRequestDigest,
+      actor: { kind: 'owner', id: authority.ownerId },
+      presenceId: authority.presenceId,
+      authenticatedSessionId: authority.authenticatedSessionId,
+      ownerPolicyRevision: authority.ownerPolicyRevision,
+      authAssurance: authority.authAssurance,
+      state: 'recorded',
+      decidedAt,
+    });
+    const grant = selectedOption.authorityDisposition === 'grant'
+      ? this.#buildAuthorityGrantV05(request, decision, stored.admissionBasis, decidedAt)
+      : undefined;
+    const binding = createJudgmentAuthorityBindingVerifierV05(() => requestHashHex)({
+      requestDigest: stored.displayedRequestDigest,
+      request,
+      answer,
+      decision,
+      authorityDisposition: grant === undefined ? 'refused' : 'granted',
+      ...(grant === undefined ? {} : { grant }),
+    });
+    const answeredRequest = judgmentRequestV05Schema.parse({
+      ...request,
+      revision: request.revision + 1,
+      decisionId: decision.id,
+      state: 'answered',
+      updatedAt: decidedAt,
+    });
+    const answeredRequestDigest = `sha256:${await this.#deps.sha256Hex(
+      canonicalizeJudgmentRequestV05ForDigest(answeredRequest),
+    )}` as const;
+
+    const committed = this.#storage.transactionSync(():
+      JudgmentAnswerResultV05 | Readonly<{ terminalState: 'expired' | 'superseded' }> => {
+      const commitAt = this.#deps.now();
+      const currentAuthority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        commitAt,
+      );
+      this.#assertJudgmentAnswerAuthority(admission, answer, currentAuthority);
+      const racedDuplicate = this.#judgments.readCommandResultInCurrentTransaction({
+        ownerId: currentAuthority.ownerId,
+        requestId: answer.requestId,
+        requestDigest: answerRequestDigest,
+      });
+      if (racedDuplicate !== undefined) return racedDuplicate;
+      if (Date.parse(commitAt) >= Date.parse(request.expiresAt)) {
+        return Object.freeze({ terminalState: 'expired' as const });
+      }
+      if (grant !== undefined && request.requestedAuthority !== null &&
+          Date.parse(commitAt) >= Date.parse(request.requestedAuthority.validUntil)) {
+        return Object.freeze({ terminalState: 'superseded' as const });
+      }
+      if (JSON.stringify(currentAuthority) !== JSON.stringify(authority)) {
+        return Object.freeze({ terminalState: 'superseded' as const });
+      }
+      const currentStored = this.#judgments.readRequestInCurrentTransaction(
+        currentAuthority.ownerId,
+        request.id,
+      );
+      if (
+        canonicalizeJudgmentRequestV05ForDigest(currentStored.request) !==
+          canonicalizeJudgmentRequestV05ForDigest(request) ||
+        currentStored.displayedRequestDigest !== stored.displayedRequestDigest ||
+        JSON.stringify(currentStored.admissionBasis) !== JSON.stringify(stored.admissionBasis)
+      ) {
+        if (currentStored.request.state !== 'open') {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+        return Object.freeze({ terminalState: 'superseded' as const });
+      }
+      let currentMaterial;
+      try {
+        currentMaterial = this.#outcomes.readExactJudgmentSubjectMaterialInCurrentTransaction({
+          ownerId: currentAuthority.ownerId,
+          kind: request.subject.kind,
+          id: request.subject.id,
+          expectedRevision: request.subject.revision,
+        });
+      } catch (error) {
+        if (!(error instanceof ResponsibilityJudgmentConflictError)) throw error;
+        return Object.freeze({ terminalState: 'superseded' as const });
+      }
+      if (currentMaterial.canonicalMaterial !== material.canonicalMaterial) {
+        return Object.freeze({ terminalState: 'superseded' as const });
+      }
+      const commitAdmission = (this.#deps.resolveJudgmentAdmissionV05 ??
+        defaultResolveJudgmentAdmissionV05)({
+        ownerId: currentAuthority.ownerId,
+        subject: request.subject,
+        affectedDigest,
+        requestedAuthority: request.requestedAuthority,
+        ownerPolicyRevision: currentAuthority.ownerPolicyRevision,
+      });
+      if (JSON.stringify(commitAdmission) !== JSON.stringify(currentAdmission)) {
+        return Object.freeze({ terminalState: 'superseded' as const });
+      }
+      const result = this.#judgments.persistAnswerInCurrentTransaction({
+        binding,
+        answeredRequest,
+        answeredRequestDigest,
+        answerRequestId: answer.requestId,
+        answerRequestMaterial,
+        answerRequestDigest,
+      });
+      this.#deps.afterWrite?.('current_state');
+      this.#deps.afterWrite?.('events');
+      this.#deps.afterWrite?.('projection');
+      this.#deps.afterWrite?.('idempotency');
+      return result;
+    });
+    if ('terminalState' in committed) {
+      await this.#terminalizeJudgmentRequestV05(
+        request,
+        committed.terminalState,
+        answerTrigger,
+        canonicalAuthority,
+      );
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    return committed;
+  }
+
+  async #buildJudgmentRequestDigestProofsV05(
+    routedOwnerId: string,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ): Promise<readonly JudgmentRequestDigestProofV05[]> {
+    const inputs = this.#storage.transactionSync(() => {
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      if (authority.ownerId !== routedOwnerId ||
+          authority.authAssurance === 'legacy_unverified') {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      return this.#judgments.collectRequestDigestInputsInCurrentTransaction(authority.ownerId);
+    });
+    const proofs: JudgmentRequestDigestProofV05[] = [];
+    for (const input of inputs) {
+      proofs.push(Object.freeze({
+        ownerCursor: input.ownerCursor,
+        canonicalRequestMaterial: input.canonicalRequestMaterial,
+        digest: `sha256:${await this.#deps.sha256Hex(input.canonicalRequestMaterial)}`,
+        triggerDigest: input.triggerRequestMaterial === null
+          ? null
+          : `sha256:${await this.#deps.sha256Hex(input.triggerRequestMaterial)}`,
+      }));
+    }
+    return Object.freeze(proofs);
+  }
+
+  async replayJudgmentsV05(
+    routedOwnerId: string,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ) {
+    const digestProofs = await this.#buildJudgmentRequestDigestProofsV05(
+      routedOwnerId,
+      canonicalAuthority,
+    );
+    return this.#storage.transactionSync(() => {
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      if (authority.ownerId !== routedOwnerId ||
+          authority.authAssurance === 'legacy_unverified') {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      const replay = this.#judgments.replayInCurrentTransaction(
+        authority.ownerId,
+        digestProofs,
+      );
+      this.#judgmentProjections.assertDigestProofsInCurrentTransaction(
+        authority.ownerId,
+        digestProofs,
+      );
+      return replay;
+    });
+  }
+
+  async rebuildJudgmentProjectionV05(
+    routedOwnerId: string,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ) {
+    const digestProofs = await this.#buildJudgmentRequestDigestProofsV05(
+      routedOwnerId,
+      canonicalAuthority,
+    );
+    return this.#storage.transactionSync(() => {
+      const at = this.#deps.now();
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        at,
+      );
+      if (authority.ownerId !== routedOwnerId ||
+          authority.authAssurance === 'legacy_unverified') {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      this.#judgments.replayInCurrentTransaction(authority.ownerId, digestProofs);
+      const rebuilt = this.#judgmentProjections.rebuildInCurrentTransaction(
+        authority.ownerId,
+        at,
+      );
+      this.#deps.afterJudgmentProjectionRebuildWrite?.();
+      this.#judgmentProjections.assertRebuiltProjectionInCurrentTransaction({
+        ownerId: authority.ownerId,
+        snapshotId: rebuilt.snapshotId,
+        updatedAt: at,
+        digestProofs,
+      });
+      return rebuilt;
+    });
+  }
+
+  async readJudgmentProjectionV05(
+    input: JudgmentProjectionReadV05,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ): Promise<JudgmentProjectionPageV05> {
+    const query = judgmentProjectionQueryV05Schema.parse(input.query);
+    const page = this.#storage.transactionSync(() => {
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      if (authority.ownerId !== input.routedOwnerId ||
+          authority.authAssurance === 'legacy_unverified') {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      return this.#judgmentProjections.readInCurrentTransaction({
+        ownerId: authority.ownerId,
+        fromExclusiveCursor: query.fromExclusiveCursor,
+        limit: query.limit,
+        ...(query.snapshotId === undefined ? {} : { snapshotId: query.snapshotId }),
+        generatedAt: this.#deps.now(),
+      });
+    });
+    for (const item of page.items) {
+      const digest = `sha256:${await this.#deps.sha256Hex(
+        canonicalizeJudgmentRequestV05ForDigest(item.request),
+      )}`;
+      if (digest !== item.displayedRequestDigest) {
+        throw new ResponsibilityDigestConflictError();
+      }
+    }
+    return page;
   }
 
   async authorizePlanningTurn(
@@ -1239,6 +1851,135 @@ export class WaldoCoordinator {
       trustedEnvelope,
       canonicalRequest: canonicalizeResponsibilityCaptureRequestV02ForDigest(request),
       responseVersion: '0.2',
+    });
+  }
+
+  #assertJudgmentAnswerAuthority(
+    admission: JudgmentAnswerAdmissionV05,
+    answer: JudgmentAnswerRequestV05,
+    authority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ): void {
+    if (
+      admission.routedOwnerId !== authority.ownerId ||
+      answer.presenceRegistrationId !== authority.presenceRegistrationId ||
+      authority.authAssurance === 'legacy_unverified'
+    ) {
+      throw new ResponsibilityOwnerRootMismatchError();
+    }
+  }
+
+  #isCurrentJudgmentAdmission(
+    request: JudgmentRequestV05,
+    basis: JudgmentAdmissionBasisV05,
+    authority: ResponsibilityCanonicalAuthorityWithAssurance,
+    current: CurrentJudgmentAdmissionV05,
+    currentAdmissionDigest: string | null,
+  ): boolean {
+    const admission = request.authorityAdmission;
+    return !(
+      basis.ownerId !== authority.ownerId ||
+      basis.ownerPolicyRevision !== authority.ownerPolicyRevision ||
+      basis.revocationGeneration !== current.revocationGeneration ||
+      JSON.stringify(basis.subject) !== JSON.stringify(request.subject) ||
+      JSON.stringify(basis.grantee) !== JSON.stringify(current.grantee) ||
+      basis.admissionContextDigest !== currentAdmissionDigest ||
+      ((admission === null) !== (current.grantee === null)) ||
+      (admission !== null && (
+        admission.ownerPolicyRevision !== authority.ownerPolicyRevision ||
+        JSON.stringify(admission.grantee) !== JSON.stringify(current.grantee) ||
+        admission.admissionContextDigest !== currentAdmissionDigest
+      ))
+    );
+  }
+
+  async #terminalizeJudgmentRequestV05(
+    openRequest: JudgmentRequestV05,
+    state: 'expired' | 'superseded',
+    trigger: Readonly<{
+      requestId: string;
+      requestMaterial: string;
+      requestDigest: `sha256:${string}`;
+    }>,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ): Promise<void> {
+    const at = this.#deps.now();
+    const terminalRequest = judgmentRequestV05Schema.parse({
+      ...openRequest,
+      revision: openRequest.revision + 1,
+      state,
+      decisionId: null,
+      updatedAt: at,
+    });
+    const terminalRequestDigest = `sha256:${await this.#deps.sha256Hex(
+      canonicalizeJudgmentRequestV05ForDigest(terminalRequest),
+    )}` as const;
+    this.#storage.transactionSync(() => {
+      const commitAt = this.#deps.now();
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        commitAt,
+      );
+      if (authority.ownerId !== openRequest.ownerId) {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      this.#judgments.terminalizeRequestInCurrentTransaction({
+        openRequest,
+        terminalRequest,
+        terminalRequestDigest,
+        triggerRequestId: trigger.requestId,
+        triggerRequestMaterial: trigger.requestMaterial,
+        triggerRequestDigest: trigger.requestDigest,
+      });
+      this.#deps.afterWrite?.('current_state');
+      this.#deps.afterWrite?.('events');
+      this.#deps.afterWrite?.('projection');
+    });
+  }
+
+  #buildAuthorityGrantV05(
+    request: JudgmentRequestV05,
+    decision: JudgmentDecisionV05,
+    basis: JudgmentAdmissionBasisV05,
+    at: string,
+  ) {
+    const requested = request.requestedAuthority;
+    const admission = request.authorityAdmission;
+    if (
+      request.subject.kind !== 'work_unit' ||
+      requested === null ||
+      admission === null ||
+      Date.parse(at) >= Date.parse(requested.validUntil)
+    ) {
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    return authorityGrantV05Schema.parse({
+      protocolVersion: '0.5',
+      id: this.#deps.newId('authority_grant'),
+      ownerId: request.ownerId,
+      revision: 1,
+      judgmentRequestId: request.id,
+      judgmentRequestRevision: request.revision,
+      judgmentDecisionId: decision.id,
+      grantor: { kind: 'owner', id: request.ownerId },
+      grantee: admission.grantee,
+      subject: request.subject,
+      purpose: requested.purpose,
+      effectFamily: requested.effectFamily,
+      resources: requested.resources,
+      scopes: requested.scopes,
+      audiences: requested.audiences,
+      argumentDigest: requested.argumentDigest,
+      contextDigest: requested.contextDigest,
+      artifactDigest: requested.artifactDigest,
+      useLimit: 1,
+      usesConsumed: 0,
+      nextUseIndex: 1,
+      validFrom: at,
+      expiresAt: requested.validUntil,
+      revocationGeneration: basis.revocationGeneration,
+      state: 'active',
+      createdAt: at,
+      updatedAt: at,
     });
   }
 

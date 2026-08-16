@@ -16,12 +16,18 @@ import { OwnerEventLog } from './owner-event-log';
 import {
   ResponsibilityPlanningConflictError,
   ResponsibilityProjectionMissingError,
+  ResponsibilityJudgmentConflictError,
 } from '../responsibility/errors';
 
 export type OutcomeRecord = OutcomeRecordV02;
 export type MissionRecord = MissionRecordV02;
 export type WorkUnitRecord = WorkUnitRecordV02;
 export type CanonicalWorkUnitRecord = CanonicalWorkUnitRecordV03;
+
+export type JudgmentSubjectMaterial = Readonly<{
+  subject: Readonly<{ kind: 'outcome' | 'work_unit'; id: string; revision: number }>;
+  canonicalMaterial: string;
+}>;
 
 export type CapturedResponsibility = Readonly<{
   outcome: OutcomeRecord;
@@ -299,6 +305,44 @@ export class OutcomeModule {
     }
     input.afterProjection?.();
     return Object.freeze({ outcome, mission, workUnits, finalCursor });
+  }
+
+  readExactJudgmentSubjectMaterialInCurrentTransaction(input: Readonly<{
+    ownerId: string;
+    kind: 'outcome' | 'work_unit';
+    id: string;
+    expectedRevision: number;
+  }>): JudgmentSubjectMaterial {
+    const outcome = input.kind === 'outcome'
+      ? this.readOutcome(input.ownerId, input.id)
+      : undefined;
+    if (outcome !== undefined) {
+      if (outcome.revision !== input.expectedRevision) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      return Object.freeze({
+        subject: Object.freeze({ kind: 'outcome', id: outcome.id, revision: outcome.revision }),
+        canonicalMaterial: JSON.stringify({ outcome }),
+      });
+    }
+    if (input.kind === 'outcome') throw new ResponsibilityJudgmentConflictError();
+
+    const row = this.readWorkUnitRow(input.ownerId, input.id);
+    if (row === undefined) throw new ResponsibilityJudgmentConflictError();
+    const workUnit = canonicalWorkUnitRecordV03Schema.parse(this.decodeWorkUnitRow(row));
+    if (workUnit.ownerId !== input.ownerId || workUnit.revision !== input.expectedRevision) {
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    const owningOutcome = this.readOutcome(input.ownerId, workUnit.outcomeId);
+    if (owningOutcome === undefined) throw new ResponsibilityJudgmentConflictError();
+    return Object.freeze({
+      subject: Object.freeze({
+        kind: 'work_unit',
+        id: workUnit.id,
+        revision: workUnit.revision,
+      }),
+      canonicalMaterial: JSON.stringify({ outcome: owningOutcome, workUnit }),
+    });
   }
 
   authorizePlanningInCurrentTransaction(input: {
@@ -612,6 +656,25 @@ export class OutcomeModule {
          FROM work_units WHERE owner_id = ? AND id = ?`,
       ownerId, workUnitId,
     ).toArray()[0];
+  }
+
+  private readOutcome(ownerId: string, outcomeId: string): OutcomeRecord | undefined {
+    const row = this.storage.sql.exec<{
+      id: string;
+      ownerId: string;
+      revision: number;
+      userStatement: string;
+      state: string;
+      createdAt: string;
+      updatedAt: string;
+    }>(
+      `SELECT id, owner_id AS ownerId, revision, user_statement AS userStatement,
+              state, created_at AS createdAt, updated_at AS updatedAt
+         FROM outcomes WHERE owner_id = ? AND id = ?`,
+      ownerId,
+      outcomeId,
+    ).toArray()[0];
+    return row === undefined ? undefined : outcomeRecordV02Schema.parse(row);
   }
 
   private decodeWorkUnitRow(row: StoredWorkUnitRow): unknown {

@@ -88,6 +88,31 @@ function executionStartRequest(body: string | object): Request {
   });
 }
 
+function judgmentAnswerRequest(body: string | object): Request {
+  return new Request('https://api.heywaldo.com/public/responsibilities/judgments/answers', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer session-token',
+      accept: 'application/vnd.waldo.responsibility.v0.5+json',
+      'content-type': 'application/vnd.waldo.responsibility.v0.5+json',
+    },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+}
+
+function judgmentProjectionRequest(search = 'fromExclusiveCursor=0&limit=25'): Request {
+  return new Request(
+    `https://api.heywaldo.com/public/responsibilities/judgments/projection?${search}`,
+    {
+      method: 'GET',
+      headers: {
+        authorization: 'Bearer session-token',
+        accept: 'application/vnd.waldo.responsibility.v0.5+json',
+      },
+    },
+  );
+}
+
 function harness(options: {
   authority?: ResponsibilityAuthority;
   ownerRoot?: ResponsibilityOwnerRoot;
@@ -129,6 +154,90 @@ function harness(options: {
 }
 
 describe('responsibility Worker adapter', () => {
+  it('admits only the strict authenticated v0.5 JudgmentAnswer surface', async () => {
+    const body = {
+      protocolVersion: '0.5',
+      requestId: 'answer_judgment_public_01',
+      commandType: 'judgment.answer',
+      presenceRegistrationId: trustedContext.presenceRegistrationId,
+      aggregate: { kind: 'judgment_request', id: 'judgment_request_01', expectedRevision: 1 },
+      clientIssuedAt: '2026-08-06T12:00:00.000Z',
+      payload: {
+        selectedOptionId: 'option_refuse',
+        displayedRequestDigest: `sha256:${'a'.repeat(64)}`,
+      },
+    } as const;
+    let admitted: unknown;
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async answerJudgment(input) {
+        admitted = input;
+        return {
+          protocolVersion: '0.5',
+          requestId: body.requestId,
+          judgmentRequest: { id: body.aggregate.id, revision: 2 },
+          judgmentDecision: { id: 'judgment_decision_01', revision: 1 },
+          selectedOptionId: body.payload.selectedOptionId,
+          projectionCursor: 4,
+          authorityDisposition: 'refused',
+        };
+      },
+    };
+    const { adapter } = harness({ ownerRoot });
+    const response = await adapter.fetch(judgmentAnswerRequest(body));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(
+      'application/vnd.waldo.responsibility.v0.5+json; charset=utf-8',
+    );
+    expect(admitted).toEqual({ routedOwnerId: trustedContext.ownerId, request: body });
+
+    const smuggled = await adapter.fetch(judgmentAnswerRequest({
+      ...body,
+      ownerId: 'owner_attacker',
+      actor: { kind: 'owner', id: 'owner_attacker' },
+      grantee: { kind: 'service', id: 'attacker' },
+    }));
+    expect(smuggled.status).toBe(400);
+  });
+
+  it('reads only the bounded authenticated v0.5 Needs You projection query', async () => {
+    let admitted: unknown;
+    const ownerRoot: ResponsibilityOwnerRoot = {
+      async capture() { throw new Error('not used'); },
+      async readProjection() { throw new Error('not used'); },
+      async readJudgmentProjection(input) {
+        admitted = input;
+        return {
+          protocolVersion: '0.5',
+          ownerId: trustedContext.ownerId,
+          projectionName: 'judgment.needs_you',
+          snapshotId: 'judgment_snapshot_01',
+          snapshotBaseCursor: 0,
+          fromExclusiveCursor: 0,
+          highWaterCursor: 0,
+          nextCursor: 0,
+          items: [],
+          hasMore: false,
+          generatedAt: '2026-08-06T12:00:01.000Z',
+        };
+      },
+    };
+    const { adapter } = harness({ ownerRoot });
+    const response = await adapter.fetch(judgmentProjectionRequest());
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe(
+      'application/vnd.waldo.responsibility.v0.5+json; charset=utf-8',
+    );
+    expect(admitted).toEqual({
+      routedOwnerId: trustedContext.ownerId,
+      query: { protocolVersion: '0.5', fromExclusiveCursor: 0, limit: 25 },
+    });
+    expect((await adapter.fetch(judgmentProjectionRequest(
+      'fromExclusiveCursor=0&limit=25&ownerId=owner_attacker',
+    ))).status).toBe(400);
+  });
+
   it('admits one bounded execution start command without caller-owned authority', async () => {
     const body = {
       protocolVersion: '0.4',

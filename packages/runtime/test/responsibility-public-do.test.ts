@@ -7,6 +7,8 @@ import {
   canonicalizeWorkUnitPlanningTurnRequestV03ForDigest,
   canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
   canonicalizeWorkUnitExecutionStartRequestV04ForDigest,
+  canonicalizeJudgmentAnswerRequestV05ForDigest,
+  judgmentAnswerRequestV05Schema,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureTrustedEnvelopeSchema,
   responsibilityCaptureRequestV02Schema,
@@ -20,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import { responsibilityOwnerRootName } from '../src/index';
 import {
   canonicalizePlanningProjectionIngressForDigest,
+  canonicalizeJudgmentProjectionIngressForDigest,
   canonicalizeResponsibilityProjectionIngressForDigest,
   signResponsibilityIngress,
   type SignedResponsibilityIngressContext,
@@ -39,6 +42,7 @@ const ingress = {
   authenticatedSessionId: `authenticated_session_${'a'.repeat(64)}`,
   authenticatedSessionExpiresAt: new Date(Date.now() + 60 * 60 * 1_000).toISOString(),
   ownerPolicyRevision: 7,
+  authAssurance: 'supabase_verified_session',
 };
 
 async function admission(
@@ -690,6 +694,126 @@ describe('production responsibility RunLoopDO RPC', () => {
     expect(await responsibilityOwnerRootName('owner_route_02')).not.toBe(first);
     expect(first).not.toContain('owner_route_01');
   });
+
+  it('answers and projects a trusted judgment through HMAC-bound owner RPC after restart', async () => {
+    const ownerId = 'owner_public_judgment_rpc_01';
+    const stub = await stubFor(ownerId);
+    const captureRequest = responsibilityCaptureRequestV02Schema.parse({
+      protocolVersion: '0.2', requestId: 'capture_public_judgment_rpc_01',
+      commandType: 'responsibility.capture',
+      presenceRegistrationId: 'presence_registration_01',
+      clientIssuedAt: '2026-08-16T12:00:00.000Z',
+      payload: {
+        userStatement: 'Prepare the scheduling action, but wait for my explicit answer.',
+        workUnits: [{ responsibility: 'Prepare scheduling without external I/O.', inputs: [],
+          dependencyPositions: [], expectedEvidence: [], requiredCapabilities: [],
+          stopConditions: ['Do not schedule without authority.'] }],
+      },
+    });
+    const captureDigest = `sha256:${await sha256Hex(
+      canonicalizeResponsibilityCaptureRequestV02ForDigest(captureRequest),
+    )}` as const;
+    const captureInput = {
+      routedOwnerId: ownerId,
+      request: captureRequest,
+      trustedEnvelope: responsibilityCaptureTrustedEnvelopeV02Schema.parse({
+        protocolVersion: '0.2', commandId: 'command_public_judgment_capture_01',
+        commandType: 'responsibility.capture', ownerId,
+        actor: { kind: 'presence', id: 'presence_01' }, presenceId: 'presence_01',
+        authenticatedSessionId: ingress.authenticatedSessionId,
+        ownerPolicyRevision: ingress.ownerPolicyRevision,
+        authAssurance: ingress.authAssurance, ownerRootRoutingVersion: 2,
+        requestDigest: captureDigest, correlationId: 'correlation_public_judgment_capture_01',
+        receivedAt: '2026-08-16T12:00:01.000Z', payload: captureRequest.payload,
+      }),
+    };
+    const captured = await stub.captureResponsibilityFromWorker(
+      captureInput,
+      await signedCaptureIngress(ownerId, captureInput),
+    );
+    const expiry = new Date(Date.now() + 30 * 60_000).toISOString();
+    const authority = Object.freeze({
+      ownerId,
+      authenticatedSubjectRef: ingress.authenticatedSubjectRef,
+      presenceId: 'presence_01',
+      presenceRegistrationId: 'presence_registration_01',
+      authenticatedSessionId: ingress.authenticatedSessionId,
+      ownerPolicyRevision: ingress.ownerPolicyRevision,
+      ownerRootRoutingVersion: 2,
+      authAssurance: ingress.authAssurance,
+    });
+    const item = await runInDurableObject(stub, (instance) =>
+      instance.__waldoCreateJudgmentRequestForTest({
+        subject: { kind: 'work_unit', id: captured.workUnits[0]!.id, expectedRevision: 1 },
+        question: { ref: 'question_public_judgment', digest: `sha256:${'1'.repeat(64)}` },
+        options: [
+          { id: 'approve_public_judgment', authorityDisposition: 'grant',
+            content: { ref: 'approve_content', digest: `sha256:${'2'.repeat(64)}` } },
+          { id: 'refuse_public_judgment', authorityDisposition: 'refuse',
+            content: { ref: 'refuse_content', digest: `sha256:${'3'.repeat(64)}` } },
+        ],
+        recommendation: null,
+        uncertainty: { ref: 'uncertainty_public', digest: `sha256:${'4'.repeat(64)}` },
+        evidence: [],
+        costOfWaiting: { ref: 'cost_public', digest: `sha256:${'5'.repeat(64)}` },
+        risk: { ref: 'risk_public', digest: `sha256:${'6'.repeat(64)}` },
+        reversibility: { ref: 'reversibility_public', digest: `sha256:${'7'.repeat(64)}` },
+        requestedAuthority: {
+          purpose: 'calendar.review.schedule', effectFamily: 'calendar.event.create',
+          resources: [{ kind: 'calendar', ref: 'calendar_primary' }],
+          scopes: ['calendar.event.create'], audiences: ['calendar.account'],
+          argumentDigest: `sha256:${'8'.repeat(64)}`,
+          contextDigest: `sha256:${'9'.repeat(64)}`, artifactDigest: null,
+          useLimit: 1, validUntil: expiry,
+        },
+        reEntryPointId: null,
+        expiresAt: expiry,
+      }, authority),
+    );
+    const answer = judgmentAnswerRequestV05Schema.parse({
+      protocolVersion: '0.5', requestId: 'answer_public_judgment_rpc_01',
+      commandType: 'judgment.answer', presenceRegistrationId: 'presence_registration_01',
+      aggregate: { kind: 'judgment_request', id: item.request.id, expectedRevision: 1 },
+      clientIssuedAt: '2026-08-16T12:00:02.000Z',
+      payload: {
+        selectedOptionId: 'refuse_public_judgment',
+        displayedRequestDigest: item.displayedRequestDigest,
+      },
+    });
+    const answerInput = { routedOwnerId: ownerId, request: answer };
+    const signedAnswer = await signedJudgmentAnswerIngress(ownerId, answer);
+    const first = await stub.answerJudgmentFromWorker(answerInput, signedAnswer);
+    await evictDurableObject(stub);
+    expect(await stub.answerJudgmentFromWorker(answerInput, signedAnswer)).toEqual(first);
+
+    await runInDurableObject(stub, async (instance) => {
+      await expect(instance.answerJudgmentFromWorker({
+        routedOwnerId: ownerId,
+        request: {
+          ...answer,
+          payload: { ...answer.payload, selectedOptionId: 'approve_public_judgment' },
+        },
+      }, signedAnswer)).rejects.toThrow('ingress authority mismatch');
+      await expect(instance.answerJudgmentFromWorker(answerInput, {
+        ...signedAnswer,
+        authAssurance: 'forged_assurance',
+      })).rejects.toThrow('ingress authority mismatch');
+    });
+
+    const projectionInput = {
+      routedOwnerId: ownerId,
+      query: { protocolVersion: '0.5' as const, fromExclusiveCursor: 0, limit: 25 },
+    };
+    const signedProjection = await signedJudgmentProjectionIngress(ownerId, projectionInput);
+    const page = await stub.readJudgmentProjectionFromWorker(projectionInput, signedProjection);
+    expect(page).toMatchObject({ ownerId, highWaterCursor: 5, nextCursor: 5, hasMore: false });
+    await runInDurableObject(stub, async (instance) => {
+      await expect(instance.readJudgmentProjectionFromWorker({
+        ...projectionInput,
+        query: { ...projectionInput.query, fromExclusiveCursor: 1 },
+      }, signedProjection)).rejects.toThrow('ingress authority mismatch');
+    });
+  });
 });
 
 async function signedCaptureIngress(
@@ -795,6 +919,44 @@ async function signedPlanningProjectionIngress(
       ownerRootRoutingVersion: 2, ...ingress,
     },
     operation: 'planning_projection', requestDigest: digest, operationDigest: digest,
+    issuedAt: Date.now(), secret: TEST_INGRESS_SECRET,
+  });
+}
+
+async function signedJudgmentAnswerIngress(
+  ownerId: string,
+  request: ReturnType<typeof judgmentAnswerRequestV05Schema.parse>,
+): Promise<SignedResponsibilityIngressContext> {
+  const digest = `sha256:${await sha256Hex(
+    canonicalizeJudgmentAnswerRequestV05ForDigest(request),
+  )}` as const;
+  return signResponsibilityIngress({
+    context: {
+      ownerId, presenceId: 'presence_01', presenceRegistrationId: 'presence_registration_01',
+      ownerRootRoutingVersion: 2, ...ingress,
+    },
+    operation: 'judgment_answer', requestDigest: digest, operationDigest: digest,
+    issuedAt: Date.now(), secret: TEST_INGRESS_SECRET,
+  });
+}
+
+async function signedJudgmentProjectionIngress(
+  ownerId: string,
+  input: Readonly<{
+    query: Readonly<{
+      protocolVersion: '0.5'; fromExclusiveCursor: number; limit: number; snapshotId?: string;
+    }>;
+  }>,
+): Promise<SignedResponsibilityIngressContext> {
+  const digest = `sha256:${await sha256Hex(
+    canonicalizeJudgmentProjectionIngressForDigest(input),
+  )}` as const;
+  return signResponsibilityIngress({
+    context: {
+      ownerId, presenceId: 'presence_01', presenceRegistrationId: 'presence_registration_01',
+      ownerRootRoutingVersion: 2, ...ingress,
+    },
+    operation: 'judgment_projection', requestDigest: digest, operationDigest: digest,
     issuedAt: Date.now(), secret: TEST_INGRESS_SECRET,
   });
 }

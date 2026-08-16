@@ -47,6 +47,12 @@ export class ResponsibilityPlanningConflictError extends ResponsibilityBoundaryE
   }
 }
 
+export class ResponsibilityJudgmentConflictError extends ResponsibilityBoundaryError {
+  constructor() {
+    super('ResponsibilityJudgmentConflictError', 'judgment authority conflict');
+  }
+}
+
 export class ResponsibilityExecutionUnavailableError extends ResponsibilityBoundaryError {
   constructor() {
     super('ResponsibilityExecutionUnavailableError', 'execution environment unavailable');
@@ -64,6 +70,7 @@ export function responsibilityBoundaryStatus(
     ResponsibilityDigestConflictError: 409,
     ResponsibilityProjectionCursorError: 409,
     ResponsibilityPlanningConflictError: 409,
+    ResponsibilityJudgmentConflictError: 409,
     ResponsibilityIngressRateLimitError: 429,
     ResponsibilityExecutionUnavailableError: 503,
   };

@@ -8,6 +8,12 @@ import {
   responsibilityHttpProblemV01,
   matchResponsibilityHttpRouteV01,
   matchResponsibilityExecutionHttpRouteV04,
+  matchResponsibilityJudgmentAuthorityHttpRouteV05,
+  responsibilityJudgmentAuthorityHttpMediaTypeV05,
+  judgmentAnswerRequestV05Schema,
+  judgmentAnswerResultV05Schema,
+  judgmentProjectionPageV05Schema,
+  judgmentProjectionQueryV05Schema,
   responsibilityCaptureRequestSchema,
   responsibilityCaptureRequestV02Schema,
   responsibilityCaptureResultV01CompatibilitySchema,
@@ -38,11 +44,13 @@ import type {
   WorkUnitPlanningAdmission,
   WorkUnitPlanningCancelAdmission,
   WorkUnitPlanningProjectionRead,
+  JudgmentAnswerAdmissionV05,
+  JudgmentProjectionReadV05,
 } from '../coordinator/waldo-coordinator';
 import { responsibilityBoundaryStatus } from './errors';
 import { parseResponsibilityJsonBytes, readBoundedResponsibilityBody } from './raw-json';
 
-export type ResponsibilityProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4';
+export type ResponsibilityProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4' | '0.5';
 
 export type TrustedResponsibilityContext = Readonly<{
   ownerId: string;
@@ -77,6 +85,14 @@ export interface ResponsibilityOwnerRoot {
     input: Readonly<{ routedOwnerId: string; request: unknown }>,
     ingress: ResponsibilityIngressContext,
   ): Promise<unknown>;
+  answerJudgment?(
+    input: JudgmentAnswerAdmissionV05,
+    ingress: ResponsibilityIngressContext,
+  ): Promise<unknown>;
+  readJudgmentProjection?(
+    input: JudgmentProjectionReadV05,
+    ingress: ResponsibilityIngressContext,
+  ): Promise<unknown>;
 }
 
 export type ResponsibilityIngressContext = Readonly<{
@@ -84,6 +100,7 @@ export type ResponsibilityIngressContext = Readonly<{
   authenticatedSessionId: string;
   authenticatedSessionExpiresAt: string;
   ownerPolicyRevision: number;
+  authAssurance: string;
 }>;
 
 export interface ResponsibilityWorkerAdapter {
@@ -106,6 +123,7 @@ const MEDIA_TYPES: Readonly<Record<ResponsibilityProtocolVersion, string>> = Obj
   '0.2': responsibilityHttpMediaTypeV02,
   '0.3': responsibilityHttpMediaTypeV03,
   '0.4': responsibilityExecutionHttpMediaTypeV04,
+  '0.5': responsibilityJudgmentAuthorityHttpMediaTypeV05,
 });
 
 export function createResponsibilityWorkerAdapter(
@@ -115,7 +133,8 @@ export function createResponsibilityWorkerAdapter(
     async fetch(request: Request): Promise<Response> {
       const url = new URL(request.url);
       const route = matchResponsibilityHttpRouteV01(request.method, url.pathname) ??
-        matchResponsibilityExecutionHttpRouteV04(request.method, url.pathname);
+        matchResponsibilityExecutionHttpRouteV04(request.method, url.pathname) ??
+        matchResponsibilityJudgmentAuthorityHttpRouteV05(request.method, url.pathname);
       if (route === null) return problem(404);
       const capture = route.id === 'capture';
       const planningTurn = route.id === 'planning_turn';
@@ -123,13 +142,16 @@ export function createResponsibilityWorkerAdapter(
       const projection = route.id === 'projection';
       const planningProjection = route.id === 'planning_projection';
       const executionStart = route.id === 'execution_start';
+      const judgmentAnswer = route.id === 'judgment_answer';
+      const judgmentProjection = route.id === 'judgment_projection';
 
       const version = selectedVersion(request.headers.get('accept'));
       if (version === null) return problem(406);
       if (!route.protocolVersions.some((supported) => supported === version)) {
         return problem(406);
       }
-      const writesBody = capture || planningTurn || planningCancel || executionStart;
+      const writesBody = capture || planningTurn || planningCancel || executionStart ||
+        judgmentAnswer;
       if (writesBody && normalizedMediaType(request.headers.get('content-type')) !== MEDIA_TYPES[version]) {
         return problem(406);
       }
@@ -143,7 +165,7 @@ export function createResponsibilityWorkerAdapter(
         return problem(503);
       }
       if (writesBody && url.search !== '') return problem(400);
-      if ((projection || planningProjection) && (
+      if ((projection || planningProjection || judgmentProjection) && (
         url.search.length > 1_024 || boundedQueryParameterCount(url.searchParams, 3) === null
       )) return problem(400);
 
@@ -170,6 +192,54 @@ export function createResponsibilityWorkerAdapter(
       if (context === null) return problem(401);
 
       try {
+        if (route.id === 'judgment_answer') {
+          const parsed = judgmentAnswerRequestV05Schema.safeParse(body);
+          if (!parsed.success) {
+            const bodyVersion = isRecord(body) ? body.protocolVersion : undefined;
+            return bodyVersion !== undefined && bodyVersion !== version ? problem(406) : problem(400);
+          }
+          if (parsed.data.presenceRegistrationId !== context.presenceRegistrationId) {
+            return problem(401);
+          }
+          const ownerRoot = await dependencies.ownerRootFor(context);
+          if (ownerRoot.answerJudgment === undefined) {
+            throw new Error('judgment answer owner root unavailable');
+          }
+          const result = await ownerRoot.answerJudgment({
+            routedOwnerId: context.ownerId,
+            request: parsed.data,
+          }, ingressContext(context));
+          const publicResult = judgmentAnswerResultV05Schema.parse(result);
+          if (
+            publicResult.requestId !== parsed.data.requestId ||
+            publicResult.judgmentRequest.id !== parsed.data.aggregate.id ||
+            publicResult.selectedOptionId !== parsed.data.payload.selectedOptionId
+          ) {
+            throw new Error('judgment answer response authority mismatch');
+          }
+          return json(publicResult, 200, '0.5');
+        }
+        if (route.id === 'judgment_projection') {
+          const query = parseProjectionQuery(url.searchParams);
+          if (query === null) return problem(400);
+          const parsedQuery = judgmentProjectionQueryV05Schema.parse({
+            protocolVersion: '0.5',
+            ...query,
+          });
+          const ownerRoot = await dependencies.ownerRootFor(context);
+          if (ownerRoot.readJudgmentProjection === undefined) {
+            throw new Error('judgment projection owner root unavailable');
+          }
+          const result = await ownerRoot.readJudgmentProjection({
+            routedOwnerId: context.ownerId,
+            query: parsedQuery,
+          }, ingressContext(context));
+          const publicResult = judgmentProjectionPageV05Schema.parse(result);
+          if (publicResult.ownerId !== context.ownerId) {
+            throw new Error('judgment projection authority mismatch');
+          }
+          return json(publicResult, 200, '0.5');
+        }
         if (route.id === 'execution_start') {
           const parsed = workUnitExecutionStartRequestV04Schema.safeParse(body);
           if (!parsed.success) {
@@ -404,6 +474,7 @@ function selectedVersion(accept: string | null): ResponsibilityProtocolVersion |
   if (mediaType === MEDIA_TYPES['0.2']) return '0.2';
   if (mediaType === MEDIA_TYPES['0.3']) return '0.3';
   if (mediaType === MEDIA_TYPES['0.4']) return '0.4';
+  if (mediaType === MEDIA_TYPES['0.5']) return '0.5';
   return null;
 }
 
@@ -491,6 +562,7 @@ function ingressContext(context: TrustedResponsibilityContext): ResponsibilityIn
     authenticatedSessionId: context.authenticatedSessionId,
     authenticatedSessionExpiresAt: context.authenticatedSessionExpiresAt,
     ownerPolicyRevision: context.ownerPolicyRevision,
+    authAssurance: context.authAssurance,
   });
 }
 

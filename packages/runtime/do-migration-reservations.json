@@ -24,6 +24,10 @@
     {
       "version": 6,
       "name": "responsibility-execution-writer-v0-4"
+    },
+    {
+      "version": 7,
+      "name": "responsibility-judgment-authority-v0-5"
     }
   ]
 }

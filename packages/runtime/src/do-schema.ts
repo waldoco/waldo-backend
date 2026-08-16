@@ -34,6 +34,12 @@ export const DO_PRODUCT_TABLES = [
   'work_unit_planning_commands',
   'work_unit_planning_controls',
   'work_unit_planning_projection',
+  'judgment_requests',
+  'judgment_decisions',
+  'authority_grants',
+  'judgment_commands',
+  'judgment_projection',
+  'judgment_projection_state',
 ] as const;
 
 export const DEFERRED_DO_PRODUCT_TABLES = [
@@ -1006,6 +1012,115 @@ export const RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+export const RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION: DoMigration = {
+  version: 7,
+  name: 'responsibility-judgment-authority-v0-5',
+  up: [
+    `ALTER TABLE presence_sessions ADD COLUMN auth_assurance TEXT NOT NULL
+      DEFAULT 'legacy_unverified'
+      CHECK (
+        length(auth_assurance) BETWEEN 1 AND 128 AND
+        substr(auth_assurance, 1, 1) GLOB '[A-Za-z0-9]' AND
+        auth_assurance NOT GLOB '*[^A-Za-z0-9._:-]*'
+      );`,
+    `CREATE TABLE judgment_requests (
+      id                       TEXT PRIMARY KEY,
+      owner_id                 TEXT NOT NULL,
+      revision                 INTEGER NOT NULL CHECK (revision > 0),
+      subject_kind             TEXT NOT NULL CHECK (subject_kind IN ('outcome', 'work_unit')),
+      subject_id               TEXT NOT NULL,
+      subject_revision         INTEGER NOT NULL CHECK (subject_revision > 0),
+      affected_digest          TEXT NOT NULL,
+      displayed_request_digest TEXT NOT NULL,
+      request_json             TEXT NOT NULL,
+      admission_basis_json     TEXT NOT NULL,
+      state                    TEXT NOT NULL CHECK (
+        state IN ('open', 'answered', 'expired', 'withdrawn', 'superseded')
+      ),
+      decision_id              TEXT,
+      expires_at               TEXT NOT NULL,
+      created_at               TEXT NOT NULL,
+      updated_at               TEXT NOT NULL,
+      UNIQUE (owner_id, id),
+      CHECK ((state = 'answered') = (decision_id IS NOT NULL))
+    );`,
+    `CREATE TABLE judgment_decisions (
+      id                  TEXT PRIMARY KEY,
+      owner_id            TEXT NOT NULL,
+      judgment_request_id TEXT NOT NULL UNIQUE,
+      revision            INTEGER NOT NULL CHECK (revision > 0),
+      decision_json       TEXT NOT NULL,
+      decided_at          TEXT NOT NULL,
+      UNIQUE (owner_id, id)
+    );`,
+    `CREATE TABLE authority_grants (
+      id                    TEXT PRIMARY KEY,
+      owner_id              TEXT NOT NULL,
+      judgment_request_id   TEXT NOT NULL UNIQUE,
+      judgment_decision_id  TEXT NOT NULL UNIQUE,
+      revision              INTEGER NOT NULL CHECK (revision > 0),
+      grant_json            TEXT NOT NULL,
+      use_limit             INTEGER NOT NULL CHECK (use_limit = 1),
+      uses_consumed         INTEGER NOT NULL CHECK (uses_consumed BETWEEN 0 AND 1),
+      next_use_index        INTEGER NOT NULL CHECK (next_use_index = uses_consumed + 1),
+      state                 TEXT NOT NULL CHECK (
+        state IN ('active', 'exhausted', 'expired', 'revoked', 'superseded')
+      ),
+      expires_at            TEXT NOT NULL,
+      revocation_generation INTEGER NOT NULL CHECK (revocation_generation >= 0),
+      created_at            TEXT NOT NULL,
+      updated_at            TEXT NOT NULL,
+      UNIQUE (owner_id, id),
+      CHECK (
+        (state = 'active' AND uses_consumed < use_limit) OR
+        (state = 'exhausted' AND uses_consumed = use_limit) OR
+        state IN ('expired', 'revoked', 'superseded')
+      )
+    );`,
+    `CREATE TABLE judgment_commands (
+      request_id     TEXT PRIMARY KEY,
+      owner_id       TEXT NOT NULL,
+      request_digest TEXT NOT NULL,
+      result_json    TEXT NOT NULL,
+      recorded_at    TEXT NOT NULL,
+      UNIQUE (owner_id, request_id)
+    );`,
+    `CREATE TABLE judgment_projection (
+      owner_cursor INTEGER PRIMARY KEY CHECK (owner_cursor > 0),
+      owner_id     TEXT NOT NULL,
+      item_json    TEXT NOT NULL
+    );`,
+    `CREATE TABLE judgment_projection_state (
+      owner_id             TEXT PRIMARY KEY,
+      snapshot_id          TEXT NOT NULL UNIQUE,
+      snapshot_base_cursor INTEGER NOT NULL CHECK (snapshot_base_cursor >= 0),
+      updated_at           TEXT NOT NULL
+    );`,
+  ],
+  down: [
+    `CREATE TABLE judgment_authority_rollback_guard (
+      eligible INTEGER NOT NULL CHECK (eligible = 1)
+    );`,
+    `INSERT INTO judgment_authority_rollback_guard (eligible)
+     SELECT CASE WHEN
+       NOT EXISTS (SELECT 1 FROM judgment_requests) AND
+       NOT EXISTS (SELECT 1 FROM judgment_decisions) AND
+       NOT EXISTS (SELECT 1 FROM authority_grants) AND
+       NOT EXISTS (SELECT 1 FROM judgment_commands) AND
+       NOT EXISTS (SELECT 1 FROM judgment_projection) AND
+       NOT EXISTS (SELECT 1 FROM judgment_projection_state)
+     THEN 1 ELSE 0 END;`,
+    'DROP TABLE judgment_authority_rollback_guard;',
+    'DROP TABLE judgment_projection_state;',
+    'DROP TABLE judgment_projection;',
+    'DROP TABLE judgment_commands;',
+    'DROP TABLE authority_grants;',
+    'DROP TABLE judgment_decisions;',
+    'DROP TABLE judgment_requests;',
+    'ALTER TABLE presence_sessions DROP COLUMN auth_assurance;',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
@@ -1013,6 +1128,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
+  RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -1171,6 +1287,7 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'expires_at',
     'created_at',
     'last_seen_at',
+    'auth_assurance',
   ],
   owner_event_state: ['root_key', 'owner_id', 'high_water_cursor'],
   outcomes: [
@@ -1293,6 +1410,26 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
     'request_id', 'owner_id', 'request_digest', 'result_json', 'recorded_at',
   ],
   work_unit_planning_projection: ['owner_cursor', 'owner_id', 'item_json'],
+  judgment_requests: [
+    'id', 'owner_id', 'revision', 'subject_kind', 'subject_id', 'subject_revision',
+    'affected_digest', 'displayed_request_digest', 'request_json', 'admission_basis_json',
+    'state', 'decision_id', 'expires_at', 'created_at', 'updated_at',
+  ],
+  judgment_decisions: [
+    'id', 'owner_id', 'judgment_request_id', 'revision', 'decision_json', 'decided_at',
+  ],
+  authority_grants: [
+    'id', 'owner_id', 'judgment_request_id', 'judgment_decision_id', 'revision',
+    'grant_json', 'use_limit', 'uses_consumed', 'next_use_index', 'state', 'expires_at',
+    'revocation_generation', 'created_at', 'updated_at',
+  ],
+  judgment_commands: [
+    'request_id', 'owner_id', 'request_digest', 'result_json', 'recorded_at',
+  ],
+  judgment_projection: ['owner_cursor', 'owner_id', 'item_json'],
+  judgment_projection_state: [
+    'owner_id', 'snapshot_id', 'snapshot_base_cursor', 'updated_at',
+  ],
 };
 
 export function provisionDoSchema(storage: DurableObjectStorage): DoSchemaAssertResult {

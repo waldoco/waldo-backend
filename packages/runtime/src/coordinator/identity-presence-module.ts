@@ -16,8 +16,12 @@ export type ResponsibilityCanonicalAuthority = Readonly<{
   ownerRootRoutingVersion: number;
 }>;
 
+export type ResponsibilityCanonicalAuthorityWithAssurance =
+  ResponsibilityCanonicalAuthority & Readonly<{ authAssurance: string }>;
+
 export type ResponsibilityCanonicalAuthorityRegistration =
   ResponsibilityCanonicalAuthority & Readonly<{
+    authAssurance?: string;
     authenticatedSessionExpiresAt: string;
     presenceState: 'active';
     at: string;
@@ -37,6 +41,7 @@ type CanonicalAuthorityRow = OwnerRootRow & {
   presence_state: string;
   authenticated_session_id: string;
   session_expires_at: string;
+  auth_assurance: string;
 };
 
 const MAX_ACTIVE_SESSIONS_PER_PRESENCE = 16;
@@ -47,8 +52,9 @@ export class IdentityPresenceModule {
 
   bootstrapOrRefreshCanonicalAuthorityInCurrentTransaction(
     registration: ResponsibilityCanonicalAuthorityRegistration,
-  ): ResponsibilityCanonicalAuthority {
+  ): ResponsibilityCanonicalAuthorityWithAssurance {
     assertRegistration(registration);
+    const authAssurance = registration.authAssurance ?? 'legacy_unverified';
     const existingRoot = this.readRoot();
     if (existingRoot === undefined) {
       this.storage.sql.exec(
@@ -145,32 +151,35 @@ export class IdentityPresenceModule {
       this.storage.sql.exec(
         `INSERT INTO presence_sessions (
           authenticated_session_id, presence_registration_id,
-          expires_at, created_at, last_seen_at
-        ) VALUES (?, ?, ?, ?, ?)`,
+          expires_at, created_at, last_seen_at, auth_assurance
+        ) VALUES (?, ?, ?, ?, ?, ?)`,
         registration.authenticatedSessionId,
         registration.presenceRegistrationId,
         registration.authenticatedSessionExpiresAt,
         registration.at,
         registration.at,
+        authAssurance,
       );
     } else if (existingSession.presence_registration_id !== registration.presenceRegistrationId) {
       throw new ResponsibilityAuthorityDeniedError();
     } else {
       this.storage.sql.exec(
-        `UPDATE presence_sessions SET expires_at = ?, last_seen_at = ?
+        `UPDATE presence_sessions
+            SET expires_at = ?, last_seen_at = ?, auth_assurance = ?
           WHERE authenticated_session_id = ?`,
         registration.authenticatedSessionExpiresAt,
         registration.at,
+        authAssurance,
         registration.authenticatedSessionId,
       );
     }
-    return freezeAuthority(registration);
+    return freezeAuthority(registration, authAssurance);
   }
 
   assertCanonicalAuthorityInCurrentTransaction(
     claim: ResponsibilityCanonicalAuthority,
     at: string,
-  ): ResponsibilityCanonicalAuthority {
+  ): ResponsibilityCanonicalAuthorityWithAssurance {
     const row = this.readCanonicalAuthority(
       claim.presenceRegistrationId,
       claim.authenticatedSessionId,
@@ -186,11 +195,12 @@ export class IdentityPresenceModule {
       row.authenticated_session_id !== claim.authenticatedSessionId ||
       row.owner_policy_revision !== claim.ownerPolicyRevision ||
       row.owner_root_routing_version !== claim.ownerRootRoutingVersion ||
+      ('authAssurance' in claim && row.auth_assurance !== claim.authAssurance) ||
       row.state !== 'active' || row.presence_state !== 'active'
     ) {
       throw new ResponsibilityAuthorityDeniedError();
     }
-    return freezeAuthority(claim);
+    return freezeAuthority(claim, row.auth_assurance);
   }
 
   setPresenceStateInCurrentTransaction(
@@ -274,7 +284,8 @@ export class IdentityPresenceModule {
               presence.presence_registration_id, presence.presence_id,
               presence.state AS presence_state,
               sessions.authenticated_session_id,
-              sessions.expires_at AS session_expires_at
+              sessions.expires_at AS session_expires_at,
+              sessions.auth_assurance
          FROM owner_roots AS roots
          JOIN presence_registrations AS presence ON presence.owner_id = roots.owner_id
          JOIN presence_sessions AS sessions
@@ -300,6 +311,7 @@ function assertRegistration(registration: ResponsibilityCanonicalAuthorityRegist
     registration.ownerPolicyRevision < 0 ||
     registration.ownerRootRoutingVersion !== RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION ||
     registration.presenceState !== 'active' ||
+    (registration.authAssurance !== undefined && !isProtocolId(registration.authAssurance)) ||
     !Number.isFinite(at) || !Number.isFinite(expiresAt) || expiresAt <= at
   ) {
     throw new Error('invalid responsibility authority registration');
@@ -308,7 +320,8 @@ function assertRegistration(registration: ResponsibilityCanonicalAuthorityRegist
 
 function freezeAuthority(
   value: ResponsibilityCanonicalAuthority,
-): ResponsibilityCanonicalAuthority {
+  authAssurance: string,
+): ResponsibilityCanonicalAuthorityWithAssurance {
   return Object.freeze({
     ownerId: value.ownerId,
     authenticatedSubjectRef: value.authenticatedSubjectRef,
@@ -317,6 +330,7 @@ function freezeAuthority(
     authenticatedSessionId: value.authenticatedSessionId,
     ownerPolicyRevision: value.ownerPolicyRevision,
     ownerRootRoutingVersion: value.ownerRootRoutingVersion,
+    authAssurance,
   });
 }
 
