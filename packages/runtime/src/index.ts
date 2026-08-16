@@ -5,6 +5,7 @@ import {
   canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
   canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
   canonicalizeWorkUnitExecutionStartRequestV04ForDigest,
+  canonicalizeJudgmentAnswerRequestV05ForDigest,
   responsibilityHttpProblemV01,
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
@@ -13,6 +14,7 @@ import { createSupabaseResponsibilityAuthority } from './responsibility/supabase
 import {
   canonicalizeResponsibilityProjectionIngressForDigest,
   canonicalizePlanningProjectionIngressForDigest,
+  canonicalizeJudgmentProjectionIngressForDigest,
   signResponsibilityIngress,
 } from './responsibility/ingress-signature';
 import {
@@ -253,6 +255,32 @@ async function ownerRootFor(
       return stub.startExecutionFromWorker(input, await signResponsibilityIngress({
         context: { ...ingress, ...authorityForIngress(context) },
         operation: 'execution_start',
+        requestDigest: digest,
+        operationDigest: digest,
+        issuedAt: Date.now(),
+        secret: ingressSecret,
+      }));
+    },
+    async answerJudgment(input, ingress) {
+      const digest = `sha256:${await sha256Hex(
+        canonicalizeJudgmentAnswerRequestV05ForDigest(input.request),
+      )}` as const;
+      return stub.answerJudgmentFromWorker(input, await signResponsibilityIngress({
+        context: { ...ingress, ...authorityForIngress(context) },
+        operation: 'judgment_answer',
+        requestDigest: digest,
+        operationDigest: digest,
+        issuedAt: Date.now(),
+        secret: ingressSecret,
+      }));
+    },
+    async readJudgmentProjection(input, ingress) {
+      const digest = `sha256:${await sha256Hex(
+        canonicalizeJudgmentProjectionIngressForDigest(input),
+      )}` as const;
+      return stub.readJudgmentProjectionFromWorker(input, await signResponsibilityIngress({
+        context: { ...ingress, ...authorityForIngress(context) },
+        operation: 'judgment_projection',
         requestDigest: digest,
         operationDigest: digest,
         issuedAt: Date.now(),

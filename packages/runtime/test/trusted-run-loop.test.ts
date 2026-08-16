@@ -1161,10 +1161,12 @@ describe('RunLoopDO trusted invocation convergence', () => {
           '__runLoopSetKillFlag',
           '__runLoopSetTestOverrides',
           '__waldoCaptureResponsibilityForTest',
+          '__waldoCreateJudgmentRequestForTest',
           '__waldoExecutePlanningTurnForTest',
           '__waldoReadResponsibilityProjectionForTest',
           '__waldoReplayResponsibilityForTest',
           'alarm',
+          'answerJudgmentFromWorker',
           'cancelPlanningTurnFromWorker',
           'captureResponsibilityFromWorker',
           'constructor',
@@ -1172,6 +1174,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
           'fetch',
           'readResponsibilityProjectionFromWorker',
           'readPlanningProjectionFromWorker',
+          'readJudgmentProjectionFromWorker',
           'readRunEvidence',
           'readRunProof',
           'readTrustedRunProof',
@@ -1206,10 +1209,17 @@ describe('RunLoopDO trusted invocation convergence', () => {
       await withNonLocalRunLoopEnvironment(instance, async () => {
         const waldo = instance as unknown as {
           __waldoCaptureResponsibilityForTest(input: unknown): Promise<unknown>;
+          __waldoCreateJudgmentRequestForTest(
+            proposal: unknown,
+            authority: unknown,
+          ): Promise<unknown>;
           __waldoReadResponsibilityProjectionForTest(input: unknown): unknown;
           __waldoReplayResponsibilityForTest(ownerId: string): unknown;
         };
         await expect(waldo.__waldoCaptureResponsibilityForTest({})).rejects.toThrow(
+          'run-loop test seam is local-only',
+        );
+        await expect(waldo.__waldoCreateJudgmentRequestForTest({}, {})).rejects.toThrow(
           'run-loop test seam is local-only',
         );
         expect(() => waldo.__waldoReadResponsibilityProjectionForTest({})).toThrow(

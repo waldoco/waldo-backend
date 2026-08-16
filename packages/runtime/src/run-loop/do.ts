@@ -6,6 +6,9 @@ import {
   canonicalizeWorkUnitPlanningTurnTrustedEnvelopeV03ForDigest,
   canonicalizeWorkUnitPlanningCancelRequestV03ForDigest,
   canonicalizeWorkUnitExecutionStartRequestV04ForDigest,
+  canonicalizeJudgmentAnswerRequestV05ForDigest,
+  judgmentAnswerRequestV05Schema,
+  judgmentProjectionQueryV05Schema,
   workUnitCandidatePlanV03Schema,
   workUnitPlanningAuthorizationResultV03Schema,
   workUnitPlanningCancelRequestV03Schema,
@@ -82,14 +85,19 @@ import {
   type WorkUnitPlanningAdmission,
   type WorkUnitPlanningCancelAdmission,
   type WorkUnitPlanningProjectionRead,
+  type JudgmentAnswerAdmissionV05,
+  type JudgmentProjectionReadV05,
+  type TrustedJudgmentRequestProposalV05,
 } from '../coordinator/waldo-coordinator';
 import type {
   ResponsibilityCanonicalAuthority,
+  ResponsibilityCanonicalAuthorityWithAssurance,
 } from '../coordinator/identity-presence-module';
 import { provisionDoSchema } from '../do-schema';
 import {
   canonicalizeResponsibilityProjectionIngressForDigest,
   canonicalizePlanningProjectionIngressForDigest,
+  canonicalizeJudgmentProjectionIngressForDigest,
   verifyResponsibilityIngress,
   type SignedResponsibilityIngressContext,
 } from '../responsibility/ingress-signature';
@@ -395,6 +403,14 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     return this.waldoCoordinator.captureResponsibility(admission);
   }
 
+  async __waldoCreateJudgmentRequestForTest(
+    proposal: TrustedJudgmentRequestProposalV05,
+    authority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ) {
+    this.#assertLocalTestSeam();
+    return this.waldoCoordinator.createTrustedJudgmentRequestV05(proposal, authority);
+  }
+
   async captureResponsibilityFromWorker(
     admission: ResponsibilityCaptureAdmission,
     ingress: SignedResponsibilityIngressContext,
@@ -504,6 +520,47 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     }
     const authority = this.#admitResponsibilityAuthorityAndIngress(ingress);
     return this.waldoCoordinator.readAuthorizedPlanningProjection(input, authority);
+  }
+
+  async answerJudgmentFromWorker(
+    admission: JudgmentAnswerAdmissionV05,
+    ingress: SignedResponsibilityIngressContext,
+  ) {
+    await this.#assertResponsibilityIngressContext(ingress, 'judgment_answer');
+    const request = judgmentAnswerRequestV05Schema.parse(admission.request);
+    const expectedDigest = `sha256:${await this.deps.sha256Hex(
+      canonicalizeJudgmentAnswerRequestV05ForDigest(request),
+    )}`;
+    if (
+      ingress.ownerId !== admission.routedOwnerId ||
+      ingress.presenceRegistrationId !== request.presenceRegistrationId ||
+      ingress.requestDigest !== expectedDigest ||
+      ingress.operationDigest !== expectedDigest
+    ) {
+      throw new Error('responsibility ingress authority mismatch');
+    }
+    const authority = this.#admitResponsibilityAuthorityAndIngress(ingress);
+    return this.waldoCoordinator.answerAuthorizedJudgmentV05(admission, authority);
+  }
+
+  async readJudgmentProjectionFromWorker(
+    input: JudgmentProjectionReadV05,
+    ingress: SignedResponsibilityIngressContext,
+  ) {
+    await this.#assertResponsibilityIngressContext(ingress, 'judgment_projection');
+    const query = judgmentProjectionQueryV05Schema.parse(input.query);
+    const expectedDigest = `sha256:${await this.deps.sha256Hex(
+      canonicalizeJudgmentProjectionIngressForDigest({ query }),
+    )}`;
+    if (
+      ingress.ownerId !== input.routedOwnerId ||
+      ingress.requestDigest !== expectedDigest ||
+      ingress.operationDigest !== expectedDigest
+    ) {
+      throw new Error('responsibility ingress authority mismatch');
+    }
+    const authority = this.#admitResponsibilityAuthorityAndIngress(ingress);
+    return this.waldoCoordinator.readJudgmentProjectionV05(input, authority);
   }
 
   __waldoReadResponsibilityProjectionForTest(
@@ -1307,7 +1364,7 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
   async #assertResponsibilityIngressContext(
     ingress: SignedResponsibilityIngressContext,
     operation: 'capture' | 'projection' | 'planning_turn' | 'planning_cancel' |
-      'planning_projection' | 'execution_start',
+      'planning_projection' | 'execution_start' | 'judgment_answer' | 'judgment_projection',
   ): Promise<void> {
     const now = this.deps.now();
     const secret = this.envBindings.RESPONSIBILITY_INGRESS_HMAC_SECRET;
@@ -1327,6 +1384,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       Date.parse(ingress.authenticatedSessionExpiresAt) <= now ||
       !Number.isSafeInteger(ingress.ownerPolicyRevision) ||
       ingress.ownerPolicyRevision < 0 ||
+      typeof ingress.authAssurance !== 'string' ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(ingress.authAssurance) ||
       ingress.ownerRootRoutingVersion !== RESPONSIBILITY_OWNER_ROOT_ROUTING_VERSION ||
       !Number.isSafeInteger(ingress.issuedAt) ||
       ingress.issuedAt > now + 5_000 || now - ingress.issuedAt > 60_000 ||
@@ -1340,9 +1399,10 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
 
   #admitResponsibilityAuthorityAndIngress(
     ingress: SignedResponsibilityIngressContext,
-  ): ResponsibilityCanonicalAuthority {
+  ): ResponsibilityCanonicalAuthorityWithAssurance {
     return this.waldoCoordinator.admitCanonicalAuthority({
       ...canonicalAuthorityFromIngress(ingress),
+      authAssurance: ingress.authAssurance,
       authenticatedSessionExpiresAt: ingress.authenticatedSessionExpiresAt,
       presenceState: 'active',
       at: new Date(this.deps.now()).toISOString(),

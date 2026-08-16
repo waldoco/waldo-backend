@@ -12,6 +12,7 @@ import {
   RESPONSIBILITY_AUTHORITY_SCHEMA_MIGRATION,
   RESPONSIBILITY_DOMAIN_SCHEMA_MIGRATION,
   RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
+  RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   applyDoMigration,
   assertDoSchema,
@@ -63,6 +64,11 @@ function provisionThroughV5(storage: DurableObjectStorage): void {
   }
 }
 
+function provisionThroughV6(storage: DurableObjectStorage): void {
+  provisionThroughV5(storage);
+  applyDoMigration(storage, RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION);
+}
+
 describe('HEY-10 DO SQLite schema root', () => {
   it('reports an empty DO SQLite database as missing required product tables', async () => {
     const stub = freshStub();
@@ -99,12 +105,20 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(6);
+    expect(result.version).toBe(7);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
       expect(result.tables).toContain(table);
     }
+    expect(result.tables).toEqual(expect.arrayContaining([
+      'judgment_requests',
+      'judgment_decisions',
+      'authority_grants',
+      'judgment_commands',
+      'judgment_projection',
+      'judgment_projection_state',
+    ]));
     expect(result.tables).toContain('do_schema_migrations');
 
     const productTables = result.tables.filter((table) =>
@@ -186,7 +200,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(6);
+    expect(result.version).toBe(7);
     expect(result.legacyRevisionOneRejected).toBe(true);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
@@ -219,7 +233,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 6, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 7, description: 'Preserve this row.' });
   });
 
   it('migrates the merged V3 responsibility schema to current without changing responsibility state', async () => {
@@ -314,7 +328,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.before.version).toBe(3);
-    expect(result.after).toEqual({ ...result.before, version: 6 });
+    expect(result.after).toEqual({ ...result.before, version: 7 });
     expect(result.authority).toEqual({
       authenticated_subject_ref: null,
       state: null,
@@ -426,7 +440,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(6);
+    expect(result.version).toBe(7);
     expect(result.after).toEqual(result.preserved);
     expect(result.newState).toEqual({ state: 'planning_authorized', revision: 2 });
   });
@@ -506,7 +520,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(6);
+    expect(result.version).toBe(7);
     expect(result.preserved).toEqual(result.before);
     expect(result.protocolVersion).toBe('0.3');
     expect(result.executionTables).toEqual([
@@ -617,7 +631,7 @@ describe('HEY-10 DO SQLite schema root', () => {
   it('refuses a V6 downgrade once native execution state exists and preserves that state', async () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
-      provisionDoSchema(state.storage);
+      provisionThroughV6(state.storage);
       const sql = state.storage.sql;
       sql.exec(
         `INSERT INTO execution_attempts (
@@ -642,6 +656,180 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({ version: 6, attempt: 'attempt-v04' });
+  });
+
+  it('downgrades an empty V7 judgment schema to V6', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionDoSchema(state.storage);
+      applyDoMigration(
+        state.storage,
+        RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
+        'down',
+      );
+      return {
+        version: getSchemaVersion(state.storage.sql),
+        judgmentTables: listTables(state.storage.sql).filter((table) =>
+          table.startsWith('judgment_') || table === 'authority_grants'),
+        sessionColumns: state.storage.sql.exec<{ name: string }>(
+          'PRAGMA table_info(presence_sessions)',
+        ).toArray().map((row) => row.name),
+      };
+    });
+
+    expect(result.version).toBe(6);
+    expect(result.judgmentTables).toEqual([]);
+    expect(result.sessionColumns).not.toContain('auth_assurance');
+  });
+
+  it('marks pre-V7 sessions non-authorizing until trusted ingress refreshes assurance', async () => {
+    const result = await runInDurableObject(freshStub(), (_instance, state) => {
+      provisionThroughV6(state.storage);
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO owner_roots (
+          root_key, owner_id, created_at, authenticated_subject_ref, state,
+          owner_policy_revision, owner_root_routing_version, updated_at
+        ) VALUES (1, 'owner-v6', ?, 'subject-v6', 'active', 1, 2, ?)`,
+        '2026-08-16T00:00:00.000Z',
+        '2026-08-16T00:00:00.000Z',
+      );
+      sql.exec(
+        `INSERT INTO presence_registrations (
+          presence_registration_id, owner_id, presence_id, state, created_at, updated_at
+        ) VALUES ('registration-v6', 'owner-v6', 'presence-v6', 'active', ?, ?)`,
+        '2026-08-16T00:00:00.000Z',
+        '2026-08-16T00:00:00.000Z',
+      );
+      sql.exec(
+        `INSERT INTO presence_sessions (
+          authenticated_session_id, presence_registration_id, expires_at,
+          created_at, last_seen_at
+        ) VALUES ('session-v6', 'registration-v6', ?, ?, ?)`,
+        '2026-08-17T00:00:00.000Z',
+        '2026-08-16T00:00:00.000Z',
+        '2026-08-16T00:00:00.000Z',
+      );
+      applyDoMigration(state.storage, RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION);
+      return sql.exec<{ auth_assurance: string }>(
+        "SELECT auth_assurance FROM presence_sessions WHERE authenticated_session_id = 'session-v6'",
+      ).one().auth_assurance;
+    });
+
+    expect(result).toBe('legacy_unverified');
+  });
+
+  it('refuses V7 downgrade for state in any judgment table and preserves the row', async () => {
+    const cases = [
+      {
+        table: 'judgment_requests',
+        insert: `INSERT INTO judgment_requests (
+          id, owner_id, revision, subject_kind, subject_id, subject_revision,
+          affected_digest, displayed_request_digest, request_json, admission_basis_json,
+          state, decision_id, expires_at, created_at, updated_at
+        ) VALUES ('request-v7', 'owner-v7', 1, 'work_unit', 'work-unit-v7', 1,
+          'sha256:a', 'sha256:b', '{}', '{}', 'open', NULL, ?, ?, ?)`,
+        args: ['2026-08-17T00:00:00.000Z', '2026-08-16T00:00:00.000Z',
+          '2026-08-16T00:00:00.000Z'],
+      },
+      {
+        table: 'judgment_decisions',
+        insert: `INSERT INTO judgment_decisions (
+          id, owner_id, judgment_request_id, revision, decision_json, decided_at
+        ) VALUES ('decision-v7', 'owner-v7', 'request-v7', 1, '{}', ?)`,
+        args: ['2026-08-16T00:00:00.000Z'],
+      },
+      {
+        table: 'authority_grants',
+        insert: `INSERT INTO authority_grants (
+          id, owner_id, judgment_request_id, judgment_decision_id, revision, grant_json,
+          use_limit, uses_consumed, next_use_index, state, expires_at,
+          revocation_generation, created_at, updated_at
+        ) VALUES ('grant-v7', 'owner-v7', 'request-v7', 'decision-v7', 1, '{}',
+          1, 0, 1, 'active', ?, 0, ?, ?)`,
+        args: ['2026-08-17T00:00:00.000Z', '2026-08-16T00:00:00.000Z',
+          '2026-08-16T00:00:00.000Z'],
+      },
+      {
+        table: 'judgment_commands',
+        insert: `INSERT INTO judgment_commands (
+          request_id, owner_id, request_digest, result_json, recorded_at
+        ) VALUES ('command-v7', 'owner-v7', 'sha256:c', '{}', ?)`,
+        args: ['2026-08-16T00:00:00.000Z'],
+      },
+      {
+        table: 'judgment_projection',
+        insert: `INSERT INTO judgment_projection (owner_cursor, owner_id, item_json)
+          VALUES (1, 'owner-v7', '{}')`,
+        args: [],
+      },
+      {
+        table: 'judgment_projection_state',
+        insert: `INSERT INTO judgment_projection_state (
+          owner_id, snapshot_id, snapshot_base_cursor, updated_at
+        ) VALUES ('owner-v7', 'snapshot-v7', 0, ?)`,
+        args: ['2026-08-16T00:00:00.000Z'],
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = await runInDurableObject(freshStub(), (_instance, state) => {
+        provisionDoSchema(state.storage);
+        state.storage.sql.exec(testCase.insert, ...testCase.args);
+        expect(() => applyDoMigration(
+          state.storage,
+          RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
+          'down',
+        )).toThrow();
+        return {
+          version: getSchemaVersion(state.storage.sql),
+          rows: state.storage.sql.exec<{ count: number }>(
+            `SELECT count(*) AS count FROM ${testCase.table}`,
+          ).one().count,
+        };
+      });
+      expect(result).toEqual({ version: 7, rows: 1 });
+    }
+  });
+
+  it('stores constrained grant-use counters for a future atomic EffectIntent transaction', async () => {
+    const stub = freshStub();
+    const result = await runInDurableObject(stub, (_instance, state) => {
+      provisionDoSchema(state.storage);
+      const sql = state.storage.sql;
+      sql.exec(
+        `INSERT INTO authority_grants (
+          id, owner_id, judgment_request_id, judgment_decision_id, revision, grant_json,
+          use_limit, uses_consumed, next_use_index, state, expires_at,
+          revocation_generation, created_at, updated_at
+        ) VALUES ('grant-v7', 'owner-v7', 'request-v7', 'decision-v7', 1, '{}',
+          1, 0, 1, 'active', ?, 0, ?, ?)`,
+        '2026-08-17T00:00:00.000Z',
+        '2026-08-16T00:00:00.000Z',
+        '2026-08-16T00:00:00.000Z',
+      );
+      expect(() => sql.exec(
+        `UPDATE authority_grants
+            SET uses_consumed = 1, next_use_index = 1
+          WHERE id = 'grant-v7'`,
+      )).toThrow();
+      return sql.exec<{
+        use_limit: number;
+        uses_consumed: number;
+        next_use_index: number;
+        state: string;
+      }>(
+        `SELECT use_limit, uses_consumed, next_use_index, state
+           FROM authority_grants WHERE id = 'grant-v7'`,
+      ).one();
+    });
+
+    expect(result).toEqual({
+      use_limit: 1,
+      uses_consumed: 0,
+      next_use_index: 1,
+      state: 'active',
+    });
   });
 
   it('refuses an unsafe V5 downgrade after planning authorization and preserves all V5 state', async () => {
@@ -850,7 +1038,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 7,
+        version: 8,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -872,8 +1060,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 6,
-      afterVersion: 6,
+      beforeVersion: 7,
+      afterVersion: 7,
       outcomesPresent: true,
       probeTables: [],
     });
