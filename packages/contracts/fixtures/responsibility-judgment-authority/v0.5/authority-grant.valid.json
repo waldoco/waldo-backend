@@ -1,0 +1,48 @@
+{
+  "protocolVersion": "0.5",
+  "id": "authority_grant_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "revision": 1,
+  "judgmentRequestId": "judgment_request_fixture_01",
+  "judgmentRequestRevision": 2,
+  "judgmentDecisionId": "judgment_decision_fixture_01",
+  "grantor": {
+    "kind": "owner",
+    "id": "owner_fixture_01"
+  },
+  "grantee": {
+    "kind": "service",
+    "id": "effect_engine"
+  },
+  "subject": {
+    "kind": "work_unit",
+    "id": "work_unit_fixture_01",
+    "revision": 4
+  },
+  "purpose": "calendar.follow_up.schedule",
+  "effectFamily": "calendar.event.create",
+  "resources": [
+    {
+      "kind": "calendar",
+      "ref": "calendar_primary"
+    }
+  ],
+  "scopes": [
+    "calendar.event.create"
+  ],
+  "audiences": [
+    "calendar.account"
+  ],
+  "argumentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "contextDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "artifactDigest": null,
+  "useLimit": 1,
+  "usesConsumed": 0,
+  "nextUseIndex": 1,
+  "validFrom": "2026-08-15T18:11:00.000Z",
+  "expiresAt": "2026-08-15T18:30:00.000Z",
+  "revocationGeneration": 0,
+  "state": "active",
+  "createdAt": "2026-08-15T18:11:00.000Z",
+  "updatedAt": "2026-08-15T18:11:00.000Z"
+}

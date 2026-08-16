@@ -31,16 +31,31 @@ import {
   workUnitExecutionStartResultV04Schema,
   type ResponsibilityExecutionHttpRouteV04,
 } from '../protocol/responsibility-workunit-execution-http-v0-4';
+import {
+  judgmentAnswerRequestV05Schema,
+  judgmentAnswerResultV05Schema,
+  judgmentAnswerRetrySemanticsV05,
+  judgmentProjectionPageV05Schema,
+} from '../protocol/responsibility-judgment-authority-v0-5';
+import {
+  responsibilityJudgmentAuthorityHttpMediaTypeV05,
+  responsibilityJudgmentAuthorityHttpRouteManifestV05,
+  type ResponsibilityJudgmentAuthorityHttpRouteV05,
+} from '../protocol/responsibility-judgment-authority-http-v0-5';
 
 type JsonRecord = Record<string, unknown>;
-type ProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4';
-type PublicResponsibilityRoute = ResponsibilityHttpRouteV01 | ResponsibilityExecutionHttpRouteV04;
+type ProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4' | '0.5';
+type PublicResponsibilityRoute =
+  | ResponsibilityHttpRouteV01
+  | ResponsibilityExecutionHttpRouteV04
+  | ResponsibilityJudgmentAuthorityHttpRouteV05;
 
 const mediaTypes: Readonly<Record<ProtocolVersion, string>> = Object.freeze({
   '0.1': responsibilityHttpMediaTypeV01,
   '0.2': responsibilityHttpMediaTypeV02,
   '0.3': responsibilityHttpMediaTypeV03,
   '0.4': responsibilityExecutionHttpMediaTypeV04,
+  '0.5': responsibilityJudgmentAuthorityHttpMediaTypeV05,
 });
 
 const operationMetadata = Object.freeze({
@@ -93,11 +108,29 @@ const operationMetadata = Object.freeze({
     requestSchemas: { '0.4': 'WorkUnitExecutionStartRequestV04' },
     responseSchemas: { '0.4': 'WorkUnitExecutionStartResultV04' },
   },
+  judgment_projection: {
+    operationId: 'readJudgmentProjection',
+    summary: 'Read the owner-bound Needs You judgment projection',
+    successStatus: '200',
+    responseSchemas: { '0.5': 'JudgmentProjectionPageV05' },
+    runtimeValidation: [
+      'displayedRequestDigest equals SHA-256 of canonical embedded JudgmentRequestV05',
+    ],
+  },
+  judgment_answer: {
+    operationId: 'answerJudgment',
+    summary: 'Answer one exact owner-bound JudgmentRequest revision',
+    successStatus: '200',
+    requestSchemas: { '0.5': 'JudgmentAnswerRequestV05' },
+    responseSchemas: { '0.5': 'JudgmentAnswerResultV05' },
+    retrySemantics: judgmentAnswerRetrySemanticsV05,
+  },
 } as const);
 
 const publicResponsibilityRouteManifest = Object.freeze([
   ...responsibilityHttpRouteManifestV01,
   ...responsibilityExecutionHttpRouteManifestV04,
+  ...responsibilityJudgmentAuthorityHttpRouteManifestV05,
 ]);
 
 function stripGeneratedSchemaNoise(value: unknown): unknown {
@@ -186,6 +219,12 @@ function operationFor(route: PublicResponsibilityRoute): JsonRecord {
   const requestSchemas = 'requestSchemas' in metadata
     ? metadata.requestSchemas as Readonly<Partial<Record<ProtocolVersion, string>>>
     : undefined;
+  const retrySemantics = 'retrySemantics' in metadata
+    ? metadata.retrySemantics
+    : undefined;
+  const runtimeValidation = 'runtimeValidation' in metadata
+    ? metadata.runtimeValidation
+    : undefined;
   return {
     operationId: metadata.operationId,
     summary: metadata.summary,
@@ -199,6 +238,12 @@ function operationFor(route: PublicResponsibilityRoute): JsonRecord {
       default: 'disabled',
     },
     'x-waldo-protocol-versions': route.protocolVersions,
+    ...(retrySemantics === undefined
+      ? {}
+      : { 'x-waldo-retry-semantics': retrySemantics }),
+    ...(runtimeValidation === undefined
+      ? {}
+      : { 'x-waldo-runtime-validation': runtimeValidation }),
     parameters: [
       {
         name: 'Accept', in: 'header', required: true,
@@ -234,7 +279,7 @@ export function buildPublicOpenApiDocument(
 
   return {
     openapi: '3.1.0',
-    info: { title: 'Waldo Public API', version: '0.2.0' },
+    info: { title: 'Waldo Public API', version: '0.3.0' },
     paths,
     components: {
       securitySchemes: {
@@ -266,6 +311,9 @@ export function buildPublicOpenApiDocument(
         WorkUnitPlanningProjectionPageV03: schemaFor(workUnitPlanningProjectionPageV03Schema),
         WorkUnitExecutionStartRequestV04: schemaFor(workUnitExecutionStartRequestV04Schema),
         WorkUnitExecutionStartResultV04: schemaFor(workUnitExecutionStartResultV04Schema),
+        JudgmentAnswerRequestV05: schemaFor(judgmentAnswerRequestV05Schema),
+        JudgmentAnswerResultV05: schemaFor(judgmentAnswerResultV05Schema),
+        JudgmentProjectionPageV05: schemaFor(judgmentProjectionPageV05Schema),
         ...Object.fromEntries(
           Object.entries(responsibilityHttpProblemSchemasV01).map(([status, schema]) => [
             `ResponsibilityHttpProblem${status}V01`,

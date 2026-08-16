@@ -9,6 +9,7 @@ import {
   ResponsibilityProjectionCursorError,
   ResponsibilityProjectionMissingError,
 } from '../src/responsibility/errors';
+import { parseResponsibilityJsonBytes } from '../src/responsibility/raw-json';
 import {
   createResponsibilityWorkerAdapter,
   type ResponsibilityAuthority,
@@ -568,12 +569,18 @@ describe('responsibility Worker adapter', () => {
     ['nested duplicate', '{"protocolVersion":"0.2","payload":{"userStatement":"a","userStatement":"b"}}'],
     ['escaped-equivalent duplicate', '{"protocolVersion":"0.2","payload":{"ownerId":"a","\\u006fwnerId":"b"}}'],
     ['unpaired surrogate', JSON.stringify(captureBody).replace('Prepare', '\\ud800Prepare')],
+    ['terminal unpaired surrogate', '{"__proto__":"\\ud800"}'],
   ])('rejects %s from raw JSON before routing', async (_name, body) => {
     const { adapter, calls } = harness();
     const response = await adapter.fetch(request(body));
     expect(response.status).toBe(400);
     expect(calls).toEqual([]);
     expect(Object.keys(await response.json()).sort()).toEqual(['code', 'status', 'title', 'type']);
+  });
+
+  it('rejects a terminal escaped high surrogate in the raw-byte admission layer', () => {
+    const bytes = new TextEncoder().encode('{"__proto__":"\\ud800"}');
+    expect(() => parseResponsibilityJsonBytes(bytes)).toThrow('responsibility JSON rejected');
   });
 
   it('rejects a media/body protocol mismatch instead of downgrading', async () => {
