@@ -1,7 +1,7 @@
 # Waldo Backend Production Run Contract — B0 to B6
 
 **Status:** current durable backend build and launch handoff
-**Updated:** 2026-08-15
+**Updated:** 2026-08-16
 **GitHub milestone:** [Waldo Backend Production Launch](https://github.com/Pin4sf/waldo-backend/milestone/1)
 **Umbrella:** [#78](https://github.com/Pin4sf/waldo-backend/issues/78)
 **Execution ledger:** [#116](https://github.com/Pin4sf/waldo-backend/issues/116) and [protocol](./EXECUTION-LEDGER.md)
@@ -12,6 +12,12 @@
 This file is the repository's single persistent run contract. GitHub issues carry bounded work and current evidence. There is no HEY-109/session-bus workflow. Source, tests, accepted ADRs, and the user's latest instruction outrank both this file and tracker text.
 
 ## Current
+
+**Human-scope stop:** this backend run is paused so work can move to the Kennel backend harness. Do not start #84 runtime/migration, #85, B2 closure, or B3–B6 work. Those lanes are `DEFERRED`/`NOT RUN`, not complete. The broad B2–B6 persistent session goal remains incomplete.
+
+At current `origin/main@105e4b5137ed6281a5d731e0cc1ff1d5a5827800`, [#82](https://github.com/Pin4sf/waldo-backend/issues/82) is landed and closed. Reviewed #131 head `c67922bce54c7307951d046d2d5bb14b2cb81cc3` and the landed merge have identical tree `a211b791cb3eff889152d4780804be2e1e6e777d`. JudgmentAuthority v0.5 is the sole writer for JudgmentRequest/Decision/AuthorityGrant; it preserves no-grant-consumption-before-#83 and performs no external I/O. Its fresh-main wall passed contracts 71/1,572, runtime 43/1,152, responsibility integration 2/5, eight migrations/reset/parity, 53 pgTAP, typechecks/guards, and independent Security/authority, Standards, Spec, and adversarial QA. That is `module_implemented`, not B2 closure or operational proof.
+
+[#84](https://github.com/Pin4sf/waldo-backend/issues/84)'s additive v0.6 contract release is ready but unmerged as [PR #133](https://github.com/Pin4sf/waldo-backend/pull/133), exact base `105e4b5137ed6281a5d731e0cc1ff1d5a5827800`, head `5e6ed074c9ae49ba95ff13c107997aa6b84010ff`, tree `754b926456782bcdf342b58097f45b5e8f89aa1d`. It makes Acceptance explicit-owner-only; an accepted binding requires the independently reread complete active check set and passed, available, independent Verification over exact admitted Evidence. Release is distinct and cannot claim verified acceptance. Exact-SHA Security/authority/privacy, Spec, Standards, and adversarial QA passed; the clean Linux/Docker/full-history wall passed contracts 74/1,584, runtime 43/1,152, integration 2/5, eight migrations/reset/parity, 53 pgTAP, typechecks, all guards, and diff check. See the [bounded handoff](../ledger/2026-08-16-b2-judgment-closure-contract-handoff.md) for hashes and the future source packet. Separate human authorization is required to merge this exact head.
 
 At landed pin `origin/main@883ef9138df0bdbad70fcbc4d45cfec203d942ad`, B0 and the bounded B1 start-only gate are complete. [#80](https://github.com/Pin4sf/waldo-backend/issues/80), [#81](https://github.com/Pin4sf/waldo-backend/issues/81), [#87](https://github.com/Pin4sf/waldo-backend/issues/87), and [#88](https://github.com/Pin4sf/waldo-backend/issues/88) are closed; PRs #123 and #125–#128 are merged. Reviewed #128 head `85e59e68377037043290ec1657262742c9f0ba3a` and the landed merge have the identical tree `2d2b0ec2505fbdfd5370b44bf74014589d00f973`. No deployment exists:
 
@@ -105,6 +111,8 @@ Surface teams may work in parallel only against released contracts and golden fi
 | #126 | merged B1 execution-environment port/fake boundary for closed #87 | landed at `9a2b11b`; reviewed head `5b3d9f5` has the same tree `8a202c5`; contains no public #88 route, real adapter, deployment, or live proof |
 | #127 | merged #88 frontier handoff | documentation/coordination only; landed in base `4e1695c` |
 | #128 | merged #88 public start-only bridge | landed as `883ef91` with the reviewed tree; additive public v0.4 route and local/fake composition through #80/#87; no deployment, real adapter, closure runtime, or live proof |
+| #131 | merged #82 JudgmentAuthority runtime | landed as `105e4b5`; reviewed `c67922b` and landed tree `a211b791` match; #82 closed; no grant consumption, external I/O, staging, or deployment |
+| #133 | ready #84 v0.6 contract release | exact base `105e4b5`, head `5e6ed07`, tree `754b926`; contract-defined PASS only; separate human merge authorization required; do not infer #84 runtime or B2 closure proof |
 | #98 | B1 single-writer decision evidence | preserve as source-pinned design evidence; re-check every claim against current source; implementation belongs to #80/#88 |
 | #103 | stale B1/B2 contract draft | #81 supersedes its released B1 families; do not merge wholesale; review any remaining B2 evidence independently |
 | #105 | B3 delivery persona/privacy hardening | review under #104 and B3 security acceptance |
@@ -126,17 +134,14 @@ No open PR is launch authority by itself. Closing, rebasing, merging, or superse
 | ISC-9 | export/delete/pre-deletion-backup restore adversarial test | no resurrection across named stores |
 | ISC-10–11 | Electron/mobile/Telegram/Discord staging matrix, load/cost, observability, incident/rollback, canonical live verification | every claim tied to the proof level exercised |
 
-## Next implementation goal
+## Resume boundary
 
 Use the [B2–B6 goal execution contract](../planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md):
 
-1. fetch current `origin/main`; inspect #78/#116 and the owning issue; verify no later conflicting owner and re-pin all sources;
-2. create one persistent root goal only with explicit human instruction; a gate is a checkpoint, while one issue or bounded vertical slice is the worktree unit;
-3. start with #82 after recording its released B2 fixture pin, canonical writer/migration ownership, first failing test, acceptance, falsifier, rollback, and review roster;
-4. keep #84/#85 and B3–B6 write lanes blocked until their named dependency barriers land; later lanes may perform read-only research, threat modeling, and acceptance planning;
-5. use `/waldo-isa-run-contract`, planner/workflow mapping, TDD, `/check-contract`, `/break-feature`, `/code-review`, Security/authority where triggered, independent QA/Standards/Spec, and the exact-SHA wall for each implementation issue;
-6. resolve the #104/#86 dependency cycle before B3 implementation; treat resume/steer/pause and the v0.3-row upgrade as `NEEDS DIRECTION`;
-7. start credentialed real-API proof only at the named B4 staging barrier with synthetic/test accounts. Production deployment remains a separate explicit action.
+1. Do not resume backend writes until the human explicitly redirects work back from the Kennel harness.
+2. At that time, re-pin `origin/main` and inspect live #78/#84/#116 and #133. If PR #133 was separately authorized and merged, compare reviewed and landed trees and run the fresh-main integration wall.
+3. Only with a separate implementation instruction, create a fresh #84 runtime worktree and source packet. Recheck migration lineage; use the v0.6 contract's authoritative active-check and current-Evidence rereads. Do not reuse the contract worktree or start #85.
+4. Keep B3–B6, credentials, staging, deployment, and production activation out of scope until their separate barriers and authorizations apply.
 
 ### Copy-ready root-session ask
 
