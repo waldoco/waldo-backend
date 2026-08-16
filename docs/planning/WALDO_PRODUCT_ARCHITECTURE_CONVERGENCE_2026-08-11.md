@@ -188,6 +188,8 @@ The matrix compares product primitives, not feature counts.
 | Medley | Mission interview, reviewed DAG, per-task provider routing, parallel workers, steering. | Mission engine is proprietary; inherited host permissions/context are too broad for Waldo authority. | **Adapt** optional Mission and frontier planning; require Waldo leases and grants. |
 | Spotify Xirp | Local multi-provider native-CLI custody, persistent terminals, project files/rules/skills, worktrees. | Provider semantics are not normalized; worktree isolation is not full execution isolation. | **Closest Kennel analogue. Adapt** custody and capability honesty. |
 | Spotify Portal | Optional organizational catalog/Workspace context through permission-aware MCP. | Catalog ownership is not authorization; raw transcript upload is not redacted. | **Adapt** as an optional Context Adapter; never make it Waldo memory or authority. |
+| DeepSeek Harness | Reversible Cordis plugin runtime, append-only model-visible session log, one tool-policy pipeline, bounded parallel effects with ordered commit, and interrupted-turn repair. | Trusted local/developer-preview boundaries, same-UID credential exposure, filesystem-focused sandboxing, dynamic plugin attack surface, and no Outcome/Acceptance or governed personal memory. | **Adopt** causal/lifecycle/effect/recovery mechanics for Kennel; keep plugins below the locked Waldo kernel and provider completion as observation only. |
+| Drover | Host-local multi-runtime custody separated from Parquet/DuckDB context and derivation provenance, with structured adapters, raw fallback, degraded workers, and quiescent fleet rollout. | One trusted operator, effectively whole-fleet credentials, no host-bound RBAC or execution sandbox, and generated decisions/open loops are projections. | **Adopt** custody/provenance/update mechanics; require scoped Waldo authority and governed promotion of derived context. |
 | Hermes | Provider-neutral personal harness, channels, schedules, memory/skills, subagents, remote execution. | Self-modifying memory/skills and provider judges can silently become truth. | **Adapt** harness portability; route learning through governed proposals and evals. |
 | Pi | Small composable multi-provider agent runtime, state/tool loop, coding CLI. | Runtime primitives do not provide Waldo product semantics, authority, or closure. | **Adopt as an executor reference**, not the Waldo brain. |
 | OpenClaw | Single-operator local assistant, many channels, tools, skills/plugins, device nodes. | Main-session tools can run on the host unless sandboxing is configured; local control plane can blur authority and execution. | **Adapt** channel/device composition; reject host access as implicit approval. |
@@ -958,6 +960,7 @@ Add WhatsApp when approved, further admitted channel/connector families, voice p
 - [Canonical Kennel Electron + mobile audit](./WALDO_CONVERGENCE_KENNEL_MOBILE_AUDIT_2026-08-11.md)
 - [Spotify Xirp + Portal research](./WALDO_CONVERGENCE_SPOTIFY_XIRP_RESEARCH_2026-08-11.md)
 - [Grok Bot product research](./GROK_BOT_PRODUCT_RESEARCH_2026-08-12.md)
+- [DeepSeek Harness and Drover backend adoption research](../research/2026-08-16-deepseek-harness-drover-architecture-adoption.md)
 - `waldo-brain/04-Sessions/weekly/2026-08-11-waldo-product-architecture-ledger.md`
 - `waldo-brain/03-References/research/spotify-xirp-portal-product-engineering-dissection-2026-08-11.md`
 
@@ -976,6 +979,8 @@ Add WhatsApp when approved, further admitted channel/connector families, voice p
 - [OpenClaw at `3cfb344f`](https://github.com/openclaw/openclaw/tree/3cfb344f9f272252db3f2da3ea4bdc8ea3cada85)
 - [Cloudflare Agents](https://developers.cloudflare.com/agents/), [Durable Objects](https://developers.cloudflare.com/durable-objects/), and [Workflows](https://developers.cloudflare.com/workflows/)
 - [Cloudflare Agents source at `48eeba71`](https://github.com/cloudflare/agents/tree/48eeba71f59eee41fc541b215150377e0aba3593)
+- [DeepSeek Harness at `47f943859`](https://github.com/deepseek-ai/deepseek-harness/tree/47f943859bef60e4160492346772ded9b24f765a) and the [official developer-preview page](https://deepseek.com/harness/en/)
+- [Drover at `4b9ac521`](https://github.com/arniesaha/drover/tree/4b9ac5211d520953b7b05519e8b243f5768167cc)
 - [MCP architecture](https://modelcontextprotocol.io/specification/2025-06-18/architecture)
 
 ## Deliverable coverage
