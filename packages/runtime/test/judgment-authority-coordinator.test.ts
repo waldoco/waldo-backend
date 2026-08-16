@@ -1,5 +1,6 @@
 import {
   canonicalizeJudgmentAnswerRequestV05ForDigest,
+  canonicalizeJudgmentRequestV05ForDigest,
   canonicalizeResponsibilityCaptureRequestV02ForDigest,
   judgmentAnswerRequestV05Schema,
   judgmentAnswerResultV05Schema,
@@ -1084,6 +1085,103 @@ describe('JudgmentAuthority Coordinator', () => {
     expect(proof.grants).toHaveLength(1);
   });
 
+  it('rejects coordinated request digest forgery before replay or snapshot deletion', async () => {
+    const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      await coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item) },
+        canonicalAuthority,
+      );
+      const forgedDigest = `sha256:${'f'.repeat(64)}`;
+      for (const row of state.storage.sql.exec<{
+        owner_cursor: number; aggregate_kind: string; payload_json: string;
+      }>(
+        `SELECT owner_cursor, aggregate_kind, payload_json FROM owner_domain_events
+          WHERE schema_version = '0.5' ORDER BY owner_cursor`,
+      ).toArray()) {
+        const payload = JSON.parse(row.payload_json);
+        if (row.aggregate_kind === 'judgment_request') {
+          payload.displayedRequestDigest = forgedDigest;
+        } else if (row.aggregate_kind === 'judgment_decision') {
+          payload.displayedRequestDigest = forgedDigest;
+        } else {
+          continue;
+        }
+        state.storage.sql.exec(
+          'UPDATE owner_domain_events SET payload_json = ? WHERE owner_cursor = ?',
+          JSON.stringify(payload),
+          row.owner_cursor,
+        );
+      }
+      state.storage.sql.exec(
+        'UPDATE judgment_requests SET displayed_request_digest = ?',
+        forgedDigest,
+      );
+      const decisionRow = state.storage.sql.exec<{ decision_json: string }>(
+        'SELECT decision_json FROM judgment_decisions',
+      ).one();
+      state.storage.sql.exec(
+        'UPDATE judgment_decisions SET decision_json = ?',
+        JSON.stringify({ ...JSON.parse(decisionRow.decision_json),
+          displayedRequestDigest: forgedDigest }),
+      );
+      for (const row of state.storage.sql.exec<{ owner_cursor: number; item_json: string }>(
+        'SELECT owner_cursor, item_json FROM judgment_projection ORDER BY owner_cursor',
+      ).toArray()) {
+        state.storage.sql.exec(
+          'UPDATE judgment_projection SET item_json = ? WHERE owner_cursor = ?',
+          JSON.stringify({ ...JSON.parse(row.item_json), displayedRequestDigest: forgedDigest }),
+          row.owner_cursor,
+        );
+      }
+      const before = {
+        snapshot: state.storage.sql.exec(
+          'SELECT * FROM judgment_projection_state',
+        ).toArray(),
+        projection: state.storage.sql.exec(
+          'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+        ).toArray(),
+      };
+      let replayRejection = '';
+      try {
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+      } catch (error) {
+        replayRejection = (error as Error).name;
+      }
+      let rebuildRejection = '';
+      try {
+        await coordinator.rebuildJudgmentProjectionV05(authority.ownerId, canonicalAuthority);
+      } catch (error) {
+        rebuildRejection = (error as Error).name;
+      }
+      return {
+        replayRejection,
+        rebuildRejection,
+        before,
+        after: {
+          snapshot: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection_state',
+          ).toArray(),
+          projection: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+          ).toArray(),
+        },
+      };
+    });
+    expect(proof.replayRejection).toBe('ResponsibilityJudgmentConflictError');
+    expect(proof.rebuildRejection).toBe('ResponsibilityJudgmentConflictError');
+    expect(proof.after).toEqual(proof.before);
+  });
+
   it('rejects an unknown v0.5 journal aggregate even when current tables still reconcile', async () => {
     const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
       let id = 0;
@@ -1109,7 +1207,408 @@ describe('JudgmentAuthority Coordinator', () => {
         'UPDATE owner_event_state SET high_water_cursor = 4 WHERE root_key = 1',
       );
       try {
-        coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+        return '';
+      } catch (error) {
+        return (error as Error).name;
+      }
+    });
+    expect(rejection).toBe('ResponsibilityJudgmentConflictError');
+  });
+
+  it.each(['relabel_only', 'relabel_and_remove_current'] as const)(
+    'rejects a known judgment aggregate relabeled away from v0.5: %s',
+    async (mutation) => {
+      const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+        let id = 0;
+        const coordinator = new WaldoCoordinator(state.storage, {
+          now: () => '2026-08-16T10:00:00.000Z',
+          newId: (kind) => `${kind}_judgment_${++id}`,
+          sha256Hex,
+        });
+        const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+        await coordinator.createTrustedJudgmentRequestV05(
+          proposal(captured.workUnits[0]!), canonicalAuthority,
+        );
+        state.storage.sql.exec(
+          `UPDATE owner_domain_events SET schema_version = '0.4'
+            WHERE aggregate_kind = 'judgment_request'`,
+        );
+        if (mutation === 'relabel_and_remove_current') {
+          state.storage.sql.exec('DELETE FROM judgment_requests');
+        }
+        const before = state.storage.sql.exec(
+          'SELECT * FROM judgment_projection_state',
+        ).toArray();
+        const rejection: string[] = [];
+        for (const operation of ['replay', 'rebuild'] as const) {
+          try {
+            if (operation === 'replay') {
+              await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+            } else {
+              await coordinator.rebuildJudgmentProjectionV05(
+                authority.ownerId,
+                canonicalAuthority,
+              );
+            }
+          } catch (error) {
+            rejection.push((error as Error).name);
+          }
+        }
+        return {
+          rejection,
+          snapshotUnchanged: JSON.stringify(before) === JSON.stringify(
+            state.storage.sql.exec('SELECT * FROM judgment_projection_state').toArray(),
+          ),
+        };
+      });
+      expect(proof).toEqual({
+        rejection: [
+          'ResponsibilityJudgmentConflictError',
+          'ResponsibilityJudgmentConflictError',
+        ],
+        snapshotUnchanged: true,
+      });
+    },
+  );
+
+  it.each(['remove', 'corrupt', 'coordinated_corrupt', 'insert'] as const)(
+    'rejects %s judgment command drift from the answered journal transition',
+    async (mutation) => {
+      const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
+        let id = 0;
+        const coordinator = new WaldoCoordinator(state.storage, {
+          now: () => '2026-08-16T10:00:00.000Z',
+          newId: (kind) => `${kind}_judgment_${++id}`,
+          sha256Hex,
+        });
+        const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+        const item = await coordinator.createTrustedJudgmentRequestV05(
+          proposal(captured.workUnits[0]!), canonicalAuthority,
+        );
+        await coordinator.answerAuthorizedJudgmentV05(
+          { routedOwnerId: authority.ownerId, request: answerFor(item) },
+          canonicalAuthority,
+        );
+        if (mutation === 'remove') {
+          state.storage.sql.exec('DELETE FROM judgment_commands');
+        } else if (mutation === 'corrupt') {
+          state.storage.sql.exec(
+            `UPDATE judgment_commands SET request_digest = ?`,
+            `sha256:${'a'.repeat(64)}`,
+          );
+        } else if (mutation === 'coordinated_corrupt') {
+          const event = state.storage.sql.exec<{
+            owner_cursor: number; payload_json: string;
+          }>(
+            `SELECT owner_cursor, payload_json FROM owner_domain_events
+              WHERE event_type = 'judgment_request.answered'`,
+          ).one();
+          const payload = JSON.parse(event.payload_json);
+          payload.answerProof.result = {
+            ...payload.answerProof.result,
+            selectedOptionId: 'refuse_schedule',
+          };
+          state.storage.sql.exec(
+            'UPDATE owner_domain_events SET payload_json = ? WHERE owner_cursor = ?',
+            JSON.stringify(payload), event.owner_cursor,
+          );
+          state.storage.sql.exec(
+            'UPDATE judgment_commands SET result_json = ?',
+            JSON.stringify(payload.answerProof.result),
+          );
+        } else {
+          state.storage.sql.exec(
+            `INSERT INTO judgment_commands (
+              request_id, owner_id, request_digest, result_json, recorded_at
+            ) SELECT 'answer_inserted_01', owner_id, request_digest, result_json, recorded_at
+                FROM judgment_commands LIMIT 1`,
+          );
+        }
+        try {
+          await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+          return '';
+        } catch (error) {
+          return (error as Error).name;
+        }
+      });
+      expect(rejection).toBe('ResponsibilityJudgmentConflictError');
+    },
+  );
+
+  it('rejects a coordinated pre-EffectEngine consumed Grant in journal and current state', async () => {
+    const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      await coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item) },
+        canonicalAuthority,
+      );
+      const event = state.storage.sql.exec<{ owner_cursor: number; payload_json: string }>(
+        `SELECT owner_cursor, payload_json FROM owner_domain_events
+          WHERE aggregate_kind = 'authority_grant'`,
+      ).one();
+      const exhausted = {
+        ...JSON.parse(event.payload_json),
+        state: 'exhausted',
+        usesConsumed: 1,
+        nextUseIndex: 2,
+      };
+      state.storage.sql.exec(
+        'UPDATE owner_domain_events SET payload_json = ? WHERE owner_cursor = ?',
+        JSON.stringify(exhausted),
+        event.owner_cursor,
+      );
+      state.storage.sql.exec(
+        `UPDATE authority_grants
+            SET grant_json = ?, state = 'exhausted', uses_consumed = 1, next_use_index = 2`,
+        JSON.stringify(exhausted),
+      );
+      try {
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+        return '';
+      } catch (error) {
+        return (error as Error).name;
+      }
+    });
+    expect(rejection).toBe('ResponsibilityJudgmentConflictError');
+  });
+
+  it('rejects legacy Decision assurance even when journal and current state agree', async () => {
+    const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      await coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item, 'refuse_schedule') },
+        canonicalAuthority,
+      );
+      const event = state.storage.sql.exec<{ owner_cursor: number; payload_json: string }>(
+        `SELECT owner_cursor, payload_json FROM owner_domain_events
+          WHERE aggregate_kind = 'judgment_decision'`,
+      ).one();
+      const legacy = { ...JSON.parse(event.payload_json), authAssurance: 'legacy_unverified' };
+      state.storage.sql.exec(
+        'UPDATE owner_domain_events SET payload_json = ? WHERE owner_cursor = ?',
+        JSON.stringify(legacy),
+        event.owner_cursor,
+      );
+      state.storage.sql.exec(
+        'UPDATE judgment_decisions SET decision_json = ?',
+        JSON.stringify(legacy),
+      );
+      try {
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+        return '';
+      } catch (error) {
+        return (error as Error).name;
+      }
+    });
+    expect(rejection).toBe('ResponsibilityJudgmentConflictError');
+  });
+
+  it('rejects a coordinated refusal Decision at request expiry', async () => {
+    const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      await coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item, 'refuse_schedule') },
+        canonicalAuthority,
+      );
+      const decidedAt = item.request.expiresAt;
+      const decisionEvent = state.storage.sql.exec<{
+        owner_cursor: number; payload_json: string;
+      }>(
+        `SELECT owner_cursor, payload_json FROM owner_domain_events
+          WHERE aggregate_kind = 'judgment_decision'`,
+      ).one();
+      const decision = { ...JSON.parse(decisionEvent.payload_json), decidedAt };
+      state.storage.sql.exec(
+        `UPDATE owner_domain_events SET payload_json = ?, occurred_at = ?
+          WHERE owner_cursor = ?`,
+        JSON.stringify(decision), decidedAt, decisionEvent.owner_cursor,
+      );
+      state.storage.sql.exec(
+        'UPDATE judgment_decisions SET decision_json = ?, decided_at = ?',
+        JSON.stringify(decision), decidedAt,
+      );
+      const answeredEvent = state.storage.sql.exec<{
+        owner_cursor: number; payload_json: string;
+      }>(
+        `SELECT owner_cursor, payload_json FROM owner_domain_events
+          WHERE event_type = 'judgment_request.answered'`,
+      ).one();
+      const answeredPayload = JSON.parse(answeredEvent.payload_json);
+      answeredPayload.request = { ...answeredPayload.request, updatedAt: decidedAt };
+      answeredPayload.answerProof = { ...answeredPayload.answerProof, recordedAt: decidedAt };
+      answeredPayload.displayedRequestDigest = `sha256:${await sha256Hex(
+        canonicalizeJudgmentRequestV05ForDigest(answeredPayload.request),
+      )}`;
+      state.storage.sql.exec(
+        `UPDATE owner_domain_events SET payload_json = ?, occurred_at = ?
+          WHERE owner_cursor = ?`,
+        JSON.stringify(answeredPayload), decidedAt, answeredEvent.owner_cursor,
+      );
+      state.storage.sql.exec(
+        `UPDATE judgment_requests
+            SET request_json = ?, displayed_request_digest = ?, updated_at = ?`,
+        canonicalizeJudgmentRequestV05ForDigest(answeredPayload.request),
+        answeredPayload.displayedRequestDigest,
+        decidedAt,
+      );
+      state.storage.sql.exec(
+        'UPDATE judgment_commands SET recorded_at = ?',
+        decidedAt,
+      );
+      const projection = state.storage.sql.exec<{
+        owner_cursor: number; item_json: string;
+      }>(
+        'SELECT owner_cursor, item_json FROM judgment_projection WHERE owner_cursor = ?',
+        answeredEvent.owner_cursor,
+      ).one();
+      state.storage.sql.exec(
+        'UPDATE judgment_projection SET item_json = ? WHERE owner_cursor = ?',
+        JSON.stringify({
+          ...JSON.parse(projection.item_json),
+          request: answeredPayload.request,
+          displayedRequestDigest: answeredPayload.displayedRequestDigest,
+        }),
+        projection.owner_cursor,
+      );
+      try {
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+        return '';
+      } catch (error) {
+        return (error as Error).name;
+      }
+    });
+    expect(rejection).toBe('ResponsibilityJudgmentConflictError');
+  });
+
+  it('rejects a coordinated Grant whose update time differs from its issue Decision', async () => {
+    const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      await coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item) },
+        canonicalAuthority,
+      );
+      const event = state.storage.sql.exec<{ owner_cursor: number; payload_json: string }>(
+        `SELECT owner_cursor, payload_json FROM owner_domain_events
+          WHERE aggregate_kind = 'authority_grant'`,
+      ).one();
+      const grant = {
+        ...JSON.parse(event.payload_json),
+        updatedAt: '2026-08-16T10:00:00.001Z',
+      };
+      state.storage.sql.exec(
+        'UPDATE owner_domain_events SET payload_json = ? WHERE owner_cursor = ?',
+        JSON.stringify(grant), event.owner_cursor,
+      );
+      state.storage.sql.exec(
+        'UPDATE authority_grants SET grant_json = ?, updated_at = ?',
+        JSON.stringify(grant), grant.updatedAt,
+      );
+      try {
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+        return '';
+      } catch (error) {
+        return (error as Error).name;
+      }
+    });
+    expect(rejection).toBe('ResponsibilityJudgmentConflictError');
+  });
+
+  it('rejects a coordinated expired transition recorded before request expiry', async () => {
+    const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      let now = '2026-08-16T10:00:00.000Z';
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => now,
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      now = item.request.expiresAt;
+      await expect(coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item) },
+        canonicalAuthority,
+      )).rejects.toMatchObject({ name: 'ResponsibilityJudgmentConflictError' });
+      const terminalEvent = state.storage.sql.exec<{
+        owner_cursor: number; payload_json: string;
+      }>(
+        `SELECT owner_cursor, payload_json FROM owner_domain_events
+          WHERE event_type = 'judgment_request.expired'`,
+      ).one();
+      const payload = JSON.parse(terminalEvent.payload_json);
+      payload.request = {
+        ...payload.request,
+        updatedAt: '2026-08-16T10:29:59.999Z',
+      };
+      payload.displayedRequestDigest = `sha256:${await sha256Hex(
+        canonicalizeJudgmentRequestV05ForDigest(payload.request),
+      )}`;
+      state.storage.sql.exec(
+        `UPDATE owner_domain_events SET payload_json = ?, occurred_at = ?
+          WHERE owner_cursor = ?`,
+        JSON.stringify(payload), payload.request.updatedAt, terminalEvent.owner_cursor,
+      );
+      state.storage.sql.exec(
+        `UPDATE judgment_requests
+            SET request_json = ?, displayed_request_digest = ?, updated_at = ?`,
+        canonicalizeJudgmentRequestV05ForDigest(payload.request),
+        payload.displayedRequestDigest,
+        payload.request.updatedAt,
+      );
+      const projection = state.storage.sql.exec<{ item_json: string }>(
+        'SELECT item_json FROM judgment_projection WHERE owner_cursor = ?',
+        terminalEvent.owner_cursor,
+      ).one();
+      state.storage.sql.exec(
+        'UPDATE judgment_projection SET item_json = ? WHERE owner_cursor = ?',
+        JSON.stringify({
+          ...JSON.parse(projection.item_json),
+          request: payload.request,
+          displayedRequestDigest: payload.displayedRequestDigest,
+        }),
+        terminalEvent.owner_cursor,
+      );
+      try {
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
         return '';
       } catch (error) {
         return (error as Error).name;
@@ -1165,7 +1664,7 @@ describe('JudgmentAuthority Coordinator', () => {
           );
         }
         try {
-          coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+          await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
           return '';
         } catch (error) {
           return (error as Error).name;
@@ -1231,7 +1730,7 @@ describe('JudgmentAuthority Coordinator', () => {
           );
         }
         try {
-          coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+          await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
           return '';
         } catch (error) {
           return (error as Error).name;
@@ -1315,7 +1814,7 @@ describe('JudgmentAuthority Coordinator', () => {
         );
       }
       try {
-        coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+        await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
         return '';
       } catch (error) {
         return (error as Error).name;
@@ -1547,6 +2046,108 @@ describe('JudgmentAuthority Coordinator', () => {
     });
   });
 
+  it.each(['{', '{}'])(
+    'normalizes malformed judgment projection JSON to a judgment conflict: %s',
+    async (itemJson) => {
+      const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
+        let id = 0;
+        const coordinator = new WaldoCoordinator(state.storage, {
+          now: () => '2026-08-16T10:00:00.000Z',
+          newId: (kind) => `${kind}_judgment_${++id}`,
+          sha256Hex,
+        });
+        const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+        await coordinator.createTrustedJudgmentRequestV05(
+          proposal(captured.workUnits[0]!), canonicalAuthority,
+        );
+        state.storage.sql.exec('UPDATE judgment_projection SET item_json = ?', itemJson);
+        try {
+          await coordinator.readJudgmentProjectionV05({
+            routedOwnerId: authority.ownerId,
+            query: { protocolVersion: '0.5', fromExclusiveCursor: 0, limit: 1 },
+          }, canonicalAuthority);
+          return '';
+        } catch (error) {
+          return (error as Error).name;
+        }
+      });
+      expect(rejection).toBe('ResponsibilityJudgmentConflictError');
+    },
+  );
+
+  it.each(['event', 'decoded_byte'] as const)(
+    'accepts the exact judgment replay %s limit and rolls back the next write',
+    async (limitKind) => {
+      const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+        let id = 0;
+        const baseDependencies: CoordinatorDependencies = {
+          now: () => '2026-08-16T10:00:00.000Z',
+          newId: (kind) => `${kind}_judgment_${++id}`,
+          sha256Hex,
+        };
+        const coordinator = new WaldoCoordinator(state.storage, baseDependencies);
+        const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+        const item = await coordinator.createTrustedJudgmentRequestV05(
+          proposal(captured.workUnits[0]!), canonicalAuthority,
+        );
+        const requestEventBytes = new TextEncoder().encode(
+          state.storage.sql.exec<{ payload_json: string }>(
+            `SELECT payload_json FROM owner_domain_events
+              WHERE aggregate_kind = 'judgment_request'`,
+          ).one().payload_json,
+        ).byteLength;
+        const limited = new WaldoCoordinator(state.storage, {
+          ...baseDependencies,
+          ...(limitKind === 'event'
+            ? { judgmentReplayEventLimit: 1 }
+            : { judgmentReplayDecodedByteLimit: requestEventBytes }),
+        });
+        const replay = await limited.replayJudgmentsV05(
+          authority.ownerId,
+          canonicalAuthority,
+        );
+        let rejection = '';
+        try {
+          await limited.answerAuthorizedJudgmentV05(
+            { routedOwnerId: authority.ownerId, request: answerFor(item) },
+            canonicalAuthority,
+          );
+        } catch (error) {
+          rejection = (error as Error).name;
+        }
+        return {
+          replayRequests: replay.requests.length,
+          rejection,
+          request: state.storage.sql.exec<{ revision: number; state: string }>(
+            'SELECT revision, state FROM judgment_requests',
+          ).one(),
+          events: state.storage.sql.exec<{ count: number }>(
+            `SELECT count(*) AS count FROM owner_domain_events
+              WHERE schema_version = '0.5'`,
+          ).one().count,
+          decisions: state.storage.sql.exec<{ count: number }>(
+            'SELECT count(*) AS count FROM judgment_decisions',
+          ).one().count,
+          grants: state.storage.sql.exec<{ count: number }>(
+            'SELECT count(*) AS count FROM authority_grants',
+          ).one().count,
+          commands: state.storage.sql.exec<{ count: number }>(
+            'SELECT count(*) AS count FROM judgment_commands',
+          ).one().count,
+        };
+      });
+      expect(proof).toEqual({
+        replayRequests: 1,
+        rejection: 'ResponsibilityJudgmentConflictError',
+        request: { revision: 1, state: 'open' },
+        events: 1,
+        decisions: 0,
+        grants: 0,
+        commands: 0,
+      });
+    },
+  );
+
   it('rejects a limit-one projection row whose JSON cursor could skip the SQL chain', async () => {
     const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
       let id = 0;
@@ -1703,7 +2304,7 @@ describe('JudgmentAuthority Coordinator', () => {
         `UPDATE judgment_projection_state
             SET snapshot_id = 'snapshot_corrupt', snapshot_base_cursor = 5`,
       );
-      coordinator.rebuildJudgmentProjectionV05(authority.ownerId, canonicalAuthority);
+      await coordinator.rebuildJudgmentProjectionV05(authority.ownerId, canonicalAuthority);
       let replacedRejection = '';
       try {
         await coordinator.readJudgmentProjectionV05({

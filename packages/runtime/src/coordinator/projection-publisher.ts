@@ -1,5 +1,8 @@
 import {
   authorityGrantV05Schema,
+  canonicalizeJudgmentRequestV05ForDigest,
+  iso8601Schema,
+  judgmentAnswerResultV05Schema,
   judgmentDecisionV05Schema,
   judgmentProjectionItemV05Schema,
   judgmentProjectionPageUtf8ByteLengthV05,
@@ -7,7 +10,9 @@ import {
   judgmentRequestV05Schema,
   MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05,
   protocolDigestSchema,
+  protocolIdSchema,
   type JudgmentProjectionPageV05,
+  type JudgmentAnswerResultV05,
   type JudgmentRequestV05,
 } from '@waldo/contracts';
 import {
@@ -29,28 +34,78 @@ export type StoredOwnerEventV05 = Readonly<{
   aggregate_id: string;
   revision: number;
   event_type: string;
+  occurred_at: string;
   payload_json: string;
 }>;
+
+export type JudgmentRequestDigestProofV05 = Readonly<{
+  ownerCursor: number;
+  canonicalRequestMaterial: string;
+  digest: `sha256:${string}`;
+}>;
+
+export const DEFAULT_JUDGMENT_REPLAY_EVENT_LIMIT = 10_000;
+export const DEFAULT_JUDGMENT_REPLAY_DECODED_BYTE_LIMIT = 8 * 1_024 * 1_024;
+const JUDGMENT_REPLAY_BATCH_SIZE = 256;
+const KNOWN_JUDGMENT_AGGREGATE_KINDS = [
+  'judgment_request', 'judgment_decision', 'authority_grant',
+] as const;
 
 export type JudgmentRequestEventPayloadV05 = Readonly<{
   request: JudgmentRequestV05;
   displayedRequestDigest: `sha256:${string}`;
   admissionBasis: unknown;
+  answerProof: JudgmentAnswerCommandProofV05 | null;
+}>;
+
+export type JudgmentAnswerCommandProofV05 = Readonly<{
+  requestId: string;
+  ownerId: string;
+  requestDigest: `sha256:${string}`;
+  result: JudgmentAnswerResultV05;
+  recordedAt: string;
 }>;
 
 const REQUEST_EVENT_PAYLOAD_KEYS = [
-  'request', 'displayedRequestDigest', 'admissionBasis',
+  'request', 'displayedRequestDigest', 'admissionBasis', 'answerProof',
 ] as const;
+
+const ANSWER_PROOF_KEYS = [
+  'requestId', 'ownerId', 'requestDigest', 'result', 'recordedAt',
+] as const;
+
+function parseJudgmentAnswerCommandProofV05(
+  value: unknown,
+): JudgmentAnswerCommandProofV05 | null {
+  if (value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new ResponsibilityJudgmentConflictError();
+  }
+  const candidate = value as Record<string, unknown>;
+  if (JSON.stringify(Object.keys(candidate).sort()) !==
+      JSON.stringify([...ANSWER_PROOF_KEYS].sort())) {
+    throw new ResponsibilityJudgmentConflictError();
+  }
+  return Object.freeze({
+    requestId: protocolIdSchema.parse(candidate.requestId),
+    ownerId: protocolIdSchema.parse(candidate.ownerId),
+    requestDigest: protocolDigestSchema.parse(candidate.requestDigest) as `sha256:${string}`,
+    result: judgmentAnswerResultV05Schema.parse(candidate.result),
+    recordedAt: iso8601Schema.parse(candidate.recordedAt),
+  });
+}
 
 export function serializeJudgmentRequestEventPayloadV05(
   request: JudgmentRequestV05,
   displayedRequestDigest: `sha256:${string}`,
   admissionBasis: unknown,
+  answerProof: JudgmentAnswerCommandProofV05 | null,
 ): string {
   return JSON.stringify({
     request: judgmentRequestV05Schema.parse(request),
     displayedRequestDigest: protocolDigestSchema.parse(displayedRequestDigest),
     admissionBasis,
+    answerProof,
   });
 }
 
@@ -73,6 +128,7 @@ export function parseJudgmentRequestEventPayloadV05(
         candidate.displayedRequestDigest,
       ) as `sha256:${string}`,
       admissionBasis: candidate.admissionBasis,
+      answerProof: parseJudgmentAnswerCommandProofV05(candidate.answerProof),
     });
   } catch (error) {
     if (error instanceof ResponsibilityJudgmentConflictError) throw error;
@@ -101,7 +157,8 @@ export function validateJudgmentRequestEventV05(
     request.ownerId !== event.owner_id ||
     request.revision !== event.revision ||
     event.event_type !== expectedEventType ||
-    (request.state === 'answered') !== (request.decisionId !== null)
+    (request.state === 'answered') !== (request.decisionId !== null) ||
+    (request.state === 'answered') !== (payload.answerProof !== null)
   ) {
     throw new ResponsibilityJudgmentConflictError();
   }
@@ -115,7 +172,13 @@ export class ProjectionPublisher {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly newSnapshotId: () => string,
+    private readonly replayEventLimit = DEFAULT_JUDGMENT_REPLAY_EVENT_LIMIT,
+    private readonly replayDecodedByteLimit = DEFAULT_JUDGMENT_REPLAY_DECODED_BYTE_LIMIT,
   ) {
+    if (!Number.isSafeInteger(replayEventLimit) || replayEventLimit < 1 ||
+        !Number.isSafeInteger(replayDecodedByteLimit) || replayDecodedByteLimit < 1) {
+      throw new Error('ProjectionPublisher requires positive replay capacity limits');
+    }
     this.events = new OwnerEventLog(storage);
   }
 
@@ -129,15 +192,60 @@ export class ProjectionPublisher {
     }
     const event = this.storage.sql.exec<StoredOwnerEventV05>(
       `SELECT owner_cursor, schema_version, owner_id, aggregate_kind, aggregate_id,
-              revision, event_type, payload_json
+              revision, event_type, occurred_at, payload_json
          FROM owner_domain_events WHERE owner_cursor = ?`,
       input.cursor,
     ).toArray()[0];
     if (event === undefined || event.owner_id !== input.ownerId) {
       throw new ResponsibilityJudgmentConflictError();
     }
+    this.readRelevantEventsInCurrentTransaction(input.ownerId);
     this.ensureSnapshotInCurrentTransaction(input.ownerId, input.at);
     return this.publishEventInCurrentTransaction(event);
+  }
+
+  readRelevantEventsInCurrentTransaction(ownerId: string): readonly StoredOwnerEventV05[] {
+    const events: StoredOwnerEventV05[] = [];
+    let afterCursor = 0;
+    let decodedBytes = 0;
+    while (true) {
+      const remaining = this.replayEventLimit - events.length;
+      const rows = this.storage.sql.exec<StoredOwnerEventV05>(
+        `SELECT owner_cursor, schema_version, owner_id, aggregate_kind, aggregate_id,
+                revision, event_type, occurred_at, payload_json
+           FROM owner_domain_events
+          WHERE owner_cursor > ? AND (
+            schema_version = '0.5' OR
+            aggregate_kind IN ('judgment_request', 'judgment_decision', 'authority_grant')
+          )
+          ORDER BY owner_cursor ASC LIMIT ?`,
+        afterCursor,
+        Math.min(JUDGMENT_REPLAY_BATCH_SIZE, remaining + 1),
+      ).toArray();
+      if (rows.length === 0) break;
+      for (const event of rows) {
+        if (events.length >= this.replayEventLimit) {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+        if (
+          event.owner_id !== ownerId || event.owner_cursor <= afterCursor ||
+          event.schema_version !== '0.5' ||
+          !KNOWN_JUDGMENT_AGGREGATE_KINDS.includes(
+            event.aggregate_kind as typeof KNOWN_JUDGMENT_AGGREGATE_KINDS[number],
+          )
+        ) {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+        decodedBytes += new TextEncoder().encode(event.payload_json).byteLength;
+        if (decodedBytes > this.replayDecodedByteLimit) {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+        events.push(event);
+        afterCursor = event.owner_cursor;
+      }
+      if (rows.length < Math.min(JUDGMENT_REPLAY_BATCH_SIZE, remaining + 1)) break;
+    }
+    return Object.freeze(events);
   }
 
   rebuildInCurrentTransaction(ownerId: string, at: string): Readonly<{
@@ -146,11 +254,7 @@ export class ProjectionPublisher {
     itemCount: number;
   }> {
     const highWaterCursor = this.events.readHighWater(ownerId);
-    const events = this.storage.sql.exec<StoredOwnerEventV05>(
-      `SELECT owner_cursor, schema_version, owner_id, aggregate_kind, aggregate_id,
-              revision, event_type, payload_json
-         FROM owner_domain_events ORDER BY owner_cursor ASC`,
-    ).toArray();
+    const events = this.readRelevantEventsInCurrentTransaction(ownerId);
     const items: JudgmentProjectionItemV05[] = [];
     let priorCursor = 0;
     for (const event of events) {
@@ -161,8 +265,6 @@ export class ProjectionPublisher {
       const item = this.itemFromEvent(event);
       if (item !== undefined) items.push(item);
     }
-    if (priorCursor !== highWaterCursor) throw new ResponsibilityJudgmentConflictError();
-
     const snapshotId = this.newSnapshotId();
     this.storage.sql.exec('DELETE FROM judgment_projection');
     this.storage.sql.exec('DELETE FROM judgment_projection_state');
@@ -178,6 +280,60 @@ export class ProjectionPublisher {
       this.insertItemInCurrentTransaction(ownerId, item);
     }
     return Object.freeze({ snapshotId, highWaterCursor, itemCount: items.length });
+  }
+
+  assertDigestProofsInCurrentTransaction(
+    ownerId: string,
+    proofs: readonly JudgmentRequestDigestProofV05[],
+    allowMissingProjectionRows: boolean,
+  ): void {
+    const proofByCursor = new Map(proofs.map((proof) => [proof.ownerCursor, proof]));
+    const expectedItems = new Map<number, JudgmentProjectionItemV05>();
+    for (const event of this.readRelevantEventsInCurrentTransaction(ownerId)) {
+      if (event.aggregate_kind !== 'judgment_request') continue;
+      const payload = validateJudgmentRequestEventV05(event);
+      const proof = proofByCursor.get(event.owner_cursor);
+      if (
+        proof === undefined ||
+        proof.canonicalRequestMaterial !==
+          canonicalizeJudgmentRequestV05ForDigest(payload.request) ||
+        proof.digest !== payload.displayedRequestDigest
+      ) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      expectedItems.set(event.owner_cursor, judgmentProjectionItemV05Schema.parse({
+        cursor: event.owner_cursor,
+        itemType: 'judgment_request',
+        request: payload.request,
+        displayedRequestDigest: proof.digest,
+      }));
+    }
+    if (expectedItems.size !== proofs.length) throw new ResponsibilityJudgmentConflictError();
+    const rows = this.storage.sql.exec<{
+      owner_cursor: number; owner_id: string; item_json: string;
+    }>(
+      `SELECT owner_cursor, owner_id, item_json FROM judgment_projection
+        ORDER BY owner_cursor LIMIT ?`,
+      expectedItems.size + 1,
+    ).toArray();
+    if (!allowMissingProjectionRows && rows.length !== expectedItems.size) {
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    for (const row of rows) {
+      const expected = expectedItems.get(row.owner_cursor);
+      let item: JudgmentProjectionItemV05;
+      try {
+        item = judgmentProjectionItemV05Schema.parse(JSON.parse(row.item_json));
+      } catch {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      if (
+        expected === undefined || row.owner_id !== ownerId ||
+        JSON.stringify(item) !== JSON.stringify(expected)
+      ) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+    }
   }
 
   readInCurrentTransaction(input: Readonly<{
@@ -220,7 +376,12 @@ export class ProjectionPublisher {
     ).toArray();
     let priorCursor = input.fromExclusiveCursor;
     const items = rows.map((row) => {
-      const item = judgmentProjectionItemV05Schema.parse(JSON.parse(row.item_json));
+      let item: JudgmentProjectionItemV05;
+      try {
+        item = judgmentProjectionItemV05Schema.parse(JSON.parse(row.item_json));
+      } catch {
+        throw new ResponsibilityJudgmentConflictError();
+      }
       if (
         row.owner_id !== input.ownerId ||
         item.request.ownerId !== input.ownerId ||

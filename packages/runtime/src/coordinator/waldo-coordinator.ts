@@ -88,6 +88,7 @@ import {
 } from './judgment-authority-module';
 import {
   ProjectionPublisher as JudgmentProjectionPublisher,
+  type JudgmentRequestDigestProofV05,
   type JudgmentProjectionItemV05,
 } from './projection-publisher';
 
@@ -330,6 +331,8 @@ export type CoordinatorDependencies = Readonly<{
       'judgment_decision' | 'authority_grant',
   ) => string;
   sha256Hex: (value: string) => Promise<string>;
+  judgmentReplayEventLimit?: number;
+  judgmentReplayDecodedByteLimit?: number;
   resolveJudgmentAdmissionV05?: (input: Readonly<{
     ownerId: string;
     subject: JudgmentRequestV05['subject'];
@@ -417,6 +420,8 @@ export class WaldoCoordinator {
     this.#judgmentProjections = new JudgmentProjectionPublisher(
       storage,
       () => dependencies.newId('snapshot'),
+      dependencies.judgmentReplayEventLimit,
+      dependencies.judgmentReplayDecodedByteLimit,
     );
     this.#judgments = new JudgmentAuthorityModule(
       storage,
@@ -819,26 +824,69 @@ export class WaldoCoordinator {
     return committed;
   }
 
-  replayJudgmentsV05(
+  async #buildJudgmentRequestDigestProofsV05(
+    routedOwnerId: string,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ): Promise<readonly JudgmentRequestDigestProofV05[]> {
+    const inputs = this.#storage.transactionSync(() => {
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        this.#deps.now(),
+      );
+      if (authority.ownerId !== routedOwnerId ||
+          authority.authAssurance === 'legacy_unverified') {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      return this.#judgments.collectRequestDigestInputsInCurrentTransaction(authority.ownerId);
+    });
+    const proofs: JudgmentRequestDigestProofV05[] = [];
+    for (const input of inputs) {
+      proofs.push(Object.freeze({
+        ...input,
+        digest: `sha256:${await this.#deps.sha256Hex(input.canonicalRequestMaterial)}`,
+      }));
+    }
+    return Object.freeze(proofs);
+  }
+
+  async replayJudgmentsV05(
     routedOwnerId: string,
     canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
   ) {
+    const digestProofs = await this.#buildJudgmentRequestDigestProofsV05(
+      routedOwnerId,
+      canonicalAuthority,
+    );
     return this.#storage.transactionSync(() => {
       const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
         canonicalAuthority,
         this.#deps.now(),
       );
-      if (authority.ownerId !== routedOwnerId) {
+      if (authority.ownerId !== routedOwnerId ||
+          authority.authAssurance === 'legacy_unverified') {
         throw new ResponsibilityOwnerRootMismatchError();
       }
-      return this.#judgments.replayInCurrentTransaction(authority.ownerId);
+      const replay = this.#judgments.replayInCurrentTransaction(
+        authority.ownerId,
+        digestProofs,
+      );
+      this.#judgmentProjections.assertDigestProofsInCurrentTransaction(
+        authority.ownerId,
+        digestProofs,
+        false,
+      );
+      return replay;
     });
   }
 
-  rebuildJudgmentProjectionV05(
+  async rebuildJudgmentProjectionV05(
     routedOwnerId: string,
     canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
   ) {
+    const digestProofs = await this.#buildJudgmentRequestDigestProofsV05(
+      routedOwnerId,
+      canonicalAuthority,
+    );
     return this.#storage.transactionSync(() => {
       const at = this.#deps.now();
       const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
@@ -849,7 +897,12 @@ export class WaldoCoordinator {
           authority.authAssurance === 'legacy_unverified') {
         throw new ResponsibilityOwnerRootMismatchError();
       }
-      this.#judgments.replayInCurrentTransaction(authority.ownerId);
+      this.#judgments.replayInCurrentTransaction(authority.ownerId, digestProofs);
+      this.#judgmentProjections.assertDigestProofsInCurrentTransaction(
+        authority.ownerId,
+        digestProofs,
+        true,
+      );
       return this.#judgmentProjections.rebuildInCurrentTransaction(authority.ownerId, at);
     });
   }
