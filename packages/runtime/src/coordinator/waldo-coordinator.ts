@@ -1809,9 +1809,10 @@ export class WaldoCoordinator {
       canonicalizeJudgmentRequestV05ForDigest(terminalRequest),
     )}` as const;
     this.#storage.transactionSync(() => {
+      const commitAt = this.#deps.now();
       const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
         canonicalAuthority,
-        at,
+        commitAt,
       );
       if (authority.ownerId !== openRequest.ownerId) {
         throw new ResponsibilityOwnerRootMismatchError();

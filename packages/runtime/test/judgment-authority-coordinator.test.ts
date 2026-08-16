@@ -412,6 +412,67 @@ describe('JudgmentAuthority Coordinator', () => {
     });
   });
 
+  it('does not terminalize after the authenticated session expires during terminal hashing', async () => {
+    const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      let armed = false;
+      let answerClockReads = 0;
+      const sessionExpiry = '2026-08-16T10:15:00.000Z';
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => {
+          if (!armed) return '2026-08-16T10:00:00.000Z';
+          answerClockReads += 1;
+          return answerClockReads >= 4
+            ? sessionExpiry
+            : '2026-08-16T10:14:59.999Z';
+        },
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      state.storage.sql.exec(
+        'UPDATE presence_sessions SET expires_at = ? WHERE authenticated_session_id = ?',
+        sessionExpiry,
+        canonicalAuthority.authenticatedSessionId,
+      );
+      state.storage.sql.exec(
+        `UPDATE work_units SET responsibility = 'Changed after display' WHERE id = ?`,
+        item.request.subject.id,
+      );
+      armed = true;
+      let rejection = '';
+      try {
+        await coordinator.answerAuthorizedJudgmentV05(
+          { routedOwnerId: authority.ownerId, request: answerFor(item) },
+          canonicalAuthority,
+        );
+      } catch (error) {
+        rejection = (error as Error).name;
+      }
+      return {
+        rejection,
+        request: state.storage.sql.exec<{ revision: number; state: string }>(
+          'SELECT revision, state FROM judgment_requests',
+        ).one(),
+        highWater: state.storage.sql.exec<{ high_water_cursor: number }>(
+          'SELECT high_water_cursor FROM owner_event_state WHERE root_key = 1',
+        ).one().high_water_cursor,
+        projectionRows: state.storage.sql.exec<{ count: number }>(
+          'SELECT count(*) AS count FROM judgment_projection',
+        ).one().count,
+      };
+    });
+    expect(proof).toEqual({
+      rejection: 'ResponsibilityAuthorityDeniedError',
+      request: { revision: 1, state: 'open' },
+      highWater: 3,
+      projectionRows: 1,
+    });
+  });
+
   it('does not create a request when requested authority expires during creation hashing', async () => {
     const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
       let id = 0;
