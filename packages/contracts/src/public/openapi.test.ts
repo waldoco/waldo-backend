@@ -4,6 +4,7 @@ import { responsibilityHttpRouteManifestV01 } from '../protocol/responsibility-h
 import { responsibilityJudgmentAuthorityHttpRouteManifestV05 } from '../protocol/responsibility-judgment-authority-http-v0-5';
 import { responsibilityExecutionHttpRouteManifestV04 } from '../protocol/responsibility-workunit-execution-http-v0-4';
 import { responsibilityClosureHttpRouteManifestV06 } from '../protocol/responsibility-closure-http-v0-6';
+import { acceptanceRecordRequestV06Schema } from '../protocol/responsibility-closure-v0-6';
 import { buildPublicOpenApiDocument } from './openapi';
 
 const forbiddenFragments = [
@@ -186,6 +187,7 @@ describe('public OpenAPI artifact', () => {
     expect(paths['/public/responsibilities/closure/acceptances']!.post!
       ['x-waldo-runtime-validation']).toEqual([
       'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'Verification references are strictly ordered by id after JSON-Schema uniqueness validation',
       'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
       'verifier identity differs from every exact Evidence producer identity',
       'release is a distinct owner disposition and never claims verified acceptance',
@@ -279,6 +281,27 @@ describe('public OpenAPI artifact', () => {
       payload: { evidence: [duplicateRef, duplicateRef] },
     })).toBe(false);
 
+    const validateAcceptance = new Ajv2020({ strict: true, allErrors: true }).compile(
+      acceptanceRequest,
+    );
+    const reversedAcceptance = {
+      protocolVersion: '0.6',
+      requestId: 'acceptance',
+      commandType: 'acceptance.record',
+      presenceRegistrationId: 'presence',
+      aggregate: { kind: 'outcome', id: 'outcome', expectedRevision: 1 },
+      payload: {
+        decision: 'accept',
+        verifications: [
+          { id: 'verification_b', revision: 1, digest: duplicateRef.digest },
+          { id: 'verification_a', revision: 1, digest: duplicateRef.digest },
+        ],
+        reasonRef: null,
+      },
+    };
+    expect(validateAcceptance(reversedAcceptance)).toBe(true);
+    expect(acceptanceRecordRequestV06Schema.safeParse(reversedAcceptance).success).toBe(false);
+
     expect(paths['/public/responsibilities/closure/acceptance-checks']!.post!
       ['x-waldo-runtime-validation']).toEqual([
       'target selector is owner-bound and reread to exact canonical subject revisions and digests',
@@ -298,6 +321,7 @@ describe('public OpenAPI artifact', () => {
     expect(paths['/public/responsibilities/closure/acceptances']!.post!
       ['x-waldo-runtime-validation']).toEqual([
       'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'Verification references are strictly ordered by id after JSON-Schema uniqueness validation',
       'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
       'verifier identity differs from every exact Evidence producer identity',
       'release is a distinct owner disposition and never claims verified acceptance',

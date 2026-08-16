@@ -28,48 +28,16 @@ import {
   type ClosureSha256HexV06,
 } from './responsibility-closure-v0-6';
 import { canonicalizeProtocolJson } from './responsibility-handshake-v0-1';
+import { addResponsibilityClosureUniqueItemsV06 } from './responsibility-closure-v0-6-json-schema';
 
 const file = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
 
-const uniqueClosureArrayPropertiesV06 = new Set([
-  'acceptanceChecks',
-  'evidence',
-  'evidenceSets',
-  'records',
-  'verifications',
-]);
-
 function schema(value: z.ZodType, name: string): object {
-  const generated = z.toJSONSchema(value, {
+  const generated = addResponsibilityClosureUniqueItemsV06(z.toJSONSchema(value, {
     target: 'draft-2020-12',
     io: 'input',
     reused: 'ref',
-  }) as Record<string, unknown>;
-  const visit = (candidate: unknown): void => {
-    if (Array.isArray(candidate)) {
-      for (const child of candidate) visit(child);
-      return;
-    }
-    if (typeof candidate !== 'object' || candidate === null) return;
-    const object = candidate as Record<string, unknown>;
-    const properties = object.properties;
-    if (typeof properties === 'object' && properties !== null) {
-      for (const [propertyName, property] of Object.entries(
-        properties as Record<string, unknown>,
-      )) {
-        if (
-          uniqueClosureArrayPropertiesV06.has(propertyName) &&
-          typeof property === 'object' &&
-          property !== null &&
-          (property as Record<string, unknown>).type === 'array'
-        ) {
-          (property as Record<string, unknown>).uniqueItems = true;
-        }
-      }
-    }
-    for (const child of Object.values(object)) visit(child);
-  };
-  visit(generated);
+  }) as Record<string, unknown>);
   return {
     ...generated,
     $id: `urn:waldo:protocol:responsibility-closure:0.6:${name}`,
@@ -583,6 +551,8 @@ export function buildResponsibilityClosureV06Bundle(
         mode: 'explicit_owner_only',
         acceptRequires:
           'complete_active_check_set_with_exact_current_evidence_and_passed_independent_verification',
+        completenessAuthority:
+          'separate_transactional_reread_of_exact_canonical_active_acceptance_check_set',
         nonPassedDisposition: 'release',
       },
       targetingPolicy: {
@@ -596,9 +566,10 @@ export function buildResponsibilityClosureV06Bundle(
       verificationPolicy: {
         independence: closureVerifierIndependenceRuleV06,
         evidence: 'exact_current_admitted_owner_subject_check_records',
+        observationUniqueness: 'binding_wide_canonical_kind_id_revision_digest',
       },
       publicCommandSafety: {
-        recursiveEnumerableUnsafeKeys: ['__proto__', 'prototype', 'constructor'],
+        recursiveOwnUnsafeKeys: ['__proto__', 'prototype', 'constructor'],
         jsonSchemaUniqueItems: true,
         runtimeOrdering: 'strict_by_id',
       },

@@ -20,8 +20,10 @@ describe('generate responsibility closure v0.6 fixtures', () => {
     ))).digest('hex');
     const hashHex = (value: string): string => createHash('sha256').update(value).digest('hex');
     const bundle = buildResponsibilityClosureV06Bundle(hashHex, sourceSha256);
+    const binding = JSON.parse(bundle['verified-acceptance-binding.valid.json']!);
     expect(() => createVerifiedAcceptanceBindingVerifierV06(hashHex)(
-      JSON.parse(bundle['verified-acceptance-binding.valid.json']!),
+      binding,
+      binding.activeAcceptanceChecks,
     )).not.toThrow();
     expect(() => createClosureProjectionPageVerifierV06(hashHex)(
       JSON.parse(bundle['closure-projection-page.valid.json']!),

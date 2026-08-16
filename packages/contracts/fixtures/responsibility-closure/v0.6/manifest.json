@@ -6,7 +6,7 @@
   "proofLevel": "adapter_conformance_fixture",
   "source": {
     "path": "packages/contracts/src/protocol/responsibility-closure-v0-6.ts",
-    "sha256": "sha256:f5ee46f56bbd8aeebcb50889e949ee9e2558964afd5a01b61ebc0af77b67adab"
+    "sha256": "sha256:aa877b8aa294b022d84d111a996a1b8e0a47de1bd8d05c042aeb5b4937f05eff"
   },
   "fixturePayloadRootSha256": "sha256:11cf202643fe0a5e146d539540b6a8ed042d32446aa319b20b1bd1bb1b05cc69",
   "compatibilityWindow": {
@@ -47,6 +47,7 @@
   "acceptancePolicy": {
     "mode": "explicit_owner_only",
     "acceptRequires": "complete_active_check_set_with_exact_current_evidence_and_passed_independent_verification",
+    "completenessAuthority": "separate_transactional_reread_of_exact_canonical_active_acceptance_check_set",
     "nonPassedDisposition": "release"
   },
   "targetingPolicy": {
@@ -62,10 +63,11 @@
       "version": "verifier-producer-identity-v1",
       "requirement": "verifier_id_must_differ_from_every_evidence_producer_id"
     },
-    "evidence": "exact_current_admitted_owner_subject_check_records"
+    "evidence": "exact_current_admitted_owner_subject_check_records",
+    "observationUniqueness": "binding_wide_canonical_kind_id_revision_digest"
   },
   "publicCommandSafety": {
-    "recursiveEnumerableUnsafeKeys": [
+    "recursiveOwnUnsafeKeys": [
       "__proto__",
       "prototype",
       "constructor"

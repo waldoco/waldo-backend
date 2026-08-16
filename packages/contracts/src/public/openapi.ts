@@ -55,6 +55,9 @@ import {
   verificationResultV06Schema,
 } from '../protocol/responsibility-closure-v0-6';
 import {
+  addResponsibilityClosureUniqueItemsV06,
+} from '../protocol/responsibility-closure-v0-6-json-schema';
+import {
   responsibilityClosureHttpMediaTypeV06,
   responsibilityClosureHttpRouteManifestV06,
   type ResponsibilityClosureHttpRouteV06,
@@ -190,6 +193,7 @@ const operationMetadata = Object.freeze({
     retrySemantics: closureCommandRetrySemanticsV06,
     runtimeValidation: [
       'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'Verification references are strictly ordered by id after JSON-Schema uniqueness validation',
       'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
       'verifier identity differs from every exact Evidence producer identity',
       'release is a distinct owner disposition and never claims verified acceptance',
@@ -230,45 +234,6 @@ function stripGeneratedSchemaNoise(value: unknown): unknown {
 
 function schemaFor(schema: z.ZodType): JsonRecord {
   return stripGeneratedSchemaNoise(z.toJSONSchema(schema)) as JsonRecord;
-}
-
-const closureUniqueArrayProperties = new Set([
-  'acceptanceChecks',
-  'evidence',
-  'evidenceSets',
-  'records',
-  'verifications',
-]);
-
-function schemaForWithUniqueArrayProperties(
-  schema: z.ZodType,
-  propertyNames: ReadonlySet<string>,
-): JsonRecord {
-  const generated = schemaFor(schema);
-  const visit = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      for (const child of value) visit(child);
-      return;
-    }
-    if (typeof value !== 'object' || value === null) return;
-    const object = value as JsonRecord;
-    const properties = object.properties;
-    if (typeof properties === 'object' && properties !== null) {
-      for (const [name, property] of Object.entries(properties as JsonRecord)) {
-        if (
-          propertyNames.has(name) &&
-          typeof property === 'object' &&
-          property !== null &&
-          (property as JsonRecord).type === 'array'
-        ) {
-          (property as JsonRecord).uniqueItems = true;
-        }
-      }
-    }
-    for (const child of Object.values(object)) visit(child);
-  };
-  visit(generated);
-  return generated;
 }
 
 function schemaContent(
@@ -444,19 +409,16 @@ export function buildPublicOpenApiDocument(
         ),
         EvidenceAdmissionRequestV06: schemaFor(evidenceAdmissionRequestV06Schema),
         EvidenceAdmissionResultV06: schemaFor(evidenceAdmissionResultV06Schema),
-        VerificationRequestV06: schemaForWithUniqueArrayProperties(
-          verificationRequestV06Schema,
-          closureUniqueArrayProperties,
+        VerificationRequestV06: addResponsibilityClosureUniqueItemsV06(
+          schemaFor(verificationRequestV06Schema),
         ),
         VerificationResultV06: schemaFor(verificationResultV06Schema),
-        AcceptanceRecordRequestV06: schemaForWithUniqueArrayProperties(
-          acceptanceRecordRequestV06Schema,
-          closureUniqueArrayProperties,
+        AcceptanceRecordRequestV06: addResponsibilityClosureUniqueItemsV06(
+          schemaFor(acceptanceRecordRequestV06Schema),
         ),
         AcceptanceRecordResultV06: schemaFor(acceptanceRecordResultV06Schema),
-        ClosureProjectionPageV06: schemaForWithUniqueArrayProperties(
-          closureProjectionPageV06Schema,
-          closureUniqueArrayProperties,
+        ClosureProjectionPageV06: addResponsibilityClosureUniqueItemsV06(
+          schemaFor(closureProjectionPageV06Schema),
         ),
         ...Object.fromEntries(
           Object.entries(responsibilityHttpProblemSchemasV01).map(([status, schema]) => [

@@ -3279,6 +3279,7 @@
         },
         "x-waldo-runtime-validation": [
           "accept covers the exact server-derived complete active AcceptanceCheck set exactly once",
+          "Verification references are strictly ordered by id after JSON-Schema uniqueness validation",
           "every passed available Verification and current Evidence envelope is owner-subject-check and digest exact",
           "verifier identity differs from every exact Evidence producer identity",
           "release is a distinct owner disposition and never claims verified acceptance"

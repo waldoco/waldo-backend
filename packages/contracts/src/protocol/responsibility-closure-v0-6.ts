@@ -135,7 +135,7 @@ const closureCommandBaseV06Shape = {
 
 const unsafePublicCommandKeysV06 = ['__proto__', 'prototype', 'constructor'] as const;
 
-function containsEnumerableUnsafePublicCommandKeyV06(
+function containsOwnUnsafePublicCommandKeyV06(
   value: unknown,
   seen: WeakSet<object>,
 ): boolean {
@@ -143,18 +143,18 @@ function containsEnumerableUnsafePublicCommandKeyV06(
   if (seen.has(value)) return false;
   seen.add(value);
   for (const key of unsafePublicCommandKeysV06) {
-    if (Object.prototype.propertyIsEnumerable.call(value, key)) return true;
+    if (Object.prototype.hasOwnProperty.call(value, key)) return true;
   }
-  return Object.keys(value).some((key) =>
-    containsEnumerableUnsafePublicCommandKeyV06(
-      (value as Record<string, unknown>)[key],
-      seen,
-    ),
-  );
+  return Reflect.ownKeys(value).some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor
+      ? containsOwnUnsafePublicCommandKeyV06(descriptor.value, seen)
+      : false;
+  });
 }
 
-function rejectEnumerableUnsafePublicCommandKeysV06(value: unknown): unknown {
-  return containsEnumerableUnsafePublicCommandKeyV06(value, new WeakSet<object>())
+function rejectOwnUnsafePublicCommandKeysV06(value: unknown): unknown {
+  return containsOwnUnsafePublicCommandKeyV06(value, new WeakSet<object>())
     ? { rejectedUnsafePublicCommandKey: true }
     : value;
 }
@@ -231,7 +231,7 @@ const acceptanceCheckDeclarationRequestV06StructuralSchema = z.strictObject({
 });
 
 export const acceptanceCheckDeclarationRequestV06Schema = z.preprocess(
-  rejectEnumerableUnsafePublicCommandKeysV06,
+  rejectOwnUnsafePublicCommandKeysV06,
   acceptanceCheckDeclarationRequestV06StructuralSchema,
 );
 
@@ -270,7 +270,7 @@ const evidenceAdmissionRequestV06StructuralSchema = z.strictObject({
 });
 
 export const evidenceAdmissionRequestV06Schema = z.preprocess(
-  rejectEnumerableUnsafePublicCommandKeysV06,
+  rejectOwnUnsafePublicCommandKeysV06,
   evidenceAdmissionRequestV06StructuralSchema,
 );
 
@@ -382,7 +382,7 @@ const verificationRequestV06StructuralSchema = z.strictObject({
 });
 
 export const verificationRequestV06Schema = z.preprocess(
-  rejectEnumerableUnsafePublicCommandKeysV06,
+  rejectOwnUnsafePublicCommandKeysV06,
   verificationRequestV06StructuralSchema,
 );
 
@@ -442,7 +442,7 @@ const acceptanceRecordRequestV06StructuralSchema = z.strictObject({
 });
 
 export const acceptanceRecordRequestV06Schema = z.preprocess(
-  rejectEnumerableUnsafePublicCommandKeysV06,
+  rejectOwnUnsafePublicCommandKeysV06,
   acceptanceRecordRequestV06StructuralSchema,
 );
 
@@ -751,6 +751,19 @@ export const verifiedAcceptanceBindingV06Schema = z
         );
       }
     }
+    const seenObservationReferences = new Set<string>();
+    for (const [setIndex, evidenceSet] of binding.evidenceSets.entries()) {
+      for (const [recordIndex, evidence] of evidenceSet.records.entries()) {
+        const observationKey = canonicalizeProtocolJson(evidence.observation);
+        if (seenObservationReferences.has(observationKey)) {
+          issue(
+            ['evidenceSets', setIndex, 'records', recordIndex, 'observation'],
+            'canonical observation reference must be unique across the entire accepted binding',
+          );
+        }
+        seenObservationReferences.add(observationKey);
+      }
+    }
     const seenCheckIds = new Set<string>();
     for (const [index, verification] of binding.verifications.entries()) {
       const expectedRef = acceptanceVerificationRefs.get(verification.id);
@@ -799,6 +812,23 @@ export const verifiedAcceptanceBindingV06Schema = z
         issue(
           ['verifications', index, 'method'],
           'Verification method and version must match the exact current AcceptanceCheck',
+        );
+      }
+      if (
+        evidenceSet === undefined ||
+        check === undefined ||
+        evidenceSet.ownerId !== acceptance.ownerId ||
+        !sameProtocolValue(evidenceSet.subject, acceptance.subject) ||
+        evidenceSet.acceptanceCheck.id !== check.id ||
+        evidenceSet.acceptanceCheck.revision !== check.revision ||
+        evidenceSet.acceptanceCheck.digest !== check.digest ||
+        evidenceSet.acceptanceCheck.id !== verification.acceptanceCheck.id ||
+        evidenceSet.acceptanceCheck.revision !== verification.acceptanceCheck.revision ||
+        evidenceSet.acceptanceCheck.digest !== verification.acceptanceCheck.digest
+      ) {
+        issue(
+          ['evidenceSets'],
+          'Evidence-set envelope must bind the exact accepted owner, subject, active AcceptanceCheck, and Verification',
         );
       }
       if (
@@ -1007,11 +1037,49 @@ export class VerifiedAcceptanceDigestMismatchErrorV06 extends Error {
 
 export function createVerifiedAcceptanceBindingVerifierV06(
   sha256Hex: ClosureSha256HexV06,
-): (value: unknown) => VerifiedAcceptanceBindingV06 {
-  return (value) => {
+): (
+  value: unknown,
+  authoritativeActiveAcceptanceChecks: unknown,
+) => VerifiedAcceptanceBindingV06 {
+  return (value, authoritativeActiveAcceptanceChecks) => {
     const binding = verifiedAcceptanceBindingV06Schema.parse(value);
+    const authoritativeSet = activeAcceptanceCheckSetV06Schema.parse(
+      authoritativeActiveAcceptanceChecks,
+    );
+    const authoritativeDigest = digestCanonicalUtf8V06(
+      canonicalizeActiveAcceptanceCheckSetV06ForDigest(authoritativeSet),
+      sha256Hex,
+    );
+    if (authoritativeSet.digest !== authoritativeDigest) {
+      throw new VerifiedAcceptanceDigestMismatchErrorV06(
+        'authoritative active AcceptanceCheck set digest must match its canonical transaction reread',
+      );
+    }
+    for (const check of authoritativeSet.records) {
+      const digest = sha256Hex(canonicalizeAcceptanceCheckV06ForDigest(check));
+      assertTrustedSha256HexV06(digest);
+      if (check.digest !== `sha256:${digest}`) {
+        throw new VerifiedAcceptanceDigestMismatchErrorV06(
+          'authoritative active AcceptanceCheck digest must match its canonical transaction reread',
+        );
+      }
+    }
+    if (!sameProtocolValue(binding.activeAcceptanceChecks, authoritativeSet)) {
+      throw new VerifiedAcceptanceDigestMismatchErrorV06(
+        'binding must match the independently reread authoritative active AcceptanceCheck set',
+      );
+    }
+    if (
+      binding.acceptance.activeAcceptanceChecks.revision !== authoritativeSet.revision ||
+      binding.acceptance.activeAcceptanceChecks.count !== authoritativeSet.count ||
+      binding.acceptance.activeAcceptanceChecks.digest !== authoritativeSet.digest
+    ) {
+      throw new VerifiedAcceptanceDigestMismatchErrorV06(
+        'persisted Acceptance summary must match the independently reread authoritative active AcceptanceCheck set',
+      );
+    }
     const checks = new Map(
-      binding.activeAcceptanceChecks.records.map((check) => [check.id, check]),
+      authoritativeSet.records.map((check) => [check.id, check]),
     );
     const verificationRefs = new Map(
       binding.acceptance.verifications.map((reference) => [reference.id, reference]),

@@ -305,18 +305,21 @@ describe('responsibility closure v0.6', () => {
     for (const { name, schema, value, paths } of requests) {
       for (const path of paths) {
         for (const key of ['__proto__', 'prototype', 'constructor']) {
-          const candidate = JSON.parse(JSON.stringify(value)) as unknown;
-          let target = candidate;
-          for (const segment of path) {
-            target = (target as Record<PropertyKey, unknown>)[segment];
+          for (const enumerable of [true, false]) {
+            const candidate = JSON.parse(JSON.stringify(value)) as unknown;
+            let target = candidate;
+            for (const segment of path) {
+              target = (target as Record<PropertyKey, unknown>)[segment];
+            }
+            Object.defineProperty(target as object, key, {
+              value: 'forbidden_unsafe_key',
+              enumerable,
+            });
+            expect(
+              schema.safeParse(candidate).success,
+              `${name}:${path.join('.')}:${key}:${enumerable ? 'enumerable' : 'hidden'}`,
+            ).toBe(false);
           }
-          Object.defineProperty(target as object, key, {
-            value: 'forbidden_unsafe_key',
-            enumerable: true,
-          });
-          expect(schema.safeParse(candidate).success, `${name}:${path.join('.')}:${key}`).toBe(
-            false,
-          );
         }
       }
     }
