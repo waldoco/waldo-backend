@@ -515,6 +515,10 @@ export class WaldoCoordinator {
           Date.parse(commitAt) >= Date.parse(request.expiresAt)) {
         throw new ResponsibilityOwnerRootMismatchError();
       }
+      if (request.requestedAuthority !== null &&
+          Date.parse(commitAt) >= Date.parse(request.requestedAuthority.validUntil)) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
       const currentMaterial = this.#outcomes.readExactJudgmentSubjectMaterialInCurrentTransaction({
         ownerId: currentAuthority.ownerId,
         ...proposal.subject,
@@ -623,7 +627,8 @@ export class WaldoCoordinator {
         id: request.subject.id,
         expectedRevision: request.subject.revision,
       });
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ResponsibilityJudgmentConflictError)) throw error;
       await this.#terminalizeJudgmentRequestV05(
         request,
         'superseded',
@@ -729,6 +734,10 @@ export class WaldoCoordinator {
       if (Date.parse(commitAt) >= Date.parse(request.expiresAt)) {
         return Object.freeze({ terminalState: 'expired' as const });
       }
+      if (grant !== undefined && request.requestedAuthority !== null &&
+          Date.parse(commitAt) >= Date.parse(request.requestedAuthority.validUntil)) {
+        return Object.freeze({ terminalState: 'superseded' as const });
+      }
       if (JSON.stringify(currentAuthority) !== JSON.stringify(authority)) {
         return Object.freeze({ terminalState: 'superseded' as const });
       }
@@ -755,7 +764,8 @@ export class WaldoCoordinator {
           id: request.subject.id,
           expectedRevision: request.subject.revision,
         });
-      } catch {
+      } catch (error) {
+        if (!(error instanceof ResponsibilityJudgmentConflictError)) throw error;
         return Object.freeze({ terminalState: 'superseded' as const });
       }
       if (currentMaterial.canonicalMaterial !== material.canonicalMaterial) {

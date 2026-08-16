@@ -412,6 +412,180 @@ describe('JudgmentAuthority Coordinator', () => {
     });
   });
 
+  it('does not create a request when requested authority expires during creation hashing', async () => {
+    const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      let armed = false;
+      let creationClockReads = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => {
+          if (!armed) return '2026-08-16T10:00:00.000Z';
+          creationClockReads += 1;
+          return creationClockReads >= 2
+            ? '2026-08-16T10:15:00.000Z'
+            : '2026-08-16T10:14:59.999Z';
+        },
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const candidate = proposal(captured.workUnits[0]!);
+      armed = true;
+      let rejection = '';
+      try {
+        await coordinator.createTrustedJudgmentRequestV05({
+          ...candidate,
+          requestedAuthority: {
+            ...candidate.requestedAuthority!,
+            validUntil: '2026-08-16T10:15:00.000Z',
+          },
+          expiresAt: '2026-08-16T10:30:00.000Z',
+        }, canonicalAuthority);
+      } catch (error) {
+        rejection = (error as Error).name;
+      }
+      return {
+        rejection,
+        requests: state.storage.sql.exec<{ count: number }>(
+          'SELECT count(*) AS count FROM judgment_requests',
+        ).one().count,
+        highWater: state.storage.sql.exec<{ high_water_cursor: number }>(
+          'SELECT high_water_cursor FROM owner_event_state WHERE root_key = 1',
+        ).one().high_water_cursor,
+      };
+    });
+    expect(proof).toEqual({
+      rejection: 'ResponsibilityJudgmentConflictError',
+      requests: 0,
+      highWater: 2,
+    });
+  });
+
+  it('does not persist an already-expired active Grant at the authority boundary', async () => {
+    const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      let armed = false;
+      let answerClockReads = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => {
+          if (!armed) return '2026-08-16T10:00:00.000Z';
+          answerClockReads += 1;
+          return answerClockReads >= 3
+            ? '2026-08-16T10:15:00.000Z'
+            : '2026-08-16T10:14:59.999Z';
+        },
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const candidate = proposal(captured.workUnits[0]!);
+      const item = await coordinator.createTrustedJudgmentRequestV05({
+        ...candidate,
+        requestedAuthority: {
+          ...candidate.requestedAuthority!,
+          validUntil: '2026-08-16T10:15:00.000Z',
+        },
+        expiresAt: '2026-08-16T10:30:00.000Z',
+      }, canonicalAuthority);
+      armed = true;
+      let rejection = '';
+      try {
+        await coordinator.answerAuthorizedJudgmentV05(
+          { routedOwnerId: authority.ownerId, request: answerFor(item) },
+          canonicalAuthority,
+        );
+      } catch (error) {
+        rejection = (error as Error).name;
+      }
+      return {
+        rejection,
+        request: state.storage.sql.exec<{ revision: number; state: string }>(
+          'SELECT revision, state FROM judgment_requests',
+        ).one(),
+        decisions: state.storage.sql.exec<{ count: number }>(
+          'SELECT count(*) AS count FROM judgment_decisions',
+        ).one().count,
+        grants: state.storage.sql.exec<{ count: number }>(
+          'SELECT count(*) AS count FROM authority_grants',
+        ).one().count,
+      };
+    });
+    expect(proof).toEqual({
+      rejection: 'ResponsibilityJudgmentConflictError',
+      request: { revision: 2, state: 'superseded' },
+      decisions: 0,
+      grants: 0,
+    });
+  });
+
+  it.each(['preflight', 'commit'] as const)(
+    'propagates unexpected %s subject corruption without terminalizing the request',
+    async (failureStage) => {
+      const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+        let id = 0;
+        let armed = false;
+        let answerHashReads = 0;
+        let workUnitId = '';
+        const coordinator = new WaldoCoordinator(state.storage, {
+          now: () => '2026-08-16T10:00:00.000Z',
+          newId: (kind) => `${kind}_judgment_${++id}`,
+          sha256Hex: async (value) => {
+            if (armed) {
+              answerHashReads += 1;
+              if (failureStage === 'commit' && answerHashReads === 5) {
+                state.storage.sql.exec(
+                  "UPDATE work_units SET inputs_json = '{' WHERE id = ?",
+                  workUnitId,
+                );
+              }
+            }
+            return sha256Hex(value);
+          },
+        });
+        const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+        workUnitId = captured.workUnits[0]!.id;
+        const item = await coordinator.createTrustedJudgmentRequestV05(
+          proposal(captured.workUnits[0]!), canonicalAuthority,
+        );
+        if (failureStage === 'preflight') {
+          state.storage.sql.exec(
+            "UPDATE work_units SET inputs_json = '{' WHERE id = ?",
+            workUnitId,
+          );
+        } else {
+          armed = true;
+        }
+        let rejection = '';
+        try {
+          await coordinator.answerAuthorizedJudgmentV05(
+            { routedOwnerId: authority.ownerId, request: answerFor(item) },
+            canonicalAuthority,
+          );
+        } catch (error) {
+          rejection = (error as Error).name;
+        }
+        return {
+          rejection,
+          request: state.storage.sql.exec<{ revision: number; state: string }>(
+            'SELECT revision, state FROM judgment_requests',
+          ).one(),
+          decisions: state.storage.sql.exec<{ count: number }>(
+            'SELECT count(*) AS count FROM judgment_decisions',
+          ).one().count,
+          highWater: state.storage.sql.exec<{ high_water_cursor: number }>(
+            'SELECT high_water_cursor FROM owner_event_state WHERE root_key = 1',
+          ).one().high_water_cursor,
+        };
+      });
+      expect(proof).toEqual({
+        rejection: 'SyntaxError',
+        request: { revision: 1, state: 'open' },
+        decisions: 0,
+        highWater: 3,
+      });
+    },
+  );
+
   it.each(['subject', 'policy', 'grantee', 'admission'] as const)(
     'atomically supersedes on current %s drift without a Decision or Grant',
     async (drift) => {
