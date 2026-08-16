@@ -1,8 +1,10 @@
 import {
   authorityGrantV05Schema,
+  canonicalizeJudgmentAnswerRequestV05ForDigest,
   canonicalizeJudgmentRequestV05ForDigest,
   iso8601Schema,
   judgmentAnswerResultV05Schema,
+  judgmentAnswerRequestV05Schema,
   judgmentDecisionV05Schema,
   judgmentProjectionItemV05Schema,
   judgmentProjectionPageUtf8ByteLengthV05,
@@ -34,6 +36,8 @@ export type StoredOwnerEventV05 = Readonly<{
   aggregate_id: string;
   revision: number;
   event_type: string;
+  causation_id: string;
+  correlation_id: string;
   occurred_at: string;
   payload_json: string;
 }>;
@@ -42,6 +46,7 @@ export type JudgmentRequestDigestProofV05 = Readonly<{
   ownerCursor: number;
   canonicalRequestMaterial: string;
   digest: `sha256:${string}`;
+  triggerDigest: `sha256:${string}` | null;
 }>;
 
 export const DEFAULT_JUDGMENT_REPLAY_EVENT_LIMIT = 10_000;
@@ -56,23 +61,46 @@ export type JudgmentRequestEventPayloadV05 = Readonly<{
   displayedRequestDigest: `sha256:${string}`;
   admissionBasis: unknown;
   answerProof: JudgmentAnswerCommandProofV05 | null;
+  terminalTriggerProof: JudgmentTerminalTriggerProofV05 | null;
 }>;
 
 export type JudgmentAnswerCommandProofV05 = Readonly<{
   requestId: string;
   ownerId: string;
+  requestMaterial: string;
   requestDigest: `sha256:${string}`;
   result: JudgmentAnswerResultV05;
   recordedAt: string;
 }>;
 
+export type JudgmentTerminalTriggerProofV05 = Readonly<{
+  requestId: string;
+  requestMaterial: string;
+  requestDigest: `sha256:${string}`;
+}>;
+
 const REQUEST_EVENT_PAYLOAD_KEYS = [
   'request', 'displayedRequestDigest', 'admissionBasis', 'answerProof',
+  'terminalTriggerProof',
 ] as const;
 
 const ANSWER_PROOF_KEYS = [
-  'requestId', 'ownerId', 'requestDigest', 'result', 'recordedAt',
+  'requestId', 'ownerId', 'requestMaterial', 'requestDigest', 'result', 'recordedAt',
 ] as const;
+
+const TERMINAL_TRIGGER_PROOF_KEYS = [
+  'requestId', 'requestMaterial', 'requestDigest',
+] as const;
+
+function parseCanonicalJudgmentAnswerRequestMaterialV05(
+  value: unknown,
+): string {
+  if (typeof value !== 'string') throw new ResponsibilityJudgmentConflictError();
+  const request = judgmentAnswerRequestV05Schema.parse(JSON.parse(value));
+  const material = canonicalizeJudgmentAnswerRequestV05ForDigest(request);
+  if (material !== value) throw new ResponsibilityJudgmentConflictError();
+  return material;
+}
 
 function parseJudgmentAnswerCommandProofV05(
   value: unknown,
@@ -89,9 +117,33 @@ function parseJudgmentAnswerCommandProofV05(
   return Object.freeze({
     requestId: protocolIdSchema.parse(candidate.requestId),
     ownerId: protocolIdSchema.parse(candidate.ownerId),
+    requestMaterial: parseCanonicalJudgmentAnswerRequestMaterialV05(
+      candidate.requestMaterial,
+    ),
     requestDigest: protocolDigestSchema.parse(candidate.requestDigest) as `sha256:${string}`,
     result: judgmentAnswerResultV05Schema.parse(candidate.result),
     recordedAt: iso8601Schema.parse(candidate.recordedAt),
+  });
+}
+
+function parseJudgmentTerminalTriggerProofV05(
+  value: unknown,
+): JudgmentTerminalTriggerProofV05 | null {
+  if (value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new ResponsibilityJudgmentConflictError();
+  }
+  const candidate = value as Record<string, unknown>;
+  if (JSON.stringify(Object.keys(candidate).sort()) !==
+      JSON.stringify([...TERMINAL_TRIGGER_PROOF_KEYS].sort())) {
+    throw new ResponsibilityJudgmentConflictError();
+  }
+  return Object.freeze({
+    requestId: protocolIdSchema.parse(candidate.requestId),
+    requestMaterial: parseCanonicalJudgmentAnswerRequestMaterialV05(
+      candidate.requestMaterial,
+    ),
+    requestDigest: protocolDigestSchema.parse(candidate.requestDigest) as `sha256:${string}`,
   });
 }
 
@@ -100,12 +152,14 @@ export function serializeJudgmentRequestEventPayloadV05(
   displayedRequestDigest: `sha256:${string}`,
   admissionBasis: unknown,
   answerProof: JudgmentAnswerCommandProofV05 | null,
+  terminalTriggerProof: JudgmentTerminalTriggerProofV05 | null,
 ): string {
   return JSON.stringify({
     request: judgmentRequestV05Schema.parse(request),
     displayedRequestDigest: protocolDigestSchema.parse(displayedRequestDigest),
     admissionBasis,
     answerProof,
+    terminalTriggerProof,
   });
 }
 
@@ -129,6 +183,9 @@ export function parseJudgmentRequestEventPayloadV05(
       ) as `sha256:${string}`,
       admissionBasis: candidate.admissionBasis,
       answerProof: parseJudgmentAnswerCommandProofV05(candidate.answerProof),
+      terminalTriggerProof: parseJudgmentTerminalTriggerProofV05(
+        candidate.terminalTriggerProof,
+      ),
     });
   } catch (error) {
     if (error instanceof ResponsibilityJudgmentConflictError) throw error;
@@ -158,7 +215,10 @@ export function validateJudgmentRequestEventV05(
     request.revision !== event.revision ||
     event.event_type !== expectedEventType ||
     (request.state === 'answered') !== (request.decisionId !== null) ||
-    (request.state === 'answered') !== (payload.answerProof !== null)
+    (request.state === 'answered') !== (payload.answerProof !== null) ||
+    ((request.state === 'expired' || request.state === 'superseded') !==
+      (payload.terminalTriggerProof !== null)) ||
+    (payload.answerProof !== null && payload.terminalTriggerProof !== null)
   ) {
     throw new ResponsibilityJudgmentConflictError();
   }
@@ -192,7 +252,7 @@ export class ProjectionPublisher {
     }
     const event = this.storage.sql.exec<StoredOwnerEventV05>(
       `SELECT owner_cursor, schema_version, owner_id, aggregate_kind, aggregate_id,
-              revision, event_type, occurred_at, payload_json
+              revision, event_type, causation_id, correlation_id, occurred_at, payload_json
          FROM owner_domain_events WHERE owner_cursor = ?`,
       input.cursor,
     ).toArray()[0];
@@ -212,7 +272,7 @@ export class ProjectionPublisher {
       const remaining = this.replayEventLimit - events.length;
       const rows = this.storage.sql.exec<StoredOwnerEventV05>(
         `SELECT owner_cursor, schema_version, owner_id, aggregate_kind, aggregate_id,
-                revision, event_type, occurred_at, payload_json
+                revision, event_type, causation_id, correlation_id, occurred_at, payload_json
            FROM owner_domain_events
           WHERE owner_cursor > ? AND (
             schema_version = '0.5' OR
@@ -285,7 +345,6 @@ export class ProjectionPublisher {
   assertDigestProofsInCurrentTransaction(
     ownerId: string,
     proofs: readonly JudgmentRequestDigestProofV05[],
-    allowMissingProjectionRows: boolean,
   ): void {
     const proofByCursor = new Map(proofs.map((proof) => [proof.ownerCursor, proof]));
     const expectedItems = new Map<number, JudgmentProjectionItemV05>();
@@ -316,7 +375,7 @@ export class ProjectionPublisher {
         ORDER BY owner_cursor LIMIT ?`,
       expectedItems.size + 1,
     ).toArray();
-    if (!allowMissingProjectionRows && rows.length !== expectedItems.size) {
+    if (rows.length !== expectedItems.size) {
       throw new ResponsibilityJudgmentConflictError();
     }
     for (const row of rows) {
@@ -334,6 +393,32 @@ export class ProjectionPublisher {
         throw new ResponsibilityJudgmentConflictError();
       }
     }
+  }
+
+  assertRebuiltProjectionInCurrentTransaction(input: Readonly<{
+    ownerId: string;
+    snapshotId: string;
+    updatedAt: string;
+    digestProofs: readonly JudgmentRequestDigestProofV05[];
+  }>): void {
+    const snapshots = this.storage.sql.exec<{
+      owner_id: string; snapshot_id: string; snapshot_base_cursor: number; updated_at: string;
+    }>(
+      `SELECT owner_id, snapshot_id, snapshot_base_cursor, updated_at
+         FROM judgment_projection_state LIMIT 2`,
+    ).toArray();
+    if (
+      snapshots.length !== 1 || snapshots[0]?.owner_id !== input.ownerId ||
+      snapshots[0].snapshot_id !== input.snapshotId ||
+      snapshots[0].snapshot_base_cursor !== 0 ||
+      snapshots[0].updated_at !== input.updatedAt
+    ) {
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    this.assertDigestProofsInCurrentTransaction(
+      input.ownerId,
+      input.digestProofs,
+    );
   }
 
   readInCurrentTransaction(input: Readonly<{

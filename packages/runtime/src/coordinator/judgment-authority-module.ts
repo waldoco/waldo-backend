@@ -1,9 +1,11 @@
 import {
   authorityGrantV05Schema,
   canonicalizeAuthorityGrantV05ForDigest,
+  canonicalizeJudgmentAnswerRequestV05ForDigest,
   canonicalizeJudgmentDecisionV05ForDigest,
   canonicalizeJudgmentRequestV05ForDigest,
   judgmentAnswerResultV05Schema,
+  judgmentAnswerRequestV05Schema,
   judgmentAuthorityBindingV05Schema,
   judgmentDecisionV05Schema,
   judgmentRequestV05Schema,
@@ -13,6 +15,7 @@ import {
   protocolIdSchema,
   protocolRevisionSchema,
   type JudgmentAnswerResultV05,
+  type JudgmentAnswerRequestV05,
   type JudgmentAuthorityBindingV05,
   type JudgmentDecisionV05,
   type AuthorityGrantV05,
@@ -158,6 +161,7 @@ export class JudgmentAuthorityModule {
         input.displayedRequestDigest,
         admissionBasis,
         null,
+        null,
       ),
     });
     const item = this.projections.publishAppendedEventInCurrentTransaction({
@@ -221,7 +225,9 @@ export class JudgmentAuthorityModule {
     openRequest: JudgmentRequestV05;
     terminalRequest: JudgmentRequestV05;
     terminalRequestDigest: `sha256:${string}`;
-    causationId: string;
+    triggerRequestId: string;
+    triggerRequestMaterial: string;
+    triggerRequestDigest: `sha256:${string}`;
   }>): JudgmentProjectionItemV05 {
     const current = this.readRequestInCurrentTransaction(
       input.openRequest.ownerId,
@@ -271,14 +277,19 @@ export class JudgmentAuthorityModule {
       aggregateId: terminal.id,
       revision: terminal.revision,
       eventType: `judgment_request.${terminal.state}`,
-      causationId: input.causationId,
-      correlationId: input.causationId,
+      causationId: input.triggerRequestId,
+      correlationId: input.triggerRequestId,
       occurredAt: terminal.updatedAt,
       payloadJson: serializeJudgmentRequestEventPayloadV05(
         terminal,
         input.terminalRequestDigest,
         current.admissionBasis,
         null,
+        Object.freeze({
+          requestId: input.triggerRequestId,
+          requestMaterial: input.triggerRequestMaterial,
+          requestDigest: input.triggerRequestDigest,
+        }),
       ),
     });
     const item = this.projections.publishAppendedEventInCurrentTransaction({
@@ -295,6 +306,7 @@ export class JudgmentAuthorityModule {
     answeredRequest: JudgmentRequestV05;
     answeredRequestDigest: `sha256:${string}`;
     answerRequestId: string;
+    answerRequestMaterial: string;
     answerRequestDigest: `sha256:${string}`;
   }>): JudgmentAnswerResultV05 {
     const binding = judgmentAuthorityBindingV05Schema.parse(input.binding);
@@ -453,10 +465,12 @@ export class JudgmentAuthorityModule {
         Object.freeze({
           requestId: input.answerRequestId,
           ownerId: answeredRequest.ownerId,
+          requestMaterial: input.answerRequestMaterial,
           requestDigest: input.answerRequestDigest,
           result,
           recordedAt: decision.decidedAt,
         }),
+        null,
       ),
     });
     if (cursor !== predictedCursor) throw new ResponsibilityJudgmentConflictError();
@@ -482,15 +496,21 @@ export class JudgmentAuthorityModule {
   collectRequestDigestInputsInCurrentTransaction(ownerId: string): readonly Readonly<{
     ownerCursor: number;
     canonicalRequestMaterial: string;
+    triggerRequestMaterial: string | null;
   }>[] {
     return Object.freeze(this.projections.readRelevantEventsInCurrentTransaction(ownerId)
       .filter((event) => event.aggregate_kind === 'judgment_request')
-      .map((event) => Object.freeze({
-        ownerCursor: event.owner_cursor,
-        canonicalRequestMaterial: canonicalizeJudgmentRequestV05ForDigest(
-          validateJudgmentRequestEventV05(event).request,
-        ),
-      })));
+      .map((event) => {
+        const payload = validateJudgmentRequestEventV05(event);
+        return Object.freeze({
+          ownerCursor: event.owner_cursor,
+          canonicalRequestMaterial: canonicalizeJudgmentRequestV05ForDigest(
+            payload.request,
+          ),
+          triggerRequestMaterial: payload.answerProof?.requestMaterial ??
+            payload.terminalTriggerProof?.requestMaterial ?? null,
+        });
+      }));
   }
 
   replayInCurrentTransaction(
@@ -507,6 +527,11 @@ export class JudgmentAuthorityModule {
     const answerProofMap = new Map<string, Readonly<{
       proof: JudgmentAnswerCommandProofV05;
       ownerCursor: number;
+      answer: JudgmentAnswerRequestV05;
+    }>>();
+    const decisionAuditMap = new Map<string, Readonly<{
+      causationId: string;
+      correlationId: string;
     }>>();
     const decisionMap = new Map<string, JudgmentDecisionV05>();
     const grantMap = new Map<string, AuthorityGrantV05>();
@@ -519,6 +544,7 @@ export class JudgmentAuthorityModule {
         const payload = validateJudgmentRequestEventV05(event);
         const request = payload.request;
         const digestProof = digestProofByCursor.get(event.owner_cursor);
+        const triggerProof = payload.answerProof ?? payload.terminalTriggerProof;
         if (
           digestProof === undefined ||
           digestProof.canonicalRequestMaterial !==
@@ -526,6 +552,30 @@ export class JudgmentAuthorityModule {
           digestProof.digest !== payload.displayedRequestDigest
         ) {
           throw new ResponsibilityJudgmentConflictError();
+        }
+        let triggerAnswer: JudgmentAnswerRequestV05 | null = null;
+        if (triggerProof === null) {
+          if (digestProof.triggerDigest !== null) {
+            throw new ResponsibilityJudgmentConflictError();
+          }
+        } else {
+          try {
+            triggerAnswer = judgmentAnswerRequestV05Schema.parse(
+              JSON.parse(triggerProof.requestMaterial),
+            );
+          } catch {
+            throw new ResponsibilityJudgmentConflictError();
+          }
+          if (
+            canonicalizeJudgmentAnswerRequestV05ForDigest(triggerAnswer) !==
+              triggerProof.requestMaterial ||
+            digestProof.triggerDigest !== triggerProof.requestDigest ||
+            triggerAnswer.requestId !== triggerProof.requestId ||
+            triggerAnswer.aggregate.id !== request.id ||
+            triggerAnswer.aggregate.expectedRevision !== 1
+          ) {
+            throw new ResponsibilityJudgmentConflictError();
+          }
         }
         if (event.occurred_at !== (
           request.revision === 1 ? request.createdAt : request.updatedAt
@@ -536,6 +586,7 @@ export class JudgmentAuthorityModule {
         const basis = parseJudgmentAdmissionBasisV05(payload.admissionBasis);
         this.assertAdmissionBinding(request, basis);
         const prior = requestMap.get(request.id);
+        const priorDigest = requestDigestMap.get(request.id);
         const priorBasis = requestBasisMap.get(request.id);
         const stableRequest = (value: JudgmentRequestV05) => {
           const { revision: _revision, state: _state, decisionId: _decisionId,
@@ -548,12 +599,21 @@ export class JudgmentAuthorityModule {
           request.ownerId !== ownerId ||
           request.revision !== (prior?.revision ?? 0) + 1 ||
           (prior === undefined && (
-            request.revision !== 1 || request.state !== 'open' || request.decisionId !== null
+            request.revision !== 1 || request.state !== 'open' || request.decisionId !== null ||
+            event.causation_id !== request.id || event.correlation_id !== request.id
           )) ||
           (prior !== undefined && (
             prior.revision !== 1 || prior.state !== 'open' ||
             JSON.stringify(stableRequest(prior)) !== JSON.stringify(stableRequest(request)) ||
             JSON.stringify(priorBasis) !== JSON.stringify(basis)
+          )) ||
+          (triggerAnswer !== null && (
+            triggerAnswer.payload.displayedRequestDigest !== priorDigest ||
+            event.causation_id !== triggerAnswer.requestId ||
+            (request.state === 'answered'
+              ? event.correlation_id !==
+                (triggerAnswer.correlationId ?? triggerAnswer.requestId)
+              : event.correlation_id !== triggerAnswer.requestId)
           ))
         ) {
           throw new ResponsibilityJudgmentConflictError();
@@ -568,6 +628,7 @@ export class JudgmentAuthorityModule {
           answerProofMap.set(request.id, Object.freeze({
             proof: payload.answerProof,
             ownerCursor: event.owner_cursor,
+            answer: triggerAnswer!,
           }));
         }
       } else if (event.aggregate_kind === 'judgment_decision') {
@@ -588,7 +649,7 @@ export class JudgmentAuthorityModule {
           decision.revision !== event.revision ||
           decision.revision !== 1 ||
           decision.ownerId !== ownerId ||
-          decisionMap.has(decision.id) ||
+          decisionMap.has(decision.id) || decisionAuditMap.has(decision.id) ||
           request === undefined || request.state !== 'open' || request.revision !== 1 ||
           decision.judgmentRequestRevision !== request.revision ||
           JSON.stringify(decision.subject) !== JSON.stringify(request.subject) ||
@@ -604,6 +665,10 @@ export class JudgmentAuthorityModule {
           throw new ResponsibilityJudgmentConflictError();
         }
         decisionMap.set(decision.id, decision);
+        decisionAuditMap.set(decision.id, Object.freeze({
+          causationId: event.causation_id,
+          correlationId: event.correlation_id,
+        }));
       } else if (event.aggregate_kind === 'authority_grant') {
         let grant: AuthorityGrantV05;
         try {
@@ -619,6 +684,9 @@ export class JudgmentAuthorityModule {
         const requested = request?.requestedAuthority;
         const admission = request?.authorityAdmission;
         const basis = request === undefined ? undefined : requestBasisMap.get(request.id);
+        const decisionAudit = decision === undefined
+          ? undefined
+          : decisionAuditMap.get(decision.id);
         if (
           event.event_type !== 'authority_grant.issued' ||
           grant.id !== event.aggregate_id ||
@@ -631,6 +699,9 @@ export class JudgmentAuthorityModule {
           requested === null || requested === undefined ||
           admission === null || admission === undefined ||
           basis === undefined ||
+          decisionAudit === undefined ||
+          event.causation_id !== decision.id ||
+          event.correlation_id !== decisionAudit.correlationId ||
           grant.judgmentRequestRevision !== request.revision ||
           JSON.stringify(grant.subject) !== JSON.stringify(request.subject) ||
           JSON.stringify(grant.grantee) !== JSON.stringify(admission.grantee) ||
@@ -688,6 +759,7 @@ export class JudgmentAuthorityModule {
           throw new ResponsibilityJudgmentConflictError();
         }
         const command = answerProofMap.get(request.id);
+        const decisionAudit = decisionAuditMap.get(decision.id);
         const grant = matchingGrants[0];
         let expectedResult: JudgmentAnswerResultV05;
         try {
@@ -715,6 +787,11 @@ export class JudgmentAuthorityModule {
         }
         if (
           command === undefined || command.proof.ownerId !== ownerId ||
+          decisionAudit === undefined ||
+          decisionAudit.causationId !== command.proof.requestId ||
+          decisionAudit.correlationId !==
+            (command.answer.correlationId ?? command.proof.requestId) ||
+          command.answer.payload.selectedOptionId !== decision.selectedOptionId ||
           command.proof.result.requestId !== command.proof.requestId ||
           command.proof.recordedAt !== decision.decidedAt ||
           request.updatedAt !== decision.decidedAt ||

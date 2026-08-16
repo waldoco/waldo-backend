@@ -333,6 +333,7 @@ export type CoordinatorDependencies = Readonly<{
   sha256Hex: (value: string) => Promise<string>;
   judgmentReplayEventLimit?: number;
   judgmentReplayDecodedByteLimit?: number;
+  afterJudgmentProjectionRebuildWrite?: () => void;
   resolveJudgmentAdmissionV05?: (input: Readonly<{
     ownerId: string;
     subject: JudgmentRequestV05['subject'];
@@ -580,9 +581,15 @@ export class WaldoCoordinator {
     canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
   ): Promise<JudgmentAnswerResultV05> {
     const answer = judgmentAnswerRequestV05Schema.parse(admission.request);
+    const answerRequestMaterial = canonicalizeJudgmentAnswerRequestV05ForDigest(answer);
     const answerRequestDigest = `sha256:${await this.#deps.sha256Hex(
-      canonicalizeJudgmentAnswerRequestV05ForDigest(answer),
+      answerRequestMaterial,
     )}` as const;
+    const answerTrigger = Object.freeze({
+      requestId: answer.requestId,
+      requestMaterial: answerRequestMaterial,
+      requestDigest: answerRequestDigest,
+    });
 
     const duplicate = this.#storage.transactionSync(() => {
       const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
@@ -621,7 +628,7 @@ export class WaldoCoordinator {
       await this.#terminalizeJudgmentRequestV05(
         request,
         'expired',
-        answer.requestId,
+        answerTrigger,
         canonicalAuthority,
       );
       throw new ResponsibilityJudgmentConflictError();
@@ -649,7 +656,7 @@ export class WaldoCoordinator {
       await this.#terminalizeJudgmentRequestV05(
         request,
         'superseded',
-        answer.requestId,
+        answerTrigger,
         canonicalAuthority,
       );
       throw new ResponsibilityJudgmentConflictError();
@@ -662,7 +669,7 @@ export class WaldoCoordinator {
       await this.#terminalizeJudgmentRequestV05(
         request,
         'superseded',
-        answer.requestId,
+        answerTrigger,
         canonicalAuthority,
       );
       throw new ResponsibilityJudgmentConflictError();
@@ -688,7 +695,7 @@ export class WaldoCoordinator {
       await this.#terminalizeJudgmentRequestV05(
         request,
         'superseded',
-        answer.requestId,
+        answerTrigger,
         canonicalAuthority,
       );
       throw new ResponsibilityJudgmentConflictError();
@@ -804,6 +811,7 @@ export class WaldoCoordinator {
         answeredRequest,
         answeredRequestDigest,
         answerRequestId: answer.requestId,
+        answerRequestMaterial,
         answerRequestDigest,
       });
       this.#deps.afterWrite?.('current_state');
@@ -816,7 +824,7 @@ export class WaldoCoordinator {
       await this.#terminalizeJudgmentRequestV05(
         request,
         committed.terminalState,
-        answer.requestId,
+        answerTrigger,
         canonicalAuthority,
       );
       throw new ResponsibilityJudgmentConflictError();
@@ -842,8 +850,12 @@ export class WaldoCoordinator {
     const proofs: JudgmentRequestDigestProofV05[] = [];
     for (const input of inputs) {
       proofs.push(Object.freeze({
-        ...input,
+        ownerCursor: input.ownerCursor,
+        canonicalRequestMaterial: input.canonicalRequestMaterial,
         digest: `sha256:${await this.#deps.sha256Hex(input.canonicalRequestMaterial)}`,
+        triggerDigest: input.triggerRequestMaterial === null
+          ? null
+          : `sha256:${await this.#deps.sha256Hex(input.triggerRequestMaterial)}`,
       }));
     }
     return Object.freeze(proofs);
@@ -873,7 +885,6 @@ export class WaldoCoordinator {
       this.#judgmentProjections.assertDigestProofsInCurrentTransaction(
         authority.ownerId,
         digestProofs,
-        false,
       );
       return replay;
     });
@@ -898,12 +909,18 @@ export class WaldoCoordinator {
         throw new ResponsibilityOwnerRootMismatchError();
       }
       this.#judgments.replayInCurrentTransaction(authority.ownerId, digestProofs);
-      this.#judgmentProjections.assertDigestProofsInCurrentTransaction(
+      const rebuilt = this.#judgmentProjections.rebuildInCurrentTransaction(
         authority.ownerId,
-        digestProofs,
-        true,
+        at,
       );
-      return this.#judgmentProjections.rebuildInCurrentTransaction(authority.ownerId, at);
+      this.#deps.afterJudgmentProjectionRebuildWrite?.();
+      this.#judgmentProjections.assertRebuiltProjectionInCurrentTransaction({
+        ownerId: authority.ownerId,
+        snapshotId: rebuilt.snapshotId,
+        updatedAt: at,
+        digestProofs,
+      });
+      return rebuilt;
     });
   }
 
@@ -1878,7 +1895,11 @@ export class WaldoCoordinator {
   async #terminalizeJudgmentRequestV05(
     openRequest: JudgmentRequestV05,
     state: 'expired' | 'superseded',
-    causationId: string,
+    trigger: Readonly<{
+      requestId: string;
+      requestMaterial: string;
+      requestDigest: `sha256:${string}`;
+    }>,
     canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
   ): Promise<void> {
     const at = this.#deps.now();
@@ -1905,7 +1926,9 @@ export class WaldoCoordinator {
         openRequest,
         terminalRequest,
         terminalRequestDigest,
-        causationId,
+        triggerRequestId: trigger.requestId,
+        triggerRequestMaterial: trigger.requestMaterial,
+        triggerRequestDigest: trigger.requestDigest,
       });
       this.#deps.afterWrite?.('current_state');
       this.#deps.afterWrite?.('events');

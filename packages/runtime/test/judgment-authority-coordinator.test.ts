@@ -1336,6 +1336,219 @@ describe('JudgmentAuthority Coordinator', () => {
     },
   );
 
+  it.each([
+    'opened_causation', 'decision_causation', 'answered_causation',
+    'grant_causation', 'correlation_drift', 'coordinated_command_id',
+  ] as const)('rejects judgment event audit-chain drift: %s', async (mutation) => {
+    const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      await coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item) },
+        canonicalAuthority,
+      );
+      if (mutation === 'opened_causation') {
+        state.storage.sql.exec(
+          `UPDATE owner_domain_events SET causation_id = 'cause_attacker'
+            WHERE event_type = 'judgment_request.opened'`,
+        );
+      } else if (mutation === 'decision_causation') {
+        state.storage.sql.exec(
+          `UPDATE owner_domain_events SET causation_id = 'cause_attacker'
+            WHERE aggregate_kind = 'judgment_decision'`,
+        );
+      } else if (mutation === 'answered_causation') {
+        state.storage.sql.exec(
+          `UPDATE owner_domain_events SET causation_id = 'cause_attacker'
+            WHERE event_type = 'judgment_request.answered'`,
+        );
+      } else if (mutation === 'grant_causation') {
+        state.storage.sql.exec(
+          `UPDATE owner_domain_events SET causation_id = 'cause_attacker'
+            WHERE aggregate_kind = 'authority_grant'`,
+        );
+      } else if (mutation === 'correlation_drift') {
+        state.storage.sql.exec(
+          `UPDATE owner_domain_events SET correlation_id = 'correlation_attacker'
+            WHERE aggregate_kind = 'judgment_decision'`,
+        );
+      } else {
+        const rewrittenId = 'answer_rewritten_01';
+        state.storage.sql.exec(
+          `UPDATE owner_domain_events SET causation_id = ?
+            WHERE aggregate_kind = 'judgment_decision'
+               OR event_type = 'judgment_request.answered'`,
+          rewrittenId,
+        );
+        const answered = state.storage.sql.exec<{
+          owner_cursor: number; payload_json: string;
+        }>(
+          `SELECT owner_cursor, payload_json FROM owner_domain_events
+            WHERE event_type = 'judgment_request.answered'`,
+        ).one();
+        const payload = JSON.parse(answered.payload_json);
+        payload.answerProof = {
+          ...payload.answerProof,
+          requestId: rewrittenId,
+          result: { ...payload.answerProof.result, requestId: rewrittenId },
+        };
+        state.storage.sql.exec(
+          'UPDATE owner_domain_events SET payload_json = ? WHERE owner_cursor = ?',
+          JSON.stringify(payload), answered.owner_cursor,
+        );
+        state.storage.sql.exec(
+          `UPDATE judgment_commands SET request_id = ?, result_json = ?`,
+          rewrittenId,
+          JSON.stringify(payload.answerProof.result),
+        );
+      }
+      const before = {
+        projection: state.storage.sql.exec(
+          'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+        ).toArray(),
+        snapshot: state.storage.sql.exec(
+          'SELECT * FROM judgment_projection_state',
+        ).toArray(),
+      };
+      const rejection: string[] = [];
+      for (const operation of ['replay', 'rebuild'] as const) {
+        try {
+          if (operation === 'replay') {
+            await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+          } else {
+            await coordinator.rebuildJudgmentProjectionV05(
+              authority.ownerId,
+              canonicalAuthority,
+            );
+          }
+        } catch (error) {
+          rejection.push((error as Error).name);
+        }
+      }
+      return {
+        rejection,
+        before,
+        after: {
+          projection: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+          ).toArray(),
+          snapshot: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection_state',
+          ).toArray(),
+        },
+      };
+    });
+    expect(proof.rejection).toEqual([
+      'ResponsibilityJudgmentConflictError',
+      'ResponsibilityJudgmentConflictError',
+    ]);
+    expect(proof.after).toEqual(proof.before);
+  });
+
+  it.each(['terminal_causation', 'coordinated_terminal_trigger'] as const)(
+    'rejects terminal judgment trigger-chain drift: %s',
+    async (mutation) => {
+      const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+        let id = 0;
+        let now = '2026-08-16T10:00:00.000Z';
+        const coordinator = new WaldoCoordinator(state.storage, {
+          now: () => now,
+          newId: (kind) => `${kind}_judgment_${++id}`,
+          sha256Hex,
+        });
+        const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+        const item = await coordinator.createTrustedJudgmentRequestV05(
+          proposal(captured.workUnits[0]!), canonicalAuthority,
+        );
+        now = item.request.expiresAt;
+        await expect(coordinator.answerAuthorizedJudgmentV05(
+          { routedOwnerId: authority.ownerId, request: answerFor(item) },
+          canonicalAuthority,
+        )).rejects.toMatchObject({ name: 'ResponsibilityJudgmentConflictError' });
+        const terminal = state.storage.sql.exec<{
+          owner_cursor: number; payload_json: string;
+        }>(
+          `SELECT owner_cursor, payload_json FROM owner_domain_events
+            WHERE event_type = 'judgment_request.expired'`,
+        ).one();
+        if (mutation === 'terminal_causation') {
+          state.storage.sql.exec(
+            `UPDATE owner_domain_events SET causation_id = 'cause_attacker'
+              WHERE owner_cursor = ?`,
+            terminal.owner_cursor,
+          );
+        } else {
+          const rewrittenId = 'answer_terminal_rewritten_01';
+          const payload = JSON.parse(terminal.payload_json);
+          const answer = JSON.parse(payload.terminalTriggerProof.requestMaterial);
+          answer.requestId = rewrittenId;
+          payload.terminalTriggerProof = {
+            ...payload.terminalTriggerProof,
+            requestId: rewrittenId,
+            requestMaterial: canonicalizeJudgmentAnswerRequestV05ForDigest(answer),
+          };
+          state.storage.sql.exec(
+            `UPDATE owner_domain_events
+                SET causation_id = ?, correlation_id = ?, payload_json = ?
+              WHERE owner_cursor = ?`,
+            rewrittenId,
+            rewrittenId,
+            JSON.stringify(payload),
+            terminal.owner_cursor,
+          );
+        }
+        const before = {
+          projection: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+          ).toArray(),
+          snapshot: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection_state',
+          ).toArray(),
+        };
+        const rejection: string[] = [];
+        for (const operation of ['replay', 'rebuild'] as const) {
+          try {
+            if (operation === 'replay') {
+              await coordinator.replayJudgmentsV05(authority.ownerId, canonicalAuthority);
+            } else {
+              await coordinator.rebuildJudgmentProjectionV05(
+                authority.ownerId,
+                canonicalAuthority,
+              );
+            }
+          } catch (error) {
+            rejection.push((error as Error).name);
+          }
+        }
+        return {
+          rejection,
+          before,
+          after: {
+            projection: state.storage.sql.exec(
+              'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+            ).toArray(),
+            snapshot: state.storage.sql.exec(
+              'SELECT * FROM judgment_projection_state',
+            ).toArray(),
+          },
+        };
+      });
+      expect(proof.rejection).toEqual([
+        'ResponsibilityJudgmentConflictError',
+        'ResponsibilityJudgmentConflictError',
+      ]);
+      expect(proof.after).toEqual(proof.before);
+    },
+  );
+
   it('rejects a coordinated pre-EffectEngine consumed Grant in journal and current state', async () => {
     const rejection = await runInDurableObject(freshStub(), async (_instance, state) => {
       let id = 0;
@@ -2262,6 +2475,148 @@ describe('JudgmentAuthority Coordinator', () => {
       hasMore: false,
       items: [{ cursor: 6, request: { state: 'answered', revision: 2 } }],
     });
+  });
+
+  it.each([
+    'malformed_json', 'stale_digest', 'foreign_owner', 'cursor_mismatch', 'unexpected_extra',
+  ] as const)('repairs arbitrary derived projection corruption: %s', async (mutation) => {
+    const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      const item = await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      await coordinator.answerAuthorizedJudgmentV05(
+        { routedOwnerId: authority.ownerId, request: answerFor(item) },
+        canonicalAuthority,
+      );
+      const original = await coordinator.readJudgmentProjectionV05({
+        routedOwnerId: authority.ownerId,
+        query: { protocolVersion: '0.5', fromExclusiveCursor: 0, limit: 25 },
+      }, canonicalAuthority);
+      const first = state.storage.sql.exec<{ owner_cursor: number; item_json: string }>(
+        'SELECT owner_cursor, item_json FROM judgment_projection ORDER BY owner_cursor LIMIT 1',
+      ).one();
+      if (mutation === 'malformed_json') {
+        state.storage.sql.exec(
+          'UPDATE judgment_projection SET item_json = ? WHERE owner_cursor = ?',
+          '{', first.owner_cursor,
+        );
+      } else if (mutation === 'stale_digest') {
+        state.storage.sql.exec(
+          'UPDATE judgment_projection SET item_json = ? WHERE owner_cursor = ?',
+          JSON.stringify({
+            ...JSON.parse(first.item_json),
+            displayedRequestDigest: `sha256:${'f'.repeat(64)}`,
+          }),
+          first.owner_cursor,
+        );
+      } else if (mutation === 'foreign_owner') {
+        state.storage.sql.exec(
+          "UPDATE judgment_projection SET owner_id = 'owner_projection_attacker'",
+        );
+      } else if (mutation === 'cursor_mismatch') {
+        state.storage.sql.exec(
+          'UPDATE judgment_projection SET item_json = ? WHERE owner_cursor = ?',
+          JSON.stringify({ ...JSON.parse(first.item_json), cursor: first.owner_cursor + 1 }),
+          first.owner_cursor,
+        );
+      } else {
+        state.storage.sql.exec(
+          `INSERT INTO judgment_projection (owner_cursor, owner_id, item_json)
+            VALUES (999, 'owner_projection_attacker', '{}')`,
+        );
+      }
+      await coordinator.rebuildJudgmentProjectionV05(authority.ownerId, canonicalAuthority);
+      const rebuilt = await coordinator.readJudgmentProjectionV05({
+        routedOwnerId: authority.ownerId,
+        query: { protocolVersion: '0.5', fromExclusiveCursor: 0, limit: 25 },
+      }, canonicalAuthority);
+      let oldSnapshotRejection = '';
+      try {
+        await coordinator.readJudgmentProjectionV05({
+          routedOwnerId: authority.ownerId,
+          query: {
+            protocolVersion: '0.5', fromExclusiveCursor: 0, limit: 25,
+            snapshotId: original.snapshotId,
+          },
+        }, canonicalAuthority);
+      } catch (error) {
+        oldSnapshotRejection = `${(error as Error).name}:${
+          (error as { code?: string }).code ?? ''}`;
+      }
+      return { original, rebuilt, oldSnapshotRejection };
+    });
+    expect(proof.rebuilt.items).toEqual(proof.original.items);
+    expect(proof.rebuilt.snapshotId).not.toBe(proof.original.snapshotId);
+    expect(proof.oldSnapshotRejection).toBe(
+      'ResponsibilityProjectionCursorError:snapshot_replaced',
+    );
+  });
+
+  it('rolls back rebuilt projection replacement when post-write validation detects corruption', async () => {
+    const proof = await runInDurableObject(freshStub(), async (_instance, state) => {
+      let id = 0;
+      let failRebuild = false;
+      const coordinator = new WaldoCoordinator(state.storage, {
+        now: () => '2026-08-16T10:00:00.000Z',
+        newId: (kind) => `${kind}_judgment_${++id}`,
+        sha256Hex,
+        afterJudgmentProjectionRebuildWrite: () => {
+          if (!failRebuild) return;
+          state.storage.sql.exec("UPDATE judgment_projection SET item_json = '{'");
+          state.storage.sql.exec(
+            'UPDATE judgment_projection_state SET snapshot_base_cursor = 77',
+          );
+        },
+      });
+      const { captured, canonicalAuthority } = await captureWorkUnit(coordinator);
+      await coordinator.createTrustedJudgmentRequestV05(
+        proposal(captured.workUnits[0]!), canonicalAuthority,
+      );
+      state.storage.sql.exec("UPDATE judgment_projection SET item_json = '{'");
+      state.storage.sql.exec(
+        `UPDATE judgment_projection_state
+            SET snapshot_id = 'snapshot_corrupt_before_rebuild', snapshot_base_cursor = 99`,
+      );
+      const before = {
+        projection: state.storage.sql.exec(
+          'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+        ).toArray(),
+        snapshot: state.storage.sql.exec(
+          'SELECT * FROM judgment_projection_state',
+        ).toArray(),
+      };
+      failRebuild = true;
+      let rejection = '';
+      try {
+        await coordinator.rebuildJudgmentProjectionV05(
+          authority.ownerId,
+          canonicalAuthority,
+        );
+      } catch (error) {
+        rejection = (error as Error).name;
+      }
+      return {
+        rejection,
+        before,
+        after: {
+          projection: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection ORDER BY owner_cursor',
+          ).toArray(),
+          snapshot: state.storage.sql.exec(
+            'SELECT * FROM judgment_projection_state',
+          ).toArray(),
+        },
+      };
+    });
+    expect(proof.rejection).toBe('ResponsibilityJudgmentConflictError');
+    expect(proof.after).toEqual(proof.before);
   });
 
   it('transactionally rebuilds an exact replacement projection from the owner journal', async () => {
