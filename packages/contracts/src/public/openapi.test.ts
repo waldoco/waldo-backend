@@ -1,3 +1,4 @@
+import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
 import { responsibilityHttpRouteManifestV01 } from '../protocol/responsibility-http-adapter-v0-1';
 import { responsibilityJudgmentAuthorityHttpRouteManifestV05 } from '../protocol/responsibility-judgment-authority-http-v0-5';
@@ -28,6 +29,28 @@ const forbiddenFragments = [
   '"credential":',
   '"transcript":',
 ];
+
+function schemasForProperty(value: unknown, property: string): Array<Record<string, unknown>> {
+  const matches: Array<Record<string, unknown>> = [];
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      for (const child of candidate) visit(child);
+      return;
+    }
+    if (typeof candidate !== 'object' || candidate === null) return;
+    const object = candidate as Record<string, unknown>;
+    const properties = object.properties;
+    if (typeof properties === 'object' && properties !== null) {
+      const match = (properties as Record<string, unknown>)[property];
+      if (typeof match === 'object' && match !== null) {
+        matches.push(match as Record<string, unknown>);
+      }
+    }
+    for (const child of Object.values(object)) visit(child);
+  };
+  visit(value);
+  return matches;
+}
 
 describe('public OpenAPI artifact', () => {
   it('publishes exactly the guarded responsibility route inventory', () => {
@@ -162,7 +185,9 @@ describe('public OpenAPI artifact', () => {
     });
     expect(paths['/public/responsibilities/closure/acceptances']!.post!
       ['x-waldo-runtime-validation']).toEqual([
-      'accept requires every current AcceptanceCheck to have exact passed independent Verification over the same canonical Evidence set',
+      'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
+      'verifier identity differs from every exact Evidence producer identity',
       'release is a distinct owner disposition and never claims verified acceptance',
     ]);
     expect(paths['/public/responsibilities/projection']!.get).not.toHaveProperty('requestBody');
@@ -222,6 +247,68 @@ describe('public OpenAPI artifact', () => {
   it('does not leak internal-only contract names or sensitive label fragments', () => {
     const artifact = JSON.stringify(buildPublicOpenApiDocument());
     for (const fragment of forbiddenFragments) expect(artifact).not.toContain(fragment);
+  });
+
+  it('expresses structural uniqueness and declares every closure runtime refinement', () => {
+    const generated = buildPublicOpenApiDocument();
+    const paths = generated.paths as Record<string, Record<string, PublicOperation>>;
+    const components = generated.components as {
+      schemas: Record<string, Record<string, unknown>>;
+    };
+    const verificationRequest = components.schemas.VerificationRequestV06!;
+    const acceptanceRequest = components.schemas.AcceptanceRecordRequestV06!;
+    expect(schemasForProperty(verificationRequest, 'evidence')).toEqual([
+      expect.objectContaining({ minItems: 1, maxItems: 64, uniqueItems: true }),
+    ]);
+    for (const verificationRefs of schemasForProperty(acceptanceRequest, 'verifications')) {
+      expect(verificationRefs).toEqual(
+        expect.objectContaining({ maxItems: 32, uniqueItems: true }),
+      );
+    }
+
+    const validateVerification = new Ajv2020({ strict: true, allErrors: true }).compile(
+      verificationRequest,
+    );
+    const duplicateRef = { id: 'evidence', revision: 1, digest: `sha256:${'a'.repeat(64)}` };
+    expect(validateVerification({
+      protocolVersion: '0.6',
+      requestId: 'verification',
+      commandType: 'verification.request',
+      presenceRegistrationId: 'presence',
+      aggregate: { kind: 'acceptance_check', id: 'check', expectedRevision: 1 },
+      payload: { evidence: [duplicateRef, duplicateRef] },
+    })).toBe(false);
+
+    expect(paths['/public/responsibilities/closure/acceptance-checks']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'target selector is owner-bound and reread to exact canonical subject revisions and digests',
+      'criterion reference is reread server-side and no inline semantic content is admitted',
+    ]);
+    expect(paths['/public/responsibilities/closure/evidence']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'observation reference resolves to one exact canonical observation and server-derived provenance',
+      'producer category and owner identity invariants are enforced without admitting inline Evidence',
+    ]);
+    expect(paths['/public/responsibilities/closure/verifications']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'Evidence references are strictly ordered after JSON-Schema uniqueness validation',
+      'every Evidence reference resolves byte-and-digest-exact to current admitted owner-subject-check Evidence',
+      'method, verifier, availability, and producer-independent identity are derived and validated server-side',
+    ]);
+    expect(paths['/public/responsibilities/closure/acceptances']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
+      'verifier identity differs from every exact Evidence producer identity',
+      'release is a distinct owner disposition and never claims verified acceptance',
+    ]);
+    expect(paths['/public/responsibilities/closure/projection']!.get!
+      ['x-waldo-runtime-validation']).toEqual([
+      'every item owner matches the authenticated projection owner',
+      'item cursors are strictly ordered within the snapshot and cursor envelope is coherent',
+      'recordDigest and pageDigest equal SHA-256 of their canonical embedded values',
+      'page item count and UTF-8 byte bounds are enforced',
+    ]);
   });
 
   it('generates byte-identically across repeated builds', () => {

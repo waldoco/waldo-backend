@@ -16,7 +16,7 @@
         "id": "check_fixture",
         "ownerId": "owner_fixture",
         "revision": 1,
-        "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+        "digest": "sha256:87dffe505c297763185d5905e29a68caa99b2771b1542c27c3481093ed6e9a0a",
         "subject": {
           "outcome": {
             "id": "outcome_fixture",
@@ -29,7 +29,12 @@
             "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
           }
         },
-        "criterion": "The exact calendar state is independently read back.",
+        "criterion": {
+          "ref": "criterion_fixture",
+          "revision": 1,
+          "version": "1.0.0",
+          "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+        },
         "verificationMethod": {
           "kind": "deterministic_read_back",
           "capability": "calendar.read",
@@ -43,7 +48,7 @@
         "createdAt": "2026-08-16T12:00:01.000Z",
         "updatedAt": "2026-08-16T12:00:01.000Z"
       },
-      "recordDigest": "sha256:949c7e1c7ab4c4194912653afb9bed5333ded051c9956a0d6a3f6118a704891d"
+      "recordDigest": "sha256:adcfd5cce16870fea62b4a5c1943430c12cee94c2b6e9e5bbb8b060484c1346c"
     },
     {
       "cursor": 2,
@@ -68,7 +73,7 @@
         "acceptanceCheck": {
           "id": "check_fixture",
           "revision": 1,
-          "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+          "digest": "sha256:87dffe505c297763185d5905e29a68caa99b2771b1542c27c3481093ed6e9a0a"
         },
         "observation": {
           "kind": "execution_observation",
@@ -91,7 +96,7 @@
         "state": "admitted",
         "admittedAt": "2026-08-16T12:01:01.000Z"
       },
-      "recordDigest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+      "recordDigest": "sha256:70f386f4deb1f593ab903a9a4cbda160439bcd24dfff7a689e40eb77e7a1a115"
     },
     {
       "cursor": 3,
@@ -116,16 +121,16 @@
         "acceptanceCheck": {
           "id": "check_fixture",
           "revision": 1,
-          "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+          "digest": "sha256:87dffe505c297763185d5905e29a68caa99b2771b1542c27c3481093ed6e9a0a"
         },
         "evidence": [
           {
             "id": "evidence_fixture",
             "revision": 1,
-            "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+            "digest": "sha256:70f386f4deb1f593ab903a9a4cbda160439bcd24dfff7a689e40eb77e7a1a115"
           }
         ],
-        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "evidenceSetDigest": "sha256:097f8a10613e097698672e6ba261f65a995403623860d8c9c2d7a2905013a2ee",
         "method": {
           "kind": "deterministic_read_back",
           "version": "1.0.0"
@@ -147,7 +152,7 @@
         "state": "passed",
         "verifiedAt": "2026-08-16T12:02:01.000Z"
       },
-      "recordDigest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+      "recordDigest": "sha256:7b0828ab56794c4ab1982098985303d8ec3355585e007d6083427b048c303bf1"
     },
     {
       "cursor": 4,
@@ -175,21 +180,38 @@
         },
         "mode": "explicit_owner",
         "recordedAt": "2026-08-16T12:03:01.000Z",
-        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "activeAcceptanceChecks": {
+          "revision": 1,
+          "count": 1,
+          "digest": "sha256:6233d825b06f9e527ff0c6c95857e438609cb170ad0d2d206fc13726320480b6"
+        },
+        "evidenceSets": [
+          {
+            "acceptanceCheck": {
+              "id": "check_fixture",
+              "revision": 1,
+              "digest": "sha256:87dffe505c297763185d5905e29a68caa99b2771b1542c27c3481093ed6e9a0a"
+            },
+            "revision": 1,
+            "count": 1,
+            "evidenceSetDigest": "sha256:097f8a10613e097698672e6ba261f65a995403623860d8c9c2d7a2905013a2ee",
+            "digest": "sha256:a7218806e34069ca81def3bb0a3d74b9ff79bf942e890c70fdf80578ea70ecbd"
+          }
+        ],
         "verifications": [
           {
             "id": "verification_fixture",
             "revision": 1,
-            "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            "digest": "sha256:7b0828ab56794c4ab1982098985303d8ec3355585e007d6083427b048c303bf1"
           }
         ],
         "decision": "accepted",
         "reasonRef": null
       },
-      "recordDigest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+      "recordDigest": "sha256:db7c71438e56a0787ad761a58ee51b15ab5e788ae51ff9e9e31acc47053f83a0"
     }
   ],
   "hasMore": false,
   "generatedAt": "2026-08-16T12:04:00.000Z",
-  "pageDigest": "sha256:722aeb69710b7e087bb1f27c55df1a00c40b7fb09fe1297901f1a78368635175"
+  "pageDigest": "sha256:a4b9f8cf2c9e17495817ec42d85206292ae70481e17f03fca8689961bb8901ea"
 }

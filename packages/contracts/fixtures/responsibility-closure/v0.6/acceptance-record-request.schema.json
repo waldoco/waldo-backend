@@ -46,16 +46,14 @@
               "type": "string",
               "const": "accept"
             },
-            "evidenceSetDigest": {
-              "$ref": "#/$defs/__schema2"
-            },
             "verifications": {
               "minItems": 1,
               "maxItems": 32,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema3"
-              }
+                "$ref": "#/$defs/__schema2"
+              },
+              "uniqueItems": true
             },
             "reasonRef": {
               "anyOf": [
@@ -70,7 +68,6 @@
           },
           "required": [
             "decision",
-            "evidenceSetDigest",
             "verifications",
             "reasonRef"
           ],
@@ -83,22 +80,13 @@
               "type": "string",
               "const": "release"
             },
-            "evidenceSetDigest": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/__schema2"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "verifications": {
               "maxItems": 32,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema3"
-              }
+                "$ref": "#/$defs/__schema2"
+              },
+              "uniqueItems": true
             },
             "reasonRef": {
               "$ref": "#/$defs/__schema0"
@@ -106,7 +94,6 @@
           },
           "required": [
             "decision",
-            "evidenceSetDigest",
             "verifications",
             "reasonRef"
           ],
@@ -137,10 +124,6 @@
       "maximum": 9007199254740991
     },
     "__schema2": {
-      "type": "string",
-      "pattern": "^sha256:[a-f0-9]{64}$"
-    },
-    "__schema3": {
       "type": "object",
       "properties": {
         "id": {
@@ -150,7 +133,8 @@
           "$ref": "#/$defs/__schema1"
         },
         "digest": {
-          "$ref": "#/$defs/__schema2"
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
         }
       },
       "required": [

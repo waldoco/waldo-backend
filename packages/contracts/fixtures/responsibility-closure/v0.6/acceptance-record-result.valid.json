@@ -4,7 +4,7 @@
   "acceptance": {
     "id": "acceptance_fixture",
     "revision": 1,
-    "digest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+    "digest": "sha256:db7c71438e56a0787ad761a58ee51b15ab5e788ae51ff9e9e31acc47053f83a0"
   },
   "decision": "accepted",
   "projectionCursor": 4

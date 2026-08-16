@@ -10,7 +10,6 @@
   },
   "payload": {
     "decision": "release",
-    "evidenceSetDigest": null,
     "verifications": [],
     "reasonRef": "owner_release_reason_fixture"
   }

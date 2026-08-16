@@ -4,7 +4,7 @@
   "evidence": {
     "id": "evidence_fixture",
     "revision": 1,
-    "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+    "digest": "sha256:70f386f4deb1f593ab903a9a4cbda160439bcd24dfff7a689e40eb77e7a1a115"
   },
   "state": "admitted",
   "projectionCursor": 2

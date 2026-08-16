@@ -6,13 +6,17 @@ import {
   acceptanceRecordRequestV06Schema,
   acceptanceRecordResultV06Schema,
   acceptanceV06Schema,
+  canonicalizeActiveAcceptanceCheckSetV06ForDigest,
   canonicalizeAcceptanceCheckV06ForDigest,
   canonicalizeClosureProjectionPageV06ForDigest,
+  canonicalizeCurrentEvidenceSetEnvelopeV06ForDigest,
   closureCommandRetrySemanticsV06,
   closureDomainEventV06Schema,
   closureProjectionPageV06Schema,
   closureProjectionQueryV06Schema,
+  closureVerifierIndependenceRuleV06,
   createEvidenceSetDigestV06,
+  currentEvidenceSetEnvelopeV06Schema,
   evidenceAdmissionRequestV06Schema,
   evidenceAdmissionResultV06Schema,
   evidenceV06Schema,
@@ -20,22 +24,64 @@ import {
   verificationResultV06Schema,
   verificationV06Schema,
   verifiedAcceptanceBindingV06Schema,
+  activeAcceptanceCheckSetV06Schema,
   type ClosureSha256HexV06,
 } from './responsibility-closure-v0-6';
 import { canonicalizeProtocolJson } from './responsibility-handshake-v0-1';
 
 const file = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
 
-const schema = (value: z.ZodType, name: string): object => ({
-  ...(z.toJSONSchema(value, { target: 'draft-2020-12', io: 'input', reused: 'ref' }) as object),
-  $id: `urn:waldo:protocol:responsibility-closure:0.6:${name}`,
-  'x-waldo-validation-level': 'structural-plus-runtime-invariants',
-  'x-waldo-offline-commands': 'none',
-});
+const uniqueClosureArrayPropertiesV06 = new Set([
+  'acceptanceChecks',
+  'evidence',
+  'evidenceSets',
+  'records',
+  'verifications',
+]);
+
+function schema(value: z.ZodType, name: string): object {
+  const generated = z.toJSONSchema(value, {
+    target: 'draft-2020-12',
+    io: 'input',
+    reused: 'ref',
+  }) as Record<string, unknown>;
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      for (const child of candidate) visit(child);
+      return;
+    }
+    if (typeof candidate !== 'object' || candidate === null) return;
+    const object = candidate as Record<string, unknown>;
+    const properties = object.properties;
+    if (typeof properties === 'object' && properties !== null) {
+      for (const [propertyName, property] of Object.entries(
+        properties as Record<string, unknown>,
+      )) {
+        if (
+          uniqueClosureArrayPropertiesV06.has(propertyName) &&
+          typeof property === 'object' &&
+          property !== null &&
+          (property as Record<string, unknown>).type === 'array'
+        ) {
+          (property as Record<string, unknown>).uniqueItems = true;
+        }
+      }
+    }
+    for (const child of Object.values(object)) visit(child);
+  };
+  visit(generated);
+  return {
+    ...generated,
+    $id: `urn:waldo:protocol:responsibility-closure:0.6:${name}`,
+    'x-waldo-validation-level': 'structural-plus-runtime-invariants',
+    'x-waldo-offline-commands': 'none',
+  };
+}
 
 const rejectionSchemaNamesV06 = [
   'acceptance-check-declaration-request.schema.json',
   'evidence-admission-request.schema.json',
+  'evidence.schema.json',
   'verification-request.schema.json',
   'verification.schema.json',
   'acceptance-record-request.schema.json',
@@ -73,7 +119,13 @@ export function buildResponsibilityClosureV06Bundle(
     commandType: 'acceptance_check.declare',
     presenceRegistrationId: 'presence_fixture',
     payload: {
-      criterion: 'The exact calendar state is independently read back.',
+      target: { kind: 'work_unit', id: 'work_fixture', expectedRevision: 2 },
+      criterion: {
+        ref: 'criterion_fixture',
+        revision: 1,
+        version: '1.0.0',
+        digest: fixtureDigest,
+      },
       verificationMethod: { kind: 'deterministic_read_back', capability: 'calendar.read' },
     },
   });
@@ -100,6 +152,22 @@ export function buildResponsibilityClosureV06Bundle(
     digest: `sha256:${hashHex(canonicalizeAcceptanceCheckV06ForDigest(checkWithoutDigest))}`,
   });
   const checkRef = { id: check.id, revision: check.revision, digest: check.digest };
+  const activeCheckSetWithoutDigest = {
+    protocolVersion: '0.6',
+    ownerId: 'owner_fixture',
+    subject,
+    revision: 1,
+    count: 1,
+    digest: fixtureDigest,
+    acceptanceChecks: [checkRef],
+    records: [check],
+  } as const;
+  const activeCheckSet = activeAcceptanceCheckSetV06Schema.parse({
+    ...activeCheckSetWithoutDigest,
+    digest: `sha256:${hashHex(
+      canonicalizeActiveAcceptanceCheckSetV06ForDigest(activeCheckSetWithoutDigest),
+    )}`,
+  });
   const declarationResult = acceptanceCheckDeclarationResultV06Schema.parse({
     protocolVersion: '0.6',
     requestId: declarationRequest.requestId,
@@ -157,6 +225,24 @@ export function buildResponsibilityClosureV06Bundle(
     payload: { evidence: [evidenceRef] },
   });
   const evidenceSetDigest = createEvidenceSetDigestV06(hashHex)(verificationRequest.payload.evidence);
+  const evidenceSetEnvelopeWithoutDigest = {
+    protocolVersion: '0.6',
+    ownerId: 'owner_fixture',
+    subject,
+    acceptanceCheck: checkRef,
+    revision: 1,
+    count: 1,
+    evidenceSetDigest,
+    digest: fixtureDigest,
+    evidence: verificationRequest.payload.evidence,
+    records: [evidence],
+  } as const;
+  const evidenceSetEnvelope = currentEvidenceSetEnvelopeV06Schema.parse({
+    ...evidenceSetEnvelopeWithoutDigest,
+    digest: `sha256:${hashHex(
+      canonicalizeCurrentEvidenceSetEnvelopeV06ForDigest(evidenceSetEnvelopeWithoutDigest),
+    )}`,
+  });
   const passedVerification = verificationV06Schema.parse({
     protocolVersion: '0.6',
     id: 'verification_fixture',
@@ -211,7 +297,6 @@ export function buildResponsibilityClosureV06Bundle(
     aggregate: { kind: 'outcome', id: 'outcome_fixture', expectedRevision: 3 },
     payload: {
       decision: 'accept',
-      evidenceSetDigest,
       verifications: [verificationRef],
       reasonRef: null,
     },
@@ -222,8 +307,21 @@ export function buildResponsibilityClosureV06Bundle(
     ownerId: 'owner_fixture',
     revision: 1,
     subject,
-    evidenceSetDigest,
     verifications: [verificationRef],
+    activeAcceptanceChecks: {
+      revision: activeCheckSet.revision,
+      count: activeCheckSet.count,
+      digest: activeCheckSet.digest,
+    },
+    evidenceSets: [
+      {
+        acceptanceCheck: evidenceSetEnvelope.acceptanceCheck,
+        revision: evidenceSetEnvelope.revision,
+        count: evidenceSetEnvelope.count,
+        evidenceSetDigest: evidenceSetEnvelope.evidenceSetDigest,
+        digest: evidenceSetEnvelope.digest,
+      },
+    ],
     actor: { kind: 'owner', id: 'owner_fixture' },
     mode: 'explicit_owner',
     decision: 'accepted',
@@ -235,18 +333,22 @@ export function buildResponsibilityClosureV06Bundle(
     requestId: 'release_request_fixture',
     payload: {
       decision: 'release',
-      evidenceSetDigest: null,
       verifications: [],
       reasonRef: 'owner_release_reason_fixture',
     },
   });
   const release = acceptanceV06Schema.parse({
-    ...acceptance,
+    protocolVersion: '0.6',
     id: 'release_fixture',
-    evidenceSetDigest: null,
+    ownerId: 'owner_fixture',
+    revision: 1,
+    subject,
     verifications: [],
+    actor: { kind: 'owner', id: 'owner_fixture' },
+    mode: 'explicit_owner',
     decision: 'released',
     reasonRef: 'owner_release_reason_fixture',
+    recordedAt: '2026-08-16T12:03:01.000Z',
   });
   const acceptanceResult = acceptanceRecordResultV06Schema.parse({
     protocolVersion: '0.6',
@@ -264,7 +366,8 @@ export function buildResponsibilityClosureV06Bundle(
   });
   const binding = verifiedAcceptanceBindingV06Schema.parse({
     acceptance,
-    acceptanceChecks: [check],
+    activeAcceptanceChecks: activeCheckSet,
+    evidenceSets: [evidenceSetEnvelope],
     verifications: [passedVerification],
   });
   const projectionQuery = closureProjectionQueryV06Schema.parse({
@@ -319,6 +422,20 @@ export function buildResponsibilityClosureV06Bundle(
     original: acceptanceRequest,
     duplicate: { ...acceptanceRequest, payload: { ...acceptanceRequest.payload, reasonRef: 'changed' } },
   };
+  const unsafeDeclaration = (key: '__proto__' | 'prototype' | 'constructor') => {
+    const value = {
+      ...declarationRequest,
+      payload: {
+        ...declarationRequest.payload,
+        criterion: { ...declarationRequest.payload.criterion },
+      },
+    };
+    Object.defineProperty(value.payload.criterion, key, {
+      value: 'forbidden_unsafe_key',
+      enumerable: true,
+    });
+    return value;
+  };
   const rejectionCatalogue = responsibilityClosureRejectionCatalogueV06Schema.parse({
     protocolVersion: '0.6',
     cases: [
@@ -328,7 +445,12 @@ export function buildResponsibilityClosureV06Bundle(
       { name: 'caller-acceptance-policy', schema: 'acceptance-record-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...acceptanceRequest, policy: 'delegate_if_unavailable' } },
       { name: 'caller-acceptance-grantee', schema: 'acceptance-record-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...acceptanceRequest, grantee: 'delegate_attacker' } },
       { name: 'caller-acceptance-override', schema: 'acceptance-record-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...acceptanceRequest, override: true } },
-      { name: 'caller-declaration-subject', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...declarationRequest, aggregate: { kind: 'work_unit', id: 'work_attacker', expectedRevision: 1 } } },
+      { name: 'caller-declaration-subject', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...declarationRequest, subject: { outcome: { id: 'outcome_attacker', revision: 1, digest: fixtureDigest }, workUnit: null } } },
+      { name: 'caller-declaration-target-digest', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...declarationRequest, payload: { ...declarationRequest.payload, target: { ...declarationRequest.payload.target, digest: fixtureDigest } } } },
+      { name: 'inline-semantic-criterion', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...declarationRequest, payload: { ...declarationRequest.payload, criterion: { ...declarationRequest.payload.criterion, text: 'private health criterion content' } } } },
+      { name: 'unsafe-key-proto', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: unsafeDeclaration('__proto__') },
+      { name: 'unsafe-key-prototype', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: unsafeDeclaration('prototype') },
+      { name: 'unsafe-key-constructor', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: unsafeDeclaration('constructor') },
       { name: 'caller-clock', schema: 'acceptance-check-declaration-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...declarationRequest, clientIssuedAt: '2026-08-16T00:00:00.000Z' } },
       { name: 'caller-verifier', schema: 'verification-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...verificationRequest, verifier: 'verifier_attacker' } },
       { name: 'caller-source', schema: 'evidence-admission-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...evidenceRequest, source: 'provider_attacker' } },
@@ -336,9 +458,19 @@ export function buildResponsibilityClosureV06Bundle(
       { name: 'provider-done-implies-evidence', schema: 'evidence-admission-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...evidenceRequest, payload: { ...evidenceRequest.payload, done: true } } },
       { name: 'self-verification-passed', schema: 'verification.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...passedVerification, verifier: { ...passedVerification.verifier, independentFromProducer: false } } },
       { name: 'unavailable-verification-passed', schema: 'verification.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...passedVerification, verifier: { ...passedVerification.verifier, availability: 'unavailable' } } },
-      { name: 'duplicate-evidence-refs', schema: 'verification-request.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...verificationRequest, payload: { evidence: [evidenceRef, evidenceRef] } } },
+      { name: 'producer-verifier-identity-conflict', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, verifications: [{ ...passedVerification, verifier: { ...passedVerification.verifier, id: 'kennel_fixture' } }] } },
+      { name: 'observation-producer-category-confusion', schema: 'evidence.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...evidence, observation: { ...evidence.observation, kind: 'person_statement' } } },
+      { name: 'cross-owner-person-producer', schema: 'evidence.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...evidence, observation: { ...evidence.observation, kind: 'person_statement' }, provenance: { producer: { kind: 'person', id: 'owner_other', version: null }, admittedBy: { kind: 'owner', id: 'owner_fixture' } } } },
+      { name: 'cross-owner-admitter', schema: 'evidence.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...evidence, provenance: { ...evidence.provenance, admittedBy: { kind: 'owner', id: 'owner_other' } } } },
+      { name: 'duplicate-evidence-refs', schema: 'verification-request.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...verificationRequest, payload: { evidence: [evidenceRef, evidenceRef] } } },
       { name: 'reordered-evidence-refs', schema: 'verification-request.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...verificationRequest, payload: { evidence: [{ ...evidenceRef, id: 'evidence_z' }, evidenceRef] } } },
-      { name: 'partial-check-coverage', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, acceptanceChecks: [check, secondCheckWithDigest] } },
+      { name: 'partial-check-coverage', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, activeAcceptanceChecks: { ...activeCheckSet, count: 2, acceptanceChecks: [checkRef, { id: secondCheckWithDigest.id, revision: secondCheckWithDigest.revision, digest: secondCheckWithDigest.digest }], records: [check, secondCheckWithDigest] } } },
+      { name: 'missing-evidence-record', schema: 'verified-acceptance-binding.schema.json', layer: 'structural', zodOutcome: 'reject', value: { ...binding, evidenceSets: [{ ...evidenceSetEnvelope, records: [] }] } },
+      { name: 'nonexistent-evidence-record', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, evidenceSets: [{ ...evidenceSetEnvelope, evidence: [{ ...evidenceRef, id: 'evidence_missing' }] }] } },
+      { name: 'stale-evidence-acceptance', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, evidenceSets: [{ ...evidenceSetEnvelope, records: [{ ...evidence, state: 'stale' }] }] } },
+      { name: 'invalidated-evidence-acceptance', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, evidenceSets: [{ ...evidenceSetEnvelope, records: [{ ...evidence, state: 'invalidated' }] }] } },
+      { name: 'cross-owner-evidence-acceptance', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, evidenceSets: [{ ...evidenceSetEnvelope, records: [{ ...evidence, ownerId: 'owner_other' }] }] } },
+      { name: 'wrong-check-evidence-acceptance', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, evidenceSets: [{ ...evidenceSetEnvelope, records: [{ ...evidence, acceptanceCheck: { ...checkRef, id: 'check_other' } }] }] } },
       { name: 'failed-verification-acceptance', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, verifications: [{ ...passedVerification, state: 'failed' }] } },
       { name: 'indeterminate-verification-acceptance', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, verifications: [indeterminateVerification] } },
       { name: 'stale-verification-acceptance', schema: 'verified-acceptance-binding.schema.json', layer: 'runtime', zodOutcome: 'reject', value: { ...binding, verifications: [{ ...passedVerification, state: 'stale' }] } },
@@ -449,8 +581,26 @@ export function buildResponsibilityClosureV06Bundle(
       },
       acceptancePolicy: {
         mode: 'explicit_owner_only',
-        acceptRequires: 'complete_current_passed_independent_verification',
+        acceptRequires:
+          'complete_active_check_set_with_exact_current_evidence_and_passed_independent_verification',
         nonPassedDisposition: 'release',
+      },
+      targetingPolicy: {
+        callerProposal: 'outcome_or_work_unit_id_and_expected_revision_only',
+        canonicalSubject: 'server_reread_owner_revision_and_digest',
+      },
+      criterionPolicy: {
+        publicRepresentation: 'content_free_server_reread_ref_revision_version_digest',
+        inlineSemanticContent: 'forbidden',
+      },
+      verificationPolicy: {
+        independence: closureVerifierIndependenceRuleV06,
+        evidence: 'exact_current_admitted_owner_subject_check_records',
+      },
+      publicCommandSafety: {
+        recursiveEnumerableUnsafeKeys: ['__proto__', 'prototype', 'constructor'],
+        jsonSchemaUniqueItems: true,
+        runtimeOrdering: 'strict_by_id',
       },
       bytePreservation: {
         throughVersion: '0.5',

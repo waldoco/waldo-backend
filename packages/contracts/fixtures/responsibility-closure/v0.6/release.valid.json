@@ -21,7 +21,6 @@
   },
   "mode": "explicit_owner",
   "recordedAt": "2026-08-16T12:03:01.000Z",
-  "evidenceSetDigest": null,
   "verifications": [],
   "decision": "released",
   "reasonRef": "owner_release_reason_fixture"

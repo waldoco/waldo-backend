@@ -46,7 +46,8 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/__schema2"
-          }
+          },
+          "uniqueItems": true
         }
       },
       "required": [

@@ -4,7 +4,17 @@
   "presenceRegistrationId": "presence_fixture",
   "commandType": "acceptance_check.declare",
   "payload": {
-    "criterion": "The exact calendar state is independently read back.",
+    "target": {
+      "kind": "work_unit",
+      "id": "work_fixture",
+      "expectedRevision": 2
+    },
+    "criterion": {
+      "ref": "criterion_fixture",
+      "revision": 1,
+      "version": "1.0.0",
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    },
     "verificationMethod": {
       "kind": "deterministic_read_back",
       "capability": "calendar.read"

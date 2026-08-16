@@ -18,7 +18,7 @@
   "acceptanceCheck": {
     "id": "check_fixture",
     "revision": 1,
-    "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+    "digest": "sha256:87dffe505c297763185d5905e29a68caa99b2771b1542c27c3481093ed6e9a0a"
   },
   "observation": {
     "kind": "execution_observation",

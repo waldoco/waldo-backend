@@ -6,7 +6,6 @@ import {
   protocolIdSchema,
   protocolNameSchema,
 } from './responsibility-handshake-v0-1';
-import { responsibilityCaptureTextV02Schema } from './responsibility-handshake-v0-2';
 import { exactRevisionV04Schema } from './responsibility-protocol-v0-4';
 
 export const protocolVersionV06Schema = z.literal('0.6');
@@ -134,6 +133,32 @@ const closureCommandBaseV06Shape = {
   presenceRegistrationId: protocolIdSchema,
 } as const;
 
+const unsafePublicCommandKeysV06 = ['__proto__', 'prototype', 'constructor'] as const;
+
+function containsEnumerableUnsafePublicCommandKeyV06(
+  value: unknown,
+  seen: WeakSet<object>,
+): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  for (const key of unsafePublicCommandKeysV06) {
+    if (Object.prototype.propertyIsEnumerable.call(value, key)) return true;
+  }
+  return Object.keys(value).some((key) =>
+    containsEnumerableUnsafePublicCommandKeyV06(
+      (value as Record<string, unknown>)[key],
+      seen,
+    ),
+  );
+}
+
+function rejectEnumerableUnsafePublicCommandKeysV06(value: unknown): unknown {
+  return containsEnumerableUnsafePublicCommandKeyV06(value, new WeakSet<object>())
+    ? { rejectedUnsafePublicCommandKey: true }
+    : value;
+}
+
 export const acceptanceCheckMethodProposalV06Schema = z.strictObject({
   kind: z.enum([
     'deterministic_read_back',
@@ -143,11 +168,24 @@ export const acceptanceCheckMethodProposalV06Schema = z.strictObject({
   capability: protocolNameSchema,
 });
 
+export const closureTargetSelectorV06Schema = z.strictObject({
+  kind: z.enum(['outcome', 'work_unit']),
+  id: protocolIdSchema,
+  expectedRevision: exactRevisionV04Schema,
+});
+
 export const acceptanceVerificationMethodV06Schema = z.strictObject({
   kind: acceptanceCheckMethodProposalV06Schema.shape.kind,
   capability: protocolNameSchema,
   version: protocolNameSchema,
   material: z.strictObject({ ref: protocolIdSchema, digest: protocolDigestSchema }),
+});
+
+export const acceptanceCriterionRefV06Schema = z.strictObject({
+  ref: protocolIdSchema,
+  revision: exactRevisionV04Schema,
+  version: protocolNameSchema,
+  digest: protocolDigestSchema,
 });
 
 export const acceptanceCheckV06Schema = z
@@ -158,7 +196,7 @@ export const acceptanceCheckV06Schema = z
     revision: exactRevisionV04Schema,
     digest: protocolDigestSchema,
     subject: closureSubjectV06Schema,
-    criterion: responsibilityCaptureTextV02Schema.max(2_048),
+    criterion: acceptanceCriterionRefV06Schema,
     verificationMethod: acceptanceVerificationMethodV06Schema,
     state: z.enum(['active', 'superseded', 'withdrawn']),
     createdAt: iso8601Schema,
@@ -182,14 +220,20 @@ export function canonicalizeAcceptanceCheckV06ForDigest(value: unknown): string 
   return canonicalizeProtocolJson(digestInput);
 }
 
-export const acceptanceCheckDeclarationRequestV06Schema = z.strictObject({
+const acceptanceCheckDeclarationRequestV06StructuralSchema = z.strictObject({
   ...closureCommandBaseV06Shape,
   commandType: z.literal('acceptance_check.declare'),
   payload: z.strictObject({
-    criterion: responsibilityCaptureTextV02Schema.max(2_048),
+    target: closureTargetSelectorV06Schema,
+    criterion: acceptanceCriterionRefV06Schema,
     verificationMethod: acceptanceCheckMethodProposalV06Schema,
   }),
 });
+
+export const acceptanceCheckDeclarationRequestV06Schema = z.preprocess(
+  rejectEnumerableUnsafePublicCommandKeysV06,
+  acceptanceCheckDeclarationRequestV06StructuralSchema,
+);
 
 export type AcceptanceCheckDeclarationRequestV06 = z.infer<
   typeof acceptanceCheckDeclarationRequestV06Schema
@@ -214,7 +258,7 @@ export const closureObservationRefV06Schema = z.strictObject({
   digest: protocolDigestSchema,
 });
 
-export const evidenceAdmissionRequestV06Schema = z.strictObject({
+const evidenceAdmissionRequestV06StructuralSchema = z.strictObject({
   ...closureCommandBaseV06Shape,
   commandType: z.literal('evidence.admit'),
   aggregate: z.strictObject({
@@ -224,6 +268,11 @@ export const evidenceAdmissionRequestV06Schema = z.strictObject({
   }),
   payload: z.strictObject({ observation: closureObservationRefV06Schema }),
 });
+
+export const evidenceAdmissionRequestV06Schema = z.preprocess(
+  rejectEnumerableUnsafePublicCommandKeysV06,
+  evidenceAdmissionRequestV06StructuralSchema,
+);
 
 export type EvidenceAdmissionRequestV06 = z.infer<typeof evidenceAdmissionRequestV06Schema>;
 
@@ -253,6 +302,13 @@ const evidenceBaseV06Shape = {
   observedAt: iso8601Schema,
 } as const;
 
+const producerKindByObservationKindV06 = {
+  provider_observation: 'provider',
+  execution_observation: 'execution_environment',
+  effect_receipt: 'effect_adapter',
+  person_statement: 'person',
+} as const;
+
 export const evidenceV06Schema = z.discriminatedUnion('state', [
   z.strictObject({
     ...evidenceBaseV06Shape,
@@ -272,6 +328,36 @@ export const evidenceV06Schema = z.discriminatedUnion('state', [
       message: 'Evidence admission cannot predate its canonical observation',
     });
   }
+  if (
+    evidence.provenance.producer.kind !==
+    producerKindByObservationKindV06[evidence.observation.kind]
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provenance', 'producer', 'kind'],
+      message: 'Evidence producer kind must match its canonical observation category',
+    });
+  }
+  if (
+    evidence.provenance.producer.kind === 'person' &&
+    evidence.provenance.producer.id !== evidence.ownerId
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provenance', 'producer', 'id'],
+      message: 'Person-produced Evidence must identify the exact owner',
+    });
+  }
+  if (
+    evidence.provenance.admittedBy.kind === 'owner' &&
+    evidence.provenance.admittedBy.id !== evidence.ownerId
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['provenance', 'admittedBy', 'id'],
+      message: 'Owner-admitted Evidence must identify the exact owner',
+    });
+  }
 });
 
 export type EvidenceV06 = z.infer<typeof evidenceV06Schema>;
@@ -284,7 +370,7 @@ export const evidenceAdmissionResultV06Schema = z.strictObject({
   projectionCursor: exactRevisionV04Schema,
 });
 
-export const verificationRequestV06Schema = z.strictObject({
+const verificationRequestV06StructuralSchema = z.strictObject({
   ...closureCommandBaseV06Shape,
   commandType: z.literal('verification.request'),
   aggregate: z.strictObject({
@@ -294,6 +380,11 @@ export const verificationRequestV06Schema = z.strictObject({
   }),
   payload: z.strictObject({ evidence: evidenceSetV06Schema }),
 });
+
+export const verificationRequestV06Schema = z.preprocess(
+  rejectEnumerableUnsafePublicCommandKeysV06,
+  verificationRequestV06StructuralSchema,
+);
 
 export type VerificationRequestV06 = z.infer<typeof verificationRequestV06Schema>;
 
@@ -311,14 +402,22 @@ export const closureCommandRetrySemanticsV06 = Object.freeze({
   changedDuplicate: 'reject_request_conflict',
 } as const);
 
-const verificationReferenceSetV06Schema = z
+export const verificationReferenceSetV06Schema = z
   .array(closureRecordRefV06Schema)
   .max(32)
   .refine(isStrictlyOrderedById, {
     error: 'Verification references must be unique and strictly ordered by id',
   });
 
-export const acceptanceRecordRequestV06Schema = z.strictObject({
+export const nonEmptyVerificationReferenceSetV06Schema = z
+  .array(closureRecordRefV06Schema)
+  .min(1)
+  .max(32)
+  .refine(isStrictlyOrderedById, {
+    error: 'Verification references must be unique and strictly ordered by id',
+  });
+
+const acceptanceRecordRequestV06StructuralSchema = z.strictObject({
   protocolVersion: protocolVersionV06Schema,
   requestId: protocolIdSchema,
   commandType: z.literal('acceptance.record'),
@@ -331,24 +430,21 @@ export const acceptanceRecordRequestV06Schema = z.strictObject({
   payload: z.discriminatedUnion('decision', [
     z.strictObject({
       decision: z.literal('accept'),
-      evidenceSetDigest: protocolDigestSchema,
-      verifications: z
-        .array(closureRecordRefV06Schema)
-        .min(1)
-        .max(32)
-        .refine(isStrictlyOrderedById, {
-          error: 'Verification references must be unique and strictly ordered by id',
-        }),
+      verifications: nonEmptyVerificationReferenceSetV06Schema,
       reasonRef: protocolIdSchema.nullable(),
     }),
     z.strictObject({
       decision: z.literal('release'),
-      evidenceSetDigest: protocolDigestSchema.nullable(),
       verifications: verificationReferenceSetV06Schema,
       reasonRef: protocolIdSchema,
     }),
   ]),
 });
+
+export const acceptanceRecordRequestV06Schema = z.preprocess(
+  rejectEnumerableUnsafePublicCommandKeysV06,
+  acceptanceRecordRequestV06StructuralSchema,
+);
 
 export type AcceptanceRecordRequestV06 = z.infer<typeof acceptanceRecordRequestV06Schema>;
 
@@ -359,6 +455,34 @@ export const acceptanceRecordResultV06Schema = z.strictObject({
   decision: z.enum(['accepted', 'released']),
   projectionCursor: exactRevisionV04Schema,
 });
+
+export const activeAcceptanceCheckSetSummaryV06Schema = z.strictObject({
+  revision: exactRevisionV04Schema,
+  count: z.int().min(1).max(32),
+  digest: protocolDigestSchema,
+});
+
+export const currentEvidenceSetSummaryV06Schema = z.strictObject({
+  acceptanceCheck: closureRecordRefV06Schema,
+  revision: exactRevisionV04Schema,
+  count: z.int().min(1).max(64),
+  evidenceSetDigest: protocolDigestSchema,
+  digest: protocolDigestSchema,
+});
+
+const currentEvidenceSetSummariesV06Schema = z
+  .array(currentEvidenceSetSummaryV06Schema)
+  .min(1)
+  .max(32)
+  .refine(
+    (values) =>
+      values.every(
+        (value, index) =>
+          index === 0 ||
+          values[index - 1]!.acceptanceCheck.id < value.acceptanceCheck.id,
+      ),
+    { error: 'Evidence-set summaries must be unique and ordered by AcceptanceCheck id' },
+  );
 
 const acceptanceBaseV06Shape = {
   protocolVersion: protocolVersionV06Schema,
@@ -374,14 +498,9 @@ const acceptanceBaseV06Shape = {
 export const acceptedAcceptanceV06Schema = z
   .strictObject({
     ...acceptanceBaseV06Shape,
-    evidenceSetDigest: protocolDigestSchema,
-    verifications: z
-      .array(closureRecordRefV06Schema)
-      .min(1)
-      .max(32)
-      .refine(isStrictlyOrderedById, {
-        error: 'Verification references must be unique and strictly ordered by id',
-      }),
+    activeAcceptanceChecks: activeAcceptanceCheckSetSummaryV06Schema,
+    evidenceSets: currentEvidenceSetSummariesV06Schema,
+    verifications: nonEmptyVerificationReferenceSetV06Schema,
     decision: z.literal('accepted'),
     reasonRef: protocolIdSchema.nullable(),
   })
@@ -398,13 +517,7 @@ export const acceptedAcceptanceV06Schema = z
 export const releasedAcceptanceV06Schema = z
   .strictObject({
     ...acceptanceBaseV06Shape,
-    evidenceSetDigest: protocolDigestSchema.nullable(),
-    verifications: z
-      .array(closureRecordRefV06Schema)
-      .max(32)
-      .refine(isStrictlyOrderedById, {
-        error: 'Verification references must be unique and strictly ordered by id',
-      }),
+    verifications: verificationReferenceSetV06Schema,
     decision: z.literal('released'),
     reasonRef: protocolIdSchema,
   })
@@ -428,16 +541,155 @@ export type AcceptanceV06 = z.infer<typeof acceptanceV06Schema>;
 const sameProtocolValue = (left: unknown, right: unknown): boolean =>
   canonicalizeProtocolJson(left) === canonicalizeProtocolJson(right);
 
-export const verifiedAcceptanceBindingV06Schema = z
+const activeAcceptanceCheckRefsV06Schema = z
+  .array(closureRecordRefV06Schema)
+  .min(1)
+  .max(32)
+  .refine(isStrictlyOrderedById, {
+    error: 'AcceptanceCheck references must be unique and strictly ordered by id',
+  });
+
+export const activeAcceptanceCheckSetV06Schema = z
   .strictObject({
-    acceptance: acceptedAcceptanceV06Schema,
-    acceptanceChecks: z
+    protocolVersion: protocolVersionV06Schema,
+    ownerId: protocolIdSchema,
+    subject: closureSubjectV06Schema,
+    revision: exactRevisionV04Schema,
+    count: z.int().min(1).max(32),
+    digest: protocolDigestSchema,
+    acceptanceChecks: activeAcceptanceCheckRefsV06Schema,
+    records: z
       .array(acceptanceCheckV06Schema)
       .min(1)
       .max(32)
       .refine(isStrictlyOrderedById, {
-        error: 'AcceptanceChecks must be unique and strictly ordered by id',
+        error: 'AcceptanceCheck records must be unique and strictly ordered by id',
       }),
+  })
+  .superRefine((set, context) => {
+    const issue = (path: PropertyKey[], message: string) =>
+      context.addIssue({ code: 'custom', path, message });
+    if (set.count !== set.acceptanceChecks.length || set.count !== set.records.length) {
+      issue(['count'], 'active AcceptanceCheck count must match exact references and records');
+    }
+    for (const [index, record] of set.records.entries()) {
+      const reference = set.acceptanceChecks[index];
+      if (
+        reference === undefined ||
+        reference.id !== record.id ||
+        reference.revision !== record.revision ||
+        reference.digest !== record.digest
+      ) {
+        issue(
+          ['records', index],
+          'active AcceptanceCheck record must match its exact ordered reference',
+        );
+      }
+      if (
+        record.state !== 'active' ||
+        record.ownerId !== set.ownerId ||
+        !sameProtocolValue(record.subject, set.subject)
+      ) {
+        issue(
+          ['records', index],
+          'active AcceptanceCheck record must match exact owner, subject, and active state',
+        );
+      }
+    }
+  });
+
+export type ActiveAcceptanceCheckSetV06 = z.infer<
+  typeof activeAcceptanceCheckSetV06Schema
+>;
+
+export function canonicalizeActiveAcceptanceCheckSetV06ForDigest(value: unknown): string {
+  const set = activeAcceptanceCheckSetV06Schema.parse(value);
+  const { digest: _digest, ...digestInput } = set;
+  return canonicalizeProtocolJson(digestInput);
+}
+
+export const currentEvidenceSetEnvelopeV06Schema = z
+  .strictObject({
+    protocolVersion: protocolVersionV06Schema,
+    ownerId: protocolIdSchema,
+    subject: closureSubjectV06Schema,
+    acceptanceCheck: closureRecordRefV06Schema,
+    revision: exactRevisionV04Schema,
+    count: z.int().min(1).max(64),
+    evidenceSetDigest: protocolDigestSchema,
+    digest: protocolDigestSchema,
+    evidence: evidenceSetV06Schema,
+    records: z
+      .array(evidenceV06Schema)
+      .min(1)
+      .max(64)
+      .refine(isStrictlyOrderedById, {
+        error: 'Evidence records must be unique and strictly ordered by id',
+      }),
+  })
+  .superRefine((set, context) => {
+    const issue = (path: PropertyKey[], message: string) =>
+      context.addIssue({ code: 'custom', path, message });
+    if (set.count !== set.evidence.length || set.count !== set.records.length) {
+      issue(['count'], 'current Evidence count must match exact references and records');
+    }
+    for (const [index, record] of set.records.entries()) {
+      const reference = set.evidence[index];
+      if (
+        reference === undefined ||
+        reference.id !== record.id ||
+        reference.revision !== record.revision
+      ) {
+        issue(['records', index], 'current Evidence record must match its exact ordered reference');
+      }
+      if (
+        record.state !== 'admitted' ||
+        record.ownerId !== set.ownerId ||
+        !sameProtocolValue(record.subject, set.subject) ||
+        !sameProtocolValue(record.acceptanceCheck, set.acceptanceCheck)
+      ) {
+        issue(
+          ['records', index],
+          'current Evidence must be admitted and match exact owner, subject, and AcceptanceCheck',
+        );
+      }
+    }
+  });
+
+export type CurrentEvidenceSetEnvelopeV06 = z.infer<
+  typeof currentEvidenceSetEnvelopeV06Schema
+>;
+
+export function canonicalizeCurrentEvidenceSetEnvelopeV06ForDigest(value: unknown): string {
+  const set = currentEvidenceSetEnvelopeV06Schema.parse(value);
+  const { digest: _digest, ...digestInput } = set;
+  return canonicalizeProtocolJson(digestInput);
+}
+
+export const closureVerifierIndependenceRuleV06 = Object.freeze({
+  version: 'verifier-producer-identity-v1',
+  requirement: 'verifier_id_must_differ_from_every_evidence_producer_id',
+} as const);
+
+const currentEvidenceSetEnvelopesV06Schema = z
+  .array(currentEvidenceSetEnvelopeV06Schema)
+  .min(1)
+  .max(32)
+  .refine(
+    (values) =>
+      values.every(
+        (value, index) =>
+          index === 0 ||
+          values[index - 1]!.acceptanceCheck.id < value.acceptanceCheck.id,
+      ),
+    { error: 'Evidence-set envelopes must be unique and ordered by AcceptanceCheck id' },
+  );
+
+export const verifiedAcceptanceBindingV06Schema = z
+  .strictObject({
+    acceptance: acceptedAcceptanceV06Schema,
+    activeAcceptanceChecks: activeAcceptanceCheckSetV06Schema,
+    evidenceSets: currentEvidenceSetEnvelopesV06Schema,
     verifications: z
       .array(verificationV06Schema)
       .min(1)
@@ -450,19 +702,44 @@ export const verifiedAcceptanceBindingV06Schema = z
     const issue = (path: PropertyKey[], message: string) =>
       context.addIssue({ code: 'custom', path, message });
     const { acceptance } = binding;
+    const acceptanceChecks = binding.activeAcceptanceChecks.records;
+    const evidenceSets = new Map(
+      binding.evidenceSets.map((set) => [set.acceptanceCheck.id, set]),
+    );
     const acceptanceVerificationRefs = new Map(
       acceptance.verifications.map((reference) => [reference.id, reference]),
     );
     if (
       binding.verifications.length !== acceptanceVerificationRefs.size ||
-      binding.acceptanceChecks.length !== binding.verifications.length
+      acceptanceChecks.length !== binding.verifications.length ||
+      binding.evidenceSets.length !== binding.verifications.length ||
+      acceptance.evidenceSets.length !== binding.verifications.length
     ) {
       issue(
         ['verifications'],
         'accepted closure requires one current passed Verification per active AcceptanceCheck',
       );
     }
-    for (const [index, check] of binding.acceptanceChecks.entries()) {
+    if (
+      binding.activeAcceptanceChecks.ownerId !== acceptance.ownerId ||
+      !sameProtocolValue(binding.activeAcceptanceChecks.subject, acceptance.subject)
+    ) {
+      issue(
+        ['activeAcceptanceChecks'],
+        'active AcceptanceCheck set must bind the exact accepted owner and subject',
+      );
+    }
+    if (
+      acceptance.activeAcceptanceChecks.revision !== binding.activeAcceptanceChecks.revision ||
+      acceptance.activeAcceptanceChecks.count !== binding.activeAcceptanceChecks.count ||
+      acceptance.activeAcceptanceChecks.digest !== binding.activeAcceptanceChecks.digest
+    ) {
+      issue(
+        ['acceptance', 'activeAcceptanceChecks'],
+        'Acceptance must bind the exact server-derived active AcceptanceCheck set',
+      );
+    }
+    for (const [index, check] of acceptanceChecks.entries()) {
       if (
         check.ownerId !== acceptance.ownerId ||
         check.state !== 'active' ||
@@ -489,16 +766,19 @@ export const verifiedAcceptanceBindingV06Schema = z
       }
       if (
         verification.ownerId !== acceptance.ownerId ||
-        !sameProtocolValue(verification.subject, acceptance.subject) ||
-        verification.evidenceSetDigest !== acceptance.evidenceSetDigest
+        !sameProtocolValue(verification.subject, acceptance.subject)
       ) {
         issue(
           ['verifications', index],
-          'Verification must bind the exact accepted owner, subject, and evidence set',
+          'Verification must bind the exact accepted owner and subject',
         );
       }
-      const check = binding.acceptanceChecks.find(
+      const check = acceptanceChecks.find(
         (candidate) => candidate.id === verification.acceptanceCheck.id,
+      );
+      const evidenceSet = evidenceSets.get(verification.acceptanceCheck.id);
+      const evidenceSetSummary = acceptance.evidenceSets.find(
+        (summary) => summary.acceptanceCheck.id === verification.acceptanceCheck.id,
       );
       if (
         check === undefined ||
@@ -519,6 +799,42 @@ export const verifiedAcceptanceBindingV06Schema = z
         issue(
           ['verifications', index, 'method'],
           'Verification method and version must match the exact current AcceptanceCheck',
+        );
+      }
+      if (
+        evidenceSet === undefined ||
+        evidenceSet.evidenceSetDigest !== verification.evidenceSetDigest ||
+        !sameProtocolValue(evidenceSet.evidence, verification.evidence)
+      ) {
+        issue(
+          ['evidenceSets'],
+          'Verification must bind one exact current Evidence-set envelope for its AcceptanceCheck',
+        );
+      }
+      if (
+        evidenceSet !== undefined &&
+        evidenceSet.records.some(
+          (evidence) => evidence.provenance.producer.id === verification.verifier.id,
+        )
+      ) {
+        issue(
+          ['verifications', index, 'verifier', 'id'],
+          'passed verifier identity must differ from every exact Evidence producer identity',
+        );
+      }
+      if (
+        evidenceSet === undefined ||
+        evidenceSetSummary === undefined ||
+        evidenceSetSummary.acceptanceCheck.revision !== evidenceSet.acceptanceCheck.revision ||
+        evidenceSetSummary.acceptanceCheck.digest !== evidenceSet.acceptanceCheck.digest ||
+        evidenceSetSummary.revision !== evidenceSet.revision ||
+        evidenceSetSummary.count !== evidenceSet.count ||
+        evidenceSetSummary.evidenceSetDigest !== evidenceSet.evidenceSetDigest ||
+        evidenceSetSummary.digest !== evidenceSet.digest
+      ) {
+        issue(
+          ['acceptance', 'evidenceSets'],
+          'Acceptance must bind every exact server-derived current Evidence-set envelope',
         );
       }
       seenCheckIds.add(verification.acceptanceCheck.id);
@@ -662,20 +978,24 @@ function assertTrustedSha256HexV06(value: string): void {
   }
 }
 
-function digestCanonicalValueV06(value: unknown, sha256Hex: ClosureSha256HexV06): string {
-  const digest = sha256Hex(canonicalizeProtocolJson(value));
+function digestCanonicalUtf8V06(
+  canonicalUtf8: string,
+  sha256Hex: ClosureSha256HexV06,
+): string {
+  const digest = sha256Hex(canonicalUtf8);
   assertTrustedSha256HexV06(digest);
   return `sha256:${digest}`;
+}
+
+function digestCanonicalValueV06(value: unknown, sha256Hex: ClosureSha256HexV06): string {
+  return digestCanonicalUtf8V06(canonicalizeProtocolJson(value), sha256Hex);
 }
 
 export function createEvidenceSetDigestV06(
   sha256Hex: ClosureSha256HexV06,
 ): (value: unknown) => string {
-  return (value) => {
-    const digest = sha256Hex(canonicalizeEvidenceSetV06ForDigest(value));
-    assertTrustedSha256HexV06(digest);
-    return `sha256:${digest}`;
-  };
+  return (value) =>
+    digestCanonicalUtf8V06(canonicalizeEvidenceSetV06ForDigest(value), sha256Hex);
 }
 
 export class VerifiedAcceptanceDigestMismatchErrorV06 extends Error {
@@ -690,17 +1010,63 @@ export function createVerifiedAcceptanceBindingVerifierV06(
 ): (value: unknown) => VerifiedAcceptanceBindingV06 {
   return (value) => {
     const binding = verifiedAcceptanceBindingV06Schema.parse(value);
-    const checks = new Map(binding.acceptanceChecks.map((check) => [check.id, check]));
+    const checks = new Map(
+      binding.activeAcceptanceChecks.records.map((check) => [check.id, check]),
+    );
     const verificationRefs = new Map(
       binding.acceptance.verifications.map((reference) => [reference.id, reference]),
     );
-    for (const check of binding.acceptanceChecks) {
+    if (
+      binding.activeAcceptanceChecks.digest !==
+      digestCanonicalUtf8V06(
+        canonicalizeActiveAcceptanceCheckSetV06ForDigest(
+          binding.activeAcceptanceChecks,
+        ),
+        sha256Hex,
+      )
+    ) {
+      throw new VerifiedAcceptanceDigestMismatchErrorV06(
+        'active AcceptanceCheck set digest must match its canonical exact envelope',
+      );
+    }
+    for (const check of binding.activeAcceptanceChecks.records) {
       const digest = sha256Hex(canonicalizeAcceptanceCheckV06ForDigest(check));
       assertTrustedSha256HexV06(digest);
       if (check.digest !== `sha256:${digest}`) {
         throw new VerifiedAcceptanceDigestMismatchErrorV06(
           'AcceptanceCheck digest must match its canonical current record',
         );
+      }
+    }
+    for (const evidenceSet of binding.evidenceSets) {
+      if (
+        evidenceSet.evidenceSetDigest !==
+        createEvidenceSetDigestV06(sha256Hex)(evidenceSet.evidence)
+      ) {
+        throw new VerifiedAcceptanceDigestMismatchErrorV06(
+          'current Evidence-set digest must match its canonical ordered references',
+        );
+      }
+      if (
+        evidenceSet.digest !==
+        digestCanonicalUtf8V06(
+          canonicalizeCurrentEvidenceSetEnvelopeV06ForDigest(evidenceSet),
+          sha256Hex,
+        )
+      ) {
+        throw new VerifiedAcceptanceDigestMismatchErrorV06(
+          'current Evidence-set envelope digest must match its canonical exact records',
+        );
+      }
+      for (const [index, evidence] of evidenceSet.records.entries()) {
+        if (
+          evidenceSet.evidence[index]?.digest !==
+          digestCanonicalValueV06(evidence, sha256Hex)
+        ) {
+          throw new VerifiedAcceptanceDigestMismatchErrorV06(
+            'Evidence reference digest must match its canonical current admitted record',
+          );
+        }
       }
     }
     for (const verification of binding.verifications) {
@@ -757,9 +1123,10 @@ export function createClosureProjectionPageVerifierV06(
         );
       }
     }
-    const digest = sha256Hex(canonicalizeClosureProjectionPageV06ForDigest(page));
-    assertTrustedSha256HexV06(digest);
-    if (page.pageDigest !== `sha256:${digest}`) {
+    if (
+      page.pageDigest !==
+      digestCanonicalUtf8V06(canonicalizeClosureProjectionPageV06ForDigest(page), sha256Hex)
+    ) {
       throw new ClosureProjectionDigestMismatchErrorV06(
         'pageDigest must match the canonical closure projection page',
       );

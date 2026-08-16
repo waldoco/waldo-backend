@@ -78,6 +78,7 @@ const schemaForValidFixture: Record<keyof typeof validFixtureSchemas, string> = 
 const rejectionSchemas = {
   'acceptance-check-declaration-request.schema.json': acceptanceCheckDeclarationRequestV06Schema,
   'evidence-admission-request.schema.json': evidenceAdmissionRequestV06Schema,
+  'evidence.schema.json': evidenceV06Schema,
   'verification-request.schema.json': verificationRequestV06Schema,
   'verification.schema.json': verificationV06Schema,
   'acceptance-record-request.schema.json': acceptanceRecordRequestV06Schema,
@@ -94,6 +95,11 @@ const requiredRejections = [
   'caller-acceptance-grantee',
   'caller-acceptance-override',
   'caller-declaration-subject',
+  'caller-declaration-target-digest',
+  'inline-semantic-criterion',
+  'unsafe-key-proto',
+  'unsafe-key-prototype',
+  'unsafe-key-constructor',
   'caller-clock',
   'caller-verifier',
   'caller-source',
@@ -101,9 +107,19 @@ const requiredRejections = [
   'provider-done-implies-evidence',
   'self-verification-passed',
   'unavailable-verification-passed',
+  'producer-verifier-identity-conflict',
+  'observation-producer-category-confusion',
+  'cross-owner-person-producer',
+  'cross-owner-admitter',
   'duplicate-evidence-refs',
   'reordered-evidence-refs',
   'partial-check-coverage',
+  'missing-evidence-record',
+  'nonexistent-evidence-record',
+  'stale-evidence-acceptance',
+  'invalidated-evidence-acceptance',
+  'cross-owner-evidence-acceptance',
+  'wrong-check-evidence-acceptance',
   'failed-verification-acceptance',
   'indeterminate-verification-acceptance',
   'stale-verification-acceptance',
@@ -138,6 +154,41 @@ describe('responsibility closure v0.6 fixtures', () => {
     expect(() => createVerifiedAcceptanceBindingVerifierV06(hashHex)(
       JSON.parse(bundle['verified-acceptance-binding.valid.json']!),
     )).not.toThrow();
+    const binding = JSON.parse(bundle['verified-acceptance-binding.valid.json']!);
+    const corruptedDigest = `sha256:${'0'.repeat(64)}`;
+    expect(() => createVerifiedAcceptanceBindingVerifierV06(hashHex)({
+      ...binding,
+      acceptance: {
+        ...binding.acceptance,
+        activeAcceptanceChecks: {
+          ...binding.acceptance.activeAcceptanceChecks,
+          digest: corruptedDigest,
+        },
+      },
+      activeAcceptanceChecks: {
+        ...binding.activeAcceptanceChecks,
+        digest: corruptedDigest,
+      },
+    })).toThrow('active AcceptanceCheck set digest');
+    expect(() => createVerifiedAcceptanceBindingVerifierV06(hashHex)({
+      ...binding,
+      acceptance: {
+        ...binding.acceptance,
+        evidenceSets: [{ ...binding.acceptance.evidenceSets[0], digest: corruptedDigest }],
+      },
+      evidenceSets: [{ ...binding.evidenceSets[0], digest: corruptedDigest }],
+    })).toThrow('current Evidence-set envelope digest');
+    expect(() => createVerifiedAcceptanceBindingVerifierV06(hashHex)({
+      ...binding,
+      evidenceSets: [{
+        ...binding.evidenceSets[0],
+        evidence: [{ ...binding.evidenceSets[0].evidence[0], digest: corruptedDigest }],
+      }],
+      verifications: [{
+        ...binding.verifications[0],
+        evidence: [{ ...binding.verifications[0].evidence[0], digest: corruptedDigest }],
+      }],
+    })).toThrow('current Evidence-set digest');
     expect(() => createClosureProjectionPageVerifierV06(hashHex)(
       JSON.parse(bundle['closure-projection-page.valid.json']!),
     )).not.toThrow();
@@ -161,8 +212,24 @@ describe('responsibility closure v0.6 fixtures', () => {
       },
       acceptancePolicy: {
         mode: 'explicit_owner_only',
-        acceptRequires: 'complete_current_passed_independent_verification',
+        acceptRequires:
+          'complete_active_check_set_with_exact_current_evidence_and_passed_independent_verification',
         nonPassedDisposition: 'release',
+      },
+      targetingPolicy: {
+        callerProposal: 'outcome_or_work_unit_id_and_expected_revision_only',
+        canonicalSubject: 'server_reread_owner_revision_and_digest',
+      },
+      criterionPolicy: {
+        publicRepresentation: 'content_free_server_reread_ref_revision_version_digest',
+        inlineSemanticContent: 'forbidden',
+      },
+      verificationPolicy: {
+        independence: {
+          version: 'verifier-producer-identity-v1',
+          requirement: 'verifier_id_must_differ_from_every_evidence_producer_id',
+        },
+        evidence: 'exact_current_admitted_owner_subject_check_records',
       },
       retrySemantics: {
         identity: 'requestId',

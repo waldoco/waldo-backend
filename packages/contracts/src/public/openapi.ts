@@ -151,6 +151,10 @@ const operationMetadata = Object.freeze({
     requestSchemas: { '0.6': 'AcceptanceCheckDeclarationRequestV06' },
     responseSchemas: { '0.6': 'AcceptanceCheckDeclarationResultV06' },
     retrySemantics: closureCommandRetrySemanticsV06,
+    runtimeValidation: [
+      'target selector is owner-bound and reread to exact canonical subject revisions and digests',
+      'criterion reference is reread server-side and no inline semantic content is admitted',
+    ],
   },
   closure_evidence_admit: {
     operationId: 'admitClosureEvidence',
@@ -159,6 +163,10 @@ const operationMetadata = Object.freeze({
     requestSchemas: { '0.6': 'EvidenceAdmissionRequestV06' },
     responseSchemas: { '0.6': 'EvidenceAdmissionResultV06' },
     retrySemantics: closureCommandRetrySemanticsV06,
+    runtimeValidation: [
+      'observation reference resolves to one exact canonical observation and server-derived provenance',
+      'producer category and owner identity invariants are enforced without admitting inline Evidence',
+    ],
   },
   closure_verification_request: {
     operationId: 'requestClosureVerification',
@@ -167,6 +175,11 @@ const operationMetadata = Object.freeze({
     requestSchemas: { '0.6': 'VerificationRequestV06' },
     responseSchemas: { '0.6': 'VerificationResultV06' },
     retrySemantics: closureCommandRetrySemanticsV06,
+    runtimeValidation: [
+      'Evidence references are strictly ordered after JSON-Schema uniqueness validation',
+      'every Evidence reference resolves byte-and-digest-exact to current admitted owner-subject-check Evidence',
+      'method, verifier, availability, and producer-independent identity are derived and validated server-side',
+    ],
   },
   closure_acceptance_record: {
     operationId: 'recordClosureAcceptance',
@@ -176,7 +189,9 @@ const operationMetadata = Object.freeze({
     responseSchemas: { '0.6': 'AcceptanceRecordResultV06' },
     retrySemantics: closureCommandRetrySemanticsV06,
     runtimeValidation: [
-      'accept requires every current AcceptanceCheck to have exact passed independent Verification over the same canonical Evidence set',
+      'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
+      'verifier identity differs from every exact Evidence producer identity',
       'release is a distinct owner disposition and never claims verified acceptance',
     ],
   },
@@ -186,7 +201,10 @@ const operationMetadata = Object.freeze({
     successStatus: '200',
     responseSchemas: { '0.6': 'ClosureProjectionPageV06' },
     runtimeValidation: [
+      'every item owner matches the authenticated projection owner',
+      'item cursors are strictly ordered within the snapshot and cursor envelope is coherent',
       'recordDigest and pageDigest equal SHA-256 of their canonical embedded values',
+      'page item count and UTF-8 byte bounds are enforced',
     ],
   },
 } as const);
@@ -212,6 +230,45 @@ function stripGeneratedSchemaNoise(value: unknown): unknown {
 
 function schemaFor(schema: z.ZodType): JsonRecord {
   return stripGeneratedSchemaNoise(z.toJSONSchema(schema)) as JsonRecord;
+}
+
+const closureUniqueArrayProperties = new Set([
+  'acceptanceChecks',
+  'evidence',
+  'evidenceSets',
+  'records',
+  'verifications',
+]);
+
+function schemaForWithUniqueArrayProperties(
+  schema: z.ZodType,
+  propertyNames: ReadonlySet<string>,
+): JsonRecord {
+  const generated = schemaFor(schema);
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (typeof value !== 'object' || value === null) return;
+    const object = value as JsonRecord;
+    const properties = object.properties;
+    if (typeof properties === 'object' && properties !== null) {
+      for (const [name, property] of Object.entries(properties as JsonRecord)) {
+        if (
+          propertyNames.has(name) &&
+          typeof property === 'object' &&
+          property !== null &&
+          (property as JsonRecord).type === 'array'
+        ) {
+          (property as JsonRecord).uniqueItems = true;
+        }
+      }
+    }
+    for (const child of Object.values(object)) visit(child);
+  };
+  visit(generated);
+  return generated;
 }
 
 function schemaContent(
@@ -387,11 +444,20 @@ export function buildPublicOpenApiDocument(
         ),
         EvidenceAdmissionRequestV06: schemaFor(evidenceAdmissionRequestV06Schema),
         EvidenceAdmissionResultV06: schemaFor(evidenceAdmissionResultV06Schema),
-        VerificationRequestV06: schemaFor(verificationRequestV06Schema),
+        VerificationRequestV06: schemaForWithUniqueArrayProperties(
+          verificationRequestV06Schema,
+          closureUniqueArrayProperties,
+        ),
         VerificationResultV06: schemaFor(verificationResultV06Schema),
-        AcceptanceRecordRequestV06: schemaFor(acceptanceRecordRequestV06Schema),
+        AcceptanceRecordRequestV06: schemaForWithUniqueArrayProperties(
+          acceptanceRecordRequestV06Schema,
+          closureUniqueArrayProperties,
+        ),
         AcceptanceRecordResultV06: schemaFor(acceptanceRecordResultV06Schema),
-        ClosureProjectionPageV06: schemaFor(closureProjectionPageV06Schema),
+        ClosureProjectionPageV06: schemaForWithUniqueArrayProperties(
+          closureProjectionPageV06Schema,
+          closureUniqueArrayProperties,
+        ),
         ...Object.fromEntries(
           Object.entries(responsibilityHttpProblemSchemasV01).map(([status, schema]) => [
             `ResponsibilityHttpProblem${status}V01`,

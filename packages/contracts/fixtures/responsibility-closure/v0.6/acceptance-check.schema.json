@@ -114,10 +114,28 @@
       "additionalProperties": false
     },
     "__schema6": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 2048,
-      "pattern": "\\S"
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "version": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema3"
+        }
+      },
+      "required": [
+        "ref",
+        "revision",
+        "version",
+        "digest"
+      ],
+      "additionalProperties": false
     },
     "__schema7": {
       "type": "object",

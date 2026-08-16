@@ -19,11 +19,54 @@
     "payload": {
       "type": "object",
       "properties": {
+        "target": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "outcome",
+                "work_unit"
+              ]
+            },
+            "id": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/__schema1"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "expectedRevision"
+          ],
+          "additionalProperties": false
+        },
         "criterion": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 2048,
-          "pattern": "\\S"
+          "type": "object",
+          "properties": {
+            "ref": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "version": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "ref",
+            "revision",
+            "version",
+            "digest"
+          ],
+          "additionalProperties": false
         },
         "verificationMethod": {
           "type": "object",
@@ -48,6 +91,7 @@
         }
       },
       "required": [
+        "target",
         "criterion",
         "verificationMethod"
       ],
@@ -68,6 +112,11 @@
       "minLength": 1,
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema1": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
     }
   },
   "$id": "urn:waldo:protocol:responsibility-closure:0.6:acceptance-check-declaration-request",

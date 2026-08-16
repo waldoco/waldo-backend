@@ -3,7 +3,7 @@
   "id": "check_fixture",
   "ownerId": "owner_fixture",
   "revision": 1,
-  "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+  "digest": "sha256:87dffe505c297763185d5905e29a68caa99b2771b1542c27c3481093ed6e9a0a",
   "subject": {
     "outcome": {
       "id": "outcome_fixture",
@@ -16,7 +16,12 @@
       "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
     }
   },
-  "criterion": "The exact calendar state is independently read back.",
+  "criterion": {
+    "ref": "criterion_fixture",
+    "revision": 1,
+    "version": "1.0.0",
+    "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+  },
   "verificationMethod": {
     "kind": "deterministic_read_back",
     "capability": "calendar.read",
