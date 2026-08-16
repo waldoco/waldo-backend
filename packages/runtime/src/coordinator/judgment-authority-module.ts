@@ -6,10 +6,6 @@ import {
   judgmentAnswerResultV05Schema,
   judgmentAuthorityBindingV05Schema,
   judgmentDecisionV05Schema,
-  judgmentProjectionItemV05Schema,
-  judgmentProjectionPageUtf8ByteLengthV05,
-  judgmentProjectionPageV05Schema,
-  MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05,
   judgmentRequestV05Schema,
   authorityGranteeV05Schema,
   judgmentSubjectV05Schema,
@@ -21,14 +17,16 @@ import {
   type JudgmentDecisionV05,
   type AuthorityGrantV05,
   type JudgmentRequestV05,
-  type JudgmentProjectionPageV05,
 } from '@waldo/contracts';
-import {
-  ResponsibilityJudgmentConflictError,
-  ResponsibilityProjectionCursorError,
-  ResponsibilityProjectionMissingError,
-} from '../responsibility/errors';
+import { ResponsibilityJudgmentConflictError } from '../responsibility/errors';
 import { OwnerEventLog } from './owner-event-log';
+import {
+  ProjectionPublisher,
+  serializeJudgmentRequestEventPayloadV05,
+  validateJudgmentRequestEventV05,
+  type JudgmentProjectionItemV05,
+  type StoredOwnerEventV05,
+} from './projection-publisher';
 
 export type JudgmentAdmissionBasisV05 = Readonly<{
   ownerId: string;
@@ -74,10 +72,6 @@ function parseJudgmentAdmissionBasisV05(value: unknown): JudgmentAdmissionBasisV
   });
 }
 
-export type JudgmentProjectionItemV05 = ReturnType<
-  typeof judgmentProjectionItemV05Schema.parse
->;
-
 type StoredRequestRow = Readonly<{
   owner_id: string;
   revision: number;
@@ -93,13 +87,14 @@ export type StoredJudgmentRequestV05 = Readonly<{
   admissionBasis: JudgmentAdmissionBasisV05;
 }>;
 
-/** Sole writer for JudgmentRequest, Decision, AuthorityGrant and the Needs You projection. */
+/** Sole writer for JudgmentRequest, Decision, and AuthorityGrant. */
 export class JudgmentAuthorityModule {
   private readonly events: OwnerEventLog;
 
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly newId: (kind: 'event' | 'snapshot') => string,
+    private readonly projections: ProjectionPublisher,
   ) {
     this.events = new OwnerEventLog(storage);
   }
@@ -146,7 +141,6 @@ export class JudgmentAuthorityModule {
       request.createdAt,
       request.updatedAt,
     );
-    this.ensureProjectionSnapshotInCurrentTransaction(request.ownerId, request.createdAt);
     const cursor = this.events.appendInCurrentTransaction({
       schemaVersion: '0.5',
       eventId: this.newId('event'),
@@ -158,21 +152,18 @@ export class JudgmentAuthorityModule {
       causationId: request.id,
       correlationId: request.id,
       occurredAt: request.createdAt,
-      payloadJson: requestJson,
+      payloadJson: serializeJudgmentRequestEventPayloadV05(
+        request,
+        input.displayedRequestDigest,
+        admissionBasis,
+      ),
     });
-    const item = judgmentProjectionItemV05Schema.parse({
+    const item = this.projections.publishAppendedEventInCurrentTransaction({
+      ownerId: request.ownerId,
       cursor,
-      itemType: 'judgment_request',
-      request,
-      displayedRequestDigest: input.displayedRequestDigest,
+      at: request.createdAt,
     });
-    this.storage.sql.exec(
-      `INSERT INTO judgment_projection (owner_cursor, owner_id, item_json)
-       VALUES (?, ?, ?)`,
-      cursor,
-      request.ownerId,
-      JSON.stringify(item),
-    );
+    if (item === undefined) throw new ResponsibilityJudgmentConflictError();
     return Object.freeze(item);
   }
 
@@ -281,21 +272,18 @@ export class JudgmentAuthorityModule {
       causationId: input.causationId,
       correlationId: input.causationId,
       occurredAt: terminal.updatedAt,
-      payloadJson: terminalJson,
+      payloadJson: serializeJudgmentRequestEventPayloadV05(
+        terminal,
+        input.terminalRequestDigest,
+        current.admissionBasis,
+      ),
     });
-    const item = judgmentProjectionItemV05Schema.parse({
+    const item = this.projections.publishAppendedEventInCurrentTransaction({
+      ownerId: terminal.ownerId,
       cursor,
-      itemType: 'judgment_request',
-      request: terminal,
-      displayedRequestDigest: input.terminalRequestDigest,
+      at: terminal.updatedAt,
     });
-    this.storage.sql.exec(
-      `INSERT INTO judgment_projection (owner_cursor, owner_id, item_json)
-       VALUES (?, ?, ?)`,
-      cursor,
-      terminal.ownerId,
-      JSON.stringify(item),
-    );
+    if (item === undefined) throw new ResponsibilityJudgmentConflictError();
     return Object.freeze(item);
   }
 
@@ -342,7 +330,7 @@ export class JudgmentAuthorityModule {
       canonicalizeJudgmentDecisionV05ForDigest(decision),
       decision.decidedAt,
     );
-    this.events.appendInCurrentTransaction({
+    const decisionCursor = this.events.appendInCurrentTransaction({
       schemaVersion: '0.5',
       eventId: this.newId('event'),
       ownerId: decision.ownerId,
@@ -354,6 +342,11 @@ export class JudgmentAuthorityModule {
       correlationId: binding.answer.correlationId ?? input.answerRequestId,
       occurredAt: decision.decidedAt,
       payloadJson: canonicalizeJudgmentDecisionV05ForDigest(decision),
+    });
+    this.projections.publishAppendedEventInCurrentTransaction({
+      ownerId: decision.ownerId,
+      cursor: decisionCursor,
+      at: decision.decidedAt,
     });
     if (binding.authorityDisposition === 'granted') {
       const grant = authorityGrantV05Schema.parse(binding.grant);
@@ -378,7 +371,7 @@ export class JudgmentAuthorityModule {
         grant.createdAt,
         grant.updatedAt,
       );
-      this.events.appendInCurrentTransaction({
+      const grantCursor = this.events.appendInCurrentTransaction({
         schemaVersion: '0.5',
         eventId: this.newId('event'),
         ownerId: grant.ownerId,
@@ -390,6 +383,11 @@ export class JudgmentAuthorityModule {
         correlationId: binding.answer.correlationId ?? input.answerRequestId,
         occurredAt: grant.createdAt,
         payloadJson: canonicalizeAuthorityGrantV05ForDigest(grant),
+      });
+      this.projections.publishAppendedEventInCurrentTransaction({
+        ownerId: grant.ownerId,
+        cursor: grantCursor,
+        at: grant.createdAt,
       });
     }
     const answeredRequestJson = canonicalizeJudgmentRequestV05ForDigest(answeredRequest);
@@ -425,21 +423,18 @@ export class JudgmentAuthorityModule {
       causationId: input.answerRequestId,
       correlationId: binding.answer.correlationId ?? input.answerRequestId,
       occurredAt: decision.decidedAt,
-      payloadJson: answeredRequestJson,
+      payloadJson: serializeJudgmentRequestEventPayloadV05(
+        answeredRequest,
+        input.answeredRequestDigest,
+        current.admissionBasis,
+      ),
     });
-    const item = judgmentProjectionItemV05Schema.parse({
+    const item = this.projections.publishAppendedEventInCurrentTransaction({
+      ownerId: answeredRequest.ownerId,
       cursor,
-      itemType: 'judgment_request',
-      request: answeredRequest,
-      displayedRequestDigest: input.answeredRequestDigest,
+      at: answeredRequest.updatedAt,
     });
-    this.storage.sql.exec(
-      `INSERT INTO judgment_projection (owner_cursor, owner_id, item_json)
-       VALUES (?, ?, ?)`,
-      cursor,
-      answeredRequest.ownerId,
-      JSON.stringify(item),
-    );
+    if (item === undefined) throw new ResponsibilityJudgmentConflictError();
     const result = judgmentAnswerResultV05Schema.parse({
       protocolVersion: '0.5',
       requestId: input.answerRequestId,
@@ -478,13 +473,13 @@ export class JudgmentAuthorityModule {
     grants: readonly AuthorityGrantV05[];
   }> {
     const requestMap = new Map<string, JudgmentRequestV05>();
+    const requestDigestMap = new Map<string, `sha256:${string}`>();
+    const requestBasisMap = new Map<string, JudgmentAdmissionBasisV05>();
     const decisionMap = new Map<string, JudgmentDecisionV05>();
     const grantMap = new Map<string, AuthorityGrantV05>();
-    const events = this.storage.sql.exec<{
-      owner_id: string; aggregate_kind: string; aggregate_id: string;
-      revision: number; event_type: string; payload_json: string;
-    }>(
-      `SELECT owner_id, aggregate_kind, aggregate_id, revision, event_type, payload_json
+    const events = this.storage.sql.exec<StoredOwnerEventV05>(
+      `SELECT owner_cursor, schema_version, owner_id, aggregate_kind, aggregate_id,
+              revision, event_type, payload_json
          FROM owner_domain_events
         WHERE schema_version = '0.5'
         ORDER BY owner_cursor ASC`,
@@ -492,58 +487,252 @@ export class JudgmentAuthorityModule {
     for (const event of events) {
       if (event.owner_id !== ownerId) throw new ResponsibilityJudgmentConflictError();
       if (event.aggregate_kind === 'judgment_request') {
-        const request = judgmentRequestV05Schema.parse(JSON.parse(event.payload_json));
+        const payload = validateJudgmentRequestEventV05(event);
+        const request = payload.request;
+        const basis = parseJudgmentAdmissionBasisV05(payload.admissionBasis);
+        this.assertAdmissionBinding(request, basis);
         const prior = requestMap.get(request.id);
+        const priorBasis = requestBasisMap.get(request.id);
+        const stableRequest = (value: JudgmentRequestV05) => {
+          const { revision: _revision, state: _state, decisionId: _decisionId,
+            updatedAt: _updatedAt, ...stable } = value;
+          return stable;
+        };
         if (
           request.id !== event.aggregate_id ||
           request.revision !== event.revision ||
           request.ownerId !== ownerId ||
-          request.revision !== (prior?.revision ?? 0) + 1
+          request.revision !== (prior?.revision ?? 0) + 1 ||
+          (prior === undefined && (
+            request.revision !== 1 || request.state !== 'open' || request.decisionId !== null
+          )) ||
+          (prior !== undefined && (
+            prior.revision !== 1 || prior.state !== 'open' ||
+            JSON.stringify(stableRequest(prior)) !== JSON.stringify(stableRequest(request)) ||
+            JSON.stringify(priorBasis) !== JSON.stringify(basis)
+          ))
         ) {
           throw new ResponsibilityJudgmentConflictError();
         }
         requestMap.set(request.id, request);
+        requestDigestMap.set(request.id, payload.displayedRequestDigest);
+        requestBasisMap.set(request.id, basis);
       } else if (event.aggregate_kind === 'judgment_decision') {
-        const decision = judgmentDecisionV05Schema.parse(JSON.parse(event.payload_json));
+        let decision: JudgmentDecisionV05;
+        try {
+          decision = judgmentDecisionV05Schema.parse(JSON.parse(event.payload_json));
+        } catch {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+        const request = requestMap.get(decision.judgmentRequestId);
+        const selectedOption = request?.options.find(
+          (option) => option.id === decision.selectedOptionId,
+        );
+        const basis = request === undefined ? undefined : requestBasisMap.get(request.id);
         if (
           event.event_type !== 'judgment_decision.recorded' ||
           decision.id !== event.aggregate_id ||
           decision.revision !== event.revision ||
+          decision.revision !== 1 ||
           decision.ownerId !== ownerId ||
-          decisionMap.has(decision.id)
+          decisionMap.has(decision.id) ||
+          request === undefined || request.state !== 'open' || request.revision !== 1 ||
+          decision.judgmentRequestRevision !== request.revision ||
+          JSON.stringify(decision.subject) !== JSON.stringify(request.subject) ||
+          decision.displayedRequestDigest !== requestDigestMap.get(request.id) ||
+          basis === undefined || decision.ownerPolicyRevision !== basis.ownerPolicyRevision ||
+          selectedOption === undefined
         ) {
           throw new ResponsibilityJudgmentConflictError();
         }
         decisionMap.set(decision.id, decision);
       } else if (event.aggregate_kind === 'authority_grant') {
-        const grant = authorityGrantV05Schema.parse(JSON.parse(event.payload_json));
+        let grant: AuthorityGrantV05;
+        try {
+          grant = authorityGrantV05Schema.parse(JSON.parse(event.payload_json));
+        } catch {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+        const request = requestMap.get(grant.judgmentRequestId);
+        const decision = decisionMap.get(grant.judgmentDecisionId);
+        const selectedOption = request?.options.find(
+          (option) => option.id === decision?.selectedOptionId,
+        );
+        const requested = request?.requestedAuthority;
+        const admission = request?.authorityAdmission;
+        const basis = request === undefined ? undefined : requestBasisMap.get(request.id);
         if (
           event.event_type !== 'authority_grant.issued' ||
           grant.id !== event.aggregate_id ||
           grant.revision !== event.revision ||
+          grant.revision !== 1 ||
           grant.ownerId !== ownerId ||
-          grantMap.has(grant.id)
+          grantMap.has(grant.id) ||
+          request === undefined || request.state !== 'open' || request.revision !== 1 ||
+          decision === undefined || selectedOption?.authorityDisposition !== 'grant' ||
+          requested === null || requested === undefined ||
+          admission === null || admission === undefined ||
+          basis === undefined ||
+          grant.judgmentRequestRevision !== request.revision ||
+          JSON.stringify(grant.subject) !== JSON.stringify(request.subject) ||
+          JSON.stringify(grant.grantee) !== JSON.stringify(admission.grantee) ||
+          grant.purpose !== requested.purpose ||
+          grant.effectFamily !== requested.effectFamily ||
+          JSON.stringify(grant.resources) !== JSON.stringify(requested.resources) ||
+          JSON.stringify(grant.scopes) !== JSON.stringify(requested.scopes) ||
+          JSON.stringify(grant.audiences) !== JSON.stringify(requested.audiences) ||
+          grant.argumentDigest !== requested.argumentDigest ||
+          grant.contextDigest !== requested.contextDigest ||
+          grant.artifactDigest !== requested.artifactDigest ||
+          grant.expiresAt !== requested.validUntil ||
+          grant.validFrom !== decision.decidedAt ||
+          grant.createdAt !== decision.decidedAt ||
+          grant.revocationGeneration !== basis.revocationGeneration ||
+          decision.ownerPolicyRevision !== basis.ownerPolicyRevision ||
+          decision.judgmentRequestId !== request.id ||
+          [...grantMap.values()].some((existing) =>
+            existing.judgmentRequestId === grant.judgmentRequestId ||
+            existing.judgmentDecisionId === grant.judgmentDecisionId)
         ) {
           throw new ResponsibilityJudgmentConflictError();
         }
         grantMap.set(grant.id, grant);
+      } else {
+        throw new ResponsibilityJudgmentConflictError();
       }
     }
+
+    for (const request of requestMap.values()) {
+      const decision = request.decisionId === null
+        ? undefined
+        : decisionMap.get(request.decisionId);
+      if (request.state === 'answered') {
+        const option = request.options.find((candidate) =>
+          candidate.id === decision?.selectedOptionId,
+        );
+        const matchingGrants = [...grantMap.values()].filter(
+          (grant) => grant.judgmentRequestId === request.id,
+        );
+        if (
+          decision === undefined || option === undefined ||
+          (option.authorityDisposition === 'grant' && matchingGrants.length !== 1) ||
+          (option.authorityDisposition === 'refuse' && matchingGrants.length !== 0)
+        ) {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+      } else if (request.state !== 'open' || decision !== undefined) {
+        if (request.state !== 'expired' && request.state !== 'superseded') {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+        if (decision !== undefined || [...grantMap.values()].some(
+          (grant) => grant.judgmentRequestId === request.id,
+        )) {
+          throw new ResponsibilityJudgmentConflictError();
+        }
+      }
+    }
+    for (const decision of decisionMap.values()) {
+      if (requestMap.get(decision.judgmentRequestId)?.decisionId !== decision.id) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+    }
+
     const requests = [...requestMap.values()];
     const decisions = [...decisionMap.values()];
     const grants = [...grantMap.values()];
-    const currentRequests = this.storage.sql.exec<{ request_json: string }>(
-      'SELECT request_json FROM judgment_requests WHERE owner_id = ? ORDER BY id',
-      ownerId,
-    ).toArray().map((row) => judgmentRequestV05Schema.parse(JSON.parse(row.request_json)));
-    const currentDecisions = this.storage.sql.exec<{ decision_json: string }>(
-      'SELECT decision_json FROM judgment_decisions WHERE owner_id = ? ORDER BY id',
-      ownerId,
-    ).toArray().map((row) => judgmentDecisionV05Schema.parse(JSON.parse(row.decision_json)));
-    const currentGrants = this.storage.sql.exec<{ grant_json: string }>(
-      'SELECT grant_json FROM authority_grants WHERE owner_id = ? ORDER BY id',
-      ownerId,
-    ).toArray().map((row) => authorityGrantV05Schema.parse(JSON.parse(row.grant_json)));
+    const currentRequests = this.storage.sql.exec<{
+      id: string; owner_id: string; revision: number; subject_kind: string;
+      subject_id: string; subject_revision: number; affected_digest: string;
+      displayed_request_digest: string; request_json: string; admission_basis_json: string;
+      state: string; decision_id: string | null; expires_at: string;
+      created_at: string; updated_at: string;
+    }>(
+      `SELECT id, owner_id, revision, subject_kind, subject_id, subject_revision,
+              affected_digest, displayed_request_digest, request_json, admission_basis_json,
+              state, decision_id, expires_at, created_at, updated_at
+         FROM judgment_requests ORDER BY id`,
+    ).toArray().map((row) => {
+      let request: JudgmentRequestV05;
+      let basis: JudgmentAdmissionBasisV05;
+      try {
+        request = judgmentRequestV05Schema.parse(JSON.parse(row.request_json));
+        basis = parseJudgmentAdmissionBasisV05(JSON.parse(row.admission_basis_json));
+      } catch (error) {
+        if (error instanceof ResponsibilityJudgmentConflictError) throw error;
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      this.assertAdmissionBinding(request, basis);
+      if (
+        row.id !== request.id || row.owner_id !== request.ownerId ||
+        row.revision !== request.revision || row.subject_kind !== request.subject.kind ||
+        row.subject_id !== request.subject.id || row.subject_revision !== request.subject.revision ||
+        row.affected_digest !== request.affectedDigest || row.state !== request.state ||
+        row.decision_id !== request.decisionId || row.expires_at !== request.expiresAt ||
+        row.created_at !== request.createdAt || row.updated_at !== request.updatedAt ||
+        row.request_json !== canonicalizeJudgmentRequestV05ForDigest(request) ||
+        row.displayed_request_digest !== requestDigestMap.get(request.id) ||
+        JSON.stringify(basis) !== JSON.stringify(requestBasisMap.get(request.id))
+      ) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      return request;
+    });
+    const currentDecisions = this.storage.sql.exec<{
+      id: string; owner_id: string; judgment_request_id: string; revision: number;
+      decision_json: string; decided_at: string;
+    }>(
+      `SELECT id, owner_id, judgment_request_id, revision, decision_json, decided_at
+         FROM judgment_decisions ORDER BY id`,
+    ).toArray().map((row) => {
+      let decision: JudgmentDecisionV05;
+      try {
+        decision = judgmentDecisionV05Schema.parse(JSON.parse(row.decision_json));
+      } catch {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      if (
+        row.id !== decision.id || row.owner_id !== decision.ownerId ||
+        row.judgment_request_id !== decision.judgmentRequestId ||
+        row.revision !== decision.revision || row.decided_at !== decision.decidedAt ||
+        row.decision_json !== canonicalizeJudgmentDecisionV05ForDigest(decision)
+      ) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      return decision;
+    });
+    const currentGrants = this.storage.sql.exec<{
+      id: string; owner_id: string; judgment_request_id: string;
+      judgment_decision_id: string; revision: number; grant_json: string;
+      use_limit: number; uses_consumed: number; next_use_index: number;
+      state: string; expires_at: string; revocation_generation: number;
+      created_at: string; updated_at: string;
+    }>(
+      `SELECT id, owner_id, judgment_request_id, judgment_decision_id, revision, grant_json,
+              use_limit, uses_consumed, next_use_index, state, expires_at,
+              revocation_generation, created_at, updated_at
+         FROM authority_grants ORDER BY id`,
+    ).toArray().map((row) => {
+      let grant: AuthorityGrantV05;
+      try {
+        grant = authorityGrantV05Schema.parse(JSON.parse(row.grant_json));
+      } catch {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      if (
+        row.id !== grant.id || row.owner_id !== grant.ownerId ||
+        row.judgment_request_id !== grant.judgmentRequestId ||
+        row.judgment_decision_id !== grant.judgmentDecisionId ||
+        row.revision !== grant.revision || row.use_limit !== grant.useLimit ||
+        row.uses_consumed !== grant.usesConsumed || row.next_use_index !== grant.nextUseIndex ||
+        row.state !== grant.state || row.expires_at !== grant.expiresAt ||
+        row.revocation_generation !== grant.revocationGeneration ||
+        row.created_at !== grant.createdAt || row.updated_at !== grant.updatedAt ||
+        row.grant_json !== canonicalizeAuthorityGrantV05ForDigest(grant)
+      ) {
+        throw new ResponsibilityJudgmentConflictError();
+      }
+      return grant;
+    });
     const byId = <Value extends { id: string }>(values: readonly Value[]) =>
       [...values].sort((left, right) => left.id.localeCompare(right.id));
     if (
@@ -560,77 +749,6 @@ export class JudgmentAuthorityModule {
     });
   }
 
-  readProjectionInCurrentTransaction(input: Readonly<{
-    ownerId: string;
-    fromExclusiveCursor: number;
-    limit: number;
-    snapshotId?: string;
-    generatedAt: string;
-  }>): JudgmentProjectionPageV05 {
-    const snapshot = this.storage.sql.exec<{
-      snapshot_id: string; snapshot_base_cursor: number;
-    }>(
-      `SELECT snapshot_id, snapshot_base_cursor
-         FROM judgment_projection_state WHERE owner_id = ?`,
-      input.ownerId,
-    ).toArray()[0];
-    if (snapshot === undefined) throw new ResponsibilityProjectionMissingError();
-    if (input.snapshotId !== undefined && input.snapshotId !== snapshot.snapshot_id) {
-      throw new ResponsibilityProjectionCursorError('snapshot_replaced');
-    }
-    const highWaterCursor = this.events.readHighWater(input.ownerId);
-    if (
-      input.fromExclusiveCursor < snapshot.snapshot_base_cursor ||
-      input.fromExclusiveCursor > highWaterCursor
-    ) {
-      throw new ResponsibilityProjectionCursorError(
-        input.fromExclusiveCursor > highWaterCursor ? 'cursor_ahead' : 'cursor_corrupt',
-      );
-    }
-    const rows = this.storage.sql.exec<{ owner_id: string; item_json: string }>(
-      `SELECT owner_id, item_json FROM judgment_projection
-        WHERE owner_id = ? AND owner_cursor > ? AND owner_cursor <= ?
-        ORDER BY owner_cursor ASC LIMIT ?`,
-      input.ownerId,
-      input.fromExclusiveCursor,
-      highWaterCursor,
-      input.limit,
-    ).toArray();
-    if (rows.some((row) => row.owner_id !== input.ownerId)) {
-      throw new ResponsibilityJudgmentConflictError();
-    }
-    const items = rows.map((row) => judgmentProjectionItemV05Schema.parse(
-      JSON.parse(row.item_json),
-    ));
-    let included = items.length;
-    while (true) {
-      const pageItems = items.slice(0, included);
-      const allJudgmentRowsIncluded = included === items.length && rows.length < input.limit;
-      const nextCursor = allJudgmentRowsIncluded
-        ? highWaterCursor
-        : pageItems.at(-1)?.cursor ?? input.fromExclusiveCursor;
-      const candidate = {
-        protocolVersion: '0.5' as const,
-        ownerId: input.ownerId,
-        projectionName: 'judgment.needs_you' as const,
-        snapshotId: snapshot.snapshot_id,
-        snapshotBaseCursor: snapshot.snapshot_base_cursor,
-        fromExclusiveCursor: input.fromExclusiveCursor,
-        highWaterCursor,
-        nextCursor,
-        items: pageItems,
-        hasMore: nextCursor < highWaterCursor,
-        generatedAt: input.generatedAt,
-      };
-      if (judgmentProjectionPageUtf8ByteLengthV05(candidate) <=
-          MAX_JUDGMENT_PROJECTION_PAGE_UTF8_BYTES_V05) {
-        return Object.freeze(judgmentProjectionPageV05Schema.parse(candidate));
-      }
-      if (included <= 1) throw new ResponsibilityProjectionCursorError('cursor_corrupt');
-      included -= 1;
-    }
-  }
-
   private assertCreationBinding(
     request: JudgmentRequestV05,
     input: Readonly<{
@@ -638,12 +756,22 @@ export class JudgmentAuthorityModule {
       admissionBasis: JudgmentAdmissionBasisV05;
     }>,
   ): void {
-    const basis = input.admissionBasis;
-    const admission = request.authorityAdmission;
     if (
       request.state !== 'open' ||
       request.revision !== 1 ||
-      request.decisionId !== null ||
+      request.decisionId !== null
+    ) {
+      throw new ResponsibilityJudgmentConflictError();
+    }
+    this.assertAdmissionBinding(request, input.admissionBasis);
+  }
+
+  private assertAdmissionBinding(
+    request: JudgmentRequestV05,
+    basis: JudgmentAdmissionBasisV05,
+  ): void {
+    const admission = request.authorityAdmission;
+    if (
       request.ownerId !== basis.ownerId ||
       request.affectedDigest !== basis.affectedDigest ||
       JSON.stringify(request.subject) !== JSON.stringify(basis.subject) ||
@@ -658,19 +786,4 @@ export class JudgmentAuthorityModule {
     }
   }
 
-  private ensureProjectionSnapshotInCurrentTransaction(ownerId: string, at: string): void {
-    const existing = this.storage.sql.exec<{ owner_id: string }>(
-      'SELECT owner_id FROM judgment_projection_state WHERE owner_id = ?',
-      ownerId,
-    ).toArray()[0];
-    if (existing !== undefined) return;
-    this.storage.sql.exec(
-      `INSERT INTO judgment_projection_state (
-        owner_id, snapshot_id, snapshot_base_cursor, updated_at
-      ) VALUES (?, ?, 0, ?)`,
-      ownerId,
-      this.newId('snapshot'),
-      at,
-    );
-  }
 }

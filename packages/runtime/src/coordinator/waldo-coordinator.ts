@@ -85,8 +85,11 @@ import type { LLMGatewayRequest, TrustedProviderEffect } from '../llm/provider';
 import {
   JudgmentAuthorityModule,
   type JudgmentAdmissionBasisV05,
-  type JudgmentProjectionItemV05,
 } from './judgment-authority-module';
+import {
+  ProjectionPublisher as JudgmentProjectionPublisher,
+  type JudgmentProjectionItemV05,
+} from './projection-publisher';
 
 export type {
   MissionRecord,
@@ -398,6 +401,7 @@ export class WaldoCoordinator {
   readonly #events: OwnerEventLog;
   readonly #outcomes: OutcomeModule;
   readonly #planning: PlanningExecutionModule;
+  readonly #judgmentProjections: JudgmentProjectionPublisher;
   readonly #judgments: JudgmentAuthorityModule;
 
   constructor(
@@ -410,7 +414,15 @@ export class WaldoCoordinator {
     this.#events = new OwnerEventLog(storage);
     this.#outcomes = new OutcomeModule(storage, dependencies.newId);
     this.#planning = new PlanningExecutionModule(storage, dependencies.newId);
-    this.#judgments = new JudgmentAuthorityModule(storage, dependencies.newId);
+    this.#judgmentProjections = new JudgmentProjectionPublisher(
+      storage,
+      () => dependencies.newId('snapshot'),
+    );
+    this.#judgments = new JudgmentAuthorityModule(
+      storage,
+      dependencies.newId,
+      this.#judgmentProjections,
+    );
   }
 
   admitCanonicalAuthority(
@@ -823,6 +835,25 @@ export class WaldoCoordinator {
     });
   }
 
+  rebuildJudgmentProjectionV05(
+    routedOwnerId: string,
+    canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
+  ) {
+    return this.#storage.transactionSync(() => {
+      const at = this.#deps.now();
+      const authority = this.#identity.assertCanonicalAuthorityInCurrentTransaction(
+        canonicalAuthority,
+        at,
+      );
+      if (authority.ownerId !== routedOwnerId ||
+          authority.authAssurance === 'legacy_unverified') {
+        throw new ResponsibilityOwnerRootMismatchError();
+      }
+      this.#judgments.replayInCurrentTransaction(authority.ownerId);
+      return this.#judgmentProjections.rebuildInCurrentTransaction(authority.ownerId, at);
+    });
+  }
+
   async readJudgmentProjectionV05(
     input: JudgmentProjectionReadV05,
     canonicalAuthority: ResponsibilityCanonicalAuthorityWithAssurance,
@@ -837,7 +868,7 @@ export class WaldoCoordinator {
           authority.authAssurance === 'legacy_unverified') {
         throw new ResponsibilityOwnerRootMismatchError();
       }
-      return this.#judgments.readProjectionInCurrentTransaction({
+      return this.#judgmentProjections.readInCurrentTransaction({
         ownerId: authority.ownerId,
         fromExclusiveCursor: query.fromExclusiveCursor,
         limit: query.limit,
