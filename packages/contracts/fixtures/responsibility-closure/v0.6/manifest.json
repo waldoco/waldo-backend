@@ -1,0 +1,220 @@
+{
+  "protocolName": "responsibility-closure",
+  "protocolVersion": "0.6",
+  "mediaType": "application/vnd.waldo.responsibility.v0.6+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "source": {
+    "path": "packages/contracts/src/protocol/responsibility-closure-v0-6.ts",
+    "sha256": "sha256:f829e870e83d339e9719e46c5e2beb574634efec9330d85af2951c4692a6a3cd"
+  },
+  "fixturePayloadRootSha256": "sha256:3c3f9db373f28a536588bd8ab5c9a8d455a6dd1fb5bbb3936ca4fd22a41b2cf8",
+  "compatibilityWindow": {
+    "predecessor": "0.5",
+    "mode": "parallel_additive",
+    "promise": "v0.1-v0.5 source, tests, and fixture bytes remain preserved",
+    "removal": "none_authorized"
+  },
+  "consumers": [
+    {
+      "name": "waldo-backend-runtime",
+      "contractRole": "canonical_runtime"
+    },
+    {
+      "name": "kennel",
+      "contractRole": "owner_surface"
+    },
+    {
+      "name": "waldo-mobile",
+      "contractRole": "owner_surface"
+    },
+    {
+      "name": "telegram",
+      "contractRole": "messaging_presence"
+    },
+    {
+      "name": "discord",
+      "contractRole": "messaging_presence"
+    }
+  ],
+  "writers": {
+    "acceptanceCheck": "OutcomeModule",
+    "evidence": "EvidenceVerifier",
+    "verification": "EvidenceVerifier",
+    "acceptance": "AcceptanceModule",
+    "projection": "ProjectionPublisher"
+  },
+  "acceptancePolicy": {
+    "mode": "explicit_owner_only",
+    "acceptRequires": "complete_current_passed_independent_verification",
+    "nonPassedDisposition": "release"
+  },
+  "bytePreservation": {
+    "throughVersion": "0.5",
+    "guard": "scripts/guards/guard-responsibility-released-v0-1-v0-5-bytes.mjs",
+    "compositeSha256": "sha256:f5bf7db0d5cef40f5acd8f9b04467e605a38cb6ab1d4e8ed15c0e6dd3db15a64"
+  },
+  "retrySemantics": {
+    "identity": "requestId",
+    "exactDuplicate": "return_persisted_result_byte_for_byte",
+    "changedDuplicate": "reject_request_conflict"
+  },
+  "files": [
+    {
+      "path": "acceptance-check-declaration-request.schema.json",
+      "sha256": "sha256:50ec628fdb37bd108043511257d27d144136de96d7026831d73b38e0cbf5431b"
+    },
+    {
+      "path": "acceptance-check-declaration-request.valid.json",
+      "sha256": "sha256:6a9dadc661d6928bf69d113f21a8a441f0bf30aec69ee82cea5f8b02c7b7350b"
+    },
+    {
+      "path": "acceptance-check-declaration-result.schema.json",
+      "sha256": "sha256:6e2a818525dff74e26d2f983126b9568264021cdb4c44d6449d70ebba5e8efe5"
+    },
+    {
+      "path": "acceptance-check-declaration-result.valid.json",
+      "sha256": "sha256:3562262fce1ae2c060d227fbe7cfa6872eb1b3fc1186517544385e2402e69962"
+    },
+    {
+      "path": "acceptance-check.schema.json",
+      "sha256": "sha256:d8d7589e929ec3de17593ee74354667d118485d570aaa4c734a887a15b47f60d"
+    },
+    {
+      "path": "acceptance-check.valid.json",
+      "sha256": "sha256:9c526f55d6680be3c3a2bb2d4376584a2a2790b1f668ed3308d68f2951826196"
+    },
+    {
+      "path": "acceptance-record-request.schema.json",
+      "sha256": "sha256:299057a20023a23efa8bb1ae9113d633ebda4a00b7a4d1457615e470ba72fa02"
+    },
+    {
+      "path": "acceptance-record-request.valid.json",
+      "sha256": "sha256:ef60403f84b3c1fd2ccd026fcbe3d9a84035d6c8b492e7c196b83c2e73420ea4"
+    },
+    {
+      "path": "acceptance-record-result.schema.json",
+      "sha256": "sha256:b72d1e6f629c49fb183818b6df15c3c0aaa0826f03910712d1a529ece298fc95"
+    },
+    {
+      "path": "acceptance-record-result.valid.json",
+      "sha256": "sha256:5dfe7b0ff842ed591abcc046dd29dbfad664fe98baf3aba223b6ead29b5b2b25"
+    },
+    {
+      "path": "acceptance.schema.json",
+      "sha256": "sha256:84420994faabf5bb575428838a48dd9d27049608e48281f4054919e67f4622f1"
+    },
+    {
+      "path": "acceptance.valid.json",
+      "sha256": "sha256:580bcf7f39d777c7f470c55219f2b5388a6755eebe70c2a7db9c34d5f109ee08"
+    },
+    {
+      "path": "closure-domain-event.schema.json",
+      "sha256": "sha256:2e4ecd861c216cd12a4a880e7499d01a3e216dcc2f7e5f383bfa953d3c3b76f8"
+    },
+    {
+      "path": "closure-domain-event.valid.json",
+      "sha256": "sha256:e7b7a9ecf0e27b9fb5a95e158166cd7ffbcfce36be13466a5b42a6a8e70acf4c"
+    },
+    {
+      "path": "closure-projection-page.schema.json",
+      "sha256": "sha256:d9aa5c09aae0c47629729bb8a2d3bcdde748e68602f570fa5034b588d8aeb92d"
+    },
+    {
+      "path": "closure-projection-page.valid.json",
+      "sha256": "sha256:0a89b3711bd9ac4992a61134cea79bff224816a256758ab784559c8ab473a4ad"
+    },
+    {
+      "path": "closure-projection-query.schema.json",
+      "sha256": "sha256:222c0971cc9f9af26cccd98470689d000cb21047726c50416de6ff91a3280692"
+    },
+    {
+      "path": "closure-projection-query.valid.json",
+      "sha256": "sha256:8360bead4747f8943d0f00df21c424aaf475f8ad89718d1027d20a6626ef20ae"
+    },
+    {
+      "path": "closure.rejections.json",
+      "sha256": "sha256:c9675a08ee3f2f2d224e2d863e00d3aac6c977c459e96ea621f7f03988d44f39"
+    },
+    {
+      "path": "evidence-admission-request.schema.json",
+      "sha256": "sha256:533de9cbc313a4fff330b60201cf6d5cd3ba32154e64075c6924e98856237ec1"
+    },
+    {
+      "path": "evidence-admission-request.valid.json",
+      "sha256": "sha256:7881f98d84c7339cd1c3e54d2843f3fc4b98978bac38a26d31bc23bfc8d3f673"
+    },
+    {
+      "path": "evidence-admission-result.schema.json",
+      "sha256": "sha256:bcc4a0ed6cc3200b73eae3edbfd34f2cfbeb9694c1d4899d3ec6b43539db6a7f"
+    },
+    {
+      "path": "evidence-admission-result.valid.json",
+      "sha256": "sha256:16b4be7c1aae2560282b60b804b3356012a14cdebb3d46c742b242ea97c35958"
+    },
+    {
+      "path": "evidence-stale.valid.json",
+      "sha256": "sha256:f16a8745548b235df2e03cef2951dfe1e0b99e62c9708b33d49bc9c62823769d"
+    },
+    {
+      "path": "evidence.schema.json",
+      "sha256": "sha256:a81ccd5a224fad40ef18ba03d382fa7cc1974702c6e731bc13cacd9d859c7781"
+    },
+    {
+      "path": "evidence.valid.json",
+      "sha256": "sha256:59e6e3394b63fafb5b947ff8b99b86cbe508965e17917989ae273a48cb637c7d"
+    },
+    {
+      "path": "idempotency.valid.json",
+      "sha256": "sha256:20d215afa2d71b2878cc93b52f81b4725ad38114d8a299a6ab686a85d608edd4"
+    },
+    {
+      "path": "release-record-request.valid.json",
+      "sha256": "sha256:66ab5f447cf4ccea061710b43a2a257ac218e50a2a449d4527d81fb216d4f51f"
+    },
+    {
+      "path": "release-record-result.valid.json",
+      "sha256": "sha256:fb600ee63126a99fe7dd70b69b3e05dd0687e0a095b29bf0fc26713d7d297ebd"
+    },
+    {
+      "path": "release.valid.json",
+      "sha256": "sha256:a0006d972ac44699fd35e31ec916340d71aa027a5cf1c443fa48d88484ada739"
+    },
+    {
+      "path": "verification-indeterminate.valid.json",
+      "sha256": "sha256:55b55d06825210250d92a296d11ef82b8e57ed847a661c9bc941ce6182529b5b"
+    },
+    {
+      "path": "verification-passed.valid.json",
+      "sha256": "sha256:72604553ca0b186a353f45153b3d66cc0378858ea18e623963eb5742576f5d67"
+    },
+    {
+      "path": "verification-request.schema.json",
+      "sha256": "sha256:fe18ca950b20cb1b1d4b22918d05c6fea4c22dbdefcfcd846c43706c5fe3a944"
+    },
+    {
+      "path": "verification-request.valid.json",
+      "sha256": "sha256:b41456f5ea445399bcd863c62b4ad58ca27f40fb0645d6b6d5b279905b1833e6"
+    },
+    {
+      "path": "verification-result.schema.json",
+      "sha256": "sha256:f4e7e7f8bd3ac5bb6bbb9264eaa41006917e300f2427e71b41288f2dc6be720f"
+    },
+    {
+      "path": "verification-result.valid.json",
+      "sha256": "sha256:ae6cde7abdf4814c71d7c8e75087c356152c702f8185d6924ee4840c2ecad907"
+    },
+    {
+      "path": "verification.schema.json",
+      "sha256": "sha256:6202068279cf83cd9351d79e38dbee10dfdbcf9d946a8b441e8541ca7ea94ad0"
+    },
+    {
+      "path": "verified-acceptance-binding.schema.json",
+      "sha256": "sha256:7f8f7d96c1514af527f29ada05db4c00ef34b4bdd201776c0c4cea53e4007fa4"
+    },
+    {
+      "path": "verified-acceptance-binding.valid.json",
+      "sha256": "sha256:e7a317b91074f4ea3a9fe47ea36eeb9e4d8e32e2359b1eb7a31ba2fe5bee1136"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "0.6",
+  "eventId": "closure_event_fixture",
+  "ownerId": "owner_fixture",
+  "aggregate": {
+    "kind": "acceptance",
+    "id": "acceptance_fixture",
+    "revision": 1
+  },
+  "eventType": "acceptance.recorded",
+  "payloadDigest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c",
+  "cursor": 4,
+  "occurredAt": "2026-08-16T12:03:01.000Z"
+}

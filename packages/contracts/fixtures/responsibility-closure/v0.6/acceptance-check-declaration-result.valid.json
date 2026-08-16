@@ -1,0 +1,10 @@
+{
+  "protocolVersion": "0.6",
+  "requestId": "check_declaration_request_fixture",
+  "acceptanceCheck": {
+    "id": "check_fixture",
+    "revision": 1,
+    "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+  },
+  "projectionCursor": 1
+}

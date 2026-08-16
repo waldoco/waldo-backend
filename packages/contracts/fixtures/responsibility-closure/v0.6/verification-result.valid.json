@@ -1,0 +1,11 @@
+{
+  "protocolVersion": "0.6",
+  "requestId": "verification_request_fixture",
+  "verification": {
+    "id": "verification_fixture",
+    "revision": 1,
+    "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+  },
+  "state": "passed",
+  "projectionCursor": 3
+}

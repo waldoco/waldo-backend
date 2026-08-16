@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.6"
+    },
+    "requestId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "presenceRegistrationId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "commandType": {
+      "type": "string",
+      "const": "acceptance_check.declare"
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "criterion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S"
+        },
+        "verificationMethod": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "deterministic_read_back",
+                "deterministic_artifact_check",
+                "declared_semantic_check"
+              ]
+            },
+            "capability": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          "required": [
+            "kind",
+            "capability"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "criterion",
+        "verificationMethod"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "requestId",
+    "presenceRegistrationId",
+    "commandType",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-closure:0.6:acceptance-check-declaration-request",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}

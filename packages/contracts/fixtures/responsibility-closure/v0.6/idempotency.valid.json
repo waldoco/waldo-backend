@@ -1,0 +1,101 @@
+{
+  "protocolVersion": "0.6",
+  "request": {
+    "protocolVersion": "0.6",
+    "requestId": "acceptance_request_fixture",
+    "commandType": "acceptance.record",
+    "presenceRegistrationId": "presence_fixture",
+    "aggregate": {
+      "kind": "outcome",
+      "id": "outcome_fixture",
+      "expectedRevision": 3
+    },
+    "payload": {
+      "decision": "accept",
+      "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+      "verifications": [
+        {
+          "id": "verification_fixture",
+          "revision": 1,
+          "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+        }
+      ],
+      "reasonRef": null
+    }
+  },
+  "firstResult": {
+    "protocolVersion": "0.6",
+    "requestId": "acceptance_request_fixture",
+    "acceptance": {
+      "id": "acceptance_fixture",
+      "revision": 1,
+      "digest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+    },
+    "decision": "accepted",
+    "projectionCursor": 4
+  },
+  "exactDuplicateResult": {
+    "protocolVersion": "0.6",
+    "requestId": "acceptance_request_fixture",
+    "acceptance": {
+      "id": "acceptance_fixture",
+      "revision": 1,
+      "digest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+    },
+    "decision": "accepted",
+    "projectionCursor": 4
+  },
+  "changedDuplicate": {
+    "original": {
+      "protocolVersion": "0.6",
+      "requestId": "acceptance_request_fixture",
+      "commandType": "acceptance.record",
+      "presenceRegistrationId": "presence_fixture",
+      "aggregate": {
+        "kind": "outcome",
+        "id": "outcome_fixture",
+        "expectedRevision": 3
+      },
+      "payload": {
+        "decision": "accept",
+        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "verifications": [
+          {
+            "id": "verification_fixture",
+            "revision": 1,
+            "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+          }
+        ],
+        "reasonRef": null
+      }
+    },
+    "duplicate": {
+      "protocolVersion": "0.6",
+      "requestId": "acceptance_request_fixture",
+      "commandType": "acceptance.record",
+      "presenceRegistrationId": "presence_fixture",
+      "aggregate": {
+        "kind": "outcome",
+        "id": "outcome_fixture",
+        "expectedRevision": 3
+      },
+      "payload": {
+        "decision": "accept",
+        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "verifications": [
+          {
+            "id": "verification_fixture",
+            "revision": 1,
+            "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+          }
+        ],
+        "reasonRef": "changed"
+      }
+    }
+  },
+  "semantics": {
+    "identity": "requestId",
+    "exactDuplicate": "return_persisted_result_byte_for_byte",
+    "changedDuplicate": "reject_request_conflict"
+  }
+}

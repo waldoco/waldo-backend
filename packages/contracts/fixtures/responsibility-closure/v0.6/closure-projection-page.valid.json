@@ -1,0 +1,195 @@
+{
+  "protocolVersion": "0.6",
+  "ownerId": "owner_fixture",
+  "projectionName": "responsibility.closure",
+  "snapshotId": "closure_snapshot_fixture",
+  "snapshotBaseCursor": 0,
+  "fromExclusiveCursor": 0,
+  "highWaterCursor": 4,
+  "nextCursor": 4,
+  "items": [
+    {
+      "cursor": 1,
+      "itemType": "acceptance_check",
+      "record": {
+        "protocolVersion": "0.6",
+        "id": "check_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+        "subject": {
+          "outcome": {
+            "id": "outcome_fixture",
+            "revision": 3,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "workUnit": {
+            "id": "work_fixture",
+            "revision": 2,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "criterion": "The exact calendar state is independently read back.",
+        "verificationMethod": {
+          "kind": "deterministic_read_back",
+          "capability": "calendar.read",
+          "version": "1.0.0",
+          "material": {
+            "ref": "calendar_state_fixture",
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "state": "active",
+        "createdAt": "2026-08-16T12:00:01.000Z",
+        "updatedAt": "2026-08-16T12:00:01.000Z"
+      },
+      "recordDigest": "sha256:949c7e1c7ab4c4194912653afb9bed5333ded051c9956a0d6a3f6118a704891d"
+    },
+    {
+      "cursor": 2,
+      "itemType": "evidence",
+      "record": {
+        "protocolVersion": "0.6",
+        "id": "evidence_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "outcome": {
+            "id": "outcome_fixture",
+            "revision": 3,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "workUnit": {
+            "id": "work_fixture",
+            "revision": 2,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "acceptanceCheck": {
+          "id": "check_fixture",
+          "revision": 1,
+          "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+        },
+        "observation": {
+          "kind": "execution_observation",
+          "id": "observation_fixture",
+          "revision": 4,
+          "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+        },
+        "provenance": {
+          "producer": {
+            "kind": "execution_environment",
+            "id": "kennel_fixture",
+            "version": "1.0.0"
+          },
+          "admittedBy": {
+            "kind": "service",
+            "id": "evidence_verifier_fixture"
+          }
+        },
+        "observedAt": "2026-08-16T12:00:30.000Z",
+        "state": "admitted",
+        "admittedAt": "2026-08-16T12:01:01.000Z"
+      },
+      "recordDigest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+    },
+    {
+      "cursor": 3,
+      "itemType": "verification",
+      "record": {
+        "protocolVersion": "0.6",
+        "id": "verification_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "outcome": {
+            "id": "outcome_fixture",
+            "revision": 3,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "workUnit": {
+            "id": "work_fixture",
+            "revision": 2,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "acceptanceCheck": {
+          "id": "check_fixture",
+          "revision": 1,
+          "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+        },
+        "evidence": [
+          {
+            "id": "evidence_fixture",
+            "revision": 1,
+            "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+          }
+        ],
+        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "method": {
+          "kind": "deterministic_read_back",
+          "version": "1.0.0"
+        },
+        "findings": {
+          "ref": "findings_fixture",
+          "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+        },
+        "verifier": {
+          "id": "independent_verifier_fixture",
+          "version": "1.0.0",
+          "availability": "available",
+          "independentFromProducer": true,
+          "disclosure": {
+            "ref": "verifier_disclosure_fixture",
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "state": "passed",
+        "verifiedAt": "2026-08-16T12:02:01.000Z"
+      },
+      "recordDigest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+    },
+    {
+      "cursor": 4,
+      "itemType": "acceptance",
+      "record": {
+        "protocolVersion": "0.6",
+        "id": "acceptance_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "outcome": {
+            "id": "outcome_fixture",
+            "revision": 3,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "workUnit": {
+            "id": "work_fixture",
+            "revision": 2,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "actor": {
+          "kind": "owner",
+          "id": "owner_fixture"
+        },
+        "mode": "explicit_owner",
+        "recordedAt": "2026-08-16T12:03:01.000Z",
+        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "verifications": [
+          {
+            "id": "verification_fixture",
+            "revision": 1,
+            "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+          }
+        ],
+        "decision": "accepted",
+        "reasonRef": null
+      },
+      "recordDigest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+    }
+  ],
+  "hasMore": false,
+  "generatedAt": "2026-08-16T12:04:00.000Z",
+  "pageDigest": "sha256:722aeb69710b7e087bb1f27c55df1a00c40b7fb09fe1297901f1a78368635175"
+}

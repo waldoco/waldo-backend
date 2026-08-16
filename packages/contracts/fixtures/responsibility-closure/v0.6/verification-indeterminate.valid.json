@@ -1,0 +1,48 @@
+{
+  "protocolVersion": "0.6",
+  "id": "verification_indeterminate_fixture",
+  "ownerId": "owner_fixture",
+  "revision": 1,
+  "subject": {
+    "outcome": {
+      "id": "outcome_fixture",
+      "revision": 3,
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    },
+    "workUnit": {
+      "id": "work_fixture",
+      "revision": 2,
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    }
+  },
+  "acceptanceCheck": {
+    "id": "check_fixture",
+    "revision": 1,
+    "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+  },
+  "evidence": [
+    {
+      "id": "evidence_fixture",
+      "revision": 1,
+      "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+    }
+  ],
+  "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+  "method": {
+    "kind": "deterministic_read_back",
+    "version": "1.0.0"
+  },
+  "findings": null,
+  "verifier": {
+    "id": "unavailable_verifier_fixture",
+    "version": "1.0.0",
+    "availability": "unavailable",
+    "independentFromProducer": true,
+    "disclosure": {
+      "ref": "verifier_disclosure_fixture",
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    }
+  },
+  "state": "indeterminate",
+  "verifiedAt": "2026-08-16T12:02:01.000Z"
+}

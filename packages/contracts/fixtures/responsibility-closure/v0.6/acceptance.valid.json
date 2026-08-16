@@ -1,0 +1,34 @@
+{
+  "protocolVersion": "0.6",
+  "id": "acceptance_fixture",
+  "ownerId": "owner_fixture",
+  "revision": 1,
+  "subject": {
+    "outcome": {
+      "id": "outcome_fixture",
+      "revision": 3,
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    },
+    "workUnit": {
+      "id": "work_fixture",
+      "revision": 2,
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    }
+  },
+  "actor": {
+    "kind": "owner",
+    "id": "owner_fixture"
+  },
+  "mode": "explicit_owner",
+  "recordedAt": "2026-08-16T12:03:01.000Z",
+  "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+  "verifications": [
+    {
+      "id": "verification_fixture",
+      "revision": 1,
+      "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+    }
+  ],
+  "decision": "accepted",
+  "reasonRef": null
+}

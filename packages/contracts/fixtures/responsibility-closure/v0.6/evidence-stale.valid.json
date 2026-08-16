@@ -1,0 +1,43 @@
+{
+  "protocolVersion": "0.6",
+  "id": "evidence_stale_fixture",
+  "ownerId": "owner_fixture",
+  "revision": 1,
+  "subject": {
+    "outcome": {
+      "id": "outcome_fixture",
+      "revision": 3,
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    },
+    "workUnit": {
+      "id": "work_fixture",
+      "revision": 2,
+      "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+    }
+  },
+  "acceptanceCheck": {
+    "id": "check_fixture",
+    "revision": 1,
+    "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+  },
+  "observation": {
+    "kind": "execution_observation",
+    "id": "observation_fixture",
+    "revision": 4,
+    "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+  },
+  "provenance": {
+    "producer": {
+      "kind": "execution_environment",
+      "id": "kennel_fixture",
+      "version": "1.0.0"
+    },
+    "admittedBy": {
+      "kind": "service",
+      "id": "evidence_verifier_fixture"
+    }
+  },
+  "observedAt": "2026-08-16T12:00:30.000Z",
+  "state": "stale",
+  "admittedAt": "2026-08-16T12:01:01.000Z"
+}

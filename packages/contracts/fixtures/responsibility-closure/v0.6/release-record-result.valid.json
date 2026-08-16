@@ -1,0 +1,11 @@
+{
+  "protocolVersion": "0.6",
+  "requestId": "release_request_fixture",
+  "acceptance": {
+    "id": "release_fixture",
+    "revision": 1,
+    "digest": "sha256:455ab3531cf0543c17d0e1a6ac5773ac313617f4e0e1e6c13d18f70b117674f4"
+  },
+  "decision": "released",
+  "projectionCursor": 4
+}

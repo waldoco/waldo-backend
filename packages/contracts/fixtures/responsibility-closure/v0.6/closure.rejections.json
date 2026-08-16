@@ -1,0 +1,1848 @@
+{
+  "protocolVersion": "0.6",
+  "cases": [
+    {
+      "name": "empty-accept-verification",
+      "schema": "acceptance-record-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 3
+        },
+        "payload": {
+          "decision": "accept",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [],
+          "reasonRef": null
+        }
+      }
+    },
+    {
+      "name": "caller-owner",
+      "schema": "acceptance-record-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 3
+        },
+        "payload": {
+          "decision": "accept",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "reasonRef": null
+        },
+        "ownerId": "owner_attacker"
+      }
+    },
+    {
+      "name": "caller-acceptance-actor",
+      "schema": "acceptance-record-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 3
+        },
+        "payload": {
+          "decision": "accept",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "reasonRef": null
+        },
+        "actor": {
+          "kind": "owner",
+          "id": "owner_attacker"
+        }
+      }
+    },
+    {
+      "name": "caller-acceptance-policy",
+      "schema": "acceptance-record-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 3
+        },
+        "payload": {
+          "decision": "accept",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "reasonRef": null
+        },
+        "policy": "delegate_if_unavailable"
+      }
+    },
+    {
+      "name": "caller-acceptance-grantee",
+      "schema": "acceptance-record-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 3
+        },
+        "payload": {
+          "decision": "accept",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "reasonRef": null
+        },
+        "grantee": "delegate_attacker"
+      }
+    },
+    {
+      "name": "caller-acceptance-override",
+      "schema": "acceptance-record-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 3
+        },
+        "payload": {
+          "decision": "accept",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "reasonRef": null
+        },
+        "override": true
+      }
+    },
+    {
+      "name": "caller-declaration-subject",
+      "schema": "acceptance-check-declaration-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "check_declaration_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "acceptance_check.declare",
+        "payload": {
+          "criterion": "The exact calendar state is independently read back.",
+          "verificationMethod": {
+            "kind": "deterministic_read_back",
+            "capability": "calendar.read"
+          }
+        },
+        "aggregate": {
+          "kind": "work_unit",
+          "id": "work_attacker",
+          "expectedRevision": 1
+        }
+      }
+    },
+    {
+      "name": "caller-clock",
+      "schema": "acceptance-check-declaration-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "check_declaration_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "acceptance_check.declare",
+        "payload": {
+          "criterion": "The exact calendar state is independently read back.",
+          "verificationMethod": {
+            "kind": "deterministic_read_back",
+            "capability": "calendar.read"
+          }
+        },
+        "clientIssuedAt": "2026-08-16T00:00:00.000Z"
+      }
+    },
+    {
+      "name": "caller-verifier",
+      "schema": "verification-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "verification_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "verification.request",
+        "aggregate": {
+          "kind": "acceptance_check",
+          "id": "check_fixture",
+          "expectedRevision": 1
+        },
+        "payload": {
+          "evidence": [
+            {
+              "id": "evidence_fixture",
+              "revision": 1,
+              "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+            }
+          ]
+        },
+        "verifier": "verifier_attacker"
+      }
+    },
+    {
+      "name": "caller-source",
+      "schema": "evidence-admission-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "evidence_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "evidence.admit",
+        "aggregate": {
+          "kind": "acceptance_check",
+          "id": "check_fixture",
+          "expectedRevision": 1
+        },
+        "payload": {
+          "observation": {
+            "kind": "execution_observation",
+            "id": "observation_fixture",
+            "revision": 4,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "source": "provider_attacker"
+      }
+    },
+    {
+      "name": "inline-private-material",
+      "schema": "evidence-admission-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "evidence_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "evidence.admit",
+        "aggregate": {
+          "kind": "acceptance_check",
+          "id": "check_fixture",
+          "expectedRevision": 1
+        },
+        "payload": {
+          "observation": {
+            "kind": "execution_observation",
+            "id": "observation_fixture",
+            "revision": 4,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "inlineEvidence": {
+            "credential": "credential_fixture_forbidden"
+          }
+        }
+      }
+    },
+    {
+      "name": "provider-done-implies-evidence",
+      "schema": "evidence-admission-request.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "evidence_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "evidence.admit",
+        "aggregate": {
+          "kind": "acceptance_check",
+          "id": "check_fixture",
+          "expectedRevision": 1
+        },
+        "payload": {
+          "observation": {
+            "kind": "execution_observation",
+            "id": "observation_fixture",
+            "revision": 4,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "done": true
+        }
+      }
+    },
+    {
+      "name": "self-verification-passed",
+      "schema": "verification.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "id": "verification_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "outcome": {
+            "id": "outcome_fixture",
+            "revision": 3,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "workUnit": {
+            "id": "work_fixture",
+            "revision": 2,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "acceptanceCheck": {
+          "id": "check_fixture",
+          "revision": 1,
+          "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+        },
+        "evidence": [
+          {
+            "id": "evidence_fixture",
+            "revision": 1,
+            "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+          }
+        ],
+        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "method": {
+          "kind": "deterministic_read_back",
+          "version": "1.0.0"
+        },
+        "findings": {
+          "ref": "findings_fixture",
+          "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+        },
+        "verifier": {
+          "id": "independent_verifier_fixture",
+          "version": "1.0.0",
+          "availability": "available",
+          "independentFromProducer": false,
+          "disclosure": {
+            "ref": "verifier_disclosure_fixture",
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "state": "passed",
+        "verifiedAt": "2026-08-16T12:02:01.000Z"
+      }
+    },
+    {
+      "name": "unavailable-verification-passed",
+      "schema": "verification.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "id": "verification_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "outcome": {
+            "id": "outcome_fixture",
+            "revision": 3,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "workUnit": {
+            "id": "work_fixture",
+            "revision": 2,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "acceptanceCheck": {
+          "id": "check_fixture",
+          "revision": 1,
+          "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+        },
+        "evidence": [
+          {
+            "id": "evidence_fixture",
+            "revision": 1,
+            "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+          }
+        ],
+        "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+        "method": {
+          "kind": "deterministic_read_back",
+          "version": "1.0.0"
+        },
+        "findings": {
+          "ref": "findings_fixture",
+          "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+        },
+        "verifier": {
+          "id": "independent_verifier_fixture",
+          "version": "1.0.0",
+          "availability": "unavailable",
+          "independentFromProducer": true,
+          "disclosure": {
+            "ref": "verifier_disclosure_fixture",
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "state": "passed",
+        "verifiedAt": "2026-08-16T12:02:01.000Z"
+      }
+    },
+    {
+      "name": "duplicate-evidence-refs",
+      "schema": "verification-request.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "verification_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "verification.request",
+        "aggregate": {
+          "kind": "acceptance_check",
+          "id": "check_fixture",
+          "expectedRevision": 1
+        },
+        "payload": {
+          "evidence": [
+            {
+              "id": "evidence_fixture",
+              "revision": 1,
+              "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+            },
+            {
+              "id": "evidence_fixture",
+              "revision": 1,
+              "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "reordered-evidence-refs",
+      "schema": "verification-request.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "verification_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "commandType": "verification.request",
+        "aggregate": {
+          "kind": "acceptance_check",
+          "id": "check_fixture",
+          "expectedRevision": 1
+        },
+        "payload": {
+          "evidence": [
+            {
+              "id": "evidence_z",
+              "revision": 1,
+              "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+            },
+            {
+              "id": "evidence_fixture",
+              "revision": 1,
+              "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "partial-check-coverage",
+      "schema": "verified-acceptance-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "acceptance": {
+          "protocolVersion": "0.6",
+          "id": "acceptance_fixture",
+          "ownerId": "owner_fixture",
+          "revision": 1,
+          "subject": {
+            "outcome": {
+              "id": "outcome_fixture",
+              "revision": 3,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "workUnit": {
+              "id": "work_fixture",
+              "revision": 2,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            }
+          },
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture"
+          },
+          "mode": "explicit_owner",
+          "recordedAt": "2026-08-16T12:03:01.000Z",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "decision": "accepted",
+          "reasonRef": null
+        },
+        "acceptanceChecks": [
+          {
+            "protocolVersion": "0.6",
+            "id": "check_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "criterion": "The exact calendar state is independently read back.",
+            "verificationMethod": {
+              "kind": "deterministic_read_back",
+              "capability": "calendar.read",
+              "version": "1.0.0",
+              "material": {
+                "ref": "calendar_state_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "active",
+            "createdAt": "2026-08-16T12:00:01.000Z",
+            "updatedAt": "2026-08-16T12:00:01.000Z"
+          },
+          {
+            "protocolVersion": "0.6",
+            "id": "check_second_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "digest": "sha256:f0a4d0eabefb4e125351bd414096dda93e61a81327fcff092c904ceaa7d6be50",
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "criterion": "The exact calendar state is independently read back.",
+            "verificationMethod": {
+              "kind": "deterministic_read_back",
+              "capability": "calendar.read",
+              "version": "1.0.0",
+              "material": {
+                "ref": "calendar_state_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "active",
+            "createdAt": "2026-08-16T12:00:01.000Z",
+            "updatedAt": "2026-08-16T12:00:01.000Z"
+          }
+        ],
+        "verifications": [
+          {
+            "protocolVersion": "0.6",
+            "id": "verification_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "acceptanceCheck": {
+              "id": "check_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+            },
+            "evidence": [
+              {
+                "id": "evidence_fixture",
+                "revision": 1,
+                "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+              }
+            ],
+            "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+            "method": {
+              "kind": "deterministic_read_back",
+              "version": "1.0.0"
+            },
+            "findings": {
+              "ref": "findings_fixture",
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "verifier": {
+              "id": "independent_verifier_fixture",
+              "version": "1.0.0",
+              "availability": "available",
+              "independentFromProducer": true,
+              "disclosure": {
+                "ref": "verifier_disclosure_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "passed",
+            "verifiedAt": "2026-08-16T12:02:01.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "failed-verification-acceptance",
+      "schema": "verified-acceptance-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "acceptance": {
+          "protocolVersion": "0.6",
+          "id": "acceptance_fixture",
+          "ownerId": "owner_fixture",
+          "revision": 1,
+          "subject": {
+            "outcome": {
+              "id": "outcome_fixture",
+              "revision": 3,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "workUnit": {
+              "id": "work_fixture",
+              "revision": 2,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            }
+          },
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture"
+          },
+          "mode": "explicit_owner",
+          "recordedAt": "2026-08-16T12:03:01.000Z",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "decision": "accepted",
+          "reasonRef": null
+        },
+        "acceptanceChecks": [
+          {
+            "protocolVersion": "0.6",
+            "id": "check_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "criterion": "The exact calendar state is independently read back.",
+            "verificationMethod": {
+              "kind": "deterministic_read_back",
+              "capability": "calendar.read",
+              "version": "1.0.0",
+              "material": {
+                "ref": "calendar_state_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "active",
+            "createdAt": "2026-08-16T12:00:01.000Z",
+            "updatedAt": "2026-08-16T12:00:01.000Z"
+          }
+        ],
+        "verifications": [
+          {
+            "protocolVersion": "0.6",
+            "id": "verification_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "acceptanceCheck": {
+              "id": "check_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+            },
+            "evidence": [
+              {
+                "id": "evidence_fixture",
+                "revision": 1,
+                "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+              }
+            ],
+            "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+            "method": {
+              "kind": "deterministic_read_back",
+              "version": "1.0.0"
+            },
+            "findings": {
+              "ref": "findings_fixture",
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "verifier": {
+              "id": "independent_verifier_fixture",
+              "version": "1.0.0",
+              "availability": "available",
+              "independentFromProducer": true,
+              "disclosure": {
+                "ref": "verifier_disclosure_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "failed",
+            "verifiedAt": "2026-08-16T12:02:01.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "indeterminate-verification-acceptance",
+      "schema": "verified-acceptance-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "acceptance": {
+          "protocolVersion": "0.6",
+          "id": "acceptance_fixture",
+          "ownerId": "owner_fixture",
+          "revision": 1,
+          "subject": {
+            "outcome": {
+              "id": "outcome_fixture",
+              "revision": 3,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "workUnit": {
+              "id": "work_fixture",
+              "revision": 2,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            }
+          },
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture"
+          },
+          "mode": "explicit_owner",
+          "recordedAt": "2026-08-16T12:03:01.000Z",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "decision": "accepted",
+          "reasonRef": null
+        },
+        "acceptanceChecks": [
+          {
+            "protocolVersion": "0.6",
+            "id": "check_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "criterion": "The exact calendar state is independently read back.",
+            "verificationMethod": {
+              "kind": "deterministic_read_back",
+              "capability": "calendar.read",
+              "version": "1.0.0",
+              "material": {
+                "ref": "calendar_state_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "active",
+            "createdAt": "2026-08-16T12:00:01.000Z",
+            "updatedAt": "2026-08-16T12:00:01.000Z"
+          }
+        ],
+        "verifications": [
+          {
+            "protocolVersion": "0.6",
+            "id": "verification_indeterminate_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "acceptanceCheck": {
+              "id": "check_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+            },
+            "evidence": [
+              {
+                "id": "evidence_fixture",
+                "revision": 1,
+                "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+              }
+            ],
+            "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+            "method": {
+              "kind": "deterministic_read_back",
+              "version": "1.0.0"
+            },
+            "findings": null,
+            "verifier": {
+              "id": "unavailable_verifier_fixture",
+              "version": "1.0.0",
+              "availability": "unavailable",
+              "independentFromProducer": true,
+              "disclosure": {
+                "ref": "verifier_disclosure_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "indeterminate",
+            "verifiedAt": "2026-08-16T12:02:01.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "stale-verification-acceptance",
+      "schema": "verified-acceptance-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "acceptance": {
+          "protocolVersion": "0.6",
+          "id": "acceptance_fixture",
+          "ownerId": "owner_fixture",
+          "revision": 1,
+          "subject": {
+            "outcome": {
+              "id": "outcome_fixture",
+              "revision": 3,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "workUnit": {
+              "id": "work_fixture",
+              "revision": 2,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            }
+          },
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture"
+          },
+          "mode": "explicit_owner",
+          "recordedAt": "2026-08-16T12:03:01.000Z",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "decision": "accepted",
+          "reasonRef": null
+        },
+        "acceptanceChecks": [
+          {
+            "protocolVersion": "0.6",
+            "id": "check_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "criterion": "The exact calendar state is independently read back.",
+            "verificationMethod": {
+              "kind": "deterministic_read_back",
+              "capability": "calendar.read",
+              "version": "1.0.0",
+              "material": {
+                "ref": "calendar_state_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "active",
+            "createdAt": "2026-08-16T12:00:01.000Z",
+            "updatedAt": "2026-08-16T12:00:01.000Z"
+          }
+        ],
+        "verifications": [
+          {
+            "protocolVersion": "0.6",
+            "id": "verification_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "acceptanceCheck": {
+              "id": "check_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+            },
+            "evidence": [
+              {
+                "id": "evidence_fixture",
+                "revision": 1,
+                "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+              }
+            ],
+            "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+            "method": {
+              "kind": "deterministic_read_back",
+              "version": "1.0.0"
+            },
+            "findings": {
+              "ref": "findings_fixture",
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "verifier": {
+              "id": "independent_verifier_fixture",
+              "version": "1.0.0",
+              "availability": "available",
+              "independentFromProducer": true,
+              "disclosure": {
+                "ref": "verifier_disclosure_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "stale",
+            "verifiedAt": "2026-08-16T12:02:01.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "cross-owner-acceptance",
+      "schema": "verified-acceptance-binding.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "acceptance": {
+          "protocolVersion": "0.6",
+          "id": "acceptance_fixture",
+          "ownerId": "owner_fixture",
+          "revision": 1,
+          "subject": {
+            "outcome": {
+              "id": "outcome_fixture",
+              "revision": 3,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "workUnit": {
+              "id": "work_fixture",
+              "revision": 2,
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            }
+          },
+          "actor": {
+            "kind": "owner",
+            "id": "owner_fixture"
+          },
+          "mode": "explicit_owner",
+          "recordedAt": "2026-08-16T12:03:01.000Z",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "decision": "accepted",
+          "reasonRef": null
+        },
+        "acceptanceChecks": [
+          {
+            "protocolVersion": "0.6",
+            "id": "check_fixture",
+            "ownerId": "owner_fixture",
+            "revision": 1,
+            "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "criterion": "The exact calendar state is independently read back.",
+            "verificationMethod": {
+              "kind": "deterministic_read_back",
+              "capability": "calendar.read",
+              "version": "1.0.0",
+              "material": {
+                "ref": "calendar_state_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "active",
+            "createdAt": "2026-08-16T12:00:01.000Z",
+            "updatedAt": "2026-08-16T12:00:01.000Z"
+          }
+        ],
+        "verifications": [
+          {
+            "protocolVersion": "0.6",
+            "id": "verification_fixture",
+            "ownerId": "owner_other",
+            "revision": 1,
+            "subject": {
+              "outcome": {
+                "id": "outcome_fixture",
+                "revision": 3,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "workUnit": {
+                "id": "work_fixture",
+                "revision": 2,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "acceptanceCheck": {
+              "id": "check_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+            },
+            "evidence": [
+              {
+                "id": "evidence_fixture",
+                "revision": 1,
+                "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+              }
+            ],
+            "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+            "method": {
+              "kind": "deterministic_read_back",
+              "version": "1.0.0"
+            },
+            "findings": {
+              "ref": "findings_fixture",
+              "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+            },
+            "verifier": {
+              "id": "independent_verifier_fixture",
+              "version": "1.0.0",
+              "availability": "available",
+              "independentFromProducer": true,
+              "disclosure": {
+                "ref": "verifier_disclosure_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              }
+            },
+            "state": "passed",
+            "verifiedAt": "2026-08-16T12:02:01.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "release-claimed-as-accepted",
+      "schema": "acceptance.schema.json",
+      "layer": "structural",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "id": "release_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "outcome": {
+            "id": "outcome_fixture",
+            "revision": 3,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          },
+          "workUnit": {
+            "id": "work_fixture",
+            "revision": 2,
+            "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+          }
+        },
+        "actor": {
+          "kind": "owner",
+          "id": "owner_fixture"
+        },
+        "mode": "explicit_owner",
+        "recordedAt": "2026-08-16T12:03:01.000Z",
+        "evidenceSetDigest": null,
+        "verifications": [],
+        "decision": "accepted",
+        "reasonRef": "owner_release_reason_fixture"
+      }
+    },
+    {
+      "name": "changed-duplicate-request",
+      "schema": "acceptance-record-request.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.6",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 3
+        },
+        "payload": {
+          "decision": "accept",
+          "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+          "verifications": [
+            {
+              "id": "verification_fixture",
+              "revision": 1,
+              "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+            }
+          ],
+          "reasonRef": "changed"
+        }
+      }
+    },
+    {
+      "name": "projection-owner-mismatch",
+      "schema": "closure-projection-page.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "ownerId": "owner_other",
+        "projectionName": "responsibility.closure",
+        "snapshotId": "closure_snapshot_fixture",
+        "snapshotBaseCursor": 0,
+        "fromExclusiveCursor": 0,
+        "highWaterCursor": 4,
+        "nextCursor": 4,
+        "items": [
+          {
+            "cursor": 1,
+            "itemType": "acceptance_check",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "check_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "criterion": "The exact calendar state is independently read back.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.read",
+                "version": "1.0.0",
+                "material": {
+                  "ref": "calendar_state_fixture",
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "state": "active",
+              "createdAt": "2026-08-16T12:00:01.000Z",
+              "updatedAt": "2026-08-16T12:00:01.000Z"
+            },
+            "recordDigest": "sha256:949c7e1c7ab4c4194912653afb9bed5333ded051c9956a0d6a3f6118a704891d"
+          },
+          {
+            "cursor": 2,
+            "itemType": "evidence",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "evidence_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "acceptanceCheck": {
+                "id": "check_fixture",
+                "revision": 1,
+                "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+              },
+              "observation": {
+                "kind": "execution_observation",
+                "id": "observation_fixture",
+                "revision": 4,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "provenance": {
+                "producer": {
+                  "kind": "execution_environment",
+                  "id": "kennel_fixture",
+                  "version": "1.0.0"
+                },
+                "admittedBy": {
+                  "kind": "service",
+                  "id": "evidence_verifier_fixture"
+                }
+              },
+              "observedAt": "2026-08-16T12:00:30.000Z",
+              "state": "admitted",
+              "admittedAt": "2026-08-16T12:01:01.000Z"
+            },
+            "recordDigest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+          },
+          {
+            "cursor": 3,
+            "itemType": "verification",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "verification_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "acceptanceCheck": {
+                "id": "check_fixture",
+                "revision": 1,
+                "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+              },
+              "evidence": [
+                {
+                  "id": "evidence_fixture",
+                  "revision": 1,
+                  "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+                }
+              ],
+              "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+              "method": {
+                "kind": "deterministic_read_back",
+                "version": "1.0.0"
+              },
+              "findings": {
+                "ref": "findings_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "verifier": {
+                "id": "independent_verifier_fixture",
+                "version": "1.0.0",
+                "availability": "available",
+                "independentFromProducer": true,
+                "disclosure": {
+                  "ref": "verifier_disclosure_fixture",
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "state": "passed",
+              "verifiedAt": "2026-08-16T12:02:01.000Z"
+            },
+            "recordDigest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+          },
+          {
+            "cursor": 4,
+            "itemType": "acceptance",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "acceptance_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "actor": {
+                "kind": "owner",
+                "id": "owner_fixture"
+              },
+              "mode": "explicit_owner",
+              "recordedAt": "2026-08-16T12:03:01.000Z",
+              "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+              "verifications": [
+                {
+                  "id": "verification_fixture",
+                  "revision": 1,
+                  "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+                }
+              ],
+              "decision": "accepted",
+              "reasonRef": null
+            },
+            "recordDigest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+          }
+        ],
+        "hasMore": false,
+        "generatedAt": "2026-08-16T12:04:00.000Z",
+        "pageDigest": "sha256:722aeb69710b7e087bb1f27c55df1a00c40b7fb09fe1297901f1a78368635175"
+      }
+    },
+    {
+      "name": "projection-cursor-corruption",
+      "schema": "closure-projection-page.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "reject",
+      "value": {
+        "protocolVersion": "0.6",
+        "ownerId": "owner_fixture",
+        "projectionName": "responsibility.closure",
+        "snapshotId": "closure_snapshot_fixture",
+        "snapshotBaseCursor": 0,
+        "fromExclusiveCursor": 0,
+        "highWaterCursor": 4,
+        "nextCursor": 3,
+        "items": [
+          {
+            "cursor": 1,
+            "itemType": "acceptance_check",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "check_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "criterion": "The exact calendar state is independently read back.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.read",
+                "version": "1.0.0",
+                "material": {
+                  "ref": "calendar_state_fixture",
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "state": "active",
+              "createdAt": "2026-08-16T12:00:01.000Z",
+              "updatedAt": "2026-08-16T12:00:01.000Z"
+            },
+            "recordDigest": "sha256:949c7e1c7ab4c4194912653afb9bed5333ded051c9956a0d6a3f6118a704891d"
+          },
+          {
+            "cursor": 2,
+            "itemType": "evidence",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "evidence_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "acceptanceCheck": {
+                "id": "check_fixture",
+                "revision": 1,
+                "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+              },
+              "observation": {
+                "kind": "execution_observation",
+                "id": "observation_fixture",
+                "revision": 4,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "provenance": {
+                "producer": {
+                  "kind": "execution_environment",
+                  "id": "kennel_fixture",
+                  "version": "1.0.0"
+                },
+                "admittedBy": {
+                  "kind": "service",
+                  "id": "evidence_verifier_fixture"
+                }
+              },
+              "observedAt": "2026-08-16T12:00:30.000Z",
+              "state": "admitted",
+              "admittedAt": "2026-08-16T12:01:01.000Z"
+            },
+            "recordDigest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+          },
+          {
+            "cursor": 3,
+            "itemType": "verification",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "verification_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "acceptanceCheck": {
+                "id": "check_fixture",
+                "revision": 1,
+                "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+              },
+              "evidence": [
+                {
+                  "id": "evidence_fixture",
+                  "revision": 1,
+                  "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+                }
+              ],
+              "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+              "method": {
+                "kind": "deterministic_read_back",
+                "version": "1.0.0"
+              },
+              "findings": {
+                "ref": "findings_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "verifier": {
+                "id": "independent_verifier_fixture",
+                "version": "1.0.0",
+                "availability": "available",
+                "independentFromProducer": true,
+                "disclosure": {
+                  "ref": "verifier_disclosure_fixture",
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "state": "passed",
+              "verifiedAt": "2026-08-16T12:02:01.000Z"
+            },
+            "recordDigest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+          },
+          {
+            "cursor": 4,
+            "itemType": "acceptance",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "acceptance_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "actor": {
+                "kind": "owner",
+                "id": "owner_fixture"
+              },
+              "mode": "explicit_owner",
+              "recordedAt": "2026-08-16T12:03:01.000Z",
+              "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+              "verifications": [
+                {
+                  "id": "verification_fixture",
+                  "revision": 1,
+                  "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+                }
+              ],
+              "decision": "accepted",
+              "reasonRef": null
+            },
+            "recordDigest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+          }
+        ],
+        "hasMore": false,
+        "generatedAt": "2026-08-16T12:04:00.000Z",
+        "pageDigest": "sha256:722aeb69710b7e087bb1f27c55df1a00c40b7fb09fe1297901f1a78368635175"
+      }
+    },
+    {
+      "name": "projection-page-digest-corruption",
+      "schema": "closure-projection-page.schema.json",
+      "layer": "runtime",
+      "zodOutcome": "accept",
+      "value": {
+        "protocolVersion": "0.6",
+        "ownerId": "owner_fixture",
+        "projectionName": "responsibility.closure",
+        "snapshotId": "closure_snapshot_fixture",
+        "snapshotBaseCursor": 0,
+        "fromExclusiveCursor": 0,
+        "highWaterCursor": 4,
+        "nextCursor": 4,
+        "items": [
+          {
+            "cursor": 1,
+            "itemType": "acceptance_check",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "check_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849",
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "criterion": "The exact calendar state is independently read back.",
+              "verificationMethod": {
+                "kind": "deterministic_read_back",
+                "capability": "calendar.read",
+                "version": "1.0.0",
+                "material": {
+                  "ref": "calendar_state_fixture",
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "state": "active",
+              "createdAt": "2026-08-16T12:00:01.000Z",
+              "updatedAt": "2026-08-16T12:00:01.000Z"
+            },
+            "recordDigest": "sha256:949c7e1c7ab4c4194912653afb9bed5333ded051c9956a0d6a3f6118a704891d"
+          },
+          {
+            "cursor": 2,
+            "itemType": "evidence",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "evidence_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "acceptanceCheck": {
+                "id": "check_fixture",
+                "revision": 1,
+                "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+              },
+              "observation": {
+                "kind": "execution_observation",
+                "id": "observation_fixture",
+                "revision": 4,
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "provenance": {
+                "producer": {
+                  "kind": "execution_environment",
+                  "id": "kennel_fixture",
+                  "version": "1.0.0"
+                },
+                "admittedBy": {
+                  "kind": "service",
+                  "id": "evidence_verifier_fixture"
+                }
+              },
+              "observedAt": "2026-08-16T12:00:30.000Z",
+              "state": "admitted",
+              "admittedAt": "2026-08-16T12:01:01.000Z"
+            },
+            "recordDigest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+          },
+          {
+            "cursor": 3,
+            "itemType": "verification",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "verification_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "acceptanceCheck": {
+                "id": "check_fixture",
+                "revision": 1,
+                "digest": "sha256:8d71f98ff4e64b93608d6aa69515518912eee4a4ba8e0b3dda7a2f4cde12e849"
+              },
+              "evidence": [
+                {
+                  "id": "evidence_fixture",
+                  "revision": 1,
+                  "digest": "sha256:595760e885bd563add0fb5433ada3c957453f793e92572f484047d7e8fe263ca"
+                }
+              ],
+              "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+              "method": {
+                "kind": "deterministic_read_back",
+                "version": "1.0.0"
+              },
+              "findings": {
+                "ref": "findings_fixture",
+                "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+              },
+              "verifier": {
+                "id": "independent_verifier_fixture",
+                "version": "1.0.0",
+                "availability": "available",
+                "independentFromProducer": true,
+                "disclosure": {
+                  "ref": "verifier_disclosure_fixture",
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "state": "passed",
+              "verifiedAt": "2026-08-16T12:02:01.000Z"
+            },
+            "recordDigest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+          },
+          {
+            "cursor": 4,
+            "itemType": "acceptance",
+            "record": {
+              "protocolVersion": "0.6",
+              "id": "acceptance_fixture",
+              "ownerId": "owner_fixture",
+              "revision": 1,
+              "subject": {
+                "outcome": {
+                  "id": "outcome_fixture",
+                  "revision": 3,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                },
+                "workUnit": {
+                  "id": "work_fixture",
+                  "revision": 2,
+                  "digest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+                }
+              },
+              "actor": {
+                "kind": "owner",
+                "id": "owner_fixture"
+              },
+              "mode": "explicit_owner",
+              "recordedAt": "2026-08-16T12:03:01.000Z",
+              "evidenceSetDigest": "sha256:bd419348912bd1d31628ce6cff855d083e9b0ae56a019368680116a153f1debe",
+              "verifications": [
+                {
+                  "id": "verification_fixture",
+                  "revision": 1,
+                  "digest": "sha256:e3235855e0f1b6d10c798a6708201b51564c409b22f59765d14159e2fed56f70"
+                }
+              ],
+              "decision": "accepted",
+              "reasonRef": null
+            },
+            "recordDigest": "sha256:99c0b78f14e8e4d8daf42ec72f628fcf0cb00e3c09a33e22acad5b07adaeec2c"
+          }
+        ],
+        "hasMore": false,
+        "generatedAt": "2026-08-16T12:04:00.000Z",
+        "pageDigest": "sha256:9a587b4c2624ccb676d03696ff0327b7ed6e9bdd2b95cd3f22fa5ddb1c90fed0"
+      }
+    }
+  ]
+}

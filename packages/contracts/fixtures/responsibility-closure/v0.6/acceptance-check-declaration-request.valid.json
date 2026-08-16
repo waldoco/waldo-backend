@@ -1,0 +1,13 @@
+{
+  "protocolVersion": "0.6",
+  "requestId": "check_declaration_request_fixture",
+  "presenceRegistrationId": "presence_fixture",
+  "commandType": "acceptance_check.declare",
+  "payload": {
+    "criterion": "The exact calendar state is independently read back.",
+    "verificationMethod": {
+      "kind": "deterministic_read_back",
+      "capability": "calendar.read"
+    }
+  }
+}

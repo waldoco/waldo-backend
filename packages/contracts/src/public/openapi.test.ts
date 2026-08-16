@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { responsibilityHttpRouteManifestV01 } from '../protocol/responsibility-http-adapter-v0-1';
 import { responsibilityJudgmentAuthorityHttpRouteManifestV05 } from '../protocol/responsibility-judgment-authority-http-v0-5';
 import { responsibilityExecutionHttpRouteManifestV04 } from '../protocol/responsibility-workunit-execution-http-v0-4';
+import { responsibilityClosureHttpRouteManifestV06 } from '../protocol/responsibility-closure-http-v0-6';
 import { buildPublicOpenApiDocument } from './openapi';
 
 const forbiddenFragments = [
@@ -36,6 +37,7 @@ describe('public OpenAPI artifact', () => {
       ...responsibilityHttpRouteManifestV01,
       ...responsibilityExecutionHttpRouteManifestV04,
       ...responsibilityJudgmentAuthorityHttpRouteManifestV05,
+      ...responsibilityClosureHttpRouteManifestV06,
     ];
     expect(Object.keys(paths).sort()).toEqual(
       [...new Set(publicRoutes.map((route) => route.path))].sort(),
@@ -136,6 +138,33 @@ describe('public OpenAPI artifact', () => {
       changedDuplicate: 'reject_request_conflict',
     });
     expect(paths).not.toHaveProperty('/public/responsibilities/judgments');
+    for (const path of [
+      '/public/responsibilities/closure/acceptance-checks',
+      '/public/responsibilities/closure/evidence',
+      '/public/responsibilities/closure/verifications',
+      '/public/responsibilities/closure/acceptances',
+    ]) {
+      expect(Object.keys(paths[path]!.post!.requestBody!.content)).toEqual([
+        'application/vnd.waldo.responsibility.v0.6+json',
+      ]);
+      expect(paths[path]!.post!['x-waldo-retry-semantics']).toEqual({
+        identity: 'requestId',
+        exactDuplicate: 'return_persisted_result_byte_for_byte',
+        changedDuplicate: 'reject_request_conflict',
+      });
+    }
+    const closureProjection = paths['/public/responsibilities/closure/projection']!.get!;
+    expect(closureProjection).not.toHaveProperty('requestBody');
+    expect(closureProjection.responses['200']!.content).toEqual({
+      'application/vnd.waldo.responsibility.v0.6+json': {
+        schema: { $ref: '#/components/schemas/ClosureProjectionPageV06' },
+      },
+    });
+    expect(paths['/public/responsibilities/closure/acceptances']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'accept requires every current AcceptanceCheck to have exact passed independent Verification over the same canonical Evidence set',
+      'release is a distinct owner disposition and never claims verified acceptance',
+    ]);
     expect(paths['/public/responsibilities/projection']!.get).not.toHaveProperty('requestBody');
     expect(paths['/public/responsibilities/planning-turns/projection']!.get)
       .not.toHaveProperty('requestBody');
@@ -150,6 +179,43 @@ describe('public OpenAPI artifact', () => {
       'JudgmentRequestV05',
     ]) {
       expect(components.schemas).not.toHaveProperty(internal);
+    }
+    for (const internal of [
+      'AcceptanceCheckV06',
+      'EvidenceV06',
+      'VerificationV06',
+      'AcceptanceV06',
+      'VerifiedAcceptanceBindingV06',
+      'ClosureDomainEventV06',
+    ]) {
+      expect(components.schemas).not.toHaveProperty(internal);
+    }
+
+    const publicCommandSchemas = [
+      'AcceptanceCheckDeclarationRequestV06',
+      'EvidenceAdmissionRequestV06',
+      'VerificationRequestV06',
+      'AcceptanceRecordRequestV06',
+    ];
+    for (const schemaName of publicCommandSchemas) {
+      const serialized = JSON.stringify(components.schemas[schemaName]);
+      for (const forbidden of [
+        'ownerId',
+        'actor',
+        'collector',
+        'source',
+        'verifier',
+        'policy',
+        'authority',
+        'credential',
+        'clientIssuedAt',
+        'clock',
+        'rawHealth',
+        'transcript',
+        'prompt',
+      ]) {
+        expect(serialized, `${schemaName}:${forbidden}`).not.toContain(`"${forbidden}"`);
+      }
     }
   });
 
