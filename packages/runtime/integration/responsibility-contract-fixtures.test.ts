@@ -180,6 +180,7 @@ describe('responsibility HTTP adapter v0.1 executable fixtures', () => {
           authenticatedSessionId: trustedContext.authenticatedSessionId,
           authenticatedSessionExpiresAt: trustedContext.authenticatedSessionExpiresAt,
           ownerPolicyRevision: trustedContext.ownerPolicyRevision,
+          authAssurance: trustedContext.authAssurance,
         },
       }]);
       expect(await response.json()).toEqual({
@@ -229,6 +230,7 @@ describe('responsibility HTTP adapter v0.1 executable fixtures', () => {
           authenticatedSessionId: trustedContext.authenticatedSessionId,
           authenticatedSessionExpiresAt: trustedContext.authenticatedSessionExpiresAt,
           ownerPolicyRevision: trustedContext.ownerPolicyRevision,
+          authAssurance: trustedContext.authAssurance,
         },
       }]);
       const cursor = Number(parameters.get('fromExclusiveCursor'));
