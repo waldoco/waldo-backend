@@ -1,6 +1,6 @@
 # Waldo Backend Documentation
 
-This is the complete live documentation set. It governs one launch across Electron Kennel desktop, Waldo mobile Health/Care, and messaging presence with Telegram and Discord required; WhatsApp activation remains vendor-approval-dependent. A new session should not need a historical handoff, external session bus, or Linear state document.
+This is the complete live documentation set. It governs one continuously understanding, user-owned Waldo across Electron Kennel desktop, Waldo mobile Health/Care, and messaging presence with Telegram and Discord required; WhatsApp activation remains vendor-approval-dependent. The current target includes admitted-source Personal Profile compilation, a local/Waldo-owned kernel, destination-specific provider projections, universal external-LLM egress, and record-scoped Kennel memory attachment; none is a shipped claim until its separate proof levels pass. A new session should not need a historical handoff, external session bus, or Linear state document.
 
 ## Read in this order
 
@@ -13,6 +13,7 @@ This is the complete live documentation set. It governs one launch across Electr
 7. [B2–B6 goal execution contract](./planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md) — dependency-frontier worktrees, source/return packets, promotion barriers, real-API ladder, and exact-SHA convergence.
 8. [Benchmark agent capability audit](./research/2026-08-15-benchmark-agent-capability-audit.md) — source-pinned Pi, Hermes Agent, OpenClaw, QM, Think, orchestrator, and provider comparison; benchmark breadth is not Waldo parity.
 9. [Contributor onboarding](./foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](./foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](./foundation/LOCAL-DEV-TESTING-PIPELINE.md) — how work is shaped, built, reviewed, and proved.
+10. [Personal-understanding architecture handoff](./ledger/2026-08-17-personal-understanding-architecture-convergence.md) — exact documentation-only scope, ownership boundaries, proof gaps, and later B4/B5 impact surface.
 
 ## Reference-only documents
 

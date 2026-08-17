@@ -1,7 +1,7 @@
 # Next Session Plan — Waldo Backend Production Convergence
 
 **Status:** current repository entrypoint
-**Updated:** 2026-08-16
+**Updated:** 2026-08-17
 **Milestone:** [Waldo Backend Production Launch](https://github.com/Pin4sf/waldo-backend/milestone/1)
 **Umbrella:** [#78](https://github.com/Pin4sf/waldo-backend/issues/78)
 **Execution ledger:** [#116](https://github.com/Pin4sf/waldo-backend/issues/116) and [protocol](./EXECUTION-LEDGER.md)
@@ -9,7 +9,7 @@
 
 Waldo is one private, user-owned agent account across three primary launch surfaces: Electron Kennel desktop, Waldo mobile with optional Health/Care, and messaging presence. Telegram and Discord are required at launch; WhatsApp remains a primary target whose vendor approval cannot block launch. The backend owns identity, authority, canonical Outcome state, context governance, evidence, verification, acceptance, continuity, and ordered projections. Presences render or propose; providers, executors, connectors, tools, channels, and people contribute bounded observations or effects. None can declare the user's Outcome complete.
 
-The product promise is: **a person can tell Waldo, “Make sure this gets handled,” and trust it to carry the responsibility until the result is verified, accepted, reopened, or consciously released—without taking control away.** Health First is a recommended and differentiated enhancement, never a prerequisite.
+The product promise is: **Waldo continuously understands the person from sources it is permitted to use, so they can say “Make sure this gets handled” without repeating themselves—and trust Waldo to carry the responsibility until the result is verified, accepted, reopened, or consciously released without taking control away.** The full current understanding remains local/Waldo-owned; every external provider receives only a consented, Scribe-sanitized destination projection. Health First is a recommended and differentiated enhancement, never a prerequisite.
 
 ## Read in this order
 
@@ -54,17 +54,20 @@ GitHub Actions was unavailable for the user and Supabase Preview was skipped; ne
 
 Implemented on landed `origin/main`: authenticated owner-routed responsibility ingress, capture/projection v0.1/v0.2, bounded planning v0.3, owner events/projections, additive v0.4 contract/fixture families, and one generalized durable v0.4 execution writer for request, Attempt, Session, Lease, Observation, cancellation, and reconciliation state. The writer derives owner and product bindings from canonical state, preserves v0.3 reads, and keeps provider and execution-environment operations distinct. A separate trusted RunLoop substrate provides journal/outbox, recovery, scheduling, safety, provider, context, and effect foundations.
 
-Missing or unproved: resume/steer/pause intent durability; upgrade of a WorkUnit already claimed by the legacy v0.3 planning row; every real execution-environment adapter and live acceptance; Judgment/Evidence/Verification/Acceptance/OpenLoop/ReEntry; multi-presence Home/channel gateway; service-first Connections and real reversible effects; governed context, routines, credentials and laptop-off execution; Kennel/mobile/Telegram/Discord acceptance; deletion/restore; staging; and production operations. B0/B1 establish a trustworthy kernel, not present-day capability parity with Pi, Hermes Agent, OpenClaw, or a complete personal agent.
+Missing or unproved: resume/steer/pause intent durability; upgrade of a WorkUnit already claimed by the legacy v0.3 planning row; every real execution-environment adapter and live acceptance; #84 Evidence/Verification/Acceptance; #85 OpenLoop/ReEntry; multi-presence Home/channel gateway; service-first Connections and real reversible effects; `SourceAdmissionPolicy`, automatic Personal Profile compilation, current local/Waldo kernel, provider-specific projections, universal external-LLM egress, record-scoped Kennel attachment, and cross-provider fresh-session continuity; governed routines, credentials and laptop-off execution; Kennel/mobile/Telegram/Discord acceptance; deletion/restore; staging; and production operations. B0/B1/#82 establish a trustworthy kernel and Judgment writer, not present-day capability parity with Pi, Hermes Agent, OpenClaw, or a complete personal agent.
 
 ## Stable kernel
 
 - One owner maps to one canonical backend authority root.
 - One named reducer is the durable writer for each aggregate.
 - `WaldoCoordinator` authenticates, authorizes, and sequences; the existing `RunLoopDO`/RunLoopEngine remains the only trusted composition and physical execution/effect path during additive migration. #87 is a seam within that path, not a sibling engine.
-- Kennel owns device-local process/workspace durability, never canonical identity, context, Outcome truth, authority, Acceptance, or closure.
+- Kennel owns device-local process/workspace durability plus pre-attachment and `local_only` Profile/Memory records; it never owns canonical Waldo identity, admitted `waldo_synced` claims, Outcome truth, authority, Acceptance, or closure.
 - Provider or executor `done` is an observation. Evidence, Verification, Acceptance, Outcome state, and OpenLoop closure are distinct.
 - Effects persist frozen intent and digest before I/O; ambiguity reconciles before retry; each call path has one retry owner.
 - User statements and corrections outrank inference. Memory is not permission.
+- Connected-source data is unavailable to Profile/Memory compilation until `SourceAdmissionPolicy` admits lawful access, account/category/organization policy, purpose, processor region/retention, and current revocation generation.
+- `ContinuityModule` owns admitted `waldo_synced` Profile/Memory Claim revisions; `ContextCompiler` owns the current owner-root kernel and context/provider projections. Kennel separately owns pre-attachment and `local_only` records. Attachment is content-free-inventory first and record-scoped; it never bulk-uploads local memory.
+- `ExternalLLMEgressGate` applies to every remote model path. It requires explicit destination/data-class consent, an active applicable DPA, `RemoteContextEgressPolicy`, processor region/retention, and fail-closed Scribe masking of PII, secrets, and health values. No provider/tool/MCP/recovery fallback can bypass it.
 - Health-declined users retain the complete core agent product without invented readiness or pressure.
 - Ordinary setup exposes one Waldo account, recognizable Connections, plain-language authority, and truthful placement/status—not MCP, CLI, Markdown, repositories, API keys, models, or runtimes.
 - Protocol 0.1/v0.2 advertises `offlineCommands: "none"`; disconnected presences show only explicitly stale read-only projections until the accepted offline-draft ADR conflict is reconciled.
@@ -77,15 +80,15 @@ Missing or unproved: resume/steer/pause intent durability; upgrade of a WorkUnit
 | B1 | shared command primitives and one WorkUnit-to-execution writer | #81, #80, #87, #88 | complete for the bounded start-only gate at landed `883ef91`; #86 owns the later B3 channel envelope; resume/steer/pause and the v0.3-row upgrade remain separate architecture stops |
 | B2 | durable judgment and honest closure spine | #82, #84, #85 | #82 landed; #84 contract PR #133 ready but unmerged; runtime/#85/closure proof deferred by human scope |
 | B3 | one Waldo across ordered desktop/mobile/messaging presences | #95, #104, #108, #86 | require both health states plus link/revoke/gap/cross-owner proof |
-| B4 | Connections, effects and real Telegram/Discord adapters | #90, #91, #109, #83, #89, #112, #113 | require Calendar/inbox test accounts and credentialed channel staging |
-| B5 | context, routines, cloud execution and durable messaging | #92, #94, #110, #114 | require restart/fault/rate-limit/retry/deletion/budget proof |
-| B6 | portability, deletion and three-surface production release | #96, #111 | require Electron, mobile, Telegram and Discord operational proof |
+| B4 | Connections, source admission, universal external-model egress, effects and real Telegram/Discord adapters | #90, #91, #109, #83, #89, #112, #113 | require Calendar/inbox test accounts, organization/account/category denial, DPA/region/retention/Scribe no-bypass fixtures, and credentialed channel staging |
+| B5 | Personal Profile/kernel/context, record-scoped Kennel attachment, routines, cloud execution and durable messaging | #92, #94, #110, #114; Personal Profile/attachment issue required before implementation | require fresh-session continuity, correction/exclusion convergence, content-free inventory/per-item receipts, attach/detach/non-resurrection, restart/fault/rate-limit/retry/deletion/budget proof |
+| B6 | portability, deletion and three-surface production release | #96, #111 | require Electron, mobile, Telegram and Discord operational proof with every prior personal-understanding and egress gate still green |
 
 Model-routing breadth (#93), MCP distribution (#97), and approval-dependent WhatsApp activation (#115) are post-launch/non-blocking. Telegram and Discord messaging are launch-critical. Gate labels express dependency order; they are not independent product editions or permission to omit later whole-product acceptance.
 
 Pull requests are reconciled in the [production run contract](./NEXT-BACKEND-SESSION-PROMPT.md): #99/#100 are closed and superseded by merged #119; #117 is closed and superseded by merged #118; test-only #121 and contract release #123 are merged; #98 remains source-pinned #80 decision evidence; #103 is stale contract evidence superseded by #81 for released B1 families and must not merge wholesale; #105 informs B3; #101 informs B4; #102 is superseded by #78; and merge-dirty pre-convergence PRs #30/#59/#70 must not merge as-is.
 
-Parallel surface work is tracked in GitHub, not Linear: Kennel [#26–#28](https://github.com/Pin4sf/kennel/issues/26), mobile [#6–#8](https://github.com/Pin4sf/waldo-app/issues/6), and messaging backend #86/#112–#114. Surface teams may consume only released, version-pinned fixtures from the current backend gate; real integration waits for the named barrier.
+Parallel surface work is tracked in GitHub, not Linear: Kennel [#26–#28](https://github.com/Pin4sf/kennel/issues/26), mobile [#6–#8](https://github.com/Pin4sf/waldo-app/issues/6), and messaging backend #86/#112–#114. Surface teams may consume only released, version-pinned fixtures from the current backend gate; real integration waits for the named barrier. Kennel's standalone no-account Local Memory/Personal Profile proof may advance independently once it has its own bounded GitHub issue and local contracts, but it cannot claim Waldo sync or alter B0–B6 backend authority. Owner-root attachment and remote-egress integration wait for released B4/B5 contracts.
 
 ## Resume only with fresh human direction
 
