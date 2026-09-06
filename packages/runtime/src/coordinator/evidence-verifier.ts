@@ -1,5 +1,6 @@
 import {
   acceptanceCheckV06Schema,
+  canonicalizeAcceptanceCheckV06ForDigest,
   canonicalizeCurrentEvidenceSetEnvelopeV06ForDigest,
   canonicalizeEvidenceSetV06ForDigest,
   canonicalizeProtocolJson,
@@ -101,6 +102,7 @@ export class EvidenceVerifier {
     observation: TrustedClosureObservation;
   }>): Promise<EvidenceV06> {
     const check = acceptanceCheckV06Schema.parse(input.acceptanceCheck);
+    await this.assertCurrentAcceptanceCheck(check);
     if (
       check.state !== 'active' ||
       check.ownerId !== input.ownerId ||
@@ -152,6 +154,7 @@ export class EvidenceVerifier {
     revision?: number;
   }>): Promise<CurrentEvidenceSetEnvelopeV06> {
     const check = acceptanceCheckV06Schema.parse(input.acceptanceCheck);
+    await this.assertCurrentAcceptanceCheck(check);
     if (check.state !== 'active' || check.ownerId !== input.ownerId || input.evidence.length === 0) {
       throw new ResponsibilityClosureInvariantError();
     }
@@ -215,6 +218,7 @@ export class EvidenceVerifier {
     evidence: CurrentEvidenceSetEnvelopeV06;
   }>): Promise<VerificationV06> {
     const check = acceptanceCheckV06Schema.parse(input.acceptanceCheck);
+    await this.assertCurrentAcceptanceCheck(check);
     const evidence = currentEvidenceSetEnvelopeV06Schema.parse(input.evidence);
     if (
       check.state !== 'active' ||
@@ -263,6 +267,15 @@ export class EvidenceVerifier {
       findings: decision.findings,
       verifiedAt: this.deps.now(),
     }));
+  }
+
+  private async assertCurrentAcceptanceCheck(check: AcceptanceCheckV06): Promise<void> {
+    const digest = assertDigestHex(
+      await this.deps.sha256Hex(canonicalizeAcceptanceCheckV06ForDigest(check)),
+    );
+    if (check.digest !== digest) {
+      throw new ResponsibilityClosureInvariantError('AcceptanceCheck digest mismatch');
+    }
   }
 
   private async assertCurrentEvidenceSet(
