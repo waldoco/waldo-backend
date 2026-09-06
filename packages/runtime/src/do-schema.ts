@@ -40,6 +40,13 @@ export const DO_PRODUCT_TABLES = [
   'judgment_commands',
   'judgment_projection',
   'judgment_projection_state',
+  'acceptance_checks',
+  'closure_evidence',
+  'closure_verifications',
+  'closure_acceptances',
+  'closure_commands',
+  'closure_projection',
+  'closure_projection_state',
 ] as const;
 
 export const DEFERRED_DO_PRODUCT_TABLES = [
@@ -1121,6 +1128,162 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+export const RESPONSIBILITY_CLOSURE_SCHEMA_MIGRATION: DoMigration = {
+  version: 8,
+  name: 'responsibility-closure-v0-6',
+  up: [
+    `CREATE TABLE acceptance_checks (
+      id                    TEXT PRIMARY KEY,
+      owner_id              TEXT NOT NULL,
+      revision              INTEGER NOT NULL CHECK (revision > 0),
+      outcome_id            TEXT NOT NULL,
+      outcome_revision      INTEGER NOT NULL CHECK (outcome_revision > 0),
+      outcome_digest        TEXT NOT NULL,
+      work_unit_id          TEXT,
+      work_unit_revision    INTEGER,
+      work_unit_digest      TEXT,
+      criterion_ref         TEXT NOT NULL,
+      criterion_revision    INTEGER NOT NULL CHECK (criterion_revision > 0),
+      criterion_digest      TEXT NOT NULL,
+      method_kind           TEXT NOT NULL CHECK (
+        method_kind IN ('deterministic_read_back', 'deterministic_artifact_check', 'declared_semantic_check')
+      ),
+      method_version        TEXT NOT NULL,
+      record_digest         TEXT NOT NULL,
+      record_json           TEXT NOT NULL,
+      state                 TEXT NOT NULL CHECK (state IN ('active', 'superseded', 'withdrawn')),
+      created_at            TEXT NOT NULL,
+      updated_at            TEXT NOT NULL,
+      UNIQUE (owner_id, id),
+      CHECK (
+        (work_unit_id IS NULL AND work_unit_revision IS NULL AND work_unit_digest IS NULL) OR
+        (work_unit_id IS NOT NULL AND work_unit_revision IS NOT NULL AND
+         work_unit_revision > 0 AND work_unit_digest IS NOT NULL)
+      )
+    );`,
+    `CREATE INDEX acceptance_checks_active_subject_idx
+       ON acceptance_checks(owner_id, outcome_id, outcome_revision, work_unit_id, work_unit_revision, state, id);`,
+    `CREATE TABLE closure_evidence (
+      id                         TEXT PRIMARY KEY,
+      owner_id                   TEXT NOT NULL,
+      revision                   INTEGER NOT NULL CHECK (revision > 0),
+      acceptance_check_id        TEXT NOT NULL,
+      acceptance_check_revision  INTEGER NOT NULL CHECK (acceptance_check_revision > 0),
+      observation_kind           TEXT NOT NULL CHECK (
+        observation_kind IN ('provider_observation', 'execution_observation', 'effect_receipt', 'person_statement')
+      ),
+      observation_id             TEXT NOT NULL,
+      observation_revision       INTEGER NOT NULL CHECK (observation_revision > 0),
+      observation_digest         TEXT NOT NULL,
+      producer_kind              TEXT NOT NULL CHECK (
+        producer_kind IN ('provider', 'execution_environment', 'effect_adapter', 'person')
+      ),
+      producer_id                TEXT NOT NULL,
+      evidence_digest            TEXT NOT NULL,
+      evidence_json              TEXT NOT NULL,
+      state                      TEXT NOT NULL CHECK (state IN ('admitted', 'stale', 'invalidated')),
+      observed_at                TEXT NOT NULL,
+      admitted_at                TEXT NOT NULL,
+      UNIQUE (owner_id, id),
+      UNIQUE (
+        owner_id, acceptance_check_id, observation_kind,
+        observation_id, observation_revision, observation_digest
+      )
+    );`,
+    `CREATE INDEX closure_evidence_check_state_idx
+       ON closure_evidence(owner_id, acceptance_check_id, acceptance_check_revision, state, id);`,
+    `CREATE TABLE closure_verifications (
+      id                         TEXT PRIMARY KEY,
+      owner_id                   TEXT NOT NULL,
+      revision                   INTEGER NOT NULL CHECK (revision > 0),
+      acceptance_check_id        TEXT NOT NULL,
+      acceptance_check_revision  INTEGER NOT NULL CHECK (acceptance_check_revision > 0),
+      evidence_set_digest        TEXT NOT NULL,
+      verifier_id                TEXT NOT NULL,
+      verifier_version           TEXT NOT NULL,
+      state                      TEXT NOT NULL CHECK (
+        state IN ('pending', 'passed', 'failed', 'indeterminate', 'stale')
+      ),
+      verification_digest        TEXT NOT NULL,
+      verification_json          TEXT NOT NULL,
+      verified_at                TEXT,
+      UNIQUE (owner_id, id)
+    );`,
+    `CREATE INDEX closure_verifications_check_state_idx
+       ON closure_verifications(owner_id, acceptance_check_id, acceptance_check_revision, state, id);`,
+    `CREATE TABLE closure_acceptances (
+      id                  TEXT PRIMARY KEY,
+      owner_id            TEXT NOT NULL,
+      revision            INTEGER NOT NULL CHECK (revision > 0),
+      outcome_id          TEXT NOT NULL,
+      outcome_revision    INTEGER NOT NULL CHECK (outcome_revision > 0),
+      work_unit_id        TEXT,
+      work_unit_revision  INTEGER,
+      decision            TEXT NOT NULL CHECK (decision IN ('accepted', 'released')),
+      acceptance_digest   TEXT NOT NULL,
+      acceptance_json     TEXT NOT NULL,
+      recorded_at         TEXT NOT NULL,
+      UNIQUE (owner_id, id),
+      CHECK (
+        (work_unit_id IS NULL AND work_unit_revision IS NULL) OR
+        (work_unit_id IS NOT NULL AND work_unit_revision IS NOT NULL AND work_unit_revision > 0)
+      )
+    );`,
+    `CREATE INDEX closure_acceptances_subject_idx
+       ON closure_acceptances(owner_id, outcome_id, outcome_revision, work_unit_id, work_unit_revision, recorded_at);`,
+    `CREATE TABLE closure_commands (
+      request_id       TEXT PRIMARY KEY,
+      owner_id         TEXT NOT NULL,
+      command_type     TEXT NOT NULL CHECK (
+        command_type IN ('acceptance_check.declare', 'evidence.admit', 'verification.request', 'acceptance.record')
+      ),
+      request_digest   TEXT NOT NULL,
+      request_json     TEXT NOT NULL,
+      result_json      TEXT NOT NULL,
+      recorded_at      TEXT NOT NULL,
+      UNIQUE (owner_id, request_id)
+    );`,
+    `CREATE TABLE closure_projection (
+      owner_cursor INTEGER PRIMARY KEY CHECK (owner_cursor > 0),
+      owner_id     TEXT NOT NULL,
+      item_json    TEXT NOT NULL
+    );`,
+    `CREATE TABLE closure_projection_state (
+      owner_id             TEXT PRIMARY KEY,
+      snapshot_id          TEXT NOT NULL UNIQUE,
+      snapshot_base_cursor INTEGER NOT NULL CHECK (snapshot_base_cursor >= 0),
+      updated_at           TEXT NOT NULL
+    );`,
+  ],
+  down: [
+    `CREATE TABLE responsibility_closure_rollback_guard (
+      eligible INTEGER NOT NULL CHECK (eligible = 1)
+    );`,
+    `INSERT INTO responsibility_closure_rollback_guard (eligible)
+     SELECT CASE WHEN
+       NOT EXISTS (SELECT 1 FROM acceptance_checks) AND
+       NOT EXISTS (SELECT 1 FROM closure_evidence) AND
+       NOT EXISTS (SELECT 1 FROM closure_verifications) AND
+       NOT EXISTS (SELECT 1 FROM closure_acceptances) AND
+       NOT EXISTS (SELECT 1 FROM closure_commands) AND
+       NOT EXISTS (SELECT 1 FROM closure_projection) AND
+       NOT EXISTS (SELECT 1 FROM closure_projection_state)
+     THEN 1 ELSE 0 END;`,
+    'DROP TABLE responsibility_closure_rollback_guard;',
+    'DROP TABLE closure_projection_state;',
+    'DROP TABLE closure_projection;',
+    'DROP TABLE closure_commands;',
+    'DROP INDEX closure_acceptances_subject_idx;',
+    'DROP TABLE closure_acceptances;',
+    'DROP INDEX closure_verifications_check_state_idx;',
+    'DROP TABLE closure_verifications;',
+    'DROP INDEX closure_evidence_check_state_idx;',
+    'DROP TABLE closure_evidence;',
+    'DROP INDEX acceptance_checks_active_subject_idx;',
+    'DROP TABLE acceptance_checks;',
+  ],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
@@ -1129,6 +1292,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
   RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
+  RESPONSIBILITY_CLOSURE_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;
@@ -1428,6 +1592,35 @@ const REQUIRED_COLUMNS: Readonly<Record<DoProductTable, readonly string[]>> = {
   ],
   judgment_projection: ['owner_cursor', 'owner_id', 'item_json'],
   judgment_projection_state: [
+    'owner_id', 'snapshot_id', 'snapshot_base_cursor', 'updated_at',
+  ],
+  acceptance_checks: [
+    'id', 'owner_id', 'revision', 'outcome_id', 'outcome_revision', 'outcome_digest',
+    'work_unit_id', 'work_unit_revision', 'work_unit_digest', 'criterion_ref',
+    'criterion_revision', 'criterion_digest', 'method_kind', 'method_version',
+    'record_digest', 'record_json', 'state', 'created_at', 'updated_at',
+  ],
+  closure_evidence: [
+    'id', 'owner_id', 'revision', 'acceptance_check_id', 'acceptance_check_revision',
+    'observation_kind', 'observation_id', 'observation_revision', 'observation_digest',
+    'producer_kind', 'producer_id', 'evidence_digest', 'evidence_json', 'state',
+    'observed_at', 'admitted_at',
+  ],
+  closure_verifications: [
+    'id', 'owner_id', 'revision', 'acceptance_check_id', 'acceptance_check_revision',
+    'evidence_set_digest', 'verifier_id', 'verifier_version', 'state',
+    'verification_digest', 'verification_json', 'verified_at',
+  ],
+  closure_acceptances: [
+    'id', 'owner_id', 'revision', 'outcome_id', 'outcome_revision', 'work_unit_id',
+    'work_unit_revision', 'decision', 'acceptance_digest', 'acceptance_json', 'recorded_at',
+  ],
+  closure_commands: [
+    'request_id', 'owner_id', 'command_type', 'request_digest', 'request_json',
+    'result_json', 'recorded_at',
+  ],
+  closure_projection: ['owner_cursor', 'owner_id', 'item_json'],
+  closure_projection_state: [
     'owner_id', 'snapshot_id', 'snapshot_base_cursor', 'updated_at',
   ],
 };
