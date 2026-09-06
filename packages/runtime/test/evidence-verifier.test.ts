@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { acceptanceCheckV06Schema } from '@waldo/contracts';
+import {
+  acceptanceCheckV06Schema,
+  canonicalizeAcceptanceCheckV06ForDigest,
+  type AcceptanceCheckV06,
+} from '@waldo/contracts';
 import {
   EvidenceVerifier,
   type ClosureVerifierPort,
@@ -13,34 +17,44 @@ async function sha256Hex(value: string): Promise<string> {
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+async function sha(value: string): Promise<`sha256:${string}`> {
+  return `sha256:${await sha256Hex(value)}`;
+}
+
 const subject = Object.freeze({
   outcome: { id: 'outcome_01', revision: 1, digest: digest('1') },
   workUnit: { id: 'work_01', revision: 2, digest: digest('2') },
 });
 
-const acceptanceCheck = acceptanceCheckV06Schema.parse({
-  protocolVersion: '0.6',
-  id: 'check_01',
-  ownerId: 'owner_01',
-  revision: 1,
-  digest: digest('3'),
-  subject,
-  criterion: {
-    ref: 'criterion_01',
+async function makeAcceptanceCheck(): Promise<AcceptanceCheckV06> {
+  const provisional = acceptanceCheckV06Schema.parse({
+    protocolVersion: '0.6',
+    id: 'check_01',
+    ownerId: 'owner_01',
     revision: 1,
-    version: '1.0.0',
-    digest: digest('4'),
-  },
-  verificationMethod: {
-    kind: 'deterministic_read_back',
-    capability: 'calendar.read',
-    version: 'calendar-readback-v1',
-    material: { ref: 'method_01', digest: digest('5') },
-  },
-  state: 'active',
-  createdAt: '2026-09-06T14:00:00.000Z',
-  updatedAt: '2026-09-06T14:00:00.000Z',
-});
+    digest: digest('0'),
+    subject,
+    criterion: {
+      ref: 'criterion_01',
+      revision: 1,
+      version: '1.0.0',
+      digest: digest('4'),
+    },
+    verificationMethod: {
+      kind: 'deterministic_read_back',
+      capability: 'calendar.read',
+      version: 'calendar-readback-v1',
+      material: { ref: 'method_01', digest: digest('5') },
+    },
+    state: 'active',
+    createdAt: '2026-09-06T14:00:00.000Z',
+    updatedAt: '2026-09-06T14:00:00.000Z',
+  });
+  return acceptanceCheckV06Schema.parse({
+    ...provisional,
+    digest: await sha(canonicalizeAcceptanceCheckV06ForDigest(provisional)),
+  });
+}
 
 const observation: TrustedClosureObservation = Object.freeze({
   ownerId: 'owner_01',
@@ -75,7 +89,7 @@ function makeVerifier(port: ClosureVerifierPort) {
 
 const disclosure = { ref: 'verifier_disclosure', digest: digest('7') } as const;
 
-async function admittedEnvelope(verifier: EvidenceVerifier) {
+async function admittedEnvelope(verifier: EvidenceVerifier, acceptanceCheck: AcceptanceCheckV06) {
   const evidence = await verifier.admitEvidence({
     ownerId: 'owner_01',
     acceptanceCheck,
@@ -91,6 +105,7 @@ async function admittedEnvelope(verifier: EvidenceVerifier) {
 
 describe('EvidenceVerifier', () => {
   it('derives Evidence provenance from a trusted canonical observation', async () => {
+    const acceptanceCheck = await makeAcceptanceCheck();
     const verifier = makeVerifier(async () => ({
       state: 'passed',
       verifier: {
@@ -130,6 +145,7 @@ describe('EvidenceVerifier', () => {
   });
 
   it('builds a deterministic exact Evidence-set envelope', async () => {
+    const acceptanceCheck = await makeAcceptanceCheck();
     const verifier = makeVerifier(async () => ({
       state: 'passed',
       verifier: {
@@ -142,7 +158,7 @@ describe('EvidenceVerifier', () => {
       findings: null,
     }));
 
-    const { evidence, envelope } = await admittedEnvelope(verifier);
+    const { evidence, envelope } = await admittedEnvelope(verifier, acceptanceCheck);
 
     expect(envelope.count).toBe(1);
     expect(envelope.records).toEqual([evidence]);
@@ -154,6 +170,7 @@ describe('EvidenceVerifier', () => {
   });
 
   it('records passed only for an available independent verifier', async () => {
+    const acceptanceCheck = await makeAcceptanceCheck();
     const verifier = makeVerifier(async () => ({
       state: 'passed',
       verifier: {
@@ -165,7 +182,7 @@ describe('EvidenceVerifier', () => {
       },
       findings: { ref: 'findings_01', digest: digest('8') },
     }));
-    const { envelope } = await admittedEnvelope(verifier);
+    const { envelope } = await admittedEnvelope(verifier, acceptanceCheck);
 
     const verification = await verifier.verify({
       ownerId: 'owner_01',
@@ -187,6 +204,7 @@ describe('EvidenceVerifier', () => {
   });
 
   it('downgrades a colluding verifier to indeterminate even if it claims passed', async () => {
+    const acceptanceCheck = await makeAcceptanceCheck();
     const verifier = makeVerifier(async () => ({
       state: 'passed',
       verifier: {
@@ -198,7 +216,7 @@ describe('EvidenceVerifier', () => {
       },
       findings: null,
     }));
-    const { envelope } = await admittedEnvelope(verifier);
+    const { envelope } = await admittedEnvelope(verifier, acceptanceCheck);
 
     const verification = await verifier.verify({
       ownerId: 'owner_01',
@@ -211,6 +229,7 @@ describe('EvidenceVerifier', () => {
   });
 
   it('maps unavailable verifier execution to indeterminate, never passed', async () => {
+    const acceptanceCheck = await makeAcceptanceCheck();
     const verifier = makeVerifier(async () => ({
       state: 'passed',
       verifier: {
@@ -222,7 +241,7 @@ describe('EvidenceVerifier', () => {
       },
       findings: null,
     }));
-    const { envelope } = await admittedEnvelope(verifier);
+    const { envelope } = await admittedEnvelope(verifier, acceptanceCheck);
 
     const verification = await verifier.verify({
       ownerId: 'owner_01',
@@ -234,8 +253,44 @@ describe('EvidenceVerifier', () => {
     expect(verification.verifier.availability).toBe('unavailable');
   });
 
+  it('rejects a forged AcceptanceCheck digest before verifier execution', async () => {
+    let calls = 0;
+    const acceptanceCheck = await makeAcceptanceCheck();
+    const forgedCheck = acceptanceCheckV06Schema.parse({
+      ...acceptanceCheck,
+      digest: digest('f'),
+    });
+    const verifier = makeVerifier(async () => {
+      calls += 1;
+      return {
+        state: 'passed',
+        verifier: {
+          id: 'calendar_verifier',
+          version: '1.0.0',
+          availability: 'available',
+          independentFromProducer: true,
+          disclosure,
+        },
+        findings: null,
+      };
+    });
+    const { evidence, envelope } = await admittedEnvelope(verifier, acceptanceCheck);
+
+    await expect(verifier.admitEvidence({
+      ownerId: 'owner_01', acceptanceCheck: forgedCheck, observation,
+    })).rejects.toThrow('AcceptanceCheck digest mismatch');
+    await expect(verifier.buildCurrentEvidenceSet({
+      ownerId: 'owner_01', acceptanceCheck: forgedCheck, evidence: [evidence],
+    })).rejects.toThrow('AcceptanceCheck digest mismatch');
+    await expect(verifier.verify({
+      ownerId: 'owner_01', acceptanceCheck: forgedCheck, evidence: envelope,
+    })).rejects.toThrow('AcceptanceCheck digest mismatch');
+    expect(calls).toBe(0);
+  });
+
   it('fails closed on owner or subject substitution before verifier execution', async () => {
     let calls = 0;
+    const acceptanceCheck = await makeAcceptanceCheck();
     const verifier = makeVerifier(async () => {
       calls += 1;
       return {
