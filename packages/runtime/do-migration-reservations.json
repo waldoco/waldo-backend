@@ -28,6 +28,10 @@
     {
       "version": 7,
       "name": "responsibility-judgment-authority-v0-5"
+    },
+    {
+      "version": 8,
+      "name": "responsibility-closure-v0-6"
     }
   ]
 }
