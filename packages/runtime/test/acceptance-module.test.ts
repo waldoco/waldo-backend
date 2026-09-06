@@ -17,6 +17,7 @@ async function sha256Hex(value: string): Promise<string> {
 const digest = (char: string) => `sha256:${char.repeat(64)}` as const;
 const ref = (id: string, char: string, revision = 1) => ({ id, revision, digest: digest(char) });
 const subject = Object.freeze({ outcome: ref('outcome_01', '1'), workUnit: ref('work_01', '2', 2) });
+const outcomeOnlySubject = Object.freeze({ outcome: subject.outcome, workUnit: null });
 
 async function sha(value: string): Promise<`sha256:${string}`> {
   return `sha256:${await sha256Hex(value)}`;
@@ -137,17 +138,59 @@ describe('AcceptanceModule', () => {
     })).rejects.toThrow();
   });
 
-  it('keeps release distinct from verified acceptance', async () => {
+  it('forces a zero-verification Release to the canonical Outcome-level subject', async () => {
     const release = await module().record({
       ownerId: 'owner_01', authenticatedOwnerId: 'owner_01', subject,
       request: request('release'), activeChecks: null, evidenceSets: [], verifications: [],
     });
     expect(release).toMatchObject({
       ownerId: 'owner_01', actor: { kind: 'owner', id: 'owner_01' },
+      subject: outcomeOnlySubject,
       decision: 'released', reasonRef: 'owner_release_reason', verifications: [],
     });
     expect('activeAcceptanceChecks' in release).toBe(false);
     expect('evidenceSets' in release).toBe(false);
+  });
+
+  it('derives non-empty Release subject from canonical Verification records', async () => {
+    const proof = await closureProof();
+    const release = await module().record({
+      ownerId: 'owner_01', authenticatedOwnerId: 'owner_01', subject: outcomeOnlySubject,
+      request: request('release', [proof.verificationRef]), activeChecks: null,
+      evidenceSets: [], verifications: [proof.verification],
+    });
+    expect(release.subject).toEqual(subject);
+  });
+
+  it('rejects cross-owner or mixed-subject Verification records on Release', async () => {
+    const proof = await closureProof();
+    const crossOwner = { ...proof.verification, ownerId: 'owner_other' };
+    const crossOwnerRef = {
+      id: crossOwner.id,
+      revision: crossOwner.revision,
+      digest: await sha(canonicalizeProtocolJson(crossOwner)),
+    };
+    await expect(module().record({
+      ownerId: 'owner_01', authenticatedOwnerId: 'owner_01', subject: outcomeOnlySubject,
+      request: request('release', [crossOwnerRef]), activeChecks: null,
+      evidenceSets: [], verifications: [crossOwner],
+    })).rejects.toThrow();
+
+    const second = {
+      ...proof.verification,
+      id: 'verification_02',
+      subject: outcomeOnlySubject,
+    };
+    const secondRef = {
+      id: second.id,
+      revision: second.revision,
+      digest: await sha(canonicalizeProtocolJson(second)),
+    };
+    await expect(module().record({
+      ownerId: 'owner_01', authenticatedOwnerId: 'owner_01', subject: outcomeOnlySubject,
+      request: request('release', [proof.verificationRef, secondRef]), activeChecks: null,
+      evidenceSets: [], verifications: [proof.verification, second],
+    })).rejects.toThrow();
   });
 
   it('rejects authenticated-owner or outcome-revision substitution', async () => {
