@@ -1,0 +1,285 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/__schema0"
+    },
+    {
+      "$ref": "#/$defs/__schema10"
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "acceptanceCheck": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "observation": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "provenance": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/__schema9"
+        },
+        "state": {
+          "type": "string",
+          "const": "admitted"
+        },
+        "admittedAt": {
+          "$ref": "#/$defs/__schema9"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "subject",
+        "acceptanceCheck",
+        "observation",
+        "provenance",
+        "observedAt",
+        "state",
+        "admittedAt"
+      ],
+      "additionalProperties": false
+    },
+    "__schema1": {
+      "type": "string",
+      "const": "0.6"
+    },
+    "__schema2": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema3": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema4": {
+      "type": "object",
+      "properties": {
+        "outcome": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "workUnit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema5"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "outcome",
+        "workUnit"
+      ],
+      "additionalProperties": false
+    },
+    "__schema5": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema6"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema6": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "__schema7": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "provider_observation",
+            "execution_observation",
+            "effect_receipt",
+            "person_statement"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema6"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema8": {
+      "type": "object",
+      "properties": {
+        "producer": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "provider",
+                "execution_environment",
+                "effect_adapter",
+                "person"
+              ]
+            },
+            "id": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/__schema2"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "version"
+          ],
+          "additionalProperties": false
+        },
+        "admittedBy": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "owner",
+                "service"
+              ]
+            },
+            "id": {
+              "$ref": "#/$defs/__schema2"
+            }
+          },
+          "required": [
+            "kind",
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "producer",
+        "admittedBy"
+      ],
+      "additionalProperties": false
+    },
+    "__schema9": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema10": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "acceptanceCheck": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "observation": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "provenance": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/__schema9"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "stale",
+            "invalidated"
+          ]
+        },
+        "admittedAt": {
+          "$ref": "#/$defs/__schema9"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "subject",
+        "acceptanceCheck",
+        "observation",
+        "provenance",
+        "observedAt",
+        "state",
+        "admittedAt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-closure:0.6:evidence",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}

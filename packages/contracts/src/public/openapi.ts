@@ -42,13 +42,34 @@ import {
   responsibilityJudgmentAuthorityHttpRouteManifestV05,
   type ResponsibilityJudgmentAuthorityHttpRouteV05,
 } from '../protocol/responsibility-judgment-authority-http-v0-5';
+import {
+  acceptanceCheckDeclarationRequestV06Schema,
+  acceptanceCheckDeclarationResultV06Schema,
+  acceptanceRecordRequestV06Schema,
+  acceptanceRecordResultV06Schema,
+  closureCommandRetrySemanticsV06,
+  closureProjectionPageV06Schema,
+  evidenceAdmissionRequestV06Schema,
+  evidenceAdmissionResultV06Schema,
+  verificationRequestV06Schema,
+  verificationResultV06Schema,
+} from '../protocol/responsibility-closure-v0-6';
+import {
+  addResponsibilityClosureUniqueItemsV06,
+} from '../protocol/responsibility-closure-v0-6-json-schema';
+import {
+  responsibilityClosureHttpMediaTypeV06,
+  responsibilityClosureHttpRouteManifestV06,
+  type ResponsibilityClosureHttpRouteV06,
+} from '../protocol/responsibility-closure-http-v0-6';
 
 type JsonRecord = Record<string, unknown>;
-type ProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4' | '0.5';
+type ProtocolVersion = '0.1' | '0.2' | '0.3' | '0.4' | '0.5' | '0.6';
 type PublicResponsibilityRoute =
   | ResponsibilityHttpRouteV01
   | ResponsibilityExecutionHttpRouteV04
-  | ResponsibilityJudgmentAuthorityHttpRouteV05;
+  | ResponsibilityJudgmentAuthorityHttpRouteV05
+  | ResponsibilityClosureHttpRouteV06;
 
 const mediaTypes: Readonly<Record<ProtocolVersion, string>> = Object.freeze({
   '0.1': responsibilityHttpMediaTypeV01,
@@ -56,6 +77,7 @@ const mediaTypes: Readonly<Record<ProtocolVersion, string>> = Object.freeze({
   '0.3': responsibilityHttpMediaTypeV03,
   '0.4': responsibilityExecutionHttpMediaTypeV04,
   '0.5': responsibilityJudgmentAuthorityHttpMediaTypeV05,
+  '0.6': responsibilityClosureHttpMediaTypeV06,
 });
 
 const operationMetadata = Object.freeze({
@@ -125,12 +147,77 @@ const operationMetadata = Object.freeze({
     responseSchemas: { '0.5': 'JudgmentAnswerResultV05' },
     retrySemantics: judgmentAnswerRetrySemanticsV05,
   },
+  closure_acceptance_check_declare: {
+    operationId: 'declareAcceptanceCheck',
+    summary: 'Declare one owner-readable AcceptanceCheck proposal',
+    successStatus: '200',
+    requestSchemas: { '0.6': 'AcceptanceCheckDeclarationRequestV06' },
+    responseSchemas: { '0.6': 'AcceptanceCheckDeclarationResultV06' },
+    retrySemantics: closureCommandRetrySemanticsV06,
+    runtimeValidation: [
+      'target selector is owner-bound and reread to exact canonical subject revisions and digests',
+      'criterion reference is reread server-side and no inline semantic content is admitted',
+    ],
+  },
+  closure_evidence_admit: {
+    operationId: 'admitClosureEvidence',
+    summary: 'Admit one attributable observation as bounded Evidence',
+    successStatus: '200',
+    requestSchemas: { '0.6': 'EvidenceAdmissionRequestV06' },
+    responseSchemas: { '0.6': 'EvidenceAdmissionResultV06' },
+    retrySemantics: closureCommandRetrySemanticsV06,
+    runtimeValidation: [
+      'observation reference resolves to one exact canonical observation and server-derived provenance',
+      'producer category and owner identity invariants are enforced without admitting inline Evidence',
+    ],
+  },
+  closure_verification_request: {
+    operationId: 'requestClosureVerification',
+    summary: 'Request independent Verification over an exact Evidence set',
+    successStatus: '200',
+    requestSchemas: { '0.6': 'VerificationRequestV06' },
+    responseSchemas: { '0.6': 'VerificationResultV06' },
+    retrySemantics: closureCommandRetrySemanticsV06,
+    runtimeValidation: [
+      'Evidence references are strictly ordered after JSON-Schema uniqueness validation',
+      'every Evidence reference resolves byte-and-digest-exact to current admitted owner-subject-check Evidence',
+      'method, verifier, availability, and producer-independent identity are derived and validated server-side',
+    ],
+  },
+  closure_acceptance_record: {
+    operationId: 'recordClosureAcceptance',
+    summary: 'Accept verified work or consciously release it as the owner',
+    successStatus: '200',
+    requestSchemas: { '0.6': 'AcceptanceRecordRequestV06' },
+    responseSchemas: { '0.6': 'AcceptanceRecordResultV06' },
+    retrySemantics: closureCommandRetrySemanticsV06,
+    runtimeValidation: [
+      'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'Verification references are strictly ordered by id after JSON-Schema uniqueness validation',
+      'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
+      'verifier identity differs from every exact Evidence producer identity',
+      'release is a distinct owner disposition and never claims verified acceptance',
+    ],
+  },
+  closure_projection: {
+    operationId: 'readClosureProjection',
+    summary: 'Read the owner-bound ordered responsibility closure projection',
+    successStatus: '200',
+    responseSchemas: { '0.6': 'ClosureProjectionPageV06' },
+    runtimeValidation: [
+      'every item owner matches the authenticated projection owner',
+      'item cursors are strictly ordered within the snapshot and cursor envelope is coherent',
+      'recordDigest and pageDigest equal SHA-256 of their canonical embedded values',
+      'page item count and UTF-8 byte bounds are enforced',
+    ],
+  },
 } as const);
 
 const publicResponsibilityRouteManifest = Object.freeze([
   ...responsibilityHttpRouteManifestV01,
   ...responsibilityExecutionHttpRouteManifestV04,
   ...responsibilityJudgmentAuthorityHttpRouteManifestV05,
+  ...responsibilityClosureHttpRouteManifestV06,
 ]);
 
 function stripGeneratedSchemaNoise(value: unknown): unknown {
@@ -279,7 +366,7 @@ export function buildPublicOpenApiDocument(
 
   return {
     openapi: '3.1.0',
-    info: { title: 'Waldo Public API', version: '0.3.0' },
+    info: { title: 'Waldo Public API', version: '0.4.0' },
     paths,
     components: {
       securitySchemes: {
@@ -314,6 +401,25 @@ export function buildPublicOpenApiDocument(
         JudgmentAnswerRequestV05: schemaFor(judgmentAnswerRequestV05Schema),
         JudgmentAnswerResultV05: schemaFor(judgmentAnswerResultV05Schema),
         JudgmentProjectionPageV05: schemaFor(judgmentProjectionPageV05Schema),
+        AcceptanceCheckDeclarationRequestV06: schemaFor(
+          acceptanceCheckDeclarationRequestV06Schema,
+        ),
+        AcceptanceCheckDeclarationResultV06: schemaFor(
+          acceptanceCheckDeclarationResultV06Schema,
+        ),
+        EvidenceAdmissionRequestV06: schemaFor(evidenceAdmissionRequestV06Schema),
+        EvidenceAdmissionResultV06: schemaFor(evidenceAdmissionResultV06Schema),
+        VerificationRequestV06: addResponsibilityClosureUniqueItemsV06(
+          schemaFor(verificationRequestV06Schema),
+        ),
+        VerificationResultV06: schemaFor(verificationResultV06Schema),
+        AcceptanceRecordRequestV06: addResponsibilityClosureUniqueItemsV06(
+          schemaFor(acceptanceRecordRequestV06Schema),
+        ),
+        AcceptanceRecordResultV06: schemaFor(acceptanceRecordResultV06Schema),
+        ClosureProjectionPageV06: addResponsibilityClosureUniqueItemsV06(
+          schemaFor(closureProjectionPageV06Schema),
+        ),
         ...Object.fromEntries(
           Object.entries(responsibilityHttpProblemSchemasV01).map(([status, schema]) => [
             `ResponsibilityHttpProblem${status}V01`,

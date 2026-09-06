@@ -1,0 +1,16 @@
+{
+  "protocolVersion": "0.6",
+  "requestId": "release_request_fixture",
+  "commandType": "acceptance.record",
+  "presenceRegistrationId": "presence_fixture",
+  "aggregate": {
+    "kind": "outcome",
+    "id": "outcome_fixture",
+    "expectedRevision": 3
+  },
+  "payload": {
+    "decision": "release",
+    "verifications": [],
+    "reasonRef": "owner_release_reason_fixture"
+  }
+}

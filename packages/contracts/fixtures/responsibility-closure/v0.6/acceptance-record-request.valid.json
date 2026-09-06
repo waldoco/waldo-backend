@@ -1,0 +1,22 @@
+{
+  "protocolVersion": "0.6",
+  "requestId": "acceptance_request_fixture",
+  "commandType": "acceptance.record",
+  "presenceRegistrationId": "presence_fixture",
+  "aggregate": {
+    "kind": "outcome",
+    "id": "outcome_fixture",
+    "expectedRevision": 3
+  },
+  "payload": {
+    "decision": "accept",
+    "verifications": [
+      {
+        "id": "verification_fixture",
+        "revision": 1,
+        "digest": "sha256:7b0828ab56794c4ab1982098985303d8ec3355585e007d6083427b048c303bf1"
+      }
+    ],
+    "reasonRef": null
+  }
+}

@@ -1,7 +1,10 @@
+import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
 import { responsibilityHttpRouteManifestV01 } from '../protocol/responsibility-http-adapter-v0-1';
 import { responsibilityJudgmentAuthorityHttpRouteManifestV05 } from '../protocol/responsibility-judgment-authority-http-v0-5';
 import { responsibilityExecutionHttpRouteManifestV04 } from '../protocol/responsibility-workunit-execution-http-v0-4';
+import { responsibilityClosureHttpRouteManifestV06 } from '../protocol/responsibility-closure-http-v0-6';
+import { acceptanceRecordRequestV06Schema } from '../protocol/responsibility-closure-v0-6';
 import { buildPublicOpenApiDocument } from './openapi';
 
 const forbiddenFragments = [
@@ -28,6 +31,28 @@ const forbiddenFragments = [
   '"transcript":',
 ];
 
+function schemasForProperty(value: unknown, property: string): Array<Record<string, unknown>> {
+  const matches: Array<Record<string, unknown>> = [];
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      for (const child of candidate) visit(child);
+      return;
+    }
+    if (typeof candidate !== 'object' || candidate === null) return;
+    const object = candidate as Record<string, unknown>;
+    const properties = object.properties;
+    if (typeof properties === 'object' && properties !== null) {
+      const match = (properties as Record<string, unknown>)[property];
+      if (typeof match === 'object' && match !== null) {
+        matches.push(match as Record<string, unknown>);
+      }
+    }
+    for (const child of Object.values(object)) visit(child);
+  };
+  visit(value);
+  return matches;
+}
+
 describe('public OpenAPI artifact', () => {
   it('publishes exactly the guarded responsibility route inventory', () => {
     const generated = buildPublicOpenApiDocument();
@@ -36,6 +61,7 @@ describe('public OpenAPI artifact', () => {
       ...responsibilityHttpRouteManifestV01,
       ...responsibilityExecutionHttpRouteManifestV04,
       ...responsibilityJudgmentAuthorityHttpRouteManifestV05,
+      ...responsibilityClosureHttpRouteManifestV06,
     ];
     expect(Object.keys(paths).sort()).toEqual(
       [...new Set(publicRoutes.map((route) => route.path))].sort(),
@@ -136,6 +162,36 @@ describe('public OpenAPI artifact', () => {
       changedDuplicate: 'reject_request_conflict',
     });
     expect(paths).not.toHaveProperty('/public/responsibilities/judgments');
+    for (const path of [
+      '/public/responsibilities/closure/acceptance-checks',
+      '/public/responsibilities/closure/evidence',
+      '/public/responsibilities/closure/verifications',
+      '/public/responsibilities/closure/acceptances',
+    ]) {
+      expect(Object.keys(paths[path]!.post!.requestBody!.content)).toEqual([
+        'application/vnd.waldo.responsibility.v0.6+json',
+      ]);
+      expect(paths[path]!.post!['x-waldo-retry-semantics']).toEqual({
+        identity: 'requestId',
+        exactDuplicate: 'return_persisted_result_byte_for_byte',
+        changedDuplicate: 'reject_request_conflict',
+      });
+    }
+    const closureProjection = paths['/public/responsibilities/closure/projection']!.get!;
+    expect(closureProjection).not.toHaveProperty('requestBody');
+    expect(closureProjection.responses['200']!.content).toEqual({
+      'application/vnd.waldo.responsibility.v0.6+json': {
+        schema: { $ref: '#/components/schemas/ClosureProjectionPageV06' },
+      },
+    });
+    expect(paths['/public/responsibilities/closure/acceptances']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'Verification references are strictly ordered by id after JSON-Schema uniqueness validation',
+      'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
+      'verifier identity differs from every exact Evidence producer identity',
+      'release is a distinct owner disposition and never claims verified acceptance',
+    ]);
     expect(paths['/public/responsibilities/projection']!.get).not.toHaveProperty('requestBody');
     expect(paths['/public/responsibilities/planning-turns/projection']!.get)
       .not.toHaveProperty('requestBody');
@@ -151,11 +207,132 @@ describe('public OpenAPI artifact', () => {
     ]) {
       expect(components.schemas).not.toHaveProperty(internal);
     }
+    for (const internal of [
+      'AcceptanceCheckV06',
+      'EvidenceV06',
+      'VerificationV06',
+      'AcceptanceV06',
+      'VerifiedAcceptanceBindingV06',
+      'ClosureDomainEventV06',
+    ]) {
+      expect(components.schemas).not.toHaveProperty(internal);
+    }
+
+    const publicCommandSchemas = [
+      'AcceptanceCheckDeclarationRequestV06',
+      'EvidenceAdmissionRequestV06',
+      'VerificationRequestV06',
+      'AcceptanceRecordRequestV06',
+    ];
+    for (const schemaName of publicCommandSchemas) {
+      const serialized = JSON.stringify(components.schemas[schemaName]);
+      for (const forbidden of [
+        'ownerId',
+        'actor',
+        'collector',
+        'source',
+        'verifier',
+        'policy',
+        'authority',
+        'credential',
+        'clientIssuedAt',
+        'clock',
+        'rawHealth',
+        'transcript',
+        'prompt',
+      ]) {
+        expect(serialized, `${schemaName}:${forbidden}`).not.toContain(`"${forbidden}"`);
+      }
+    }
   });
 
   it('does not leak internal-only contract names or sensitive label fragments', () => {
     const artifact = JSON.stringify(buildPublicOpenApiDocument());
     for (const fragment of forbiddenFragments) expect(artifact).not.toContain(fragment);
+  });
+
+  it('expresses structural uniqueness and declares every closure runtime refinement', () => {
+    const generated = buildPublicOpenApiDocument();
+    const paths = generated.paths as Record<string, Record<string, PublicOperation>>;
+    const components = generated.components as {
+      schemas: Record<string, Record<string, unknown>>;
+    };
+    const verificationRequest = components.schemas.VerificationRequestV06!;
+    const acceptanceRequest = components.schemas.AcceptanceRecordRequestV06!;
+    expect(schemasForProperty(verificationRequest, 'evidence')).toEqual([
+      expect.objectContaining({ minItems: 1, maxItems: 64, uniqueItems: true }),
+    ]);
+    for (const verificationRefs of schemasForProperty(acceptanceRequest, 'verifications')) {
+      expect(verificationRefs).toEqual(
+        expect.objectContaining({ maxItems: 32, uniqueItems: true }),
+      );
+    }
+
+    const validateVerification = new Ajv2020({ strict: true, allErrors: true }).compile(
+      verificationRequest,
+    );
+    const duplicateRef = { id: 'evidence', revision: 1, digest: `sha256:${'a'.repeat(64)}` };
+    expect(validateVerification({
+      protocolVersion: '0.6',
+      requestId: 'verification',
+      commandType: 'verification.request',
+      presenceRegistrationId: 'presence',
+      aggregate: { kind: 'acceptance_check', id: 'check', expectedRevision: 1 },
+      payload: { evidence: [duplicateRef, duplicateRef] },
+    })).toBe(false);
+
+    const validateAcceptance = new Ajv2020({ strict: true, allErrors: true }).compile(
+      acceptanceRequest,
+    );
+    const reversedAcceptance = {
+      protocolVersion: '0.6',
+      requestId: 'acceptance',
+      commandType: 'acceptance.record',
+      presenceRegistrationId: 'presence',
+      aggregate: { kind: 'outcome', id: 'outcome', expectedRevision: 1 },
+      payload: {
+        decision: 'accept',
+        verifications: [
+          { id: 'verification_b', revision: 1, digest: duplicateRef.digest },
+          { id: 'verification_a', revision: 1, digest: duplicateRef.digest },
+        ],
+        reasonRef: null,
+      },
+    };
+    expect(validateAcceptance(reversedAcceptance)).toBe(true);
+    expect(acceptanceRecordRequestV06Schema.safeParse(reversedAcceptance).success).toBe(false);
+
+    expect(paths['/public/responsibilities/closure/acceptance-checks']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'target selector is owner-bound and reread to exact canonical subject revisions and digests',
+      'criterion reference is reread server-side and no inline semantic content is admitted',
+    ]);
+    expect(paths['/public/responsibilities/closure/evidence']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'observation reference resolves to one exact canonical observation and server-derived provenance',
+      'producer category and owner identity invariants are enforced without admitting inline Evidence',
+    ]);
+    expect(paths['/public/responsibilities/closure/verifications']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'Evidence references are strictly ordered after JSON-Schema uniqueness validation',
+      'every Evidence reference resolves byte-and-digest-exact to current admitted owner-subject-check Evidence',
+      'method, verifier, availability, and producer-independent identity are derived and validated server-side',
+    ]);
+    expect(paths['/public/responsibilities/closure/acceptances']!.post!
+      ['x-waldo-runtime-validation']).toEqual([
+      'accept covers the exact server-derived complete active AcceptanceCheck set exactly once',
+      'Verification references are strictly ordered by id after JSON-Schema uniqueness validation',
+      'every passed available Verification and current Evidence envelope is owner-subject-check and digest exact',
+      'verifier identity differs from every exact Evidence producer identity',
+      'release is a distinct owner disposition and never claims verified acceptance',
+    ]);
+    expect(paths['/public/responsibilities/closure/projection']!.get!
+      ['x-waldo-runtime-validation']).toEqual([
+      'every item owner matches the authenticated projection owner',
+      'item cursors are strictly ordered within the snapshot and cursor envelope is coherent',
+      'recordDigest and pageDigest equal SHA-256 of their canonical embedded values',
+      'page item count and UTF-8 byte bounds are enforced',
+    ]);
   });
 
   it('generates byte-identically across repeated builds', () => {
