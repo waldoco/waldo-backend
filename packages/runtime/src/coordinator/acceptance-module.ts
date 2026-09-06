@@ -41,6 +41,10 @@ function sameProtocolValue(left: unknown, right: unknown): boolean {
   return canonicalizeProtocolJson(left) === canonicalizeProtocolJson(right);
 }
 
+function compareProtocolIds(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function assertLowerHex(value: string): `sha256:${string}` {
   if (!/^[a-f0-9]{64}$/.test(value)) {
     throw new ResponsibilityClosureInvariantError('trusted SHA-256 must return lowercase hex');
@@ -98,7 +102,7 @@ export class AcceptanceModule {
 
     const evidenceSets = input.evidenceSets
       .map((value) => currentEvidenceSetEnvelopeV06Schema.parse(value))
-      .sort((left, right) => left.acceptanceCheck.id.localeCompare(right.acceptanceCheck.id));
+      .sort((left, right) => compareProtocolIds(left.acceptanceCheck.id, right.acceptanceCheck.id));
     if (evidenceSets.length !== activeChecks.records.length) {
       throw new ResponsibilityClosureInvariantError('Acceptance requires one Evidence set per active check');
     }
@@ -108,7 +112,7 @@ export class AcceptanceModule {
 
     const verifications = input.verifications
       .map((value) => verificationV06Schema.parse(value))
-      .sort((left, right) => left.id.localeCompare(right.id));
+      .sort((left, right) => compareProtocolIds(left.id, right.id));
     await this.assertVerificationReferences(
       request.payload.verifications,
       verifications,
@@ -277,6 +281,9 @@ export class AcceptanceModule {
       throw new ResponsibilityClosureInvariantError('Verification reference coverage mismatch');
     }
     const byId = new Map(records.map((record) => [record.id, record]));
+    if (byId.size !== records.length) {
+      throw new ResponsibilityClosureInvariantError('duplicate Verification records');
+    }
     for (const reference of requested) {
       const record = byId.get(reference.id);
       if (record === undefined || record.revision !== reference.revision) {
