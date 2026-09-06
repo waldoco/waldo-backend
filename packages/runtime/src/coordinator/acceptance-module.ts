@@ -29,7 +29,7 @@ export type AcceptanceRecordInput = Readonly<{
   ownerId: string;
   /** Authenticated owner derived from the admitted presence/session, never request payload. */
   authenticatedOwnerId: string;
-  /** Exact current subject reread from OutcomeModule. */
+  /** Exact current Outcome subject material reread from OutcomeModule. */
   subject: ActiveAcceptanceCheckSetV06['subject'];
   request: AcceptanceRecordRequestV06;
   activeChecks: ActiveAcceptanceCheckSetV06 | null;
@@ -67,17 +67,14 @@ export class AcceptanceModule {
     this.assertOwnerAndSubject(input, request);
 
     if (request.payload.decision === 'release') {
-      await this.assertVerificationReferences(
-        request.payload.verifications,
-        input.verifications,
-        false,
-      );
+      const verifications = input.verifications.map((value) => verificationV06Schema.parse(value));
+      const releaseSubject = await this.resolveReleaseSubject(input, request, verifications);
       return Object.freeze(acceptanceV06Schema.parse({
         protocolVersion: '0.6',
         id: this.deps.newId(),
         ownerId: input.ownerId,
         revision: 1,
-        subject: input.subject,
+        subject: releaseSubject,
         actor: { kind: 'owner', id: input.authenticatedOwnerId },
         mode: 'explicit_owner',
         verifications: request.payload.verifications,
@@ -205,6 +202,47 @@ export class AcceptanceModule {
     ) {
       throw new ResponsibilityClosureInvariantError('authenticated owner or Outcome revision mismatch');
     }
+  }
+
+  private async resolveReleaseSubject(
+    input: AcceptanceRecordInput,
+    request: AcceptanceRecordRequestV06,
+    verifications: readonly VerificationV06[],
+  ): Promise<ActiveAcceptanceCheckSetV06['subject']> {
+    await this.assertVerificationReferences(
+      request.payload.verifications,
+      verifications,
+      false,
+    );
+
+    if (request.payload.verifications.length === 0) {
+      return Object.freeze({
+        outcome: input.subject.outcome,
+        workUnit: null,
+      });
+    }
+
+    const first = verifications[0];
+    if (
+      first === undefined ||
+      first.ownerId !== input.ownerId ||
+      !sameProtocolValue(first.subject.outcome, input.subject.outcome)
+    ) {
+      throw new ResponsibilityClosureInvariantError('Release Verification owner/Outcome mismatch');
+    }
+
+    for (const verification of verifications) {
+      if (
+        verification.ownerId !== input.ownerId ||
+        !sameProtocolValue(verification.subject, first.subject)
+      ) {
+        throw new ResponsibilityClosureInvariantError(
+          'Release Verifications must share one canonical owner and subject',
+        );
+      }
+    }
+
+    return first.subject;
   }
 
   private async assertActiveCheckDigests(activeChecks: ActiveAcceptanceCheckSetV06): Promise<void> {
