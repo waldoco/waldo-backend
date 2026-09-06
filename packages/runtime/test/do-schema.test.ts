@@ -69,6 +69,11 @@ function provisionThroughV6(storage: DurableObjectStorage): void {
   applyDoMigration(storage, RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION);
 }
 
+function provisionThroughV7(storage: DurableObjectStorage): void {
+  provisionThroughV6(storage);
+  applyDoMigration(storage, RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION);
+}
+
 describe('HEY-10 DO SQLite schema root', () => {
   it('reports an empty DO SQLite database as missing required product tables', async () => {
     const stub = freshStub();
@@ -105,7 +110,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.version).toBe(DO_SCHEMA_VERSION);
     expect(result.assertResult.ok).toBe(true);
     for (const table of DO_PRODUCT_TABLES) {
@@ -200,7 +205,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.legacyRevisionOneRejected).toBe(true);
     expect(result.tables).toContain('goals');
     expect(result.explicitGoalsIndexes).toEqual([]);
@@ -233,7 +238,7 @@ describe('HEY-10 DO SQLite schema root', () => {
         ).one().description,
       };
     });
-    expect(result).toEqual({ version: 7, description: 'Preserve this row.' });
+    expect(result).toEqual({ version: 8, description: 'Preserve this row.' });
   });
 
   it('migrates the merged V3 responsibility schema to current without changing responsibility state', async () => {
@@ -328,7 +333,7 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result.before.version).toBe(3);
-    expect(result.after).toEqual({ ...result.before, version: 7 });
+    expect(result.after).toEqual({ ...result.before, version: 8 });
     expect(result.authority).toEqual({
       authenticated_subject_ref: null,
       state: null,
@@ -440,7 +445,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.after).toEqual(result.preserved);
     expect(result.newState).toEqual({ state: 'planning_authorized', revision: 2 });
   });
@@ -520,7 +525,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       };
     });
 
-    expect(result.version).toBe(7);
+    expect(result.version).toBe(8);
     expect(result.preserved).toEqual(result.before);
     expect(result.protocolVersion).toBe('0.3');
     expect(result.executionTables).toEqual([
@@ -661,7 +666,7 @@ describe('HEY-10 DO SQLite schema root', () => {
   it('downgrades an empty V7 judgment schema to V6', async () => {
     const stub = freshStub();
     const result = await runInDurableObject(stub, (_instance, state) => {
-      provisionDoSchema(state.storage);
+      provisionThroughV7(state.storage);
       applyDoMigration(
         state.storage,
         RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
@@ -774,7 +779,7 @@ describe('HEY-10 DO SQLite schema root', () => {
 
     for (const testCase of cases) {
       const result = await runInDurableObject(freshStub(), (_instance, state) => {
-        provisionDoSchema(state.storage);
+        provisionThroughV7(state.storage);
         state.storage.sql.exec(testCase.insert, ...testCase.args);
         expect(() => applyDoMigration(
           state.storage,
@@ -1038,7 +1043,7 @@ describe('HEY-10 DO SQLite schema root', () => {
       provisionDoSchema(state.storage);
       const beforeVersion = getSchemaVersion(state.storage.sql);
       const badMigration: DoMigration = {
-        version: 8,
+        version: 9,
         name: 'intentional-failure',
         up: [
           'CREATE TABLE transient_failure_probe (id TEXT PRIMARY KEY);',
@@ -1060,8 +1065,8 @@ describe('HEY-10 DO SQLite schema root', () => {
     });
 
     expect(result).toEqual({
-      beforeVersion: 7,
-      afterVersion: 7,
+      beforeVersion: 8,
+      afterVersion: 8,
       outcomesPresent: true,
       probeTables: [],
     });
