@@ -14,7 +14,7 @@ import { ResponsibilityClosureInvariantError } from './evidence-verifier';
 
 export type TrustedClosureSubject = Readonly<{
   ownerId: string;
-  subject: ReturnType<typeof closureSubjectV06Schema.parse>;
+  subject: AcceptanceCheckV06['subject'];
 }>;
 
 export type ClosureAcceptanceCheckBuilderDependencies = Readonly<{
