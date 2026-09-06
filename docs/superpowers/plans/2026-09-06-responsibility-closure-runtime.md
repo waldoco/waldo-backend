@@ -32,27 +32,20 @@
 - Read: `packages/contracts/src/protocol/responsibility-closure-v0-6.ts`
 - Read: `packages/contracts/src/protocol/responsibility-closure-http-v0-6.ts`
 - Read: `packages/contracts/src/index.ts`
-- Read: `packages/runtime/do-migration-reservations.json`
-- Read: `packages/runtime/src/do-schema.ts`
+- Read: `packages/runtime/DO-MIGRATIONS.md`
 - Modify after re-pin: `packages/runtime/do-migration-reservations.json`
 - Modify after re-pin: `packages/runtime/src/do-schema.ts`
-- Test: `packages/runtime/test/do-schema.test.ts` or the existing migration test file that owns executable lineage on landed main
+- Test: `packages/runtime/test/do-schema.test.ts`
+- Guard: `scripts/guards/guard-do-migration-lineage.mjs`
 
 - [ ] Confirm PR #133 is merged and record landed `main` SHA/tree in #116.
 - [ ] Confirm `responsibility-closure-v0-6` and its HTTP route manifest resolve from `@waldo/contracts` on landed main.
 - [ ] Confirm current highest reserved migration version and append exactly one collision-free closure-runtime migration.
-- [ ] Write the RED migration test first: a fresh owner DO schema must not yet contain the v0.6 closure tables; then update the expectation so it fails because the new migration is missing.
-- [ ] Run the focused migration test and observe the expected RED.
-- [ ] Add the minimal additive schema required for:
-  - `acceptance_checks`;
-  - `closure_evidence`;
-  - `closure_verifications`;
-  - `closure_acceptances`;
-  - `closure_commands`;
-  - closure projection state/items only if the existing projection schema cannot safely namespace v0.6 records.
-- [ ] Add owner/revision/request uniqueness and parameterizable lookup indexes. Do not add denormalized content fields that are not required by the v0.6 contract/runtime rereads.
+- [ ] RED: add a `do-schema.test.ts` assertion that a freshly initialized owner DO exposes the new closure tables and current migration version; run it and observe failure because the migration is absent.
+- [ ] GREEN: add the minimal additive schema required for `acceptance_checks`, `closure_evidence`, `closure_verifications`, `closure_acceptances`, `closure_commands`, and closure projection state/items only if the existing projection schema cannot safely namespace v0.6 records.
+- [ ] Add owner/revision/request uniqueness and parameterized lookup indexes. Do not add denormalized content fields not required by the v0.6 contract/runtime rereads.
 - [ ] Run the focused migration test and observe GREEN.
-- [ ] Run the DO migration lineage guard.
+- [ ] Run the DO migration lineage guard and keep the reservation/source chain identical.
 
 **Verification commands:**
 
@@ -69,7 +62,7 @@ node scripts/guards/guard-do-migration-lineage.mjs
 
 **Files:**
 - Modify: `packages/runtime/src/coordinator/outcome-module.ts`
-- Modify only if needed for typed conflict mapping: `packages/runtime/src/responsibility/errors.ts`
+- Modify only for typed conflict mapping: `packages/runtime/src/responsibility/errors.ts`
 - Test: `packages/runtime/test/responsibility-closure-outcome.test.ts`
 
 **Desired interface:**
@@ -93,21 +86,15 @@ OutcomeModule.readActiveAcceptanceCheckSetInCurrentTransaction(input: {
 }): ActiveAcceptanceCheckSetV06
 ```
 
-The concrete function names may be shortened only if the ownership remains unmistakable and no second writer is created.
-
-- [ ] RED: test exact current WorkUnit declaration creates one active AcceptanceCheck bound to canonical Outcome/WorkUnit revision and server-computed digest.
-- [ ] Observe RED because the method does not exist.
+- [ ] RED: exact current WorkUnit declaration creates one active AcceptanceCheck bound to canonical Outcome/WorkUnit revision and server-computed digest; observe failure because the method is absent.
 - [ ] GREEN: implement exact target reread and minimal persistence/event append; derive owner/subject from current rows, never request data.
-- [ ] RED: stale `expectedRevision` rejects before writing rows/events.
-- [ ] GREEN: add stale-revision guard.
-- [ ] RED: cross-owner target and nonexistent target both fail closed without distinguishing private existence to the public layer.
-- [ ] GREEN: add owner-scoped rereads.
-- [ ] RED: active-set reread is sorted, complete, owner/subject exact, and digest recomputes deterministically.
-- [ ] GREEN: implement exact active-set envelope construction using v0.6 canonicalizers.
-- [ ] RED: duplicate active criterion/method for the same exact subject does not create ambiguous active checks; changed/conflicting declaration fails according to command identity handled by Coordinator in Task 5.
-- [ ] Refactor only after all focused tests stay green.
+- [ ] RED/GREEN: stale `expectedRevision` rejects before rows/events are written.
+- [ ] RED/GREEN: cross-owner and nonexistent targets fail closed; public mapping must not disclose private existence.
+- [ ] RED/GREEN: active-set reread is strictly sorted, complete, owner/subject exact, and its digest recomputes deterministically with v0.6 canonicalizers.
+- [ ] RED/GREEN: duplicate/conflicting active criteria cannot create an ambiguous active success definition.
+- [ ] Refactor only after focused tests remain green.
 
-**Verification commands:**
+**Verification command:**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-closure-outcome
@@ -122,10 +109,10 @@ npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-closure-outco
 **Files:**
 - Create: `packages/runtime/src/coordinator/evidence-verifier.ts`
 - Modify: `packages/runtime/src/index.ts`
-- Modify only if the canonical observation reread needs a narrow existing seam: the current execution/effect observation owner module, not a duplicate observation store
+- Modify only through the existing canonical observation owner seam discovered on landed main; do not create a duplicate observation store.
 - Test: `packages/runtime/test/evidence-verifier.test.ts`
 
-**Desired trusted boundary:**
+**Trusted verifier boundary:**
 
 ```ts
 export type ClosureVerifier = (input: {
@@ -143,26 +130,17 @@ export type ClosureVerifier = (input: {
 }>>;
 ```
 
-The final return type must be strict enough that runtime, not the public caller/model, selects verifier identity/policy and validates every field through v0.6 schemas.
+- [ ] RED: admitting a canonical execution/provider/effect/person observation derives producer provenance from trusted source state and persists bounded Evidence only; observe failure because `EvidenceVerifier` is absent.
+- [ ] GREEN: implement owner-scoped observation reread plus `EvidenceV06` persistence/event append.
+- [ ] RED/GREEN: stale, missing, or cross-owner observation produces no Evidence row/event.
+- [ ] RED/GREEN: one canonical observation cannot be counted twice in a current accepted binding.
+- [ ] RED/GREEN: current Evidence-set envelope is strictly ordered, contains only `admitted` current records for the exact check, and recomputes `evidenceSetDigest` plus envelope digest.
+- [ ] RED/GREEN: verifier identity equal to any Evidence producer cannot persist `passed`.
+- [ ] RED/GREEN: unavailable/unsupported verifier produces `indeterminate`, never `passed`.
+- [ ] RED/GREEN: verifier method/version must match the exact current AcceptanceCheck.
+- [ ] RED/GREEN: cover passed, failed, and indeterminate paths with the injected hermetic verifier.
 
-- [ ] RED: admitting a canonical execution/provider/effect/person observation derives producer provenance from trusted source state and persists bounded Evidence only.
-- [ ] Observe RED.
-- [ ] GREEN: implement owner-scoped observation reread + `EvidenceV06` persistence and event append.
-- [ ] RED: stale/missing/cross-owner observation produces no Evidence row/event.
-- [ ] GREEN: fail closed.
-- [ ] RED: same canonical observation cannot be counted twice in a current accepted binding; duplicate command identity itself is handled by Coordinator.
-- [ ] GREEN: enforce observation uniqueness at persistence and envelope construction.
-- [ ] RED: current Evidence-set envelope is strictly ordered, contains only `admitted` current records for the exact check, and recomputes `evidenceSetDigest`/envelope digest.
-- [ ] GREEN: implement envelope reread/canonicalization.
-- [ ] RED: verifier identity equal to any Evidence producer cannot persist `passed`.
-- [ ] GREEN: enforce `closureVerifierIndependenceRuleV06` before persistence.
-- [ ] RED: unavailable/unsupported verifier produces `indeterminate`, never `passed`.
-- [ ] GREEN: implement availability mapping.
-- [ ] RED: verifier method/version must match the exact active AcceptanceCheck.
-- [ ] GREEN: bind method/version from server-owned check state.
-- [ ] RED/GREEN: cover successful passed, explicit failed, and indeterminate paths with the injected hermetic verifier.
-
-**Verification commands:**
+**Verification command:**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime test -- evidence-verifier
@@ -194,23 +172,15 @@ AcceptanceModule.recordInCurrentTransaction(input: {
 }): AcceptanceV06
 ```
 
-The module MUST independently validate the full binding with `createVerifiedAcceptanceBindingVerifierV06` before persisting an `accepted` record. For `release`, construct only the released shape and never reuse the accepted path.
+- [ ] RED: `accept` succeeds only with exactly one current `passed`, available, independent Verification for every active AcceptanceCheck; observe failure because the module is absent.
+- [ ] GREEN: construct and validate the complete binding with `createVerifiedAcceptanceBindingVerifierV06`, then persist.
+- [ ] RED/GREEN: zero, partial, or duplicate Verification coverage fails.
+- [ ] RED/GREEN: stale check revision/digest, stale Evidence set, changed Evidence-set digest, failed/indeterminate/stale Verification, or verifier/producer identity collision fails.
+- [ ] RED/GREEN: actor other than the exact authenticated owner fails; actor is server-constructed.
+- [ ] RED/GREEN: `release` requires `reasonRef`, records `released`, and never claims verified Acceptance.
+- [ ] RED/GREEN: Acceptance persistence does not mutate Outcome state or #85 OpenLoop/ReEntry state.
 
-- [ ] RED: `accept` succeeds only with exactly one current `passed`, available, independent Verification for every active AcceptanceCheck.
-- [ ] Observe RED.
-- [ ] GREEN: implement complete binding validation and persistence.
-- [ ] RED: zero/partial/duplicate Verification coverage fails.
-- [ ] GREEN: enforce one-to-one check coverage.
-- [ ] RED: stale check revision/digest, stale Evidence set, changed Evidence-set digest, failed/indeterminate/stale Verification, or verifier/producer identity collision all fail.
-- [ ] GREEN: rely on same-transaction rereads plus contract binding verifier; do not duplicate contract logic inconsistently.
-- [ ] RED: actor other than exact authenticated owner fails.
-- [ ] GREEN: actor is server-constructed from canonical authority; module asserts `actor.id === ownerId`.
-- [ ] RED: `release` requires reasonRef, records `released`, and never exposes active-check/evidence summaries as verified Acceptance.
-- [ ] GREEN: implement separate release persistence/event type.
-- [ ] RED: Acceptance persistence does not mutate Outcome state or #85 OpenLoop/ReEntry state.
-- [ ] GREEN: keep module ownership bounded.
-
-**Verification commands:**
+**Verification command:**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime test -- acceptance-module
@@ -220,14 +190,14 @@ npx -y pnpm@10.34.4 --filter @waldo/runtime test -- acceptance-module
 
 ---
 
-## Task 5: Coordinator sequencing, idempotency, and transaction rollback
+## Task 5: Coordinator sequencing, idempotency, and rollback
 
 **Files:**
 - Modify: `packages/runtime/src/coordinator/waldo-coordinator.ts`
-- Modify if shared helper earns its keep: `packages/runtime/src/coordinator/owner-event-log.ts`
+- Modify only if shared journal behavior is truly needed: `packages/runtime/src/coordinator/owner-event-log.ts`
 - Test: `packages/runtime/test/responsibility-closure-coordinator.test.ts`
 
-**Coordinator methods to add:**
+**Coordinator methods:**
 
 ```ts
 declareAcceptanceCheckV06(request, canonicalAuthority)
@@ -237,22 +207,15 @@ recordAcceptanceV06(request, canonicalAuthority)
 readClosureProjectionV06(query, canonicalAuthority)
 ```
 
-- [ ] RED: each command rejects presence-registration mismatch/cross-owner authority before mutation.
-- [ ] GREEN: reuse existing canonical authority admission and owner routing.
-- [ ] RED: first command persists `requestId`, canonical request material/digest, exact result bytes, domain rows, event, and projection atomically.
-- [ ] GREEN: add `closure_commands` transaction helper behind Coordinator.
-- [ ] RED: exact retry returns byte-identical result and unchanged row/event/high-water counts.
-- [ ] GREEN: return persisted result without calling writers.
-- [ ] RED: same requestId with changed canonical material rejects and leaves state unchanged.
-- [ ] GREEN: compare canonical digest/material before any writer call.
-- [ ] RED: induced exception after row write but before event/projection rolls the whole command back.
-- [ ] GREEN: keep all writers inside one `storage.transactionSync`/existing transaction pattern.
-- [ ] RED: Acceptance rereads active checks, current Evidence envelopes, and current Verification records in the same transaction immediately before persistence.
-- [ ] GREEN: sequence authoritative rereads explicitly.
-- [ ] RED: no provider/model/public request field can populate owner, actor, provenance, verifier, policy, IDs, clocks, digests, or Verification state.
-- [ ] GREEN: construct all server-owned material in Coordinator/writer boundaries only.
+- [ ] RED/GREEN: each command rejects presence-registration mismatch/cross-owner authority before mutation using existing canonical authority admission.
+- [ ] RED/GREEN: first command persists `requestId`, canonical request material/digest, exact result bytes, domain rows, event, and projection atomically.
+- [ ] RED/GREEN: exact retry returns byte-identical result and unchanged row/event/high-water counts.
+- [ ] RED/GREEN: same requestId with changed canonical material rejects and leaves state unchanged.
+- [ ] RED/GREEN: induced exception after a row write but before event/projection rolls back the whole command.
+- [ ] RED/GREEN: Acceptance rereads active checks, current Evidence envelopes, and current Verification records in the same transaction immediately before persistence.
+- [ ] RED/GREEN: no provider/model/public request field can populate owner, actor, provenance, verifier, policy, IDs, clocks, digests, or Verification state.
 
-**Verification commands:**
+**Verification command:**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-closure-coordinator
@@ -266,21 +229,16 @@ npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-closure-coord
 
 **Files:**
 - Modify: `packages/runtime/src/coordinator/projection-publisher.ts`
-- Modify only if exported aliases are required: `packages/runtime/src/index.ts`
+- Modify: `packages/runtime/src/index.ts`
 - Test: `packages/runtime/test/closure-projection-publisher.test.ts`
-- Regression test: `packages/runtime/test/judgment-authority-coordinator.test.ts`
+- Regression: `packages/runtime/test/judgment-authority-coordinator.test.ts`
 
-- [ ] RED: publishing a valid v0.6 `acceptance_check.declared` event creates one closure projection item at the owner cursor.
-- [ ] GREEN: teach existing publisher to recognize and validate the closure namespace without weakening v0.5 Judgment checks.
-- [ ] RED/GREEN: add `evidence.admitted`/`evidence.invalidated`, `verification.recorded`, `acceptance.recorded`, and `release.recorded` mappings.
-- [ ] RED: wrong schema version, aggregate/event mismatch, malformed payload, owner mismatch, revision mismatch, or record digest mismatch fails closed.
-- [ ] GREEN: validate every event against canonical persisted record material.
-- [ ] RED: rebuild from owner events reproduces ordered closure items and high-water state after projection rows are deleted.
-- [ ] GREEN: implement bounded v0.6 replay.
-- [ ] RED: closure projection query enforces snapshot/cursor ordering, 256-item cap, page digest, and 262,144-byte page limit.
-- [ ] GREEN: implement page builder using contract schemas/canonical digest.
-- [ ] RED: existing Judgment projection tests remain unchanged and green.
-- [ ] GREEN/refactor: extract only shared replay mechanics that genuinely reduce duplication without changing public behavior.
+- [ ] RED/GREEN: valid v0.6 `acceptance_check.declared` event creates one closure projection item at owner cursor.
+- [ ] RED/GREEN: support `evidence.admitted`, `evidence.invalidated`, `verification.recorded`, `acceptance.recorded`, and `release.recorded` without weakening v0.5 Judgment checks.
+- [ ] RED/GREEN: wrong schema version, aggregate/event mismatch, malformed payload, owner/revision mismatch, or record-digest mismatch fails closed.
+- [ ] RED/GREEN: deleting rebuildable closure projection rows then replaying owner events reproduces identical ordered closure items and high-water state.
+- [ ] RED/GREEN: closure projection query enforces snapshot/cursor ordering, 256-item cap, page digest, and 262,144-byte page limit.
+- [ ] RED/GREEN: existing Judgment projection tests stay unchanged and green.
 
 **Verification commands:**
 
@@ -293,53 +251,51 @@ npx -y pnpm@10.34.4 --filter @waldo/runtime test -- judgment-authority-coordinat
 
 ---
 
-## Task 7: Public responsibility v0.6 HTTP ingress
+## Task 7: Public v0.6 responsibility ingress
 
 **Files:**
 - Modify: `packages/runtime/src/responsibility/worker-adapter.ts`
-- Modify only if generic problem mapping needs a v0.6 conflict code: `packages/runtime/src/responsibility/errors.ts`
-- Test: `packages/runtime/test/responsibility-worker-adapter.test.ts` or the landed adapter test file that currently owns public responsibility route conformance
+- Modify: `packages/runtime/src/responsibility/ingress-signature.ts`
+- Modify only for typed generic problem mapping: `packages/runtime/src/responsibility/errors.ts`
+- Test: `packages/runtime/test/responsibility-worker-adapter.test.ts`
+- Public DO regression: `packages/runtime/test/responsibility-public-do.test.ts`
 
-- [ ] RED: all five `responsibilityClosureHttpRouteManifestV06` routes are recognized only with the exact method/path/media type.
-- [ ] GREEN: add route matching/imports without changing v0.1-v0.5 behavior.
-- [ ] RED: strict schemas reject extra/caller-smuggled owner/actor/provenance/verifier/policy/digest/result fields.
-- [ ] GREEN: parse v0.6 request schemas before Coordinator invocation.
-- [ ] RED: missing/invalid auth, owner routing mismatch, revoked/stale presence, oversized body, or malformed JSON returns the existing generic public problem shape and performs no write.
-- [ ] GREEN: reuse existing auth/authority/budget/error seams; do not hand-roll another auth path.
-- [ ] RED: valid commands call the corresponding Coordinator method and return the exact v0.6 result media type.
-- [ ] GREEN: wire the thin route handlers.
-- [ ] RED: GET closure projection is owner-scoped, cursor bounded, and content-free beyond the contract projection.
-- [ ] GREEN: wire read path.
+- [ ] RED/GREEN: extend `ResponsibilityIngressOperation` with bounded closure command/projection operations and preserve canonical ingress-signature behavior.
+- [ ] RED/GREEN: all five `responsibilityClosureHttpRouteManifestV06` routes are recognized only with the exact method/path/media type.
+- [ ] RED/GREEN: strict schemas reject extra/caller-smuggled owner, actor, provenance, verifier, policy, digest, and result fields.
+- [ ] RED/GREEN: missing/invalid auth, owner mismatch, revoked/stale presence, oversized body, or malformed JSON returns existing generic public problems and performs no write.
+- [ ] RED/GREEN: valid commands call the corresponding Coordinator method and return exact v0.6 result media type.
+- [ ] RED/GREEN: GET closure projection is owner-scoped and cursor bounded.
+- [ ] Run the existing public DO regression path to prove the new routes do not weaken prior public responsibility ingress.
 
 **Verification commands:**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-worker-adapter
+npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-public-do
 ```
 
 **Commit:** `feat(runtime): expose responsibility closure v0.6 ingress`
 
 ---
 
-## Task 8: Adversarial integration, replay, and security proof
+## Task 8: Adversarial integration and replay proof
 
 **Files:**
-- Test: `packages/runtime/test/responsibility-closure-e2e.test.ts`
-- Test/support only if existing repo convention requires: `packages/runtime/test/helpers/*`
-- No production changes unless a failing test identifies an in-scope defect.
+- Create: `packages/runtime/test/responsibility-closure-e2e.test.ts`
 
-**Golden flow:** authenticated owner captures an Outcome/WorkUnit → declares AcceptanceCheck → admits trusted observation as Evidence → requests independent Verification → receives `passed` → explicitly accepts → reads closure projection → deletes/rebuilds projection in hermetic DO → obtains identical canonical closure items. No provider/model step can directly create Acceptance.
+**Golden flow:** authenticated owner captures Outcome/WorkUnit → declares AcceptanceCheck → admits trusted observation as Evidence → requests independent Verification → gets `passed` → explicitly accepts → reads closure projection → rebuilds projection in hermetic DO → obtains identical canonical closure items. No provider/model step can directly create Acceptance.
 
 - [ ] RED/GREEN: golden flow.
 - [ ] RED/GREEN: hostile provider observation claiming `done` without admitted Evidence cannot close.
-- [ ] RED/GREEN: one LLM/verifier assertion with producer/verifier identity collision cannot produce passed Acceptance.
-- [ ] RED/GREEN: Evidence becomes stale or AcceptanceCheck revision changes between Verification and Acceptance; Acceptance fails.
-- [ ] RED/GREEN: duplicate commands under concurrent/replayed delivery produce one canonical row/event/result.
-- [ ] RED/GREEN: induced exception at each writer boundary leaves no partial command/result/event/projection state.
+- [ ] RED/GREEN: verifier/producer identity collision cannot yield accepted closure.
+- [ ] RED/GREEN: Evidence becomes stale or AcceptanceCheck changes between Verification and Acceptance; Acceptance fails.
+- [ ] RED/GREEN: replayed commands produce one canonical row/event/result.
+- [ ] RED/GREEN: induced exceptions at writer boundaries leave no partial command/result/event/projection state.
 - [ ] RED/GREEN: cross-owner IDs never disclose or mutate another owner's records.
-- [ ] Verify tests contain no credentials, raw health, transcript, prompt, artifact bytes, or production identifiers.
+- [ ] Verify fixtures contain no credentials, health values, prompts/transcripts, artifact bytes, or production identifiers.
 
-**Focused verification:**
+**Verification command:**
 
 ```bash
 npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-closure-e2e
@@ -351,17 +307,16 @@ npx -y pnpm@10.34.4 --filter @waldo/runtime test -- responsibility-closure-e2e
 
 ## Task 9: Full verification wall and review
 
-- [ ] Run contract tests to ensure released contract compatibility.
+- [ ] Run contract tests for released compatibility.
 - [ ] Run runtime tests and typecheck.
-- [ ] Run Supabase integration regression even though #84 does not add a Supabase migration.
-- [ ] Run migration guards and generated-artifact guards.
-- [ ] Run the full pinned verification wall.
-- [ ] Run `git diff --check`.
-- [ ] Run repo `/check-contract` equivalent review against v0.6 schemas and HTTP manifest.
-- [ ] Run adversarial `/break-feature` or QA-breaker pass.
-- [ ] Run mandatory Security/authority/privacy review because this changes owner authority/product truth and DO writes.
+- [ ] Run Supabase responsibility integration regression even though #84 adds no Supabase migration.
+- [ ] Run migration and generated-artifact guards.
+- [ ] Run the full pinned verification wall and `git diff --check`.
+- [ ] Run repo contract review against v0.6 schemas/HTTP manifest.
+- [ ] Run adversarial QA-breaker.
+- [ ] Run mandatory Security/authority/privacy review because this changes owner product truth and DO writes.
 - [ ] Run independent Standards and Spec reviews.
-- [ ] Classify every failed test as in-branch, introduced, pre-existing, or genuinely flaky before changing anything.
+- [ ] Classify every failure as in-branch, introduced, pre-existing, or genuinely flaky before changing code.
 - [ ] Record exact SHA/tree and passed/failed/skipped/unavailable/not-run evidence separately on #84 and #116.
 
 **Full commands:**
@@ -374,9 +329,9 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-Do not describe local/fake proof as staging, deployment, adapter conformance, cross-surface acceptance, or production proof.
+Do not describe local/hermetic proof as staging, deployment, adapter conformance, cross-surface acceptance, or production proof.
 
-**Final commit only if verification/review causes source changes:** `fix(runtime): harden responsibility closure invariants`
+**Conditional hardening commit:** `fix(runtime): harden responsibility closure invariants`
 
 ---
 
@@ -385,8 +340,8 @@ Do not describe local/fake proof as staging, deployment, adapter conformance, cr
 - [ ] Update #84 with exact implementation evidence, residual risks, and proof classification.
 - [ ] Post `SESSION HANDOFF` to #116 before opening a PR or ending the lane.
 - [ ] Open the #84 runtime PR only after the exact verification wall and reviews pass.
-- [ ] PR body must distinguish: `architecture_specified`, `contract_defined`, `module_implemented`, `adapter_conformance_passed`, `cross_surface_acceptance_passed`, `operational_proof_passed`.
-- [ ] Runtime PR merge requires the repository's normal explicit human boundary; deployment is not included.
+- [ ] PR body must distinguish `architecture_specified`, `contract_defined`, `module_implemented`, `adapter_conformance_passed`, `cross_surface_acceptance_passed`, and `operational_proof_passed`.
+- [ ] Runtime PR merge remains a separate human boundary; deployment is not included.
 - [ ] Keep #85 blocked until #84 runtime is landed and exact release evidence is pinned.
 
 ## Rollback
