@@ -66,7 +66,11 @@ function sameProtocolValue(left: unknown, right: unknown): boolean {
   return canonicalizeProtocolJson(left) === canonicalizeProtocolJson(right);
 }
 
-function assertDigestHex(value: string): string {
+function compareProtocolIds(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function assertDigestHex(value: string): `sha256:${string}` {
   if (!/^[a-f0-9]{64}$/.test(value)) {
     throw new ResponsibilityClosureInvariantError('trusted SHA-256 must return lowercase hex');
   }
@@ -79,6 +83,13 @@ function checkRef(check: AcceptanceCheckV06) {
     revision: check.revision,
     digest: check.digest,
   });
+}
+
+function sameRef(
+  left: Readonly<{ id: string; revision: number; digest: string }>,
+  right: Readonly<{ id: string; revision: number; digest: string }>,
+): boolean {
+  return left.id === right.id && left.revision === right.revision && left.digest === right.digest;
 }
 
 export class EvidenceVerifier {
@@ -147,11 +158,11 @@ export class EvidenceVerifier {
 
     const records = input.evidence
       .map((record) => evidenceV06Schema.parse(record))
-      .sort((left, right) => left.id.localeCompare(right.id));
+      .sort((left, right) => compareProtocolIds(left.id, right.id));
 
     const seenIds = new Set<string>();
     const seenObservations = new Set<string>();
-    const refs: Array<{ id: string; revision: number; digest: string }> = [];
+    const refs: Array<{ id: string; revision: number; digest: `sha256:${string}` }> = [];
     for (const record of records) {
       const observationKey = canonicalizeProtocolJson(record.observation);
       if (
@@ -214,6 +225,7 @@ export class EvidenceVerifier {
     ) {
       throw new ResponsibilityClosureInvariantError();
     }
+    await this.assertCurrentEvidenceSet(evidence);
 
     const decision = await this.deps.verifier(Object.freeze({
       ownerId: input.ownerId,
@@ -251,5 +263,37 @@ export class EvidenceVerifier {
       findings: decision.findings,
       verifiedAt: this.deps.now(),
     }));
+  }
+
+  private async assertCurrentEvidenceSet(
+    evidence: CurrentEvidenceSetEnvelopeV06,
+  ): Promise<void> {
+    if (evidence.records.length !== evidence.evidence.length || evidence.count !== evidence.records.length) {
+      throw new ResponsibilityClosureInvariantError('Evidence set count mismatch');
+    }
+    for (const [index, record] of evidence.records.entries()) {
+      const reference = evidence.evidence[index];
+      if (reference === undefined || record.state !== 'admitted') {
+        throw new ResponsibilityClosureInvariantError('Verification cannot use non-current Evidence');
+      }
+      const digest = assertDigestHex(
+        await this.deps.sha256Hex(canonicalizeProtocolJson(record)),
+      );
+      if (!sameRef(reference, { id: record.id, revision: record.revision, digest })) {
+        throw new ResponsibilityClosureInvariantError('Evidence reference digest mismatch');
+      }
+    }
+    const evidenceSetDigest = assertDigestHex(
+      await this.deps.sha256Hex(canonicalizeEvidenceSetV06ForDigest(evidence.evidence)),
+    );
+    if (evidence.evidenceSetDigest !== evidenceSetDigest) {
+      throw new ResponsibilityClosureInvariantError('Evidence-set digest mismatch');
+    }
+    const envelopeDigest = assertDigestHex(
+      await this.deps.sha256Hex(canonicalizeCurrentEvidenceSetEnvelopeV06ForDigest(evidence)),
+    );
+    if (evidence.digest !== envelopeDigest) {
+      throw new ResponsibilityClosureInvariantError('Evidence envelope digest mismatch');
+    }
   }
 }
