@@ -24,6 +24,7 @@ type ClosureProjectionItem = ReturnType<typeof closureProjectionItemV06Schema.pa
 type StoredClosureEvent = Readonly<{
   owner_cursor: number;
   schema_version: string;
+  event_id: string;
   owner_id: string;
   aggregate_kind: string;
   aggregate_id: string;
@@ -53,10 +54,6 @@ const KNOWN_CLOSURE_AGGREGATES = [
 
 type KnownClosureAggregate = typeof KNOWN_CLOSURE_AGGREGATES[number];
 
-function compareIds(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
@@ -69,63 +66,63 @@ function asDigest(hex: string): ProtocolDigest {
 }
 
 function parseEventPayload(event: StoredClosureEvent): ClosureProjectionItem {
-  let payload: unknown;
   try {
-    payload = JSON.parse(event.payload_json);
-  } catch {
+    const payload: unknown = JSON.parse(event.payload_json);
+    if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+      throw new ResponsibilityProjectionCursorError('cursor_corrupt');
+    }
+    const candidate = payload as Record<string, unknown>;
+    if (
+      Object.keys(candidate).length !== 2 ||
+      !Object.prototype.hasOwnProperty.call(candidate, 'record') ||
+      !Object.prototype.hasOwnProperty.call(candidate, 'recordDigest')
+    ) {
+      throw new ResponsibilityProjectionCursorError('cursor_corrupt');
+    }
+    const recordDigest = protocolDigestSchema.parse(candidate.recordDigest) as ProtocolDigest;
+    const aggregateKind = event.aggregate_kind as KnownClosureAggregate;
+    if (!KNOWN_CLOSURE_AGGREGATES.includes(aggregateKind)) {
+      throw new ResponsibilityProjectionCursorError('cursor_corrupt');
+    }
+    const record = aggregateKind === 'acceptance_check'
+      ? acceptanceCheckV06Schema.parse(candidate.record)
+      : aggregateKind === 'evidence'
+        ? evidenceV06Schema.parse(candidate.record)
+        : aggregateKind === 'verification'
+          ? verificationV06Schema.parse(candidate.record)
+          : acceptanceV06Schema.parse(candidate.record);
+    if (
+      event.schema_version !== '0.6' ||
+      record.ownerId !== event.owner_id ||
+      record.id !== event.aggregate_id ||
+      record.revision !== event.revision
+    ) {
+      throw new ResponsibilityProjectionCursorError('cursor_corrupt');
+    }
+    closureDomainEventV06Schema.parse({
+      schemaVersion: '0.6',
+      eventId: event.event_id,
+      ownerId: event.owner_id,
+      aggregate: {
+        kind: aggregateKind,
+        id: event.aggregate_id,
+        revision: event.revision,
+      },
+      eventType: event.event_type,
+      payloadDigest: recordDigest,
+      cursor: event.owner_cursor,
+      occurredAt: event.occurred_at,
+    });
+    return closureProjectionItemV06Schema.parse({
+      cursor: event.owner_cursor,
+      itemType: aggregateKind,
+      record,
+      recordDigest,
+    });
+  } catch (error) {
+    if (error instanceof ResponsibilityProjectionCursorError) throw error;
     throw new ResponsibilityProjectionCursorError('cursor_corrupt');
   }
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-    throw new ResponsibilityProjectionCursorError('cursor_corrupt');
-  }
-  const candidate = payload as Record<string, unknown>;
-  if (
-    Object.keys(candidate).length !== 2 ||
-    !Object.prototype.hasOwnProperty.call(candidate, 'record') ||
-    !Object.prototype.hasOwnProperty.call(candidate, 'recordDigest')
-  ) {
-    throw new ResponsibilityProjectionCursorError('cursor_corrupt');
-  }
-  const recordDigest = protocolDigestSchema.parse(candidate.recordDigest) as ProtocolDigest;
-  const aggregateKind = event.aggregate_kind as KnownClosureAggregate;
-  if (!KNOWN_CLOSURE_AGGREGATES.includes(aggregateKind)) {
-    throw new ResponsibilityProjectionCursorError('cursor_corrupt');
-  }
-  const record = aggregateKind === 'acceptance_check'
-    ? acceptanceCheckV06Schema.parse(candidate.record)
-    : aggregateKind === 'evidence'
-      ? evidenceV06Schema.parse(candidate.record)
-      : aggregateKind === 'verification'
-        ? verificationV06Schema.parse(candidate.record)
-        : acceptanceV06Schema.parse(candidate.record);
-  if (
-    event.schema_version !== '0.6' ||
-    record.ownerId !== event.owner_id ||
-    record.id !== event.aggregate_id ||
-    record.revision !== event.revision
-  ) {
-    throw new ResponsibilityProjectionCursorError('cursor_corrupt');
-  }
-  closureDomainEventV06Schema.parse({
-    schemaVersion: '0.6',
-    eventId: event.causation_id === '' ? 'invalid' : event.causation_id,
-    ownerId: event.owner_id,
-    aggregate: {
-      kind: aggregateKind,
-      id: event.aggregate_id,
-      revision: event.revision,
-    },
-    eventType: event.event_type,
-    payloadDigest: recordDigest,
-    cursor: event.owner_cursor,
-    occurredAt: event.occurred_at,
-  });
-  return closureProjectionItemV06Schema.parse({
-    cursor: event.owner_cursor,
-    itemType: aggregateKind,
-    record,
-    recordDigest,
-  });
 }
 
 export class ClosureProjectionPublisher {
@@ -148,6 +145,8 @@ export class ClosureProjectionPublisher {
   }
 
   readRelevantEventsInCurrentTransaction(ownerId: string): readonly StoredClosureEvent[] {
+    // Validate the shared owner stream before using any protocol-specific subset.
+    this.events.readHighWater(ownerId);
     const events: StoredClosureEvent[] = [];
     let afterCursor = 0;
     let decodedBytes = 0;
@@ -155,7 +154,7 @@ export class ClosureProjectionPublisher {
       const remaining = this.replayEventLimit - events.length;
       const batchLimit = Math.min(REPLAY_BATCH_SIZE, remaining + 1);
       const rows = this.storage.sql.exec<StoredClosureEvent>(
-        `SELECT owner_cursor, schema_version, owner_id, aggregate_kind, aggregate_id,
+        `SELECT owner_cursor, schema_version, event_id, owner_id, aggregate_kind, aggregate_id,
                 revision, event_type, causation_id, correlation_id, occurred_at, payload_json
            FROM owner_domain_events
           WHERE owner_cursor > ? AND (
@@ -198,8 +197,8 @@ export class ClosureProjectionPublisher {
     highWaterCursor: number;
     itemCount: number;
   }> {
-    const highWaterCursor = this.events.readHighWater(ownerId);
     const events = this.readRelevantEventsInCurrentTransaction(ownerId);
+    const highWaterCursor = events.at(-1)?.owner_cursor ?? 0;
     const items = events.map(parseEventPayload);
     const snapshotId = this.newSnapshotId();
 
@@ -246,7 +245,8 @@ export class ClosureProjectionPublisher {
       throw new ResponsibilityProjectionCursorError('cursor_corrupt');
     }
 
-    const highWaterCursor = this.events.readHighWater(input.ownerId);
+    const relevantEvents = this.readRelevantEventsInCurrentTransaction(input.ownerId);
+    const highWaterCursor = relevantEvents.at(-1)?.owner_cursor ?? 0;
     if (
       input.fromExclusiveCursor < snapshot.snapshot_base_cursor ||
       input.fromExclusiveCursor > highWaterCursor
@@ -265,6 +265,9 @@ export class ClosureProjectionPublisher {
       highWaterCursor,
       input.limit + 1,
     ).toArray();
+    if (rows.length === 0 && highWaterCursor > input.fromExclusiveCursor) {
+      throw new ResponsibilityProjectionCursorError('cursor_corrupt');
+    }
     const hasAnotherClosureItem = rows.length > input.limit;
     const visibleRows = rows.slice(0, input.limit);
     let priorCursor = input.fromExclusiveCursor;
@@ -284,8 +287,8 @@ export class ClosureProjectionPublisher {
       ) {
         throw new ResponsibilityProjectionCursorError('cursor_corrupt');
       }
-      const digest = asDigest(await this.sha256Hex(canonicalizeProtocolJson(item.record)));
-      if (item.recordDigest !== digest) {
+      const recordDigest = asDigest(await this.sha256Hex(canonicalizeProtocolJson(item.record)));
+      if (item.recordDigest !== recordDigest) {
         throw new ResponsibilityProjectionCursorError('cursor_corrupt');
       }
       priorCursor = item.cursor;
