@@ -15,20 +15,14 @@ import { ResponsibilityDigestConflictError } from '../responsibility/errors';
 import { OwnerEventLog } from './owner-event-log';
 
 type ProtocolDigest = `sha256:${string}`;
-type ClosureCommandType =
-  | 'acceptance_check.declare'
-  | 'evidence.admit'
-  | 'verification.request'
-  | 'acceptance.record';
-type ClosureAggregateKind = 'acceptance_check' | 'evidence' | 'verification' | 'acceptance';
+type ClosureCommandType = 'evidence.admit' | 'verification.request' | 'acceptance.record';
+type ClosureAggregateKind = 'evidence' | 'verification' | 'acceptance';
 type ClosureEventType =
-  | 'acceptance_check.declared'
   | 'evidence.admitted'
   | 'evidence.invalidated'
   | 'verification.recorded'
   | 'acceptance.recorded'
   | 'release.recorded';
-type ClosureProjectionItem = ReturnType<typeof closureProjectionItemV06Schema.parse>;
 type EvidenceAdmissionResult = ReturnType<typeof evidenceAdmissionResultV06Schema.parse>;
 type VerificationResult = ReturnType<typeof verificationResultV06Schema.parse>;
 type AcceptanceRecordResult = ReturnType<typeof acceptanceRecordResultV06Schema.parse>;
@@ -373,7 +367,7 @@ export class ClosurePersistenceModule {
       itemType: input.aggregateKind,
       record: input.record,
       recordDigest: input.recordDigest,
-    } satisfies ClosureProjectionItem);
+    });
     this.storage.sql.exec(
       `INSERT INTO closure_projection (owner_cursor, owner_id, item_json)
        VALUES (?, ?, ?)`,
