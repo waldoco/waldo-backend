@@ -206,7 +206,7 @@ describe('ClosurePersistenceModule', () => {
       aggregate_kind: 'evidence',
       aggregate_id: record.id,
       event_type: 'evidence.admitted',
-      payload_json: JSON.stringify({ payloadDigest: recordDigest }),
+      payload_json: JSON.stringify({ record, recordDigest }),
     });
     const projection = closureProjectionItemV06Schema.parse(JSON.parse(observed.projection.item_json));
     expect(projection).toEqual({
