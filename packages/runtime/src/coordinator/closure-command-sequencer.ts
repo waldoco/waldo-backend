@@ -3,8 +3,13 @@ import {
   canonicalizeProtocolJson,
   evidenceAdmissionRequestV06Schema,
   evidenceAdmissionResultV06Schema,
+  evidenceV06Schema,
+  verificationRequestV06Schema,
+  verificationResultV06Schema,
   type AcceptanceCheckV06,
   type EvidenceAdmissionRequestV06,
+  type EvidenceV06,
+  type VerificationRequestV06,
 } from '@waldo/contracts';
 import { ClosurePersistenceModule } from './closure-persistence-module';
 import {
@@ -14,6 +19,7 @@ import {
 
 type ProtocolDigest = `sha256:${string}`;
 type EvidenceAdmissionResult = ReturnType<typeof evidenceAdmissionResultV06Schema.parse>;
+type VerificationResult = ReturnType<typeof verificationResultV06Schema.parse>;
 
 export class ClosureCanonicalConflictError extends Error {
   constructor(message = 'canonical closure material changed before commit') {
@@ -132,6 +138,87 @@ export class ClosureCommandSequencer {
     });
   }
 
+  async requestVerification(input: Readonly<{
+    ownerId: string;
+    request: unknown;
+    correlationId: string;
+  }>): Promise<SequencedClosureResult<VerificationResult>> {
+    const request = verificationRequestV06Schema.parse(input.request);
+    const requestJson = canonicalizeProtocolJson(request);
+    const requestDigest = assertLowerHex(await this.deps.sha256Hex(requestJson));
+
+    const replay = this.storage.transactionSync(() =>
+      this.deps.persistence.readCommandResultInCurrentTransaction({
+        ownerId: input.ownerId,
+        requestId: request.requestId,
+        requestDigest,
+      }),
+    );
+    if (replay !== undefined) {
+      return this.replayedVerificationResult(replay);
+    }
+
+    const preflight = this.storage.transactionSync(() =>
+      this.readVerificationCanonicalMaterialInCurrentTransaction(input.ownerId, request),
+    );
+    const evidenceSet = await this.deps.evidenceVerifier.buildCurrentEvidenceSet({
+      ownerId: input.ownerId,
+      acceptanceCheck: preflight.acceptanceCheck,
+      evidence: preflight.evidence,
+    });
+    if (!sameProtocolValue(evidenceSet.evidence, request.payload.evidence)) {
+      throw new ClosureCanonicalConflictError(
+        'Verification request must bind the exact current admitted Evidence set',
+      );
+    }
+
+    const verification = await this.deps.evidenceVerifier.verify({
+      ownerId: input.ownerId,
+      acceptanceCheck: preflight.acceptanceCheck,
+      evidence: evidenceSet,
+    });
+    const verificationDigest = assertLowerHex(await this.deps.sha256Hex(
+      canonicalizeProtocolJson(verification),
+    ));
+
+    return this.storage.transactionSync(() => {
+      const commitReplay = this.deps.persistence.readCommandResultInCurrentTransaction({
+        ownerId: input.ownerId,
+        requestId: request.requestId,
+        requestDigest,
+      });
+      if (commitReplay !== undefined) {
+        return this.replayedVerificationResult(commitReplay);
+      }
+
+      const current = this.readVerificationCanonicalMaterialInCurrentTransaction(
+        input.ownerId,
+        request,
+      );
+      if (
+        !sameProtocolValue(current.acceptanceCheck, preflight.acceptanceCheck) ||
+        !sameProtocolValue(current.evidence, preflight.evidence)
+      ) {
+        throw new ClosureCanonicalConflictError();
+      }
+
+      const result = this.deps.persistence.persistVerificationInCurrentTransaction({
+        verification,
+        verificationDigest,
+        requestId: request.requestId,
+        requestDigest,
+        requestJson,
+        correlationId: input.correlationId,
+        recordedAt: this.deps.now(),
+      });
+      return Object.freeze({
+        value: result,
+        rawJson: JSON.stringify(result),
+        replayed: false,
+      });
+    });
+  }
+
   private readEvidenceCanonicalMaterialInCurrentTransaction(
     ownerId: string,
     request: EvidenceAdmissionRequestV06,
@@ -139,21 +226,11 @@ export class ClosureCommandSequencer {
     acceptanceCheck: AcceptanceCheckV06;
     observation: TrustedClosureObservation;
   }> {
-    const acceptanceCheck = acceptanceCheckV06Schema.parse(
-      this.deps.readAcceptanceCheckInCurrentTransaction({
-        ownerId,
-        id: request.aggregate.id,
-        expectedRevision: request.aggregate.expectedRevision,
-      }),
+    const acceptanceCheck = this.readCurrentAcceptanceCheckInCurrentTransaction(
+      ownerId,
+      request.aggregate.id,
+      request.aggregate.expectedRevision,
     );
-    if (
-      acceptanceCheck.ownerId !== ownerId ||
-      acceptanceCheck.id !== request.aggregate.id ||
-      acceptanceCheck.revision !== request.aggregate.expectedRevision ||
-      acceptanceCheck.state !== 'active'
-    ) {
-      throw new ClosureCanonicalConflictError('AcceptanceCheck is not current and active');
-    }
 
     const observation = this.deps.readObservationInCurrentTransaction({
       ownerId,
@@ -170,17 +247,85 @@ export class ClosureCommandSequencer {
     return Object.freeze({ acceptanceCheck, observation });
   }
 
+  private readVerificationCanonicalMaterialInCurrentTransaction(
+    ownerId: string,
+    request: VerificationRequestV06,
+  ): Readonly<{
+    acceptanceCheck: AcceptanceCheckV06;
+    evidence: readonly EvidenceV06[];
+  }> {
+    const acceptanceCheck = this.readCurrentAcceptanceCheckInCurrentTransaction(
+      ownerId,
+      request.aggregate.id,
+      request.aggregate.expectedRevision,
+    );
+    const evidence = this.readCurrentEvidenceInCurrentTransaction(ownerId, acceptanceCheck);
+    if (evidence.length === 0) {
+      throw new ClosureCanonicalConflictError('Verification requires current admitted Evidence');
+    }
+    return Object.freeze({ acceptanceCheck, evidence: Object.freeze(evidence) });
+  }
+
+  private readCurrentAcceptanceCheckInCurrentTransaction(
+    ownerId: string,
+    id: string,
+    expectedRevision: number,
+  ): AcceptanceCheckV06 {
+    const acceptanceCheck = acceptanceCheckV06Schema.parse(
+      this.deps.readAcceptanceCheckInCurrentTransaction({ ownerId, id, expectedRevision }),
+    );
+    if (
+      acceptanceCheck.ownerId !== ownerId ||
+      acceptanceCheck.id !== id ||
+      acceptanceCheck.revision !== expectedRevision ||
+      acceptanceCheck.state !== 'active'
+    ) {
+      throw new ClosureCanonicalConflictError('AcceptanceCheck is not current and active');
+    }
+    return acceptanceCheck;
+  }
+
+  private readCurrentEvidenceInCurrentTransaction(
+    ownerId: string,
+    acceptanceCheck: AcceptanceCheckV06,
+  ): EvidenceV06[] {
+    const rows = this.storage.sql.exec<{ evidence_json: string }>(
+      `SELECT evidence_json
+         FROM closure_evidence
+        WHERE owner_id = ?
+          AND acceptance_check_id = ?
+          AND acceptance_check_revision = ?
+          AND state = 'admitted'
+        ORDER BY id ASC`,
+      ownerId,
+      acceptanceCheck.id,
+      acceptanceCheck.revision,
+    ).toArray();
+    try {
+      return rows.map((row) => evidenceV06Schema.parse(JSON.parse(row.evidence_json)));
+    } catch {
+      throw new ClosureCanonicalConflictError('current Evidence material is malformed');
+    }
+  }
+
   private replayedEvidenceResult(rawJson: string): SequencedClosureResult<EvidenceAdmissionResult> {
+    return this.replayedResult(rawJson, evidenceAdmissionResultV06Schema.parse);
+  }
+
+  private replayedVerificationResult(rawJson: string): SequencedClosureResult<VerificationResult> {
+    return this.replayedResult(rawJson, verificationResultV06Schema.parse);
+  }
+
+  private replayedResult<T>(
+    rawJson: string,
+    parse: (value: unknown) => T,
+  ): SequencedClosureResult<T> {
     let value: unknown;
     try {
       value = JSON.parse(rawJson);
     } catch {
       throw new ClosureCanonicalConflictError('persisted closure replay result is malformed');
     }
-    return Object.freeze({
-      value: evidenceAdmissionResultV06Schema.parse(value),
-      rawJson,
-      replayed: true,
-    });
+    return Object.freeze({ value: parse(value), rawJson, replayed: true });
   }
 }
