@@ -344,7 +344,10 @@ export class ClosurePersistenceModule {
       causationId: input.requestId,
       correlationId: input.correlationId,
       occurredAt: input.occurredAt,
-      payloadJson: JSON.stringify({ payloadDigest: input.recordDigest }),
+      payloadJson: JSON.stringify({
+        record: input.record,
+        recordDigest: input.recordDigest,
+      }),
     });
     closureDomainEventV06Schema.parse({
       schemaVersion: '0.6',
