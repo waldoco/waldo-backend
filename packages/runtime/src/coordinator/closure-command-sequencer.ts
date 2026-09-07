@@ -262,9 +262,13 @@ export class ClosureCommandSequencer {
 
   async recordAcceptance(input: Readonly<{
     ownerId: string;
+    authenticatedOwnerId: string;
     request: unknown;
     correlationId: string;
   }>): Promise<SequencedClosureResult<AcceptanceRecordResult>> {
+    if (input.authenticatedOwnerId !== input.ownerId) {
+      throw new ClosureCanonicalConflictError('authenticated owner does not match routed owner');
+    }
     const request = acceptanceRecordRequestV06Schema.parse(input.request);
     const requestJson = canonicalizeProtocolJson(request);
     const requestDigest = assertLowerHex(await this.deps.sha256Hex(requestJson));
@@ -293,7 +297,7 @@ export class ClosureCommandSequencer {
     const acceptanceDeps = this.requireAcceptanceDependencies();
     const acceptance = await acceptanceDeps.acceptanceModule.record({
       ownerId: input.ownerId,
-      authenticatedOwnerId: input.ownerId,
+      authenticatedOwnerId: input.authenticatedOwnerId,
       subject: preflight.subject,
       request,
       activeChecks: preflight.activeChecks,
