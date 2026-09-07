@@ -148,10 +148,16 @@ describe('ClosureCommandSequencer Acceptance', () => {
         payload: { decision: 'accept', verifications: [verified.value.verification], reasonRef: null },
       });
       const first = await sequencer.recordAcceptance({
-        ownerId: check.ownerId, request: acceptanceRequest, correlationId: 'correlation_acceptance',
+        ownerId: check.ownerId,
+        authenticatedOwnerId: check.ownerId,
+        request: acceptanceRequest,
+        correlationId: 'correlation_acceptance',
       });
       const duplicate = await sequencer.recordAcceptance({
-        ownerId: check.ownerId, request: acceptanceRequest, correlationId: 'correlation_ignored',
+        ownerId: check.ownerId,
+        authenticatedOwnerId: check.ownerId,
+        request: acceptanceRequest,
+        correlationId: 'correlation_ignored',
       });
       const stored = state.storage.sql.exec<{ result_json: string }>(
         'SELECT result_json FROM closure_commands WHERE request_id = ?',
@@ -206,6 +212,7 @@ describe('ClosureCommandSequencer Acceptance', () => {
       });
       return sequencer.recordAcceptance({
         ownerId: check.ownerId,
+        authenticatedOwnerId: check.ownerId,
         correlationId: 'correlation_release',
         request: acceptanceRecordRequestV06Schema.parse({
           protocolVersion: '0.6', requestId: 'request_release_01', commandType: 'acceptance.record',
@@ -290,7 +297,10 @@ describe('ClosureCommandSequencer Acceptance', () => {
       let conflict = false;
       try {
         await sequencer.recordAcceptance({
-          ownerId: check.ownerId, request: acceptanceRequest, correlationId: 'correlation_acceptance',
+          ownerId: check.ownerId,
+          authenticatedOwnerId: check.ownerId,
+          request: acceptanceRequest,
+          correlationId: 'correlation_acceptance',
         });
       } catch (error) {
         conflict = error instanceof ClosureCanonicalConflictError;
@@ -309,5 +319,63 @@ describe('ClosureCommandSequencer Acceptance', () => {
     expect(observed.activeReads).toBe(2);
     expect(observed.acceptanceCount).toBe(0);
     expect(observed.acceptanceCommands).toBe(0);
+  });
+
+  it('rejects authenticated-owner substitution before replay or Acceptance persistence', async () => {
+    const check = await makeCheck();
+    const canonicalObservation = observation(check);
+    const stub = freshStub();
+
+    const observed = await runInDurableObject(stub, async (_instance, state) => {
+      provisionDoSchema(state.storage);
+      seedOwnerRoot(state.storage.sql);
+      const persistence = new ClosurePersistenceModule(state.storage, (kind) => `${kind}_auth`);
+      const evidenceVerifier = new EvidenceVerifier({
+        now: () => at,
+        newId: () => 'unused',
+        sha256Hex,
+        admitter: { kind: 'service', id: 'evidence_verifier' },
+        verifier: async () => { throw new Error('unused'); },
+      });
+      const acceptanceModule = new AcceptanceModule({
+        now: () => at, newId: () => 'acceptance_auth', sha256Hex,
+      });
+      const sequencer = new ClosureCommandSequencer(state.storage, {
+        now: () => at, sha256Hex, persistence, evidenceVerifier, acceptanceModule,
+        readAcceptanceCheckInCurrentTransaction: () => check,
+        readObservationInCurrentTransaction: () => canonicalObservation,
+        readOutcomeRefInCurrentTransaction: () => check.subject.outcome,
+        readActiveAcceptanceChecksInCurrentTransaction: () => null,
+      });
+      const releaseRequest = acceptanceRecordRequestV06Schema.parse({
+        protocolVersion: '0.6', requestId: 'request_release_auth', commandType: 'acceptance.record',
+        presenceRegistrationId: 'presence_registration_01',
+        aggregate: { kind: 'outcome', id: check.subject.outcome.id, expectedRevision: check.subject.outcome.revision },
+        payload: { decision: 'release', verifications: [], reasonRef: 'owner_release_reason' },
+      });
+
+      let conflict = false;
+      try {
+        await sequencer.recordAcceptance({
+          ownerId: check.ownerId,
+          authenticatedOwnerId: 'owner_other',
+          request: releaseRequest,
+          correlationId: 'correlation_auth',
+        });
+      } catch (error) {
+        conflict = error instanceof ClosureCanonicalConflictError;
+      }
+      return {
+        conflict,
+        acceptances: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM closure_acceptances').one().n,
+        commands: state.storage.sql.exec<{ n: number }>(
+          "SELECT count(*) AS n FROM closure_commands WHERE command_type = 'acceptance.record'",
+        ).one().n,
+      };
+    });
+
+    expect(observed.conflict).toBe(true);
+    expect(observed.acceptances).toBe(0);
+    expect(observed.commands).toBe(0);
   });
 });
