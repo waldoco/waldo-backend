@@ -1,33 +1,26 @@
 # Waldo Backend Documentation
 
-This is the complete live documentation set. It governs one launch across Electron Kennel desktop, Waldo mobile Health/Care, and messaging presence with Telegram and Discord required; WhatsApp activation remains vendor-approval-dependent. A new session should not need a historical handoff, external session bus, or Linear state document.
+## Current entrypoints
 
-## Read in this order
+- [Personal-agent launch contract — pinned Brain revision](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md): the single cross-repository release scope and M0-M8 map.
+- [Next session](foundation/NEXT-SESSION-PLAN.md): backend execution view; read current source and the owning issue next.
+- [Execution ledger protocol](foundation/EXECUTION-LEDGER.md) and [live #116](https://github.com/Pin4sf/waldo-backend/issues/116): session ownership and evidence.
+- [Contributor onboarding](foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](foundation/LOCAL-DEV-TESTING-PIPELINE.md): engineering method, not a separate release definition.
 
-1. [Next session plan](./foundation/NEXT-SESSION-PLAN.md) — one repository entrypoint, current evidence, and the next safe action.
-2. [Execution ledger](./foundation/EXECUTION-LEDGER.md) — live GitHub ownership plus durable agent, subagent, worktree, and handoff records.
-3. [Product and architecture convergence](./planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md) — current product definition and experience authority.
-4. [Product capability matrix](./planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md) — whole-product envelope and capability-status authority.
-5. [Architecture lock](./planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md) — placement, single writers, trust boundaries, and invariants.
-6. [Next backend session prompt](./foundation/NEXT-BACKEND-SESSION-PROMPT.md) — durable B0–B6 run contract, issue map, acceptance criteria, and verification wall.
-7. [B2–B6 goal execution contract](./planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md) — dependency-frontier worktrees, source/return packets, promotion barriers, real-API ladder, and exact-SHA convergence.
-8. [Benchmark agent capability audit](./research/2026-08-15-benchmark-agent-capability-audit.md) — source-pinned Pi, Hermes Agent, OpenClaw, QM, Think, orchestrator, and provider comparison; benchmark breadth is not Waldo parity.
-9. [Contributor onboarding](./foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](./foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](./foundation/LOCAL-DEV-TESTING-PIPELINE.md) — how work is shaped, built, reviewed, and proved.
+The old [next-backend prompt](foundation/NEXT-BACKEND-SESSION-PROMPT.md) is a compatibility redirect. Do not maintain two next-session plans.
 
-## Reference-only documents
+## Retained decision and source evidence
 
-These preserve unique source, contract, migration, comparator, or failure-path evidence. They never define current sequencing or shipped status:
+- [Architecture lock](planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md): stable placement, writers, trust boundaries and invariants. September personal-agent scope supersedes conflicting release breadth/order only.
+- [August product convergence](planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md), [capability matrix](planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md), and [Home/Work architecture](planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md): dated target/source reference, not current shipped status.
+- [B2-B6 goal contract](planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md): historical execution discipline and dependencies. Do not copy its old release sequence over the current contract.
+- [Benchmark audit](research/2026-08-15-benchmark-agent-capability-audit.md): source-pinned comparison, not present-day parity.
+- Existing `docs/ledger/` handoffs and `docs/research/` studies: retain unique evidence and source lineage.
 
-- [Final Home + Work architecture](./planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md)
-- [Capability source notes](./planning/WALDO_PRODUCT_CAPABILITY_VALIDATION_SOURCE_NOTES_2026-08-04.md)
-- [Cloudflare adoption analysis](./planning/CLOUDFLARE_AGENTIC_ECONOMY_AND_WALDO_ADOPTION_2026-08-04.md)
-- [Backend and Brain audit](./planning/WALDO_CONVERGENCE_BACKEND_BRAIN_AUDIT_2026-08-11.md)
-- [Kennel and mobile audit](./planning/WALDO_CONVERGENCE_KENNEL_MOBILE_AUDIT_2026-08-11.md)
-- [Spotify Xirp and Portal research](./planning/WALDO_CONVERGENCE_SPOTIFY_XIRP_RESEARCH_2026-08-11.md)
-- [Grok Bot research](./planning/GROK_BOT_PRODUCT_RESEARCH_2026-08-12.md)
+Accepted ADRs in Brain and released wire contracts are not silently changed by this documentation pass. Historical references to Telegram/Discord or desktop as mandatory launch surfaces do not govern the personal-agent release. Health is a launch capability while consent remains optional per person. WhatsApp engineering and eligible live activation are separate gates.
 
-## Authority and retirement rules
+## Evidence rules
 
-When documents differ, use convergence for product definition, the capability matrix for delivery classification, the architecture lock plus accepted ADRs for placement and invariants, and current source/tests/runtime evidence for implementation truth. The backend run contract owns build order.
+Live progress belongs in issues/PRs, not copied tables or new state dashboards. Pin source and test evidence; classify architecture, contracts, module implementation, adapter conformance, cross-surface acceptance and operational proof separately. Existing audit findings are not automatically true of a later head.
 
-Completed Gate A/Gate B/capture handoffs, July wave plans, superseded app plans, generated graphs, one-off verification logs, and the HEY-109 session-bus workflow are retired. Git history preserves them. Do not restore them as live guidance or copy their sequencing into issues.
+No runtime source, migration, protected soul file, canonical rule mirror or unique research was removed by this reconciliation. See the master contract's cleanup register for tested replacement/decommission gates.

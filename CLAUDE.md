@@ -1,67 +1,47 @@
-# waldo-backend — Claude Code Instructions
+# waldo-backend — repository instructions
 
 ## Current build authority
 
-Before implementation:
+Read `.claude/rules/INDEX.md`, `AGENTS.md`, and `docs/foundation/NEXT-SESSION-PLAN.md`. The [pinned reconciled launch contract](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md) owns personal-agent scope and milestone order. Relevant accepted ADRs and released schemas still constrain implementation. Current source/tests determine actual capability, not roadmap prose.
 
-1. Read `.claude/rules/INDEX.md` and `AGENTS.md`.
-2. Read `docs/foundation/NEXT-SESSION-PLAN.md`.
-3. Read `docs/planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md`.
-4. Read the relevant sections of `docs/planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md` and the product capability matrix.
-5. Inspect fresh source/tests and the current issue/PR; pin the SHA behind implementation claims.
-6. Read accepted ADRs and Waldo Brain sources for the exact seam. Report conflicts rather than silently applying stale wording.
-
-Retired ticket handoffs, wave plans, and health-first build narratives are absent from the live documentation tree. Git history preserves them for archaeology; they do not define current product scope, assignment, sequence, or public claims.
+The September 17 task is documentation-only. It does not authorize runtime execution, cloud mutation, dependency changes, source deletion, merge of PR #137, or deployment. Start implementation only under the subsequent bounded user task.
 
 ## Stable constraints
 
-- Build one Waldo across personal assistance, work orchestration, and their bridge.
-- There are no product phases or slices. Use parallel, dependency-aware workstreams and shared proof gates.
-- Keep one per-owner backend authority root and one durable writer per aggregate.
-- Host `WaldoCoordinator` with the trusted `RunLoopEngine` in the owner Durable Object until measured evidence earns another placement.
-- Kennel proposes; the owner backend admits. Providers and executors return untrusted observations.
-- Preserve intent-before-I/O, frozen digests, keyed reconciliation, one retry owner, bounded retries, cancellation fencing, and terminal ambiguity.
-- Keep activity, Evidence, Verification, Acceptance, Outcome state, and Open Loop closure separate.
-- Compile minimum purpose-bound context. Memory is not permission; credentials stay outside model-visible context.
-- Health is optional passive context inside a user-grounded purpose, never product category, agenda, or authority.
-- Protocol 0.1 uses `offlineCommands: "none"`; disconnected presences are stale read-only projections only.
-- Do not infer shipped capability from plans, schemas, tickets, local fakes, or provider claims.
+- One per-owner authority root and one durable writer per aggregate; no competing agent brain.
+- Keep `WaldoCoordinator`, the trusted RunLoop/physical effect path, and existing ContextComposer. A new adapter does not become canonical authority.
+- App and WhatsApp are the target personal-agent launch presences; later desktop is an executor/presence. Do not impose the older desktop + Telegram + Discord release sequence on this launch.
+- Health-aware planning and supported pattern awareness are core launch capabilities. Health sharing is optional per user; missing/revoked health never becomes invented readiness or implicit action authority.
+- Preserve ADR-0081 health computation/destination rules and ADR-0082 device lifecycle. New health-pattern persistence, conversation-body storage, standing grants and email-body processing need explicit bounded contract/ADR review where they extend existing decisions.
+- Preserve intent-before-I/O, frozen intent/digests, keyed reconciliation, one retry owner, bounded work, cancellation fencing and honest terminal ambiguity. Never run external I/O inside the owning SQLite transaction.
+- Activity, Evidence, Verification, Acceptance and Outcome/OpenLoop closure remain distinct. Existing explicit-owner closure rules are not weakened by a standing tool grant.
+- Built-in capabilities are not preauthorized actions. Grants are owner/resource/parameter/time/budget scoped, revocable and rechecked before dispatch/resume.
+- Compile minimum purpose-bound context. Memory is correctable context, not permission. Credentials never enter prompts, logs, fixtures or event payloads.
+- Sensitive chat is classified at ingress. Do not persist raw health or forbidden numeric derived values in DO memory, general transcripts, R2, browser jobs or traces. Provider egress must satisfy applicable consent/DPA/Scribe policy.
+- Protected voice assets are reviewed source material, not authority to leak numbers or claim actions. Personality cannot override receipts, uncertainty, privacy or current user preferences.
+- Published historical protocols retain their offline semantics. New draft/replay/stream behavior requires an additive released contract; no silent widening of v0.1/v0.2.
+- Informational conversation does not need a formal Mission/Outcome ceremony, but consequential work uses canonical admission/effects/closure.
+- Never infer shipped capability or competitor parity from plans, schema counts, local fakes or model claims.
 
 ## Repository responsibilities
 
-- `packages/contracts`: versioned DTOs, schemas, commands/events, adapter contracts, public payloads, fixtures.
-- `packages/runtime`: Durable Object runtime, trusted RunLoop/effect foundations, persistence, adapters.
-- `scripts/guards`: static architecture and agent-surface invariants.
-- `docs/planning`: target architecture and capability/source evidence.
-- `docs/foundation`: current contributor, session-handoff, and verification guidance.
-- `supabase`: migrations/RLS/Vault; no hosted mutation without explicit authority.
+`packages/contracts` owns public DTOs, schemas, manifests and fixtures; `packages/runtime` owns runtime, persistence and adapters; `supabase` holds backend-controlled migrations/health data-plane work; `scripts/guards` enforces architecture boundaries. No mobile or marketing implementation belongs here.
 
-No mobile or marketing implementation belongs in this repository.
+Use `docs/README.md` for retained reference material. The architecture lock remains an invariant/ownership source, not current whole-product launch scheduling. Old handoffs, PR descriptions and Linear/HEY identifiers are historical unless fresh evidence confirms otherwise.
 
 ## Working discipline
 
-- Inspect `git status` and preserve unrelated work.
-- Define observable done, affected contracts/stores/trust boundaries, invalid paths, and rollback before editing.
-- Use tests first for behavior changes where practical.
-- Keep shared runtime/contract writer surfaces coordinated and single-writer.
-- Never use credentials, private content, raw health, full transcripts, or production data in fixtures/logs.
-- Never describe configuration, schema, local tests, or fake adapters as staging/production/product proof.
-- Use issue/PR evidence and bounded workstream handoffs; do not resurrect old wave ownership from historical docs.
+Inspect fresh source, Git state, owning issue and ledger #116; preserve unrelated work. Name the concrete problem, files/interfaces, canonical writer, privacy/authority impact, tests, falsifiers and rollback before a bounded change. Use TDD for behavior, break rejection/recovery paths, and run independent review when required. Keep schema/migration/Coordinator writers coordinated. Do not re-open the whole architecture without implementation evidence.
+
+Runtime cleanup is not a blanket delete: inventory imports, dynamic callers, build entries, tests, native modules, deployed routes/jobs/bindings and retained migration history; establish generated-client replacement, staging/device parity and rollback first.
 
 ## Commands
 
 ```bash
-pnpm install
-npx -y pnpm@10.34.4 typecheck
-npx -y pnpm@10.34.4 test
-
-# Documentation/instruction changes
 git diff --check
 npx -y pnpm@10.34.4 verify:guards
-
-# Merge wall for source or integration changes
+# Required full wall for runtime/contracts/integration changes:
 npx -y pnpm@10.34.4 verify
-git diff --check
 ```
 
-Cloudflare, Supabase, provider, staging, production, or other external mutations require explicit user authority. Local fake bindings and hermetic tests do not grant that authority.
+Use the locked repository environment and actual script definitions. Record PASS, FAIL, NOT RUN and UNAVAILABLE separately at an exact SHA. Do not use `--no-verify`, weaken guards to fit documentation, or describe source-only inspection as tests. External credentials, staging/production mutations and deployment require separate explicit authority.
