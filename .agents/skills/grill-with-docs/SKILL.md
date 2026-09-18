@@ -34,7 +34,7 @@ Which one owns the state?"
 
 ### Sharpen fuzzy language
 
-When the user uses vague terms, propose the precise term from the architecture lock, language rules, or owning contract. “You said memory—do you mean an explicit `ContextClaim`, an inferred Spot, an execution workspace, or a rebuildable knowledge projection?”
+When the user uses vague terms, propose the precise term from the current build plan, language rules, or owning contract. “You said memory—do you mean a Profile Claim, an episode, a commitment/Open Loop, or a rebuildable search projection?”
 
 ### Stress-test scenarios
 
@@ -46,7 +46,7 @@ When user states behavior, check the code. If contradiction, surface it. "Your c
 
 ### Update the owning source inline
 
-When a term resolves, prefer updating the architecture lock, owning foundation document, accepted ADR, or contract comment/test name. Do not create a glossary file just to have one.
+When a term resolves, prefer updating the current build plan, owning foundation document, accepted ADR, or contract comment/test name. Do not create a glossary file just to have one.
 
 Keep vocabulary updates domain-meaningful; avoid implementation-only churn.
 
@@ -65,7 +65,7 @@ in Waldo Brain.
 
 ### Waldo-specific anchors (don't re-litigate)
 
-- The August architecture lock, current session entrypoint, accepted ADRs, and freshly inspected source/tests
+- The September personal-agent build plan, current session entrypoint, accepted ADRs, and freshly inspected source/tests
 - One Waldo identity and one per-owner backend authority root across Home and Work
 - One named durable writer per aggregate; the Coordinator sequences but does not bypass reducers
 - The trusted RunLoop remains the physical execution/effect path during additive migration

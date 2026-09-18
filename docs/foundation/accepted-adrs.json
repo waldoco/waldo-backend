@@ -1,7 +1,9 @@
 [
   {
-    "_note": "Snapshot of waldo-brain ADR status index. Read-only single-source-of-truth for guard-adr-status.mjs during CI. Do not hand-edit ADR statuses here; resync from source.",
-    "_resyncSource": "https://github.com/Pin4sf/waldo-brain/blob/main/agent-rules/adrs.json",
+    "_note": "Read-only snapshot reconstructed from waldo-brain ADR Markdown frontmatter for guard-adr-status.mjs. Do not hand-edit ADR statuses here; resync from the pinned source directory and apply accepted supersedes relationships.",
+    "_resyncSource": "https://github.com/Pin4sf/waldo-brain/tree/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29",
+    "_resyncMethod": "agent-rules/scripts/sync.mjs frontmatter scan at _sourceCommit, plus accepted supersedes relationships such as ADR-0084 over ADR-0043",
+    "_sourceCommit": "be08c4afa6f356c66600e73ae0bf54e5d7a3a158",
     "_snapshot": true
   },
   {
@@ -441,6 +443,42 @@
     "title": "Conversation spaces, nested threading, context pins, health bundles, and replay",
     "status": "accepted",
     "file": "0077-conversation-spaces-threading-context-pins-and-replay.md"
+  },
+  {
+    "adr": "0078",
+    "title": "Memory edges activation graph",
+    "status": "proposed",
+    "file": "0078-memory-edges-activation-graph.md"
+  },
+  {
+    "adr": "0079",
+    "title": "Prospective commitments as explicit memory",
+    "status": "proposed",
+    "file": "0079-prospective-commitments.md"
+  },
+  {
+    "adr": "0080",
+    "title": "Handoff state as a resumable planning surface",
+    "status": "proposed",
+    "file": "0080-handoff-state.md"
+  },
+  {
+    "adr": "0081",
+    "title": "Versioned backend authority for health-derived fields and Form/CRS",
+    "status": "accepted",
+    "file": "0081-health-derived-fields-form-crs-computation-authority.md"
+  },
+  {
+    "adr": "0082",
+    "title": "Per-account encrypted device cache with per-account key and consent epoch",
+    "status": "accepted",
+    "file": "0082-device-local-sensitive-cache-account-consent-lifecycle.md"
+  },
+  {
+    "adr": "0083",
+    "title": "Mutable workspace-skill read admission and model-aware prompt budget",
+    "status": "accepted",
+    "file": "0083-mutable-workspace-skill-read-admission-and-prompt-budget.md"
   },
   {
     "adr": "0084",

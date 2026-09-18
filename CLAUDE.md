@@ -1,21 +1,22 @@
 # waldo-backend — repository instructions
 
-## Current build authority
+## Candidate build roadmap
 
-Read `.claude/rules/INDEX.md`, `AGENTS.md`, and `docs/foundation/NEXT-SESSION-PLAN.md`. The [pinned reconciled launch contract](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md) owns personal-agent scope and milestone order. Relevant accepted ADRs and released schemas still constrain implementation. Current source/tests determine actual capability, not roadmap prose.
+Read `.claude/rules/INDEX.md`, `AGENTS.md`, the [personal-agent product architecture and build plan](docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md), and `docs/foundation/NEXT-SESSION-PLAN.md`. The [pinned reconciled launch contract](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md) is the current cross-repository scope authority and must be amended for the plan's release cuts. Before merge, the backend plan is a candidate roadmap. After review/merge it governs backend roadmap, dependency order, and documentation cleanup; conflicting product-scope or architecture seams remain non-authoritative until the launch contract/ADRs are published in Brain, the plan/entrypoints are repinned, and `accepted-adrs.json` is regenerated. Current source/tests determine actual capability, not roadmap prose.
 
-The September 17 task is documentation-only. It does not authorize runtime execution, cloud mutation, dependency changes, source deletion, merge of PR #137, or deployment. Start implementation only under the subsequent bounded user task.
+Planning text never authorizes runtime execution, cloud mutation, dependency changes, source deletion, merge, or deployment. Start implementation only under a bounded user task and owning issue.
 
 ## Stable constraints
 
 - One per-owner authority root and one durable writer per aggregate; no competing agent brain.
 - Keep `WaldoCoordinator`, the trusted RunLoop/physical effect path, and existing ContextComposer. A new adapter does not become canonical authority.
-- App and WhatsApp are the target personal-agent launch presences; later desktop is an executor/presence. Do not impose the older desktop + Telegram + Discord release sequence on this launch.
+- App is the first complete presence; inbound email and officially eligible WhatsApp follow the same authority boundary. Later desktop is an executor/presence. Do not impose the older desktop + Telegram + Discord release sequence on this launch.
 - Health-aware planning and supported pattern awareness are core launch capabilities. Health sharing is optional per user; missing/revoked health never becomes invented readiness or implicit action authority.
 - Preserve ADR-0081 health computation/destination rules and ADR-0082 device lifecycle. New health-pattern persistence, conversation-body storage, standing grants and email-body processing need explicit bounded contract/ADR review where they extend existing decisions.
 - Preserve intent-before-I/O, frozen intent/digests, keyed reconciliation, one retry owner, bounded work, cancellation fencing and honest terminal ambiguity. Never run external I/O inside the owning SQLite transaction.
 - Activity, Evidence, Verification, Acceptance and Outcome/OpenLoop closure remain distinct. Existing explicit-owner closure rules are not weakened by a standing tool grant.
-- Built-in capabilities are not preauthorized actions. Grants are owner/resource/parameter/time/budget scoped, revocable and rechecked before dispatch/resume.
+- Built-in capabilities are not preauthorized actions. Resolve the smallest per-turn capability manifest. Grants are owner/resource/parameter/time/budget scoped, revocable and rechecked before dispatch/resume.
+- A Trusted Relationship does not share memory or authority. Each owner independently admits, approves, executes, and accepts its side of a signed, minimal coordination exchange.
 - Compile minimum purpose-bound context. Memory is correctable context, not permission. Credentials never enter prompts, logs, fixtures or event payloads.
 - Sensitive chat is classified at ingress. Do not persist raw health or forbidden numeric derived values in DO memory, general transcripts, R2, browser jobs or traces. Provider egress must satisfy applicable consent/DPA/Scribe policy.
 - Protected voice assets are reviewed source material, not authority to leak numbers or claim actions. Personality cannot override receipts, uncertainty, privacy or current user preferences.
@@ -27,7 +28,7 @@ The September 17 task is documentation-only. It does not authorize runtime execu
 
 `packages/contracts` owns public DTOs, schemas, manifests and fixtures; `packages/runtime` owns runtime, persistence and adapters; `supabase` holds backend-controlled migrations/health data-plane work; `scripts/guards` enforces architecture boundaries. No mobile or marketing implementation belongs here.
 
-Use `docs/README.md` for retained reference material. The architecture lock remains an invariant/ownership source, not current whole-product launch scheduling. Old handoffs, PR descriptions and Linear/HEY identifiers are historical unless fresh evidence confirms otherwise.
+Use `docs/README.md` for retained reference material. The September personal-agent build plan, accepted ADRs, released contracts, and current source/tests own live implementation constraints. Old planning snapshots, handoffs, PR descriptions, and Linear/HEY identifiers are historical unless fresh evidence confirms otherwise.
 
 ## Working discipline
 

@@ -35,7 +35,7 @@ Use this template for backend, protocol, Kennel, presence, connector, or runtime
 - List all new/modified files for easy context loading
 
 **Steps:**
-1. Read `.claude/rules/INDEX.md`, the current session entrypoint, architecture lock, and the relevant owning documents/contracts
+1. Read `.claude/rules/INDEX.md`, the September personal-agent build plan, the current session entrypoint, and the relevant accepted ADRs/contracts
 2. Run `git log --oneline` to see what was committed
 3. Run `git diff main --stat` to see all changed files
 4. Check for any failing tests or known issues
