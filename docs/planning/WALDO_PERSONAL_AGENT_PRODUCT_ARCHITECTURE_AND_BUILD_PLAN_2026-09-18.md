@@ -9,6 +9,9 @@
 **App baseline:** `origin/main@7218c18fed8b874492e3831bbb5bd1e1c58abe58`
 
 **Current cross-repository scope authority requiring G0 amendment:** [Waldo Personal Agent — Reconciled Launch Contract](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md)
+
+**Research/review record:** [Waldo Brain PR #31](https://github.com/Pin4sf/waldo-brain/pull/31) at `43be41e1a24af5d901eb6b68d9a63e1c32dfa6f7`; it reviews the prior PR #138 head `db659aec4d9d98aca041d170ae37af6393a45edd` and remains evidence rather than roadmap or architecture authority.
+
 **Live work/evidence:** the owning GitHub issue or PR and [ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116)
 
 This is the implementation plan for getting a real Waldo personal agent running as quickly as possible without discarding the trustworthy kernel already built. Before merge, it is a candidate roadmap. Once reviewed and merged, it replaces the August backend plans and B0–B6 sequencing for roadmap, dependency order, and documentation cleanup. It does not silently override the pinned Brain launch contract or an accepted Brain ADR: a conflicting product-scope seam remains non-authoritative until the launch contract is amended, a conflicting architecture seam remains non-authoritative until the named ADR disposition is published, and the plan/entrypoints plus `accepted-adrs.json` are repinned/regenerated from that Brain revision. Unaffected seams follow this plan. The older backend documents remain available at the pinned baseline in Git history.
@@ -177,6 +180,22 @@ The following accepted decisions would otherwise silently re-import the old prod
 
 Accepted ADRs not named in sections 2.3–2.4 remain binding for their seam. If implementation uncovers another contradiction, stop that seam and add an explicit retain/amend/supersede decision rather than interpreting silence as permission.
 
+### 2.5 Brain PR #31 review integration
+
+Brain PR #31 is the durable research and independent-review record; it is not a competing build plan and does not itself amend an accepted ADR. Its review targeted backend PR #138 at `db659aec4d9d98aca041d170ae37af6393a45edd` and was summarized in the [owner COMMENT review](https://github.com/Pin4sf/waldo-backend/pull/138#pullrequestreview-5249943509). This revision accepts the following findings, incorporates the blocking corrections in the plan, and leaves the Brain record immutable as evidence of what was reviewed.
+
+| Finding | Assessment | Plan disposition | Acceptance gate |
+|---|---|---|---|
+| R1 — crash can lose exact conversation bytes | **Correct, P1.** A digest and reserved ordering cannot reconstruct uncommitted user bytes or a nondeterministic assistant response. | Stage the exact admitted input/output in the canonical Supabase content lifecycle before durable acknowledgement or recoverable publication intent; keep staged rows hidden, owner-bound, expiring, and deletion-generation aware. This is not a second transcript. | G1 proves no-client-retry recovery at every staging/reservation/commit boundary, changed-byte rejection, orphan cleanup, cancellation/deletion, and next-turn liveness. |
+| R2 — mutable Gmail draft can change after final read | **Correct, P1.** Waldo cannot lock a Gmail draft against another client between `drafts.get` and `drafts.send`. | Freeze the exact approved RFC 5322/MIME message snapshot and send that immutable snapshot through `users.messages.send`; do not send a mutable provider draft by ID. Preserve the provider draft and any concurrent edits unless a separate visible cleanup operation is authorized. | G4 races recipient/body/header/attachment/thread changes after approval, provider revoke, timeout, success-with-response-loss, and duplicate suppression. |
+| R3 — account-isolation proof arrives too late | **Correct as a gate-order defect, P1.** It does not by itself prove a production leak. | Move the minimum account-isolation floor into G0 and make it a prerequisite for every real G1/G2 path: account-and-generation-bound local/query/cache state, cancellation on logout/switch, stale callback/subscription rejection, and disabled legacy health upload until explicit cloud consent. | G0/G1/G2 race A→B during chat, provider callback, deep link, subscription delivery, queued work, and background upload; assert zero cross-account display, write, or upload. Full physical HealthKit proof remains G5. |
+| R4 — one provider identity cannot be made globally unique by independent owner DOs | **Correct, P2.** | Add a protected global claim registry that reserves/activates/revokes `(provider namespace, provider subject)` while each owner DO remains the permission authority. | Required before G8 activates a second presence; prove concurrent claims, partial failure, expiry, revoke/relink, and recycled-number step-up. |
+| R5 — Calendar ambiguity needs provider concurrency primitives | **Correct, P2.** | Persist a client-chosen event ID before create; reconcile that ID after timeout. Bind `If-Match` to update/delete; a `412` creates a fresh proposal rather than overwrite. | G2 tests response loss, duplicate create, external edit/delete/move, stale etag, and ambiguous absence. |
+| R6 — schedules, reviewed procedures, and continuous responsibility were conflated | **Correct, P2.** | Separate worker liveness, proactive assessment, and scheduled responsibility. Admit reviewed static procedures only with source/license/version/digest, compatibility, activation/revocation, and resume checks; file format never grants authority. | G1 covers static-procedure admission if used; G4 proves occurrence identity, timezone/DST, overlap, lateness/misfire, pause/resume/cancel, duplicate alarm, lost wake, and bounded recovery. |
+| R7 — the plan conflated two products named Folk | **Correct, P2.** | Track `folk Personal AI` separately from `folk CRM Assistant`; do not transfer claims between them. | Market/eval fixtures use the correct product identity and only first-party supported claims. |
+
+The review also sharpens three cross-cutting rules: a long-running agent is a durable responsibility state machine, not continuous model thought; engineering improvement is separate from production execution and cannot self-authorize policy/tool changes; and files such as soul, memory, or skill documents are authoring/projection/procedure interfaces rather than schedulers, credentials, permissions, or canonical state.
+
 ## 3. First-principles hypotheses and falsifiers
 
 The plan is driven by hypotheses that can fail, not competitor imitation.
@@ -208,7 +227,7 @@ The architectural spike falsifier is simple: an authenticated app message must p
 
 Instinct's supplied dashboard shows Google Workspace, Outlook, Linear, Notion, GitHub, Slack, and Granola; contact through Messages, WhatsApp, and a dedicated email; Trusted People; external-data deletion; and a vault for logins, cards, personal information, and agent-held items. Its Google consent screen requests broad Drive, Contacts, Slides, Docs, Sheets, Calendar, Gmail, and Tasks access.
 
-Poke emphasizes low-friction messaging, recipes, and MCP connectivity. Folk's assistant is grounded in relationship/CRM context. Meta Muse emphasizes background work, a secure VM/browser, app/WhatsApp access, connectors, and a security monitor. Grok Bot brings an agent into collaborative chat. Hermes and OpenClaw show the appeal of open, extensible runtimes, persistent context, skills, and local/computer execution.
+Poke emphasizes low-friction messaging, recipes, and MCP connectivity. Two distinct products named Folk must not be conflated: `folk Personal AI` presents a relationship-like personal agent across messaging surfaces, while `folk CRM Assistant` grounds workflows in CRM context. Meta Muse emphasizes background work, a secure VM/browser, app/WhatsApp access, connectors, and a security monitor. Grok Bot brings an agent into collaborative chat. Hermes and OpenClaw show the appeal of open, extensible runtimes, persistent context, skills, and local/computer execution.
 
 ### 4.2 Capability comparison
 
@@ -218,7 +237,8 @@ This is a public-evidence comparison, not a benchmark or reverse-engineering cla
 |---|---|---|---|---|
 | [Instinct](https://instinct.com/) | text/call; supplied dashboard shows Messages, WhatsApp, and dedicated email | site claims a model for personal nuance; dashboard exposes personal info and agent items | dashboard shows Google Workspace, Outlook, Linear, Notion, GitHub, Slack, Granola; founder posts show agent email and concierge calls | site claims proactive follow-up and phone/computer use; isolation, receipts, and execution architecture are not public |
 | [Poke](https://poke.com/docs) | Apple Messages, Telegram, WhatsApp, RCS | durable personal memory/personality is not established by the checked overview | email, Calendar, reminders, web search, integrations | reminders are documented; a general persistent computer/browser architecture is not established |
-| [folk Assistant](https://help.folk.app/en/articles/12460796-introducing-assistant) | built into the folk relationship/CRM workspace | recaps use notes and interactions around people, companies, and deals | finds follow-ups, researches companies, sends trigger-defined emails | assistants are described as always-on and trigger-driven; no general computer-use claim |
+| [folk Personal AI](https://www.folk.com/) | iMessage, Telegram, WhatsApp, and Discord | presents itself as a friend that remembers conversations and checks in | reminders plus read-only Plaid-backed money context are publicly described | folk drafts and the user sends; public material does not establish autonomous money movement or a general browser/computer runtime |
+| [folk CRM Assistant](https://help.folk.app/en/articles/12460796-introducing-assistant) | built into the folk relationship/CRM workspace | recaps use notes and interactions around people, companies, and deals | finds follow-ups, researches companies, sends trigger-defined emails | assistants are described as always-on and trigger-driven; no general computer-use claim |
 | [Meta Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) | Muse app, WhatsApp, iOS/Android/web; glasses planned | learns from conversations, remembers details, accepts “forget” requests | connected apps, email, travel, forms, negotiation, protected payment and credential paths | dedicated Secure VM/browser, Sentinel review, long-running work, app-close continuation, approvals and audit trail |
 | [Grok Bot](https://docs.x.ai/grok-bot/overview) | desktop/mobile direct chats and multi-Bot groups | Bot history, preference corrections, reusable skills and scheduled/event routines | Marketplace connectors, browser, CLI, files, secure takeover, optional local-computer execution | persistent cloud computer and background routines; Bots on one account share cookies, files, and CLI credentials |
 | [Hermes Agent](https://hermes-agent.nousresearch.com/docs/) | CLI/desktop plus 20+ messaging platforms | agent-curated cross-session memory, user modeling, `SOUL.md`, self-created/improved skills | 60+ tools, web/browser, MCP, portable skills | local/VPS/container/serverless terminals, cron, Bot teams, isolated subagents |
@@ -228,7 +248,8 @@ This is a public-evidence comparison, not a benchmark or reverse-engineering cla
 |---|---|---|---|---|
 | Instinct | founder-announced Trusted Person network and Instinct-to-Instinct coordination | no public builder/API contract found | retention, model/provider stack, browser isolation, approval/recovery semantics, measured reliability | adopt effortless contact, proactive completion, and trusted coordination; defer broad scopes and a credential/TOTP vault |
 | Poke | no owner-to-owner agent protocol found in checked docs | recipes, MCP servers, and API docs | memory/correction model, connector effect controls, background recovery | adopt messaging ergonomics and reusable recipes behind Waldo policy; do not chase all channels before app truth |
-| folk | shared CRM context is not an owner-to-owner personal-agent protocol | source establishes assistants/workflows, not a general public plugin runtime | portability outside folk, personal memory controls, general action recovery | adopt relationship-grounded retrieval and follow-up signals; use as a connector, not Waldo's brain |
+| folk Personal AI | no owner-to-owner agent protocol is established by the checked source | no general public plugin contract established | memory correction/export/deletion, action recovery, and messaging-platform data handling | adopt low-friction relational conversation, explicit reminders, and user-finalized sends; retain Waldo's governed memory and effect boundary |
+| folk CRM Assistant | shared CRM context is not an owner-to-owner personal-agent protocol | source establishes assistants/workflows, not a general public plugin runtime | portability outside folk, personal memory controls, general action recovery | adopt relationship-grounded retrieval and follow-up signals; use as a connector, not Waldo's brain |
 | Meta Muse | no public owner-to-owner agent protocol in the launch source | controlled connector ecosystem; no general public plugin contract established | real-world reliability, retention detail, connector catalog/regions; Confidential VM is future-tense | adopt secret brokerage, isolated execution, visible audit and approval patterns; buy computer infrastructure behind Waldo's port |
 | Grok Bot | Bot-to-Bot groups/handoffs inside an account; not a two-owner trust protocol | REST/API surface, Marketplace connectors, saved skills/routines | account-wide shared computer state weakens isolation between Bots; personal/work boundary and long-term retention | adopt steer/stop, visible activity, evidence, routines; require stronger per-purpose isolation and exact manifests |
 | Hermes Agent | named Bots, group chat and subagents; no checked owner-to-owner relationship protocol | MIT, MCP, open skills/Skills Hub, many backends | operational burden, connector conformance, safety of autonomous skill mutation and broad channel credentials | borrow adapter/tool conformance and portable-procedure ideas; defer self-modifying skills until the core agent is reliable |
@@ -338,7 +359,7 @@ health view        budgets/expiry
 | State | Canonical writer/store | Notes |
 |---|---|---|
 | identity, presences, grants, command intake/order | existing owner authority / DO SQLite | one owner root; server-derived bindings; sole allocator of owner `command_seq` and per-thread `turn_seq` |
-| conversation graph, parentage, and bodies | Supabase `day_spaces`/threads/messages under RLS | accepted ADR-0077 ownership; only the authenticated backend publication service commits rows, carrying immutable DO-assigned IDs/sequences rather than inventing a second order |
+| conversation graph, parentage, and bodies | Supabase `day_spaces`/threads/messages under RLS | accepted ADR-0077 ownership; the authenticated backend publication service is the only content/state writer and uses hidden `staged` plus visible `committed` states carrying immutable DO-assigned IDs/sequences rather than inventing a second order |
 | conversation execution state | existing owner DO runs/outbox/stream cursors | coordinates publication and retry but is not a second transcript |
 | connector identity, scopes, and lifecycle | **[Proposed] `ConnectionModule` / owner DO** | canonical provider-account binding, consent/scope revision, token generation, status, and deletion progress |
 | Profile Claims and user preferences | owner DO compact records | source, purpose, sensitivity, revision, correction, expiry |
@@ -348,6 +369,7 @@ health view        budgets/expiry
 | raw/normalized health | device and protected Supabase health plane | never DO memory or generic transcript |
 | derived health planning view | versioned protected computation, purpose-filtered projection | nonnumeric/minimal where sent to a model or external channel |
 | OAuth credentials and provider bearer use | Supabase Vault plus trusted connector Edge Function/proxy | amended ADR-0075; refresh/access tokens never enter the DO/model/log, and the proxy exposes only typed allowlisted operations |
+| global provider-presence claims | **[Proposed] protected `PresenceClaimRegistry`** | sole cross-owner uniqueness writer for `(provider namespace, provider subject)` reservation/activation/revoke generation; it owns no conversation, memory, or per-owner permission |
 | relationship state | each owner's DO | no cross-owner canonical writer or shared memory |
 | relationship exchange | **[Proposed] minimal signed envelope relay** | transport/receipt ordering only; never owns either user's commitment |
 | large artifacts | object storage only when a real artifact requires it | not a default memory store |
@@ -356,17 +378,20 @@ Do not move conversation bodies into the owner DO or create a second app transcr
 
 #### Conversation publication and deletion protocol
 
-The authenticated backend `ConversationPublicationService` is the only service allowed to create canonical assistant rows or assign visible ordering. Supabase remains the canonical human-visible graph; the owner DO remains execution truth. There is deliberately no claimed cross-store transaction. Idempotent states and reconciliation make partial progress visible and recoverable.
+The authenticated backend `ConversationPublicationService` is the only service allowed to create or transition conversation-content rows and materialize visible ordering from the DO reservation. Supabase remains the canonical human-visible graph; the owner DO remains execution truth and the order allocator. There is deliberately no claimed cross-store transaction. Idempotent states and reconciliation make partial progress visible and recoverable.
+
+The content lifecycle is `staged -> reserved -> committed`, with terminal `expired`, `revoked`, or `deleted` states. Every stage binds owner, thread, client idempotency key, exact content digest, admission/deletion generations, expiry, and an opaque staging reference. Staged rows are inaccessible to the normal transcript projection and prompt assembly, but participate in RLS, retention, export, deletion, and content-log suppression. This is one Supabase content lifecycle and writer, not a second transcript.
 
 For an inbound user command:
 
 1. authenticate the owner and bind the thread before accepting the body into an in-memory quarantine whose request logs, traces, analytics, and error reporting cannot capture content;
 2. apply deterministic local Scribe/DLP classification before any generic transcript, event, queue, or log write;
 3. for raw health or another protected field, require the exact purpose and current consent, store the value only in its protected plane (or process it transiently without retention), and reduce the generic form to a non-reconstructive display marker plus opaque reference; use a keyed, rotating digest where low-entropy values could otherwise be guessed, never a plain digest of the protected value;
-4. submit only the admitted content digest/reference metadata and client idempotency key to the owner DO; it dedupes and freezes a server message ID, owner-wide `command_seq`, per-thread `turn_seq`, parent/cancellation generation, and consent/admission generation without storing the body;
-5. idempotently commit one owner-bound Supabase message carrying those frozen IDs/sequences and either the ordinary body or protected display marker/reference; `visible_order` is deterministically derived from the DO-assigned turn and message phase, never independently allocated by Supabase;
-6. only a confirmed canonical message commit releases exactly one DO run bound to that immutable message ID/digest; and
-7. on a crash between commits, retry/reconcile the same identifiers rather than creating another message, sequence, or run.
+4. canonicalize the admitted ordinary bytes or protected marker/reference and idempotently write a hidden `staged_input` through the publication service, bound to the owner/thread, client key, exact digest, current admission/deletion generations, and short expiry; reuse of the key with changed bytes is rejected;
+5. submit only the opaque staging reference, digest, and generation metadata to the owner DO; it dedupes and returns a reservation containing the server message ID, owner-wide `command_seq`, per-thread `turn_seq`, and parent/cancellation generation without storing the body; the publication service then compare-and-sets the staged row to `reserved` with that reservation;
+6. compare-and-set the same Supabase row to visible `committed`, carrying the frozen IDs/sequences; `visible_order` is derived from the DO-assigned turn and message phase, never independently allocated by Supabase;
+7. only a confirmed canonical commit releases exactly one DO run bound to that immutable message ID/digest; and
+8. acknowledge durable acceptance only after both the staged payload and recoverable DO reservation exist. Before that point the input is explicitly unaccepted and may require the same-key resubmission. After it, restart reconciliation uses the exact staged bytes and frozen identifiers rather than reconstructing content from a digest or rerunning the user.
 
 The protected write must be confirmed before its non-reconstructive transcript reference becomes visible. A crash after the protected write but before reference publication leaves a quarantined, idempotently recoverable record with a short cleanup deadline; it does not leak the value into the transcript. Consent revocation or deletion between the two steps cancels publication and purges/tombstones the protected record. Missing purpose/consent fails closed and retains no exact value. Crash tests cover every protected-store/reference boundary, log and error capture, low-entropy digest guessing, late revocation, retry, orphan cleanup, and deletion/reindex replay.
 
@@ -375,10 +400,13 @@ For launch, one thread executes turns serially. A concurrent inbound message is 
 For assistant output:
 
 1. provisional stream events remain noncanonical and cannot claim an effect;
-2. after final schema/policy validation, the DO freezes the final digest and enqueues an idempotent publication intent;
-3. the publication service compare-and-sets one canonical Supabase assistant message keyed by the server message/run identity;
-4. only a confirmed Supabase commit emits `message.committed`, advances the DO outbox, and becomes visible to later prompt assembly; and
-5. a timeout remains `publication_pending` until read-back proves commit or retry safely completes it.
+2. after final schema/policy validation, the publication service writes the exact final body as a hidden `staged_output`, keyed by server message/run identity and bound to its digest, parent, owner/thread, admission/deletion generations, and expiry;
+3. only after staging succeeds does the DO freeze the opaque reference/digest and enqueue a restart-resumable publication intent; a model rerun never reconstructs an already-frozen answer;
+4. the publication service compare-and-sets that same row to visible `committed` with the frozen order;
+5. only a confirmed Supabase commit emits `message.committed`, advances the DO outbox, and becomes visible to later prompt assembly; and
+6. a timeout remains `publication_pending` until read-back proves commit or retry safely completes it. A failure before staging is an honest interrupted/failed turn, not a recoverable exact answer.
+
+Missing, expired, revoked, or deleted staged payloads become visible terminal execution states where appropriate and release their reserved turn so later turns remain live. Orphan cleanup is deadline-bound and idempotent. Consent revocation, message/thread deletion, and account deletion advance the governing generation before purge, preventing a late promotion. G1 kills the process after input stage, reservation, input commit, output stage, publication intent, and output commit, then restarts without client retry. It also tests same-key changed bytes, revoke/delete between every boundary, orphan expiry/purge, and next-turn liveness, asserting no duplicate visible message, regenerated answer, wedged sequence, or second canonical transcript.
 
 Logs, journal metadata, and unrelated DO events never duplicate conversation bodies. Raw health samples or protected health fields typed into chat are handled through the pre-persistence quarantine and accepted health destination matrix; exact values remain transient or in the protected health plane, while the generic transcript contains only the non-reconstructive marker/reference.
 
@@ -386,7 +414,7 @@ Deletion first makes the canonical Supabase message/thread unavailable to normal
 
 #### Multi-presence identity and channel binding
 
-`IdentityPresenceModule` remains the sole writer, but its one-Presence-per-owner invariant becomes one owner with multiple independently revocable `PresenceBinding` records. Each binding carries channel/provider, stable provider subject or normalized phone identity, verified-at, status, binding and revocation generations, capabilities, and last provider event cursor. A provider identity is unique across active owners within its provider namespace.
+`IdentityPresenceModule` remains each owner's sole permission writer, but its one-Presence-per-owner invariant becomes one owner with multiple independently revocable `PresenceBinding` records. Each binding carries channel/provider, stable provider subject or normalized phone identity, verified-at, status, binding and revocation generations, capabilities, and last provider event cursor. Because independent owner DOs cannot atomically enforce cross-owner uniqueness, a protected `PresenceClaimRegistry` is the sole writer for reservation, activation, expiry, and revoke generation of `(provider namespace, provider subject)`. It owns no conversation, memory, or per-owner permission. A provider identity becomes active for at most one owner; partial reservations are recoverable and recycled identities require explicit step-up before relink.
 
 Linking starts only from a freshly authenticated Waldo app session. The server issues a short-lived, one-use challenge bound to owner, intended channel/provider account, app presence, and redirect/callback. The channel callback proves possession and provider signature before activation. Never join by display name, profile photo, address-book similarity, or phone-number resemblance. A recycled/reassigned number requires re-verification and explicit relink after the prior binding is revoked/quarantined; it never inherits the old owner's memory, threads, pending actions, or delivery state.
 
@@ -490,6 +518,10 @@ Launch proactivity comes only from:
 
 Every proactive rule has purpose, source, cadence, quiet hours, rate limit, expiry, cancellation, and a visible reason. Do not run generic patrol, dreaming, or engagement-seeking messages.
 
+Keep three mechanisms distinct: **worker liveness** wakes infrastructure, **proactive assessment** decides whether an admitted observation warrants a proposal, and **scheduled responsibility** advances a user-visible commitment. Cloudflare Durable Object alarms provide at-least-once wakeups and only one alarm per object; they are not themselves a multi-schedule product contract. Each routine therefore has an owner, purpose, stable occurrence ID, trigger and timezone/travel policy, overlap and lateness/misfire rules, admitted capabilities and aggregate/token/tool/recovery budgets, expiry, cancellation generation, delivery destination, and inspect/edit/pause/resume/cancel/history controls. Deterministic reminders do not require an LLM. Resume reconciles pending effects first, rechecks authorization/config/source/procedure revisions, and cannot let verifier or recovery loops evade the routine's aggregate budget.
+
+A durable continuation record names the task revision, accepted progress, pending effects and approvals, source/context/procedure/tool versions, remaining aggregate budget, cancellation/revocation generations, and next allowed transition. A wakeup or long context window is not continuity by itself; each resume validates the record and reconciles source-of-record effects before taking another step.
+
 Founder-path mail follow-up is not general inbox monitoring. It is a bounded scheduled re-read of an exact Gmail thread that the owner admitted for a waiting-reply Open Loop. The rule stores only the provider thread ID, admitted purpose, last source message/history marker, cadence, expiry, and revocation generation; it stops when a qualifying reply is observed, the loop closes/expires, or the Connection is revoked. It suppresses Waldo's own sent-message echo and treats external draft edits as observations, not replies. Gmail `users.watch`/Pub/Sub is deferred until a separate cursor/renewal/gap-recovery contract is accepted. Tests cover late/reordered observations, concurrent external reply/draft changes, self-sent echo, revoke during poll, missed cadence, and provider/read failure without an invented reminder.
 
 ## 8. Connector and adapter strategy
@@ -538,7 +570,7 @@ Incremental scope order:
 | Gmail-2 | read selected threads/bodies | `gmail.readonly`; same scope as search, newly admitted typed operation and retention purpose | explicit mail-content explanation and retention policy |
 | Gmail-3 | create/update drafts | `gmail.compose`; this scope also permits send, so proxy policy—not OAuth—enforces draft-only | draft operation grant; no send authority |
 | Gmail-4 | delete exact draft | `gmail.compose`; distinct typed destructive operation | explicit confirmation; Gmail deletes it immediately and permanently |
-| Gmail-5 | send exact draft | `gmail.compose`; distinct typed irreversible operation bound to exact draft/recipients/digest | fresh approval at the irreversible edge |
+| Gmail-5 | send exact approved message snapshot | `gmail.compose`; proxy freezes approved RFC 5322/MIME bytes and sends through `users.messages.send`, never mutable draft ID | fresh approval bound to every byte at the irreversible edge |
 | Drive-1 | user-selected files through Picker | `drive.file` where the workflow permits it | no all-Drive default |
 | People-1 | user-selected contact lookup for an invite or recipient | deferred; exact `contacts.readonly` need and minimization must be justified before request | no full address-book ingestion |
 | Tasks-1 | read/create/update selected task lists | exact Tasks scope selected by read/write operation at adapter contract | enable only when the workflow is used |
@@ -548,9 +580,9 @@ Do not copy Instinct's all-at-once Google grant. Use incremental authorization a
 
 Google classifies Gmail scopes that read/manage message metadata, headers, or bodies—including `gmail.metadata`, `gmail.readonly`, and `gmail.compose`—as restricted. `gmail.compose` is not a draft-only security boundary; it can authorize `drafts.send`. If Waldo's server stores or transmits restricted data, production use requires Limited Use compliance, restricted-scope OAuth verification, and ordinarily an annual Google-approved security assessment. Begin scope justification, verified-domain/privacy materials, processor/data-flow inventory, test-user plan, and CASA readiness in G0. Founder/test-user corridors do not prove public verification, and Gmail must not enter external beta until the applicable approval is complete.
 
-Keep the first Calendar effect class deliberately narrow: the authenticated owner's primary calendar; non-recurring, owner-only events; no attendee or conference mutation; and `sendUpdates=none`. Bind the approved event version/etag, timezone, and resolved instant, then read back. Additional owner-selected calendars, recurring-series/instance edits, attendee notifications, conference creation, organizer transfer, and imported invitations are later distinct effects with their own approval and reconciliation rules. Test DST boundaries, timezone changes, etag conflict, a deleted/moved event, and timeout after provider commit.
+Keep the first Calendar effect class deliberately narrow: the authenticated owner's primary calendar; non-recurring, owner-only events; no attendee or conference mutation; and `sendUpdates=none`. For create, persist a valid client-chosen Google event ID before I/O and reconcile that exact ID after response loss; retrying the same insert must not create a second event. For update/delete, bind the approved version/etag, timezone, and resolved instant and dispatch with `If-Match`; a provider `412` invalidates the approval and creates a fresh proposal rather than silently rebasing or overwriting. Then read back from Google. Additional owner-selected calendars, recurring-series/instance edits, attendee notifications, conference creation, organizer transfer, and imported invitations are later distinct effects with their own approval and reconciliation rules. Test DST boundaries, timezone changes, stale etag/`412`, external edit/delete/move, ambiguous absence, and timeout after provider commit.
 
-Gmail send has its own TOCTOU boundary. Fresh approval binds provider draft ID/revision, canonical MIME/body and attachment digests, exact `From`/`To`/`Cc`/`Bcc`/`Reply-To`/subject, and a Waldo-owned idempotency/reconciliation reference. Immediately before send, the typed proxy re-fetches and canonicalizes the provider draft; any recipient, header, body, attachment, or revision change invalidates approval and returns a new proposal. A timeout after `drafts.send` is indeterminate: reconcile draft/message state and the stable message reference before reporting or offering another send—never blindly resend. Tests include edits from another Gmail client after approval, MIME/header/attachment substitution, recipient normalization edge cases, provider commit followed by timeout, and ambiguous reconciliation.
+Gmail send has its own TOCTOU boundary, and Google does not document atomic compare-and-send for a mutable draft. Fresh approval therefore binds canonical approved raw RFC 5322/MIME bytes, every envelope/header recipient, subject, attachment bytes/digests, thread intent, owner/provider account, approval generation, expiry, and a Waldo-owned idempotency/reconciliation reference. The typed proxy sends those immutable bytes through `users.messages.send`; it does not call `drafts.send` by mutable provider draft ID. The provider draft remains intact, including concurrent external edits, and is surfaced as independently changed/still present. Any cleanup is a separate visible operation with separate approval. A timeout after send is indeterminate: reconcile source-of-record message state before reporting or offering another send—never blindly resend. Tests edit the draft after the final read, substitute MIME/headers/recipients/attachments, revoke during dispatch, simulate provider success followed by response loss, and prove concurrent external draft edits remain intact.
 
 Waiting-reply tracking in G4 uses the bounded exact-thread scheduled-read contract in §7.3. Search/read scopes alone do not imply mailbox surveillance. A future Gmail watch stream must separately specify `users.watch`, Pub/Sub authentication, history cursor storage, renewal, dedupe/order, expired-history and gap recovery, reauthorization, revoke, deletion, and self-event suppression before it can replace polling.
 
@@ -837,28 +869,33 @@ Adapter contracts, provider sandboxes, and conformance fixtures may start in the
 - review/merge one canonical build plan and thin entrypoints; publish the amended/superseding Brain launch contract plus every retained/amended/superseded ADR disposition named in §§2.3–2.4; then repin the plan/entrypoints and regenerate/diff `accepted-adrs.json` from that Brain revision before implementing any conflicting seam;
 - create clean backend/app worktrees at fresh remote pins;
 - remove app fictional success;
+- put the entire authenticated app group behind a protected route/auth gate, including direct and stale deep links;
+- define an account epoch such as `(owner_id, auth_generation, consent_epoch)` and bind every Query key, Zustand projection, SQLCipher store, SecureStore preference/watermark, subscription, queued operation, callback, and background job to it;
+- on logout/account switch, advance the generation first, cancel in-flight query/mutation/upload work, reject stale completions, clear visible stores, close the prior account database, and only then admit the next owner;
+- disable legacy health upload by default until separate cloud-processing consent exists; device HealthKit authorization never creates Waldo cloud consent;
 - resolve or explicitly version the closure OpenAPI/runtime mismatch;
 - lock the additive one-Presence-to-multi-presence contract, schema migration, compatibility read path, rollback, and channel-lane owner; preserve the current app binding until G8 proves multiple active presences rather than putting that migration on the founder-alpha critical path;
 - inventory existing OAuth token tables/functions, reconcile them to the single Vault/typed-connector-proxy boundary, and specify rollback for that reconciliation;
 - start Google brand/scope verification and restricted-scope Limited Use/CASA readiness: exact scope justification, verified domains, public privacy/data-deletion pages, processor/data-flow inventory, test-user project, and annual-assessment ownership;
-- publish the provider/route-by-data-class egress matrix, DPA/retention/region status, and a synthetic proof that gateway/provider payload logging is disabled;
+- publish the provider/route-by-data-class egress matrix and DPA/retention/region evidence; a synthetic log canary proves only the observable capture paths it exercises and cannot substitute for provider-wide retention/ZDR/DPA evidence;
 - prove app dependency install, tests, simulator build, and backend verification wall;
 - record signing/physical-device prerequisites.
 
-**Exit:** no demo fallback can look like a receipt; exact baselines and failures are recorded.
+**Exit:** no demo fallback can look like a receipt; exact baselines and failures are recorded. Deterministic A→B and logout tests race chat, Calendar request, connector callback, subscription delivery, background health upload, queued work, and deep-link processing and prove zero A-owned display, cache reuse, write, upload, or delivery under B. Server RLS remains mandatory but is not accepted as protection against stale local state.
 
 ### G1 — Hello Waldo: production conversation + compact personalization (5–10 days)
 
 - authenticated app turn, server IDs/order/cancellation, streaming model response;
 - one evaluated default model route plus a bounded reasoning/fallback ladder with spend, safety, context, and data-class ceilings;
 - enforce `ModelEgressPolicy` before every provider/fallback attempt; G1 admits no mail, meeting, or health context until its route passes the corresponding data-class gate;
-- Supabase conversation graph plus backend `ConversationPublicationService`, coordinated by DO run/outbox state without a second transcript;
+- Supabase conversation graph plus backend `ConversationPublicationService`, coordinated by DO run/outbox state without a second transcript; exact input and output bytes follow the hidden staged/reserved/committed lifecycle in §6.1;
 - digest-bound per-turn capability resolver enforced again at dispatch;
 - reviewed voice pack and user style settings;
+- if reviewed static procedures are used, record source/license/version/digest, compatibility/tool requirements, evaluation, activation and emergency revocation; progressive disclosure and a file format never grant execution authority, and resume rejects a revoked or incompatible version;
 - Profile Claim propose/inspect/correct/delete;
 - generated app client and no direct legacy success path.
 
-**Exit:** real multi-turn conversation survives restart, correction, deletion, mid-stream cancellation, unsafe output, and provider failure without duplicate or fictional output. A pure conversation exposes zero effect/MCP tools; dispatch rejects any operation absent from the turn manifest; lazy discovery cannot widen the frozen manifest.
+**Exit:** real multi-turn conversation survives restart, correction, deletion, mid-stream cancellation, unsafe output, and provider failure without duplicate or fictional output. Fault injection kills the process after input stage, DO reservation, input commit, assistant stage, publication intent, and assistant commit, then restarts without client retry; changed-byte replay, revoke/delete at every boundary, orphan expiry, and later-turn liveness pass without a regenerated answer or wedged sequence. G0's A→B isolation floor passes on the real conversation path. A pure conversation exposes zero effect/MCP tools; dispatch rejects any operation absent from the turn manifest; lazy discovery cannot widen the frozen manifest.
 
 ### G2 — Google Calendar vertical slice (4–8 days)
 
@@ -866,13 +903,13 @@ Adapter contracts, provider sandboxes, and conformance fixtures may start in the
 - harden and prove the single Vault/typed-connector-proxy boundary; migrate or remove any conflicting legacy secret path without dual-write or exposing bearer tokens to the DO;
 - read/free-busy/find slots;
 - per-turn manifests admit only the exact Calendar reads/writes required by the request and approved proposal;
-- primary-calendar, owner-only/non-recurring proposal, approval, apply with `sendUpdates=none`, etag-bound read-back, reconciliation, revoke;
+- primary-calendar, owner-only/non-recurring proposal, approval, apply with `sendUpdates=none`, client-chosen create ID, `If-Match` update/delete, etag-bound read-back, reconciliation, revoke;
 - Open Loop/update/receipt in app;
 - prompt-injection and cross-owner tests.
 
 Proxy adversarial tests cover bearer exfiltration, arbitrary URL/path injection, SSRF, resource/account substitution, operation confusion (including draft-to-send), manifest/digest substitution, replay/expiry, response oversize/secret reflection, revoke during execution, and provider commit followed by transport loss.
 
-**Exit:** an exact primary-calendar, owner-only event change is source-verified and retry-safe in a test account across timezone/DST and etag-conflict cases.
+**Exit:** an exact primary-calendar, owner-only event change is source-verified and retry-safe in a test account across timezone/DST, response loss, duplicate create, external edit/delete/move, ambiguous absence, and stale-etag `412`; a `412` produces a new proposal and never overwrites. Account switching during OAuth callback, read, and write proves zero cross-owner display or effect.
 
 ### G3 — Trusted Relationships (5–10 days)
 
@@ -883,21 +920,23 @@ Proxy adversarial tests cover bearer exfiltration, arbitrary URL/path injection,
 - independent approvals and dual receipts;
 - private decline/failure semantics and one-sided-apply compensation.
 
+The accepted threat model must name message/key endpoints and the Waldo operator/server threat boundary. Server-root encryption is not described as operator-confidential unless the selected protocol and evidence actually provide that property.
+
 Calendar invitations or attendee notifications are not the cross-owner authority protocol; each Waldo applies only its owner's owner-only event in this gate.
 
 **Exit:** two test owners schedule/reschedule or decline without sharing event titles, memory, or authority.
 
 ### G4 — Gmail, selected Drive, meetings, and proactivity (5–10 days)
 
-- bounded Gmail search/read/draft; send remains exact approval;
+- bounded Gmail search/read/draft; send uses the immutable approved RFC 5322/MIME snapshot through `users.messages.send`, preserves the mutable provider draft, and remains a separate exact approval;
 - selected Drive files only;
 - Granola read-only retrieval with citations, signed-webhook admission, and bounded backfill;
-- explicit follow-up/reminder/quiet-hours engine;
+- explicit follow-up/reminder/quiet-hours engine with stable occurrence identity, timezone/travel, overlap, lateness/misfire, expiry, bounded recovery, and inspect/edit/pause/resume/cancel/history controls;
 - waiting-reply detection only through bounded scheduled re-reads of owner-admitted exact Gmail thread IDs; no general inbox monitor or implied watch stream;
 - owner-bound APNs token registration/rotation/revocation, minimal lock-screen payloads, quiet hours, and deep links to canonical state;
 - connector availability and revocation UX.
 
-**Exit:** Waldo prepares for a meeting, drafts a follow-up, and tracks/notifies it without silently sending, leaking private notification content, or retaining unrelated content. APNs provider acceptance is not misreported as user display or acknowledgement.
+**Exit:** Waldo prepares for a meeting, drafts a follow-up, and tracks/notifies it without silently sending, leaking private notification content, or retaining unrelated content. The Gmail suite edits a provider draft after the last read, substitutes MIME/header/recipient/attachment data, races revoke, simulates provider success plus response loss, and proves the approved immutable message is the only possible send while external draft edits remain intact. Routine tests cover DST gaps/repeats, travel, overlap, pause/reschedule/cancel in flight, missed/lost/duplicate alarm delivery, no-action decisions, and recovery that cannot evade the aggregate budget. APNs provider acceptance is not misreported as user display or acknowledgement.
 
 ### G5 — Health-aware planning on physical devices (7–14 days)
 
@@ -943,14 +982,15 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 ### G8 — Channels and joined release (external lead time dominates)
 
 - migrate and prove independently revocable multi-presence bindings through the G0 compatibility/rollback contract before enabling a second active presence;
+- add the protected `PresenceClaimRegistry` as the sole global reservation/activation/revoke-generation writer for `(provider namespace, provider subject)` while owner DOs remain the permission authority; recover partial reservations and require explicit step-up for recycled identities;
 - realtime/app delivery hardening and cross-surface ordering;
-- inbound email;
+- inbound email with provider webhook authentication, explicit sender linking or step-up, per-owner aliases/nonces, quoted-text and attachment limits, bounce/auto-reply/unsubscribe loop suppression, and bounded retention;
 - official WhatsApp adapter only if Meta has supplied the required Third Party Agent/provider admission and test tenant; otherwise omit it from the release claim;
 - App Store submission disclosures and HealthKit/privacy compliance evidence distinct from device-function evidence;
 - deletion/export, incident controls, observability and cohort acceptance;
 - cost/concurrency/backpressure/load proof.
 
-**Exit:** advertised surfaces pass real test tenants/devices and an owner can trace and revoke every connection/action.
+**Exit:** advertised surfaces pass real test tenants/devices and an owner can trace and revoke every connection/action. Two owners racing the same provider subject produce one recoverable claim; partial activation, expiry, revoke/relink, recycled-number, and late-callback cases cannot inherit prior authority. Email spoofing, alias/nonce replay, oversized/hostile attachment, quoted-instruction, bounce/auto-reply loop, unsubscribe, and deletion tests pass.
 
 ### G9 — Work-agent bridge
 
@@ -976,6 +1016,9 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 11. **Deletion:** deleted memory is absent from canonical store, indexes, summaries, prompt caches, and future jobs.
 12. **Cross-surface race:** simultaneous app/channel messages produce one ordered owner history.
 13. **Pattern correction:** a supported health association loses eligible evidence or the user corrects context; it becomes corrected/insufficient/dismissed and never resurfaces from memory.
+14. **Publication restart:** the process dies after staging/reservation with no client retry; exact input/output bytes recover or terminate honestly and the next turn remains live.
+15. **Gmail draft race:** another client changes the draft after approval; Waldo can send only the frozen approved MIME snapshot and preserves the external draft change.
+16. **Routine recovery:** an alarm is duplicated, missed, or delivered across DST/travel; one occurrence advances within budget and remains inspectable/cancellable.
 
 ### 17.2 Metrics
 
@@ -984,12 +1027,14 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 - unauthorized action/data-disclosure rate;
 - approval precision and unnecessary-interruption rate;
 - preference recall, update, correction, deletion, and abstention;
+- temporal memory update accuracy and correct abstention under missing/contradictory evidence;
 - source citation/provenance accuracy;
 - duplicate-effect and indeterminate-effect resolution;
+- no-progress loop detection plus aggregate agent/tool/verifier/recovery budget adherence;
 - user-rated usefulness, trust, personality consistency, and controllability;
 - latency, tokens, browser minutes, connector/API cost, and cost per verified task.
 
-Use same-model ablations: no durable memory; memory without health; complete Waldo. Keep held-out histories and repeated trials. A finite green eval suite is not universal safety proof.
+Predeclare tasks, trial counts, denominators, severe-failure rules, and source-of-record graders. Preserve bounded trajectories—not just final prose—so tool choice, approval, reconciliation, resume, and no-progress failures are diagnosable. Use same-model ablations: no durable memory; memory without health; complete Waldo. Keep held-out histories and repeated trials. Long-horizon memory fixtures cover temporal updates and abstention, but recall benchmarks do not prove deletion or tenant isolation. A finite green eval suite is not universal safety proof.
 
 ### 17.3 Owner-run Instinct parity harness
 
@@ -1040,7 +1085,7 @@ Before physical-device work:
 | Gate/risk | Current state | Mitigation |
 |---|---|---|
 | Google restricted/sensitive scopes and verification | not proved; Gmail metadata/read/compose are restricted, and server storage/transmission ordinarily triggers annual assessment | begin G0 Limited Use, exact-scope justification, verified domain/privacy/deletion materials, test-user plan, restricted-scope review and CASA readiness; no external-beta Gmail claim before approval |
-| model/gateway processing of personal source data | DPA/ZDR/region/retention and payload-log-off proof not completed in this pass | default-deny route-by-data-class matrix; synthetic log canary; no mail/meeting/derived-health content until admitted; fallback cannot widen egress |
+| model/gateway processing of personal source data | DPA/ZDR/region/retention and payload-log-off proof not completed in this pass | default-deny route-by-data-class matrix; bounded synthetic canary for observable capture paths plus separate provider contractual/retention evidence; no mail/meeting/derived-health content until admitted; fallback cannot widen egress |
 | WhatsApp general AI eligibility in India | **currently blocked by the public Business Solution Terms** unless Meta admits Waldo to the Third Party Agent path or authoritatively confirms another eligible route | seek provider admission/test tenant; app/email fallback; no workaround or advertised WhatsApp support |
 | Apple signing | account exists per owner; zero local identities observed | configure Xcode team/certificates/profiles before physical proof |
 | HealthKit/App Store compliance | not proved | purpose-specific usage text; privacy policy/App Privacy disclosure; permitted cloud/LLM review; deletion/export; no ads, data-broker sale, or marketing use of HealthKit data |
@@ -1092,6 +1137,7 @@ Accepted ADRs, universal rule mirrors, current contributor/verification method, 
 - [Backend main `e91bee0`](https://github.com/Pin4sf/waldo-backend/tree/e91bee017b0c36759cbfda1353fc11c73e3afe0a)
 - [App main `7218c18f`](https://github.com/Pin4sf/waldo-app/tree/7218c18fed8b874492e3831bbb5bd1e1c58abe58)
 - [Brain personal-agent launch contract `be08c4a`](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md)
+- [Brain PR #31 research/review record `43be41e`](https://github.com/Pin4sf/waldo-brain/pull/31), including the [PR #138 architecture review](https://github.com/Pin4sf/waldo-brain/blob/43be41e1a24af5d901eb6b68d9a63e1c32dfa6f7/03-References/research/waldo-backend-pr138-architecture-review-2026-09-18.md) and [harness-engineering source/adoption register](https://github.com/Pin4sf/waldo-brain/blob/43be41e1a24af5d901eb6b68d9a63e1c32dfa6f7/03-References/research/waldo-harness-engineering-lessons-and-adoption-2026-09-18.md); evidence only, not live product authority
 - [Backend entrypoint reconciliation `c91fa51`](https://github.com/Pin4sf/waldo-backend/commit/c91fa51)
 - [App documentation reconciliation `97b43ff2`](https://github.com/Pin4sf/waldo-app/commit/97b43ff2)
 
@@ -1102,7 +1148,8 @@ Accepted ADRs, universal rule mirrors, current contributor/verification method, 
 - Meta Muse: [announcement](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) and [product](https://ai.meta.com/muse/)
 - Grok Bot: [official overview](https://docs.x.ai/grok-bot/overview), [collaboration](https://docs.x.ai/grok-bot/chat-and-collaboration), [computer/apps](https://docs.x.ai/grok-bot/computer-and-apps), and [skills/routines](https://docs.x.ai/grok-bot/skills-routines-and-automations)
 - Poke: [official docs](https://poke.com/docs)
-- Folk Assistant: [official help](https://help.folk.app/en/articles/12460796-introducing-assistant)
+- folk Personal AI: [official product](https://www.folk.com/)
+- folk CRM Assistant: [official help](https://help.folk.app/en/articles/12460796-introducing-assistant)
 - Hermes Agent: [official docs](https://hermes-agent.nousresearch.com/docs/)
 - OpenClaw: [official docs](https://docs.openclaw.ai/)
 - Swiggy MCP: [builder docs](https://mcp.swiggy.com/builders/docs/)
@@ -1114,14 +1161,19 @@ Accepted ADRs, universal rule mirrors, current contributor/verification method, 
 - Google Workspace user-data policy: [official policy](https://developers.google.com/workspace/workspace-api-user-data-developer-policy)
 - Google API Services User Data Policy and Limited Use: [official policy](https://developers.google.com/terms/api-services-user-data-policy)
 - Google Calendar OAuth scopes: [official scope table](https://developers.google.com/workspace/calendar/api/auth)
+- Google Calendar client-chosen event IDs: [official event-creation guide](https://developers.google.com/workspace/calendar/api/guides/create-events)
+- Google Calendar conditional writes and `412`: [official versioned-resources guide](https://developers.google.com/workspace/calendar/api/guides/version-resources)
 - Gmail OAuth scopes: [official scope table](https://developers.google.com/workspace/gmail/api/auth/scopes)
 - Gmail message search/list caveat: [official API method](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list)
+- Gmail draft replacement/send semantics: [official draft guide](https://developers.google.com/workspace/gmail/api/guides/drafts)
 - Gmail draft send authorization: [official API method](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/send)
+- Gmail immutable message send: [official API method](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send)
 - Gmail draft deletion: [official API method](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/delete)
 - Google Workspace MCP servers: [Developer Preview program](https://developers.google.com/workspace/preview)
 - Nango: [official guides](https://docs.nango.dev/guides)
 - Composio: [official docs](https://docs.composio.dev/)
 - Cloudflare browser tooling: [official docs](https://developers.cloudflare.com/agents/tools/browser/)
+- Cloudflare Durable Object alarms: [official docs](https://developers.cloudflare.com/durable-objects/api/alarms/)
 - Cloudflare AI Gateway payload logging: [official docs](https://developers.cloudflare.com/ai-gateway/observability/logging/)
 - OpenAI computer use: [official guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
 - Apple HealthKit setup: [official docs](https://developer.apple.com/documentation/healthkit/setting-up-healthkit)
@@ -1135,5 +1187,7 @@ Accepted ADRs, universal rule mirrors, current contributor/verification method, 
 - Apple WatchConnectivity: [official docs](https://developer.apple.com/documentation/watchconnectivity)
 - WhatsApp Business Solution Terms: [official terms](https://www.whatsapp.com/legal/business-solution-terms)
 - WhatsApp Third Party Agent user terms: [official terms](https://www.whatsapp.com/legal/third-party-agents-terms)
+- LongMemEval: [research paper](https://arxiv.org/abs/2410.10813)
+- Clawdrain: [research paper](https://arxiv.org/abs/2603.00902)
 
 Recheck time-sensitive terms, APIs, model availability, prices, and platform eligibility before implementation or launch.
