@@ -178,18 +178,18 @@ This table compares documented product shapes, not measured winners. A marketing
 | [Grok Bot](https://docs.x.ai/grok-bot/overview) | persistent named teammates, visible tool activity, steer/stop, cloud computer, teachable skills and routines | explicit approval boundaries, source/audit guidance, test-before-enable, routine history and secure takeover | all Bots in one account share files, browser sessions and CLI credentials; account-wide connector availability is not purpose isolation |
 | Waldo current plan | governed personal continuity, compact memory, exact effects, Trusted Relationships, health-aware planning, India-specific corridors | typed proposals/approvals, immutable send snapshot, source read-back, receipts, account epochs, incremental grants and deletion proofs | most advantages are plan/contracts rather than accepted runtime evidence; the intended user experience needs a simpler visible shape |
 
-### Important legal boundary for competitive testing
+### Competitive-study method and risk boundary
 
-The existing Waldo plan proposes an owner-run Instinct parity harness. The current [Instinct Terms of Service](https://instinct.com/terms) prohibit use for benchmarking and development of competing products. The current [Poke Terms of Service](https://poke.com/terms) likewise prohibit use in competition, benchmarking, or competitive analysis. Possession of an ordinary paid or invited account does not remove those restrictions.
+The current [Instinct Terms of Service](https://instinct.com/terms) prohibit use for benchmarking and development of competing products. The current [Poke Terms of Service](https://poke.com/terms) likewise prohibit use in competition, benchmarking, or competitive analysis. Those terms are relevant collection-method and publication risks, but recording them must not erase competitive study from Waldo's product process.
 
-Therefore:
+The competitive lab should instead keep four evidence lanes distinct:
 
-- do not run or publish systematic Instinct or Poke head-to-head benchmarks without written vendor permission or counsel-confirmed authority;
-- do not scrape, automate, prompt-extract, load-test, or use non-public outputs for product development;
-- use public first-party material and owner-supplied ordinary-use observations only as product signals, not parity proof; and
-- keep Waldo's internal release evals scenario-based and vendor-independent. If a competitor allows a comparison in writing, add it as a separately authorized evidence lane.
+- public-source teardown establishes documented capabilities and hypotheses;
+- owner-operated black-box study records observable flows against synthetic data from an account the owner controls;
+- open/self-hosted study traces Hermes/OpenClaw-class behavior from public code and docs; and
+- clean-room Waldo reproduction converts observed outcomes into independently authored fixtures and contracts.
 
-This is a required correction to the current plan's §17.3 framing, not a reason to weaken Waldo's internal quality bar.
+Each record should state access method, product/build/date, terms and collection risks, prompts/inputs, permissions, screenshots/traces, failures, latency, interaction count, and provider source-of-record result. Never copy private code, credentials, proprietary prompts, hidden data, or another person's content; never bypass access controls or disrupt a service. Terms inform the owner's risk decision but do not become a product-research veto.
 
 ## Where Waldo can be the better product
 
@@ -303,7 +303,7 @@ Add:
 
 ## Joined product-experience gate
 
-Before founder alpha or personal beta is called competitive, run the same internal synthetic scenario pack against successive Waldo candidates. This is the legal and reproducible benchmark even when competitor terms forbid head-to-head testing.
+Before founder alpha or personal beta is called competitive, run the same synthetic scenario pack against successive Waldo candidates and every available comparable peer surface. Keep public-source, black-box, open/self-hosted, and clean-room evidence labelled separately and bind every parity statement to the named product/build/date and scenarios actually run.
 
 Measure:
 
@@ -388,5 +388,5 @@ Waldo can be better if it refuses the false choice between intimacy and governan
 - The authenticated Moonshot iPhone beta, Google/Apple sign-in, stored data and connector actions were not accessed.
 - `door.moonshot.computer` was not retrievable through the text-fetch path used for this review; no login was attempted.
 - The report treats Moonshot's privacy policy as a first-party commitment and architecture description, not independent verification.
-- Competitor ordinary-use accounts were deliberately not used for benchmarking, especially because Instinct and Poke currently prohibit benchmarking/competitive analysis in their terms.
+- No authenticated competitor account was used in this specific public-source review. Later owner-run black-box observations must be recorded as a separate evidence lane rather than retrospectively attributed to this document.
 - “Not established” means absent from the checked public sources; it does not prove that the feature does not exist.

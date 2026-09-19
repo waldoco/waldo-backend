@@ -2,7 +2,7 @@
 
 **Status:** proposed canonical backend roadmap; review before merge
 
-**Updated:** 2026-09-18
+**Updated:** 2026-09-19
 
 **Backend baseline:** `origin/main@e91bee017b0c36759cbfda1353fc11c73e3afe0a`
 
@@ -295,6 +295,45 @@ For founder alpha and personal beta, Waldo therefore has no 24/7 microphone mode
 
 Waldo should match these outcomes, not copy Instinct's permission breadth or vault implementation.
 
+### 4.6 Final experience thesis and build order
+
+The category leaders expose different parts of one winning loop:
+
+| Product signal | Experience lesson for Waldo | Build response |
+|---|---|---|
+| Instinct | one recognizable person, proactive follow-through, direct contact, broad life/work context, trusted-person coordination | make personality, continuity, follow-up, app/APNs presence, and Trusted Relationships first-class product behavior rather than settings or architecture prose |
+| Moonshot | named personal objects and value before a new prompt | ship `Today`, `Open Loops`, Memory, standing reminders, and receipts without using ambient surveillance as the shortcut |
+| Poke | the assistant feels like a contact and integrations start from natural language/recipes | keep the conversation as the primary interface; turn a successful one-time task into an inspectable repeatable routine rather than exposing a workflow builder first |
+| Meta Muse | persistent background work, browser reach, goals, visible approvals and audit | provide Activity, plan/progress, approval, takeover, and read-back UX; buy the isolated browser substrate after API corridors work |
+| Grok Bot | visible tool activity, steer/stop, persistent computer, test-before-enable skills/routines | expose running state and stop/steer early; require one safe manual run before automation; do not copy account-wide shared-computer credentials |
+| Hermes / OpenClaw | broad tools, memory, channels, skills, scheduling, self-hostable/open runtime patterns | reuse or buy tool/browser/scheduler/connectivity substrate where it passes Waldo adapters; keep identity, memory admission, authority, effects, receipts, relationship, and health semantics Waldo-owned |
+
+The shortest competitive build is one closed daily loop, not the full connector list:
+
+```text
+talk to Waldo
+-> Waldo remembers a correctable fact or commitment
+-> Today/Open Loops reflects it with Calendar context
+-> Waldo follows up at the right time through app/APNs
+-> the owner can steer, stop, snooze, correct, revoke, or inspect why
+-> any Calendar effect is approved, read back, and receipted
+```
+
+Build and release in this order:
+
+1. **G0 truth and owner isolation.** Remove fictional success, resolve authority/documentation conflicts, bind every state path to the owner/account generation, and make data/revoke/delete state inspectable.
+2. **G1 relationship core.** Real streaming conversation, recognizable personality, compact provenance-bearing memory, correction/forget, and visible stop/steer in the real app.
+3. **G2 daily context.** Optional Calendar-only connection, cited `Today`, availability, exact propose/approve/apply/read-back, and Open Loops.
+4. **G2a proactive return loop.** Explicit commitments, reminders, quiet hours, APNs, `why now`, done/snooze/dismiss/incorrect/dial-down, Activity history, and test-before-enable routines. Founder alpha begins here because this is the first build that behaves like an agent between prompts.
+5. **Parallel depth after founder alpha:** G4 Gmail/selected Drive/Granola context; G5 HealthKit planning on physical devices; and G3 Trusted Relationships. These lanes reuse the same memory, approval, scheduling, Activity, and receipt surfaces and cannot create alternate agent loops.
+6. **G6/G7 action reach.** Add one official India corridor, then a replaceable managed browser fallback for unsupported sites. APIs remain preferred; login/payment uses takeover and exact approval.
+7. **G8 distribution and joined release.** Add inbound email and independently revocable presences; ship WhatsApp only on a supported provider path. Join app, push, email, and later channels into one ordered owner history.
+8. **G9 work bridge.** Let Kennel consume the same owner authority, memory/commitment, and receipt contracts only after the personal loop is operationally stable.
+
+Run the §17.3 competitive lab throughout. A benchmark finding may reorder a not-yet-started slice when it shows a materially better user outcome, but it cannot silently bypass owner isolation, exact approval, correction/deletion, source verification, or the zero-critical-failure floor.
+
+The supporting [peer-experience reverse-engineering and build-order record](../research/WALDO_PEER_EXPERIENCE_REVERSE_ENGINEERING_AND_BUILD_ORDER_2026-09-19.md) preserves the product-by-product observations, inferences, unknowns, first-party sources, emulate/reject/buy/build decisions, and proposed measurement exits behind this sequence.
+
 ## 5. Definition of done
 
 The list below defines the feature-complete competitive target. Passing it in a named test environment creates a beta/release candidate, not production proof. A public release additionally requires staging, physical-device/channel acceptance, deletion/recovery exercises, and small-cohort operational evidence for every advertised surface.
@@ -317,7 +356,7 @@ The list below defines the feature-complete competitive target. Passing it in a 
 
 ### Release cuts
 
-- **Founder alpha — after G2:** real app conversation, reviewed personality voice pack (not voice I/O), inspectable/correctable memory, Connection controls, and the Google Calendar read/propose/apply/read-back corridor for a tiny internal owner set. This is the earliest useful Waldo and makes no HealthKit, Granola, Swiggy, WhatsApp, or broad parity claim.
+- **Founder alpha — after G2a:** real app conversation, reviewed personality voice pack (not voice I/O), inspectable/correctable memory, Connection controls, the Google Calendar read/propose/apply/read-back corridor, Open Loops, bounded reminders/proactivity, Activity, and owner-bound APNs for a tiny internal owner set. This is the earliest Waldo that can return usefully between prompts and makes no HealthKit, Granola, Swiggy, WhatsApp, or broad parity claim.
 - **Personal beta — after G3 + G4 + G5 and the external-beta privacy gate:** add Trusted Relationships, bounded Gmail/selected Drive, owner-bound APNs proactivity, physical-device health proof, and the deletion/revocation/control surface. Before inviting any non-founder, complete ADR-0073 age/eligibility and geo policy, per-source/purpose consent, DPIA and processor/DPA inventory, privacy disclosures, export/deletion exercise, incident/breach plan, and launch-region decision. Granola is enabled only for accounts/plans with verified API access; its absence does not block testing the rest of this cut and is not silently replaced by scraping.
 - **India beta — after G6:** add the supported Swiggy corridor for an eligible test cohort. Production-access lead time cannot block founder alpha or personal beta.
 - **Competitive multichannel release candidate — after G5b and G8:** all applicable P0 outcomes, including supported health patterns, meeting, and India corridors, pass in staging and on real devices/accounts; email is joined; WhatsApp is included only with official provider admission and otherwise is not advertised. Promotion to public release still requires the operational proof above.
@@ -779,7 +818,7 @@ Define `BrowserExecutionPort` with:
 
 A workspace, working directory, container label, or vendor “session” is organization—not proof of isolation. G7 must separately prove filesystem, process, network, credential, clipboard, download/upload, and cross-session boundaries; absolute paths or inherited host access fail the gate even if execution stayed inside the named workspace during a happy-path test.
 
-Pilot Cloudflare's browser/agent tooling because the backend already runs on Cloudflare, but keep Browserbase/Stagehand or another managed provider behind the same port. Promote a vendor only after isolation, authenticated-session cleanup, prompt-injection resistance, receipt quality, cancellation, latency, and cost pass. Computer-use model output never bypasses this port.
+Pilot Cloudflare's browser/agent tooling because the backend already runs on Cloudflare, but keep Browserbase/Stagehand or another managed provider behind the same port. A timeboxed OpenClaw/Hermes adapter study may reuse their browser, channel, or execution substrate where license, isolation, secret handling, and operational recovery pass; their memory, permissions, schedules, and product model never become Waldo authority. Promote a substrate only after isolation, authenticated-session cleanup, prompt-injection resistance, receipt quality, cancellation, latency, and cost pass. Computer-use model output never bypasses this port.
 
 APIs remain preferred for Calendar, Gmail, Granola, and Swiggy. Browser fallback is lower assurance and visibly labeled.
 
@@ -882,11 +921,13 @@ Do not delete runtime code solely because it is frozen. Runtime removal requires
 
 These are dependency gates, not one strictly serial queue or substitute products. Time ranges are planning ranges for one focused implementation lane with agent/reviewer support; they exclude external OAuth/platform approval time.
 
-After G0, run three bounded lanes in parallel:
+After G0, run one launch spine plus two bounded readiness lanes:
 
-- **agent corridor:** G1, then G2 Calendar; after G2, run G3 Trusted Relationships and G4 bounded Gmail/Drive/meetings/APNs as disjoint parallel lanes, and join them with G5 for personal beta;
+- **agent launch spine:** G1 conversation/memory, G2 Calendar/Today, then G2a Open Loops/proactivity/APNs/Activity; release the founder alpha only after the joined daily loop passes;
 - **Apple truth lane:** repair account/consent partitioning, truthful HealthKit states, native tests, simulator builds, signing, and physical-device fixtures, joining the corridor at G5; and
 - **external access lane:** probe/apply for Google verification, Granola plan/webhook access, Swiggy production access, official WhatsApp eligibility, and Apple certificates/profiles. This lane may prove availability but cannot claim product integration.
+
+After G2a, run G3 Trusted Relationships, G4 bounded Gmail/selected Drive/meetings, and G5 physical-device health as disjoint parallel depth lanes. Each must reuse G1 memory, G2 connector/effect, and G2a scheduling/Activity surfaces. G6/G7 action reach follows one proved API corridor; G8 joins channels; G9 attaches the later work-agent surface.
 
 Adapter contracts, provider sandboxes, and conformance fixtures may start in the external lane once their writer and authority boundaries are fixed. No lane may publish a user-visible success path before the G1 conversation/receipt corridor exists, and every join reruns cross-owner, revocation, retry, and deletion tests.
 
@@ -927,11 +968,11 @@ Adapter contracts, provider sandboxes, and conformance fixtures may start in the
 - digest-bound per-turn capability resolver enforced again at dispatch;
 - reviewed voice pack and user style settings;
 - if reviewed static procedures are used, separate acquisition, scan/review, installation, activation, execution, update, and emergency revocation; record source/license/version plus a recursive digest over instructions, scripts, references, assets, and pinned dependencies, compatibility/tool requirements, evaluation, and sandbox/egress needs; popularity, provenance labels, or a scanner result are evidence but never proof of safety, progressive disclosure and a file format never grant execution authority, and resume rejects a revoked, changed, or incompatible version;
-- Profile Claim propose/inspect/correct/delete, with source, evidence/status, purpose, freshness, “why Waldo knows this,” and a direct correct/forget path on every durable claim;
+- Profile Claim propose/inspect/correct/delete, with source, evidence/status, purpose, freshness, “why Waldo knows this,” and a direct correct/forget path on every durable claim; forget preview states what is deleted, retained for a bounded reason, rebuildable, provider-held, or backup-pending;
 - conversational quality evaluation for warmth, specificity, uncertainty, stable style, interruption recovery, and useful initiative, with explicit failures for clinginess, coercive attachment, fabricated intimacy, invented emotional insight, or confident personality inference from thin evidence;
 - generated app client and no direct legacy success path.
 
-**Exit:** a new owner gets a useful first session with no connector. Real multi-turn conversation survives restart, correction, forget/delete, contradiction, mid-stream cancellation, unsafe output, and provider failure without duplicate, resurrected, or fictional output. Every retained claim can answer why/how it was learned, current status, purpose, and freshness. A stopped turn publishes neither success nor later side effects. Fault injection kills the process after input stage, DO reservation, input commit, assistant stage, publication intent, and assistant commit, then restarts without client retry; changed-byte replay, revoke/delete at every boundary, orphan expiry, and later-turn liveness pass without a regenerated answer or wedged sequence. G0's A→B isolation floor passes on the real conversation path. A pure conversation exposes zero effect/MCP tools; dispatch rejects any operation absent from the turn manifest; lazy discovery cannot widen or mutate the frozen manifest. Procedure fixtures additionally prove recursive-digest mismatch, hidden script/resource substitution, dependency drift, activation/revocation races, output/context amplification, and aggregate token/tool/verifier/retry budget enforcement. Blinded conversation review has no critical manipulation/fabricated-intimacy failure and meets predeclared usefulness, personality, and controllability thresholds.
+**Exit:** a fresh install reaches a verified useful response with no connector and without exposing provider, tool, gateway, or workflow-builder complexity. Real multi-turn conversation survives restart, correction, forget/delete, contradiction, mid-stream cancellation, unsafe output, and provider failure without duplicate, resurrected, or fictional output. Every retained claim can answer why/how it was learned, current status, purpose, and freshness; a forget preview and later verification match the actual deletion lineage. A stopped turn publishes neither success nor later side effects. Fault injection kills the process after input stage, DO reservation, input commit, assistant stage, publication intent, and assistant commit, then restarts without client retry; changed-byte replay, revoke/delete at every boundary, orphan expiry, and later-turn liveness pass without a regenerated answer or wedged sequence. G0's A→B isolation floor passes on the real conversation path. A pure conversation exposes zero effect/MCP tools; dispatch rejects any operation absent from the turn manifest; lazy discovery cannot widen or mutate the frozen manifest. Procedure fixtures additionally prove recursive-digest mismatch, hidden script/resource substitution, dependency drift, activation/revocation races, output/context amplification, and aggregate token/tool/verifier/retry budget enforcement. Blinded conversation review has no critical manipulation/fabricated-intimacy failure and meets predeclared usefulness, personality, and controllability thresholds.
 
 ### G2 — Google Calendar vertical slice (4–8 days)
 
@@ -948,6 +989,21 @@ Adapter contracts, provider sandboxes, and conformance fixtures may start in the
 Proxy adversarial tests cover bearer exfiltration, arbitrary URL/path injection, SSRF, resource/account substitution, operation confusion (including draft-to-send), manifest/digest substitution, replay/expiry, response oversize/secret reflection, revoke during execution, and provider commit followed by transport loss.
 
 **Exit:** a zero-connector owner can opt into Calendar only, receive a source-cited `Today` view, inspect the exact approval, apply one primary-calendar owner-only event change, and revoke the connection without a hidden Gmail/Drive/Contacts grant. The effect is source-verified and retry-safe in a test account across timezone/DST, response loss, duplicate create, external edit/delete/move, ambiguous absence, and stale-etag `412`; a `412` produces a new proposal and never overwrites. Account switching during OAuth callback, read, and write proves zero cross-owner display or effect. Predeclared trust-speed thresholds pass without an unauthorized, ambiguous, or falsely completed action.
+
+### G2a — Open Loops, proactivity, Activity, and APNs (3–6 days)
+
+- explicit commitments created from an owner request, accepted memory proposal, or Calendar outcome; no ambient/inferred promise mining;
+- one reminder/follow-up engine with stable occurrence identity, timezone/travel, overlap, lateness/misfire, expiry, bounded recovery, and inspect/edit/pause/resume/cancel/history controls;
+- deterministic/no-model execution for reminders and watchdogs that need no judgment; separate execution and delivery status, owner-visible run history, no recursive routine creation, and dead-letter/watchdog repair after alarm retry exhaustion;
+- every proactive item states `why now` and the admitted sources, and offers done, snooze, dismiss, incorrect, and dial-down/off controls that update future behavior without silently creating durable personality claims;
+- owner-bound APNs token registration/rotation/revocation, minimal lock-screen payloads, quiet hours, and deep links to canonical state;
+- one joined Activity surface for proposal, approval, running/tool activity, stop, waiting, reconciliation, completion, delivery, failure, revoke, and deletion; chat is not the only audit surface;
+- manual-first routine creation: prove one safe occurrence, then show owner, schedule/time zone, input source, expected result, approval boundary, missing/stale-data behavior, next run, and notification plan before enablement;
+- every enabled obligation exposes owner, purpose, source, destination, cadence/event, current authority, expiry, cancel control, last result, next run, and delivery proof; a chat mention alone never grants recurring authority;
+- no-change runs remain silent and leave an inspectable no-op record rather than manufacturing engagement;
+- explicit `Stop`/pause semantics across scheduler, run, delivery, and publication so a cancelled occurrence cannot later emit success or a stale notification.
+
+**Exit:** an owner creates one Open Loop in conversation, sees it alongside Calendar context in `Today`, receives exactly one quiet-hours-compliant APNs follow-up with a source-grounded `why now`, resolves it through done/snooze/dismiss/incorrect/dial-down, and can inspect or stop every state in Activity. Disabled, quiet, and no-change states produce zero notifications. Recovery distinguishes what was attempted, what external effect occurred, available evidence, Verification, Acceptance, and the remaining Open Loop. Tests cover DST gaps/repeats, travel, overlap, pause/reschedule/cancel in flight, missed/lost/duplicate alarm delivery, restart, alarm retry exhaustion, no-action decisions, delivery failure after successful execution, recursive-schedule rejection, stale notification deep links, and recovery that cannot evade the aggregate budget. Predeclared helpfulness/nuisance thresholds pass with zero critical authority, disclosure, duplicate-delivery, or false-success failures.
 
 ### G3 — Trusted Relationships (5–10 days)
 
@@ -966,21 +1022,17 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 
 **Exit:** two test owners schedule/reschedule or decline without sharing event titles, memory, inferred profiles, or authority. Wrong-person acceptance, recycled identity, forwarded invite, compromised device, replay, blocking, harassment/report, one-sided deletion, and one-sided revocation fixtures preserve the same boundary and leave an inspectable receipt. Public non-user/recipient handling language matches the tested protocol.
 
-### G4 — Gmail, selected Drive, meetings, and proactivity (5–10 days)
+### G4 — Gmail, selected Drive, and meeting context (5–10 days)
 
 - Gmail defaults to metadata/snippet search; opening a selected thread/body is a separately visible read and attachments require their own explicit admission; send uses the immutable approved RFC 5322/MIME snapshot through `users.messages.send`, preserves the mutable provider draft, and remains a separate exact approval outside model prose with exact account, recipients, subject, body, attachments, authority expiry, and changed-since-review invalidation;
 - selected Drive files only;
 - Granola read-only retrieval with citations, signed-webhook admission, and bounded backfill;
-- explicit follow-up/reminder/quiet-hours engine with stable occurrence identity, timezone/travel, overlap, lateness/misfire, expiry, bounded recovery, and inspect/edit/pause/resume/cancel/history controls;
-- every proactive item states `why now` and the sources used, and offers done, snooze, dismiss, incorrect, and dial-down controls that update future behavior without silently creating durable personality claims;
-- deterministic/no-model execution for reminders and watchdogs that need no judgment; separate execution and delivery status, owner-visible run history, no recursive routine creation, and dead-letter/watchdog repair after alarm retry exhaustion;
-- waiting-reply detection only through bounded scheduled re-reads of owner-admitted exact Gmail thread IDs; no general inbox monitor or implied watch stream;
-- owner-bound APNs token registration/rotation/revocation, minimal lock-screen payloads, quiet hours, and deep links to canonical state;
+- waiting-reply detection only through bounded scheduled re-reads of owner-admitted exact Gmail thread IDs and the G2a engine; no general inbox monitor or implied watch stream;
 - connector availability and revocation UX.
-- one joined Activity surface shows proposal, approval, running/tool activity, stop, reconciliation, completion, delivery, failure, revoke, and deletion states; no second hidden automation history is treated as product truth;
-- automation remains manual-first: the owner can test one occurrence and inspect its exact data/tool/notification plan before enabling a routine; voice/transcription/inference/analytics subprocessors and their retention/training posture are visible before sensitive data is admitted.
+- Gmail/meeting occurrences reuse G2a's manual-first routine, Activity, stop, delivery, and notification contracts rather than creating connector-specific automation state;
+- voice/transcription/inference/analytics subprocessors and their retention/training posture are visible before sensitive data is admitted.
 
-**Exit:** Waldo prepares for a meeting, drafts a follow-up, and tracks/notifies it without silently sending, leaking private notification content, or retaining unrelated content. Every proactive item has source-grounded `why now` and working done/snooze/dismiss/incorrect/dial-down controls; disabled/quiet hours produce zero notifications. Predeclared nuisance/helpfulness thresholds pass with zero critical authority, disclosure, or false-success failures. The Gmail suite edits a provider draft after the last read, substitutes MIME/header/recipient/attachment data, races revoke, simulates provider success plus response loss, and proves the approved immutable message is the only possible send while external draft edits remain intact. Routine tests cover DST gaps/repeats, travel, overlap, pause/reschedule/cancel in flight, missed/lost/duplicate alarm delivery, alarm retry exhaustion, no-action decisions, delivery failure after successful execution, recursive-schedule rejection, and recovery that cannot evade the aggregate budget. APNs provider acceptance is not misreported as user display or acknowledgement. One manual test occurrence is inspectable before routine enablement, and Activity reconciles execution, delivery, revoke, and deletion to their source records.
+**Exit:** Waldo prepares for a meeting, drafts a follow-up, and tracks/notifies it through G2a without silently sending, leaking private notification content, or retaining unrelated content. Every proactive item retains source-grounded `why now` and working controls. The Gmail suite edits a provider draft after the last read, substitutes MIME/header/recipient/attachment data, races revoke, simulates provider success plus response loss, and proves the approved immutable message is the only possible send while external draft edits remain intact. Waiting-reply occurrences inherit and pass G2a's schedule/delivery/recovery suite. APNs provider acceptance is not misreported as user display or acknowledgement, and Activity reconciles connector execution, delivery, revoke, and deletion to their source records.
 
 ### G5 — Health-aware planning on physical devices (7–14 days)
 
@@ -1019,6 +1071,7 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 - vendor spike against `BrowserExecutionPort`;
 - isolated sessions, allowlist, trace/redaction, takeover, budgets and cleanup;
 - prompt-injection and authenticated-session tests;
+- effect-specific approval for communication, purchase, deletion, publication, authentication, permission change, or external mutation; no normal-path `approve all`, permanent desktop grant, or provider `--yolo` equivalent;
 - one non-payment use case, then one user-takeover transaction.
 
 **Exit:** a failed/ambiguous browser run cannot be reported as done or repeated blindly.
@@ -1029,6 +1082,7 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 - add the protected `PresenceClaimRegistry` as the sole global reservation/activation/revoke-generation writer for `(provider namespace, provider subject)` while owner DOs remain the permission authority; recover partial reservations and require explicit step-up for recycled identities;
 - realtime/app delivery hardening and cross-surface ordering;
 - inbound email with provider webhook authentication, explicit sender linking or step-up, per-owner aliases/nonces, quoted-text and attachment limits, bounce/auto-reply/unsubscribe loop suppression, and bounded retention;
+- channel pairing proves who may communicate through that presence but never grants authority over another connector, device, relationship, workspace, or shared channel; cross-presence effects require the same owner/capability checks as the app;
 - official WhatsApp adapter only if Meta has supplied the required Third Party Agent/provider admission and test tenant; otherwise omit it from the release claim;
 - App Store submission disclosures and HealthKit/privacy compliance evidence distinct from device-function evidence;
 - deletion/export, incident controls, observability and cohort acceptance;
@@ -1082,11 +1136,18 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 
 Predeclare tasks, trial counts, denominators, severe-failure rules, and source-of-record graders. Run every trial from an isolated clean environment and report both aggregate success and consistency measures such as `pass^k` for customer-facing flows where every repeated attempt must succeed. Bound evaluator/repair iterations and include their spend in the task budget. Preserve bounded trajectories—not just final prose—so tool choice, approval, reconciliation, resume, and no-progress failures are diagnosable. Use same-model ablations: no durable memory; memory without health; complete Waldo. Keep held-out histories and repeated trials. Long-horizon memory fixtures cover temporal updates and abstention, but recall benchmarks do not prove deletion or tenant isolation. A finite green eval suite is not universal safety proof.
 
-### 17.3 Peer-derived internal experience gate
+### 17.3 Competitive reverse-engineering and parity lab
 
-Public first-party pages, policies, documentation, and owner-supplied ordinary-use screenshots establish product signals, not parity. As checked on 2026-09-19, [Instinct's Terms](https://instinct.com/terms) prohibit benchmarking, developing competing products/services, and using the service to improve or train other AI; [Poke's Terms](https://poke.com/terms) prohibit competitive analysis and benchmarking. An authorized account is therefore not sufficient authority for a systematic head-to-head evaluation. Do not scrape, reverse engineer, extract prompts, automate/load-test a competitor, or run a structured comparison through an account without written vendor permission or counsel-confirmed authority. Ordinary-use observations remain dated qualitative evidence only.
+Waldo should study, benchmark, and reverse-engineer the observable product experience of serious peers. That work is not removed merely because a vendor publishes restrictive terms. Record applicable account terms, access method, data risk, and collection constraints in the benchmark record so the owner can make an informed decision; treat them as a method/risk input, not as a substitute for product judgment or an automatic roadmap veto.
 
-Instead, run a vendor-independent synthetic fixture pack derived from the user outcomes competitors make legible:
+Use four evidence lanes and never merge their claims:
+
+1. **Public-source teardown:** first-party product pages, documentation, policies, release notes, demos, screenshots, and public code establish documented capability and intended experience.
+2. **Owner-operated black-box study:** with an account the owner controls, run ordinary user-visible flows against synthetic data; record the dated product state, prompts, clicks, permissions, timing, outputs, corrections, failures, and source-of-record effects.
+3. **Self-hosted/open implementation study:** install or inspect public source and docs for Hermes/OpenClaw-class systems; trace tool, memory, schedule, browser, channel, and recovery behavior without treating their architecture as Waldo's product architecture.
+4. **Clean-room Waldo reproduction:** translate observed user outcomes into independently written fixtures and contracts. Do not copy private code, credentials, proprietary prompts, hidden data, or another user's content; do not bypass access controls, disrupt a service, or claim an unobserved internal mechanism.
+
+The core cross-product fixture pack covers:
 
 1. useful zero-connector first session;
 2. personality continuity without fabricated intimacy;
@@ -1111,7 +1172,9 @@ Use dedicated synthetic owners, biographies, calendars, mailboxes, health summar
 | proactivity | every item has a source-grounded `why now`; quiet/disabled states are silent; helpful, ignored, snoozed, dismissed, incorrect, and dial-down outcomes meet predeclared nuisance thresholds |
 | longitudinal quality | a small 7/14-day synthetic and consenting-test cohort meets predeclared usefulness, personality, memory-correction, friction, and controllability thresholds without weakening the zero-critical-failure rule |
 
-Waldo may claim only that the tested release scope passed this dated internal gate; it must not claim competitor parity from public material or an unauthorized account comparison. If a vendor later grants written benchmarking permission, run that work as a separate, permission-bounded lane with synthetic data, a dated product/account state, explicit geography/configuration, randomized repeated trials, and `not comparable` for unsupported surfaces.
+Run the pack first against Waldo and every available peer surface. Use the same synthetic biographies, calendars, mailboxes, tasks, relationship scenarios, and scoring rubric where the products support comparable surfaces. Preserve screen recordings/screenshots, prompts, action traces, correction attempts, latency, interaction count, permission friction, and final source state. Mark unsupported or inaccessible surfaces `not comparable`; do not invent a result. Repeat critical flows enough to measure consistency, not just the best run.
+
+Waldo may claim “tested-scope parity” with a named, dated product only for the scenarios actually run and evidenced. It must still have zero critical authority, privacy, cross-owner, deletion-resurrection, or false-success failures; a competitor's weaker control does not lower Waldo's floor. Public-source teardowns can define hypotheses but cannot alone prove parity, and private internals remain unknown unless independently evidenced.
 
 ### 17.4 Proof ladder
 
@@ -1161,7 +1224,7 @@ Before physical-device work:
 | conversation publication/retention | Supabase/DO ownership is accepted; production writer, retention and deletion corridor are unproved | publication service, RLS, retention/deletion/export and restart proof before G1 persistence |
 | relationship confidentiality, keys, and relay placement | proposed | identity/signature plus authenticated-encryption/key-agreement, recovery, forward-secrecy, relay retention/deletion ADR and threat model before cross-owner data exists |
 | browser vendor reliability/cost | unknown | timeboxed vendor bake-off and kill criteria |
-| competitor evaluation authority | Instinct and Poke terms checked 2026-09-19 prohibit relevant benchmarking/competitive use | run the vendor-independent §17.3 gate; require written vendor permission or counsel-confirmed authority for any systematic account comparison |
+| competitive-study collection method | peer access, terms, observable surfaces, and reproducibility vary by product | log access/method risk, use synthetic owner-controlled data, separate public, black-box, self-hosted, and clean-room evidence, and bound every parity claim to the exact dated scenarios actually run |
 | remote reconciliation branches | docs exist but are not merged | review together; do not create competing authorities |
 
 ## 20. GPT-6 Astra review packet
@@ -1185,7 +1248,7 @@ Review this document and the branch diff against exact source pins. The reviewer
 15. Can multi-presence linking survive recycled phone numbers, cross-owner claims, late webhooks, simultaneous turns, and echo loops?
 16. Are the health-pattern thresholds, negative controls, correction/deletion semantics, and noncausal wording sufficient to justify a release claim?
 17. Does “deliberate continuity” plus zero-connector value, incremental grants, per-claim provenance, joined deletion, and no ambient listening through G4 form a coherent and defensible product wedge against Moonshot's ambient-memory model?
-18. Are the peer-derived experience fixtures and thresholds strong enough to support a competitive release claim without unauthorized competitor benchmarking, and which thresholds must be fixed before implementation begins?
+18. Does the four-lane competitive lab separate public evidence, owner-run black-box observation, open/self-hosted implementation study, and clean-room Waldo reproduction while still producing a rigorous tested-scope parity claim, and which thresholds must be fixed before implementation begins?
 
 ## 21. Documentation migration and source register
 
@@ -1210,6 +1273,7 @@ Accepted ADRs, universal rule mirrors, current contributor/verification method, 
 - [Brain PR #31 research/review record `43be41e`](https://github.com/Pin4sf/waldo-brain/pull/31), including the [PR #138 architecture review](https://github.com/Pin4sf/waldo-brain/blob/43be41e1a24af5d901eb6b68d9a63e1c32dfa6f7/03-References/research/waldo-backend-pr138-architecture-review-2026-09-18.md) and [harness-engineering source/adoption register](https://github.com/Pin4sf/waldo-brain/blob/43be41e1a24af5d901eb6b68d9a63e1c32dfa6f7/03-References/research/waldo-harness-engineering-lessons-and-adoption-2026-09-18.md); evidence only, not live product authority
 - [Independent PR #31 source/adoption evaluation](../research/WALDO_BRAIN_PR31_SOURCE_AUDIT_2026-09-18.md), covering every S01–S32 source and A01–A18 record with authority classes, limits, corrections, and launch dispositions
 - [Moonshot and peer competitive-quality evaluation](../research/WALDO_MOONSHOT_COMPETITIVE_QUALITY_EVALUATION_2026-09-19.md), separating first-party observations from inferences and converting the data-flow, experience, privacy, and benchmarking lessons into G0–G4 acceptance gates
+- [Peer-experience reverse engineering and smallest winning build order](../research/WALDO_PEER_EXPERIENCE_REVERSE_ENGINEERING_AND_BUILD_ORDER_2026-09-19.md), covering Moonshot, Instinct, Poke, Muse, Grok Bot, Hermes, and OpenClaw with public/black-box/open-system/clean-room evidence lanes and measurable launch slices
 - [Backend entrypoint reconciliation `c91fa51`](https://github.com/Pin4sf/waldo-backend/commit/c91fa51)
 - [App documentation reconciliation `97b43ff2`](https://github.com/Pin4sf/waldo-app/commit/97b43ff2)
 
