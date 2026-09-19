@@ -229,7 +229,7 @@ The architectural spike falsifier is simple: an authenticated app message must p
 
 Instinct's supplied dashboard shows Google Workspace, Outlook, Linear, Notion, GitHub, Slack, and Granola; contact through Messages, WhatsApp, and a dedicated email; Trusted People; external-data deletion; and a vault for logins, cards, personal information, and agent-held items. Its Google consent screen requests broad Drive, Contacts, Slides, Docs, Sheets, Calendar, Gmail, and Tasks access.
 
-Poke emphasizes low-friction messaging, recipes, and MCP connectivity. Two distinct products named Folk must not be conflated: `folk Personal AI` presents a relationship-like personal agent across messaging surfaces, while `folk CRM Assistant` grounds workflows in CRM context. Meta Muse emphasizes background work, a secure VM/browser, app/WhatsApp access, connectors, and a security monitor. Grok Bot brings an agent into collaborative chat. Hermes and OpenClaw show the appeal of open, extensible runtimes, persistent context, skills, and local/computer execution.
+Poke emphasizes low-friction messaging, recipes, and MCP connectivity. Two distinct products named Folk must not be conflated: `folk Personal AI` presents a relationship-like personal agent across messaging surfaces, while `folk CRM Assistant` grounds workflows in CRM context. Moonshot Computer is a particularly relevant early-stage peer: its first-party material describes an early-access iPhone agent built around ambient transcription, a persistent `Mind`, ledger/morning history, reminders and standing orders, HealthKit sleep, Apple context, and one managed Google connection. Meta Muse emphasizes background work, a secure VM/browser, app/WhatsApp access, connectors, and a security monitor. Grok Bot brings an agent into collaborative chat. Hermes and OpenClaw show the appeal of open, extensible runtimes, persistent context, skills, and local/computer execution.
 
 ### 4.2 Capability comparison
 
@@ -239,6 +239,7 @@ This is a public-evidence comparison, not a benchmark or reverse-engineering cla
 |---|---|---|---|---|
 | [Instinct](https://instinct.com/) | text/call; supplied dashboard shows Messages, WhatsApp, and dedicated email | site claims a model for personal nuance; dashboard exposes personal info and agent items | dashboard shows Google Workspace, Outlook, Linear, Notion, GitHub, Slack, Granola; founder posts show agent email and concierge calls | site claims proactive follow-up and phone/computer use; isolation, receipts, and execution architecture are not public |
 | [Poke](https://poke.com/docs) | Apple Messages, Telegram, WhatsApp, RCS | durable personal memory/personality is not established by the checked overview | email, Calendar, reminders, web search, integrations | reminders are documented; a general persistent computer/browser architecture is not established |
+| [Moonshot Computer](https://moonshot.computer/) | early-access iPhone app; push and a separately linked iMessage/web conversation are described | ambient transcript-derived `Mind`, ledger, morning history, standing orders, call records, per-fact correct/forget | iOS permissions; reminders, WeatherKit, read-only HealthKit sleep; one Composio Google grant for Gmail, Calendar, Drive metadata and Contacts | ambient assessment and three-times-daily permanent-Mind study are described; no general browser/computer runtime is established |
 | [folk Personal AI](https://www.folk.com/) | iMessage, Telegram, WhatsApp, and Discord | presents itself as a friend that remembers conversations and checks in | reminders plus read-only Plaid-backed money context are publicly described | folk drafts and the user sends; public material does not establish autonomous money movement or a general browser/computer runtime |
 | [folk CRM Assistant](https://help.folk.app/en/articles/12460796-introducing-assistant) | built into the folk relationship/CRM workspace | recaps use notes and interactions around people, companies, and deals | finds follow-ups, researches companies, sends trigger-defined emails | assistants are described as always-on and trigger-driven; no general computer-use claim |
 | [Meta Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) | Muse app, WhatsApp, iOS/Android/web; glasses planned | learns from conversations, remembers details, accepts “forget” requests | connected apps, email, travel, forms, negotiation, protected payment and credential paths | dedicated Secure VM/browser, Sentinel review, long-running work, app-close continuation, approvals and audit trail |
@@ -250,6 +251,7 @@ This is a public-evidence comparison, not a benchmark or reverse-engineering cla
 |---|---|---|---|---|
 | Instinct | founder-announced Trusted Person network and Instinct-to-Instinct coordination | no public builder/API contract found | retention, model/provider stack, browser isolation, approval/recovery semantics, measured reliability | adopt effortless contact, proactive completion, and trusted coordination; defer broad scopes and a credential/TOTP vault |
 | Poke | no owner-to-owner agent protocol found in checked docs | recipes, MCP servers, and API docs | memory/correction model, connector effect controls, background recovery | adopt messaging ergonomics and reusable recipes behind Waldo policy; do not chase all channels before app truth |
+| Moonshot Computer | no owner-to-owner agent protocol established; ambient capture can include people who never installed it | no general public plugin contract; Google actions run through a named managed-tool set | real-world usefulness and reliability; accuracy of inferred `Mind`; bystander consent; full deletion horizon during storage migration; provider retention; broad bundled Google scope | adopt its concrete data-flow disclosure, per-fact correction, visible deletion result, quiet-state signal, morning brief, ledger and standing-order UX; reject ambient listening or bundled Google access as Waldo launch defaults |
 | folk Personal AI | no owner-to-owner agent protocol is established by the checked source | no general public plugin contract established | memory correction/export/deletion, action recovery, and messaging-platform data handling | adopt low-friction relational conversation, explicit reminders, and user-finalized sends; retain Waldo's governed memory and effect boundary |
 | folk CRM Assistant | shared CRM context is not an owner-to-owner personal-agent protocol | source establishes assistants/workflows, not a general public plugin runtime | portability outside folk, personal memory controls, general action recovery | adopt relationship-grounded retrieval and follow-up signals; use as a connector, not Waldo's brain |
 | Meta Muse | no public owner-to-owner agent protocol in the launch source | controlled connector ecosystem; no general public plugin contract established | real-world reliability, retention detail, connector catalog/regions; Confidential VM is future-tense | adopt secret brokerage, isolated execution, visible audit and approval patterns; buy computer infrastructure behind Waldo's port |
@@ -266,8 +268,18 @@ This is a public-evidence comparison, not a benchmark or reverse-engineering cla
 - Provider `done` does not prove the external result, user Acceptance, or continuing responsibility.
 - A vault UI does not justify storing raw passwords, cards, CVVs, OTPs, or TOTP seeds.
 - Closed-source product internals, retention, and platform agreements are unknown unless the vendor publishes them.
+- Deleting transient microphone audio does not mean the retained transcript, derived memory, model-provider copy, recovery record, or backup has been deleted.
+- A detailed privacy policy is valuable evidence of intended data flows and known limits; it is not runtime proof that those flows, retention periods, and deletion paths behave as described.
 
-### 4.4 Instinct parity by user outcome
+### 4.4 Moonshot lesson: beat ambient surveillance with deliberate continuity
+
+Moonshot demonstrates that a small team can make a personal agent feel coherent through a small set of legible objects: a `Mind`, an open-loop ledger, a morning history, standing orders, receipts, and permission-aware phone context. Its privacy page is also a useful disclosure benchmark because it names actual providers, request payload classes, server copies, correction/deletion controls, backup horizons, bystander data, and unfinished encryption/retention limits.
+
+Waldo should not compete by collecting more ambient life. It should be the agent that earns deep personalization from deliberate, provenance-bearing sources: the owner's conversation and corrections, Calendar, selected mail/meeting context, explicit commitments, and purpose-filtered health state. Every durable claim should answer **why Waldo knows it**, **which source and purpose admit it**, **when it expires**, and **how to correct or forget it**. Every proactive message should answer **why now**, **what changed**, **what Waldo proposes**, and **how to mute, defer, or cancel it**.
+
+For founder alpha and personal beta, Waldo therefore has no 24/7 microphone mode and no automatic ambient transcript-to-memory path. A future user-triggered or time-bounded capture feature requires its own on-device-first data-flow and bystander-consent review; transient-audio deletion alone is insufficient. Google is optional and incrementally authorized—Calendar first, then bounded Gmail/selected Drive—not one required super-grant. Mail, meeting, health, or relationship data may not use a model route with an unknown or materially worse retention/training posture merely to create a richer profile.
+
+### 4.5 Instinct parity by user outcome
 
 | User outcome | Instinct signal | Waldo current truth | Waldo parity decision |
 |---|---|---|---|
@@ -291,16 +303,16 @@ The list below defines the feature-complete competitive target. Passing it in a 
 
 1. **Conversation:** an authenticated owner receives a streaming, non-fabricated answer; restart/retry does not duplicate the turn.
 2. **Personality:** blinded reviewers recognize Waldo's voice without the agent becoming verbose, clingy, medically certain, or falsely confident.
-3. **Memory:** the user can ask Waldo to remember a preference, inspect it, correct it, delete it, and see the correction win in a later conversation.
-4. **Calendar:** Waldo can find availability, propose a change, obtain the required approval, apply it, read it back from Google, and show a receipt.
+3. **Memory:** the user can ask Waldo to remember a preference, inspect its source/status/purpose/freshness, correct it, delete it, and see the correction win in a later conversation.
+4. **Calendar / Today:** Waldo can produce a cited view of today's commitments from Calendar plus explicit Open Loops, find availability, propose a change, obtain the required approval, apply it, read it back from Google, and show a receipt.
 5. **Email:** Waldo can search/read within granted scope and create a draft; send remains a separate explicit effect.
-6. **Proactivity:** Waldo follows up on an explicit commitment within quiet hours and stops after completion, cancellation, or expiry.
+6. **Proactivity:** Waldo follows up on an explicit commitment within quiet hours, explains `why now`, offers done/snooze/dismiss/incorrect/dial-down controls, and stops after completion, cancellation, or expiry.
 7. **Trusted relationship:** two owners can invite/revoke, negotiate availability with minimal disclosure, independently approve their own event, and receive linked receipts.
 8. **Health:** with explicit consent, physical-device HealthKit data produces a freshness/provenance-bearing derived planning constraint; Waldo-consent-declined/revoked, `no_accessible_data`, limited-history, and stale states never invent readiness.
 9. **Supported pattern awareness:** a protected deterministic pipeline can say “insufficient history,” surface an evidence-backed observational pattern with support/missingness/freshness/provenance, accept correction/dismissal, and delete it without causal or clinical claims.
 10. **Meeting context:** Granola notes/action items are retrieved with source links and become proposals, not hidden commitments.
 11. **India corridor:** Swiggy search/cart can produce an exact-price proposal and user-controlled checkout handoff without exposing OTP, UPI PIN, CVV, or password.
-12. **Control:** the user can view Connections, current grants, retained Profile Claims, pending actions, receipts, and deletion/revocation status.
+12. **Control:** one coherent experience exposes Connections, current grants, retained Profile Claims, Open Loops, pending/running/waiting/completed/failed actions, receipts, processor-visible data paths, and deletion/revocation/backup-expiry status.
 13. **Distribution:** the app path works end to end; email follows. WhatsApp for India is activated only if Meta admits Waldo to the Third Party Agent path or gives authoritative written eligibility for Waldo's exact offering and test tenant.
 
 ### Release cuts
@@ -881,9 +893,16 @@ Adapter contracts, provider sandboxes, and conformance fixtures may start in the
 ### G0 — Truthful baseline and documentation convergence (1–3 days)
 
 - review/merge one canonical build plan and thin entrypoints; publish the amended/superseding Brain launch contract plus every retained/amended/superseded ADR disposition named in §§2.3–2.4; then repin the plan/entrypoints and regenerate/diff `accepted-adrs.json` from that Brain revision before implementing any conflicting seam;
+- publish one live data-path register for every admitted source and derived object: collection trigger, fields, purpose, canonical owner, every processor/model/storage copy, training/default-improvement setting, retention and backup horizon, region/DPA state, revoke/delete path, and `live | limited | planned | retired` status; a privacy-policy sentence or adapter interface is not runtime proof;
+- make conversation useful with zero connectors, and require separately selectable grants; a Calendar-only choice must not enroll Gmail, Drive, Contacts, or a bundled super-scope;
+- prohibit always-listening microphone capture, ambient transcription, and transcript-derived durable memory through G0–G4; any future capture proposal requires a separate bystander-consent, on-device-first, retention, model-egress, correction, and deletion gate;
+- define joined identity lifecycle and deletion across the app account, website/waitlist, messaging presences, marketing records, analytics, connector grants, support/application records, provider mirrors, recovery copies, and backups; the deletion receipt distinguishes `deleted`, `revoked`, `pending provider`, `backup expiry`, and `failed` rather than collapsing them into one success;
+- ban absolute claims such as “private,” “nothing leaves,” “deleted,” “encrypted so we cannot read it,” or “on device” unless the ordinary-language meaning is true for every relevant copy and processor; add claim-to-evidence tests for public copy and in-product receipts;
+- define non-user data handling before importing email, meetings, contacts, relationship messages, or audio: minimization, notice where feasible, source visibility, correction/removal, retention, model egress, and abuse/report handling;
 - create clean backend/app worktrees at fresh remote pins;
 - remove app fictional success;
 - put the entire authenticated app group behind a protected route/auth gate, including direct and stale deep links;
+- bind each device/session to an inspectable owner session, expose last-active/revoke controls, and prove a revoked or stale device cannot resume connector work, receive private pushes, or replay approvals;
 - define an account epoch such as `(owner_id, auth_generation, consent_epoch)` and bind every Query key, Zustand projection, SQLCipher store, SecureStore preference/watermark, subscription, queued operation, callback, and background job to it;
 - on logout/account switch, advance the generation first, cancel in-flight query/mutation/upload work, reject stale completions, clear visible stores, close the prior account database, and only then admit the next owner;
 - disable legacy health upload by default until separate cloud-processing consent exists; device HealthKit authorization never creates Waldo cloud consent;
@@ -895,63 +914,73 @@ Adapter contracts, provider sandboxes, and conformance fixtures may start in the
 - prove app dependency install, tests, simulator build, and backend verification wall;
 - record signing/physical-device prerequisites.
 
-**Exit:** no demo fallback can look like a receipt; exact baselines and failures are recorded. Deterministic A→B and logout tests race chat, Calendar request, connector callback, subscription delivery, background health upload, queued work, and deep-link processing and prove zero A-owned display, cache reuse, write, upload, or delivery under B. Server RLS remains mandatory but is not accepted as protection against stale local state.
+**Exit:** no demo fallback can look like a receipt; exact baselines and failures are recorded. A fresh owner reaches useful conversation without a connector, Calendar-only authorization exposes no Gmail/Drive/Contacts grant, and the data-path/deletion registers reconcile every admitted copy with provider evidence and truthful UI language. Deterministic A→B, device-revoke, joined-deletion, and logout tests race chat, Calendar request, connector callback, subscription delivery, background health upload, queued work, and deep-link processing and prove zero A-owned display, cache reuse, write, upload, or delivery under B. Server RLS remains mandatory but is not accepted as protection against stale local state.
 
 ### G1 — Hello Waldo: production conversation + compact personalization (5–10 days)
 
 - authenticated app turn, server IDs/order/cancellation, streaming model response;
+- one simple owner surface organised as `Today`, `Open Loops`, `Memory`, `Activity`, and `Connections`; internal Profile Claim/graph/protocol terms remain progressive disclosure rather than becoming competing product nouns;
+- visible `Stop` and steer controls; stopped work cannot later publish a success response or durable memory update;
 - one evaluated default model route plus a bounded reasoning/fallback ladder with spend, safety, context, and data-class ceilings;
 - enforce `ModelEgressPolicy` before every provider/fallback attempt; G1 admits no mail, meeting, or health context until its route passes the corresponding data-class gate;
 - Supabase conversation graph plus backend `ConversationPublicationService`, coordinated by DO run/outbox state without a second transcript; exact input and output bytes follow the hidden staged/reserved/committed lifecycle in §6.1;
 - digest-bound per-turn capability resolver enforced again at dispatch;
 - reviewed voice pack and user style settings;
 - if reviewed static procedures are used, separate acquisition, scan/review, installation, activation, execution, update, and emergency revocation; record source/license/version plus a recursive digest over instructions, scripts, references, assets, and pinned dependencies, compatibility/tool requirements, evaluation, and sandbox/egress needs; popularity, provenance labels, or a scanner result are evidence but never proof of safety, progressive disclosure and a file format never grant execution authority, and resume rejects a revoked, changed, or incompatible version;
-- Profile Claim propose/inspect/correct/delete;
+- Profile Claim propose/inspect/correct/delete, with source, evidence/status, purpose, freshness, “why Waldo knows this,” and a direct correct/forget path on every durable claim;
+- conversational quality evaluation for warmth, specificity, uncertainty, stable style, interruption recovery, and useful initiative, with explicit failures for clinginess, coercive attachment, fabricated intimacy, invented emotional insight, or confident personality inference from thin evidence;
 - generated app client and no direct legacy success path.
 
-**Exit:** real multi-turn conversation survives restart, correction, deletion, mid-stream cancellation, unsafe output, and provider failure without duplicate or fictional output. Fault injection kills the process after input stage, DO reservation, input commit, assistant stage, publication intent, and assistant commit, then restarts without client retry; changed-byte replay, revoke/delete at every boundary, orphan expiry, and later-turn liveness pass without a regenerated answer or wedged sequence. G0's A→B isolation floor passes on the real conversation path. A pure conversation exposes zero effect/MCP tools; dispatch rejects any operation absent from the turn manifest; lazy discovery cannot widen or mutate the frozen manifest. Procedure fixtures additionally prove recursive-digest mismatch, hidden script/resource substitution, dependency drift, activation/revocation races, output/context amplification, and aggregate token/tool/verifier/retry budget enforcement.
+**Exit:** a new owner gets a useful first session with no connector. Real multi-turn conversation survives restart, correction, forget/delete, contradiction, mid-stream cancellation, unsafe output, and provider failure without duplicate, resurrected, or fictional output. Every retained claim can answer why/how it was learned, current status, purpose, and freshness. A stopped turn publishes neither success nor later side effects. Fault injection kills the process after input stage, DO reservation, input commit, assistant stage, publication intent, and assistant commit, then restarts without client retry; changed-byte replay, revoke/delete at every boundary, orphan expiry, and later-turn liveness pass without a regenerated answer or wedged sequence. G0's A→B isolation floor passes on the real conversation path. A pure conversation exposes zero effect/MCP tools; dispatch rejects any operation absent from the turn manifest; lazy discovery cannot widen or mutate the frozen manifest. Procedure fixtures additionally prove recursive-digest mismatch, hidden script/resource substitution, dependency drift, activation/revocation races, output/context amplification, and aggregate token/tool/verifier/retry budget enforcement. Blinded conversation review has no critical manipulation/fabricated-intimacy failure and meets predeclared usefulness, personality, and controllability thresholds.
 
 ### G2 — Google Calendar vertical slice (4–8 days)
 
-- incremental OAuth and Connection controls;
+- incremental OAuth and Connection controls, beginning with an independently revocable Calendar-only grant; Connections displays granted scopes, account, last sync/use, errors, and revoke/delete consequences;
+- a cited on-demand `Today` brief combines Calendar source records and owner-approved Open Loops without ambient capture or hidden inbox expansion;
 - harden and prove the single Vault/typed-connector-proxy boundary; migrate or remove any conflicting legacy secret path without dual-write or exposing bearer tokens to the DO;
 - read/free-busy/find slots;
 - per-turn manifests admit only the exact Calendar reads/writes required by the request and approved proposal;
-- primary-calendar, owner-only/non-recurring proposal, approval, apply with `sendUpdates=none`, client-chosen create ID, `If-Match` update/delete, etag-bound read-back, reconciliation, revoke;
+- primary-calendar, owner-only/non-recurring proposal, approval, apply with `sendUpdates=none`, client-chosen create ID, `If-Match` update/delete, etag-bound read-back, reconciliation, revoke; the deterministic approval card sits outside model prose and shows provider account/calendar, exact before/after, notifications, authority expiry, and what remains unapproved;
 - Open Loop/update/receipt in app;
+- record trust-speed measures—time to first value, turns, permissions requested, approval corrections/abandons, and successful revoke—without relaxing the authority boundary;
 - prompt-injection and cross-owner tests.
 
 Proxy adversarial tests cover bearer exfiltration, arbitrary URL/path injection, SSRF, resource/account substitution, operation confusion (including draft-to-send), manifest/digest substitution, replay/expiry, response oversize/secret reflection, revoke during execution, and provider commit followed by transport loss.
 
-**Exit:** an exact primary-calendar, owner-only event change is source-verified and retry-safe in a test account across timezone/DST, response loss, duplicate create, external edit/delete/move, ambiguous absence, and stale-etag `412`; a `412` produces a new proposal and never overwrites. Account switching during OAuth callback, read, and write proves zero cross-owner display or effect.
+**Exit:** a zero-connector owner can opt into Calendar only, receive a source-cited `Today` view, inspect the exact approval, apply one primary-calendar owner-only event change, and revoke the connection without a hidden Gmail/Drive/Contacts grant. The effect is source-verified and retry-safe in a test account across timezone/DST, response loss, duplicate create, external edit/delete/move, ambiguous absence, and stale-etag `412`; a `412` produces a new proposal and never overwrites. Account switching during OAuth callback, read, and write proves zero cross-owner display or effect. Predeclared trust-speed thresholds pass without an unauthorized, ambiguous, or falsely completed action.
 
 ### G3 — Trusted Relationships (5–10 days)
 
 - entry criterion: accepted identity/signature, authenticated-encryption/key-agreement, relay, key-lifecycle/recovery, forward-secrecy, retention/deletion ADR and threat model before any cross-owner data;
 - invite/accept/revoke/block/report;
+- the recipient sees the requesting owner and narrowly stated purpose before acceptance; acceptance never grants a general profile, memory, inbox, calendar, health, connector, or inferred-relationship view of the other person;
 - signed envelope, expiry, replay/dedupe and abuse controls;
 - minimal availability negotiation;
 - independent approvals and dual receipts;
 - private decline/failure semantics and one-sided-apply compensation.
+- independent relationship-object export/deletion/revoke for each owner, including relay copies and pending invitations, without deleting or exposing the other owner's private state;
 
 The accepted threat model must name message/key endpoints and the Waldo operator/server threat boundary. Server-root encryption is not described as operator-confidential unless the selected protocol and evidence actually provide that property.
 
 Calendar invitations or attendee notifications are not the cross-owner authority protocol; each Waldo applies only its owner's owner-only event in this gate.
 
-**Exit:** two test owners schedule/reschedule or decline without sharing event titles, memory, or authority.
+**Exit:** two test owners schedule/reschedule or decline without sharing event titles, memory, inferred profiles, or authority. Wrong-person acceptance, recycled identity, forwarded invite, compromised device, replay, blocking, harassment/report, one-sided deletion, and one-sided revocation fixtures preserve the same boundary and leave an inspectable receipt. Public non-user/recipient handling language matches the tested protocol.
 
 ### G4 — Gmail, selected Drive, meetings, and proactivity (5–10 days)
 
-- bounded Gmail search/read/draft; send uses the immutable approved RFC 5322/MIME snapshot through `users.messages.send`, preserves the mutable provider draft, and remains a separate exact approval;
+- Gmail defaults to metadata/snippet search; opening a selected thread/body is a separately visible read and attachments require their own explicit admission; send uses the immutable approved RFC 5322/MIME snapshot through `users.messages.send`, preserves the mutable provider draft, and remains a separate exact approval outside model prose with exact account, recipients, subject, body, attachments, authority expiry, and changed-since-review invalidation;
 - selected Drive files only;
 - Granola read-only retrieval with citations, signed-webhook admission, and bounded backfill;
 - explicit follow-up/reminder/quiet-hours engine with stable occurrence identity, timezone/travel, overlap, lateness/misfire, expiry, bounded recovery, and inspect/edit/pause/resume/cancel/history controls;
+- every proactive item states `why now` and the sources used, and offers done, snooze, dismiss, incorrect, and dial-down controls that update future behavior without silently creating durable personality claims;
 - deterministic/no-model execution for reminders and watchdogs that need no judgment; separate execution and delivery status, owner-visible run history, no recursive routine creation, and dead-letter/watchdog repair after alarm retry exhaustion;
 - waiting-reply detection only through bounded scheduled re-reads of owner-admitted exact Gmail thread IDs; no general inbox monitor or implied watch stream;
 - owner-bound APNs token registration/rotation/revocation, minimal lock-screen payloads, quiet hours, and deep links to canonical state;
 - connector availability and revocation UX.
+- one joined Activity surface shows proposal, approval, running/tool activity, stop, reconciliation, completion, delivery, failure, revoke, and deletion states; no second hidden automation history is treated as product truth;
+- automation remains manual-first: the owner can test one occurrence and inspect its exact data/tool/notification plan before enabling a routine; voice/transcription/inference/analytics subprocessors and their retention/training posture are visible before sensitive data is admitted.
 
-**Exit:** Waldo prepares for a meeting, drafts a follow-up, and tracks/notifies it without silently sending, leaking private notification content, or retaining unrelated content. The Gmail suite edits a provider draft after the last read, substitutes MIME/header/recipient/attachment data, races revoke, simulates provider success plus response loss, and proves the approved immutable message is the only possible send while external draft edits remain intact. Routine tests cover DST gaps/repeats, travel, overlap, pause/reschedule/cancel in flight, missed/lost/duplicate alarm delivery, alarm retry exhaustion, no-action decisions, delivery failure after successful execution, recursive-schedule rejection, and recovery that cannot evade the aggregate budget. APNs provider acceptance is not misreported as user display or acknowledgement.
+**Exit:** Waldo prepares for a meeting, drafts a follow-up, and tracks/notifies it without silently sending, leaking private notification content, or retaining unrelated content. Every proactive item has source-grounded `why now` and working done/snooze/dismiss/incorrect/dial-down controls; disabled/quiet hours produce zero notifications. Predeclared nuisance/helpfulness thresholds pass with zero critical authority, disclosure, or false-success failures. The Gmail suite edits a provider draft after the last read, substitutes MIME/header/recipient/attachment data, races revoke, simulates provider success plus response loss, and proves the approved immutable message is the only possible send while external draft edits remain intact. Routine tests cover DST gaps/repeats, travel, overlap, pause/reschedule/cancel in flight, missed/lost/duplicate alarm delivery, alarm retry exhaustion, no-action decisions, delivery failure after successful execution, recursive-schedule rejection, and recovery that cannot evade the aggregate budget. APNs provider acceptance is not misreported as user display or acknowledgement. One manual test occurrence is inspectable before routine enablement, and Activity reconciles execution, delivery, revoke, and deletion to their source records.
 
 ### G5 — Health-aware planning on physical devices (7–14 days)
 
@@ -1053,15 +1082,36 @@ Calendar invitations or attendee notifications are not the cross-owner authority
 
 Predeclare tasks, trial counts, denominators, severe-failure rules, and source-of-record graders. Run every trial from an isolated clean environment and report both aggregate success and consistency measures such as `pass^k` for customer-facing flows where every repeated attempt must succeed. Bound evaluator/repair iterations and include their spend in the task budget. Preserve bounded trajectories—not just final prose—so tool choice, approval, reconciliation, resume, and no-progress failures are diagnosable. Use same-model ablations: no durable memory; memory without health; complete Waldo. Keep held-out histories and repeated trials. Long-horizon memory fixtures cover temporal updates and abstention, but recall benchmarks do not prove deletion or tenant isolation. A finite green eval suite is not universal safety proof.
 
-### 17.3 Owner-run Instinct parity harness
+### 17.3 Peer-derived internal experience gate
 
-Public feature pages establish targets, not parity. With the owner's authorized Instinct account, run the same synthetic scenarios against a dated Instinct build/account state and the corresponding Waldo release candidate. This is black-box product evaluation, not scraping, reverse engineering, prompt extraction, or load testing.
+Public first-party pages, policies, documentation, and owner-supplied ordinary-use screenshots establish product signals, not parity. As checked on 2026-09-19, [Instinct's Terms](https://instinct.com/terms) prohibit benchmarking, developing competing products/services, and using the service to improve or train other AI; [Poke's Terms](https://poke.com/terms) prohibit competitive analysis and benchmarking. An authorized account is therefore not sufficient authority for a systematic head-to-head evaluation. Do not scrape, reverse engineer, extract prompts, automate/load-test a competitor, or run a structured comparison through an account without written vendor permission or counsel-confirmed authority. Ordinary-use observations remain dated qualitative evidence only.
 
-The fixture pack covers personality continuity across sessions; explicit remember/correct/forget; Calendar read/propose/apply/read-back; Gmail search/read/draft without send; proactive follow-up/cancellation; cross-surface handoff where both products officially support the tested surfaces; and Trusted scheduling between two synthetic owners. Use dedicated synthetic Google/accounts/calendars/mailboxes and invented biographies/health summaries. Never enter production personal data, credentials, payment secrets, or another person's messages.
+Instead, run a vendor-independent synthetic fixture pack derived from the user outcomes competitors make legible:
 
-Run repeated randomized trials, preserve exact task/initial state/connector grants, and have blinded reviewers score usefulness, personality continuity, factuality, correction/forget behavior, friction, and control. Independently verify every effect against the provider source of record; capture false completion, unauthorized disclosure/action, recovery, latency, interaction count, and attributable cost. Record product/version or observed UI build, model/config where knowable, connector state, geography, and date. Mark a row `not comparable` when access or official surface differs rather than imputing a result.
+1. useful zero-connector first session;
+2. personality continuity without fabricated intimacy;
+3. remember/update/contradict/correct/forget with provenance and no resurrection;
+4. cited `Today` and inspectable Open Loops;
+5. Calendar-only connect/read/propose/approve/apply/read-back/revoke;
+6. Gmail metadata-first search, selected-thread read, draft, exact approval, and send when G4 is admitted;
+7. source-grounded proactivity with why-now/done/snooze/dismiss/incorrect/dial-down controls;
+8. visible activity, steer/stop, recovery, and no late fictional success;
+9. data-path comprehension, non-user handling, joined deletion, provider-pending state, and backup expiry;
+10. Trusted Relationship invitation, purpose, scheduling, decline, revoke, and abuse cases.
 
-Waldo reaches “Instinct-class for the tested release scope” only when it meets the outcome threshold across repeated trials **and** has zero critical authority/privacy/false-success failures. A prettier answer cannot compensate for a failed correction, unverifiable effect, or data leak. Publish the fixture definitions and aggregate/redacted results so GPT-6 Astra and later reviewers can reproduce the claim.
+Use dedicated synthetic owners, biographies, calendars, mailboxes, health summaries, contacts, and relationship messages. Freeze the task, initial state, connector grants, expected authority, provider source of record, fault schedule, grader, and severe-failure rule before each run. Preserve bounded trajectories rather than final prose alone. Blinded reviewers score usefulness, personality continuity, specificity, factuality, friction, initiative, correction/forget behavior, and control; deterministic graders independently verify effects, source citations, deletion, and revocation.
+
+| Dimension | Acceptance floor |
+|---|---|
+| truth and authority | zero critical unauthorized action/disclosure, fictional success, deleted-memory resurrection, or misleading privacy/deletion receipt |
+| first value | works with zero connectors; record predeclared p50/p95 time, turns, permissions, and abandonment thresholds |
+| personalization | repeated remember/update/contradict/correct/forget fixtures pass, with provenance and correct abstention under weak evidence |
+| control | an owner can explain why Waldo knows/notified/acted, stop a run, inspect Activity, revoke a connector, correct/forget a claim, and obtain a deletion-state receipt |
+| effects and recovery | exact proposal/approval/read-back match the provider record; timeout, restart, revoke, and response-loss faults create no duplicate or false success |
+| proactivity | every item has a source-grounded `why now`; quiet/disabled states are silent; helpful, ignored, snoozed, dismissed, incorrect, and dial-down outcomes meet predeclared nuisance thresholds |
+| longitudinal quality | a small 7/14-day synthetic and consenting-test cohort meets predeclared usefulness, personality, memory-correction, friction, and controllability thresholds without weakening the zero-critical-failure rule |
+
+Waldo may claim only that the tested release scope passed this dated internal gate; it must not claim competitor parity from public material or an unauthorized account comparison. If a vendor later grants written benchmarking permission, run that work as a separate, permission-bounded lane with synthetic data, a dated product/account state, explicit geography/configuration, randomized repeated trials, and `not comparable` for unsupported surfaces.
 
 ### 17.4 Proof ladder
 
@@ -1111,6 +1161,7 @@ Before physical-device work:
 | conversation publication/retention | Supabase/DO ownership is accepted; production writer, retention and deletion corridor are unproved | publication service, RLS, retention/deletion/export and restart proof before G1 persistence |
 | relationship confidentiality, keys, and relay placement | proposed | identity/signature plus authenticated-encryption/key-agreement, recovery, forward-secrecy, relay retention/deletion ADR and threat model before cross-owner data exists |
 | browser vendor reliability/cost | unknown | timeboxed vendor bake-off and kill criteria |
+| competitor evaluation authority | Instinct and Poke terms checked 2026-09-19 prohibit relevant benchmarking/competitive use | run the vendor-independent §17.3 gate; require written vendor permission or counsel-confirmed authority for any systematic account comparison |
 | remote reconciliation branches | docs exist but are not merged | review together; do not create competing authorities |
 
 ## 20. GPT-6 Astra review packet
@@ -1133,6 +1184,8 @@ Review this document and the branch diff against exact source pins. The reviewer
 14. Does the provider-by-data-class egress gate cover DPA/ZDR/region/retention/logging and every fallback path?
 15. Can multi-presence linking survive recycled phone numbers, cross-owner claims, late webhooks, simultaneous turns, and echo loops?
 16. Are the health-pattern thresholds, negative controls, correction/deletion semantics, and noncausal wording sufficient to justify a release claim?
+17. Does “deliberate continuity” plus zero-connector value, incremental grants, per-claim provenance, joined deletion, and no ambient listening through G4 form a coherent and defensible product wedge against Moonshot's ambient-memory model?
+18. Are the peer-derived experience fixtures and thresholds strong enough to support a competitive release claim without unauthorized competitor benchmarking, and which thresholds must be fixed before implementation begins?
 
 ## 21. Documentation migration and source register
 
@@ -1156,16 +1209,18 @@ Accepted ADRs, universal rule mirrors, current contributor/verification method, 
 - [Brain personal-agent launch contract `be08c4a`](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md)
 - [Brain PR #31 research/review record `43be41e`](https://github.com/Pin4sf/waldo-brain/pull/31), including the [PR #138 architecture review](https://github.com/Pin4sf/waldo-brain/blob/43be41e1a24af5d901eb6b68d9a63e1c32dfa6f7/03-References/research/waldo-backend-pr138-architecture-review-2026-09-18.md) and [harness-engineering source/adoption register](https://github.com/Pin4sf/waldo-brain/blob/43be41e1a24af5d901eb6b68d9a63e1c32dfa6f7/03-References/research/waldo-harness-engineering-lessons-and-adoption-2026-09-18.md); evidence only, not live product authority
 - [Independent PR #31 source/adoption evaluation](../research/WALDO_BRAIN_PR31_SOURCE_AUDIT_2026-09-18.md), covering every S01–S32 source and A01–A18 record with authority classes, limits, corrections, and launch dispositions
+- [Moonshot and peer competitive-quality evaluation](../research/WALDO_MOONSHOT_COMPETITIVE_QUALITY_EVALUATION_2026-09-19.md), separating first-party observations from inferences and converting the data-flow, experience, privacy, and benchmarking lessons into G0–G4 acceptance gates
 - [Backend entrypoint reconciliation `c91fa51`](https://github.com/Pin4sf/waldo-backend/commit/c91fa51)
 - [App documentation reconciliation `97b43ff2`](https://github.com/Pin4sf/waldo-app/commit/97b43ff2)
 
 ### 21.3 Competitor and infrastructure sources
 
-- Instinct: [product](https://instinct.com/) and owner-supplied dashboard/permission screenshots dated 2026-09-18
+- Moonshot Computer: [product](https://moonshot.computer/), [privacy/data-flow disclosure](https://moonshot.computer/privacy), and [about/founding beta](https://moonshot.computer/about)
+- Instinct: [product](https://instinct.com/), [privacy](https://instinct.com/privacy-policy), [terms](https://instinct.com/terms), and owner-supplied dashboard/permission screenshots dated 2026-09-18
 - Instinct founder on X: [launch](https://x.com/noahrshinn/status/2092691344456351744), [agent email](https://x.com/noahrshinn/status/2097443132816396649), [Trusted Person protocol](https://x.com/noahrshinn/status/2097794967574028448), [network follow-up](https://x.com/noahrshinn/status/2099358203121393851), [Concierge](https://x.com/noahrshinn/status/2100262985491231101), and [Stripe Link](https://x.com/noahrshinn/status/2093368510449877180)
 - Meta Muse: [announcement](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) and [product](https://ai.meta.com/muse/)
 - Grok Bot: [official overview](https://docs.x.ai/grok-bot/overview), [collaboration](https://docs.x.ai/grok-bot/chat-and-collaboration), [computer/apps](https://docs.x.ai/grok-bot/computer-and-apps), and [skills/routines](https://docs.x.ai/grok-bot/skills-routines-and-automations)
-- Poke: [official docs](https://poke.com/docs)
+- Poke: [official docs](https://poke.com/docs), [privacy](https://poke.com/privacy), and [terms](https://poke.com/terms)
 - folk Personal AI: [official product](https://www.folk.com/)
 - folk CRM Assistant: [official help](https://help.folk.app/en/articles/12460796-introducing-assistant)
 - Hermes Agent: [official docs](https://hermes-agent.nousresearch.com/docs/)
