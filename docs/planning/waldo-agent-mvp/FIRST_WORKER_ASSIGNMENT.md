@@ -23,3 +23,7 @@ Give this assignment to the first implementation agent. Product decisions are fi
 - Honest next-frontier recommendation using the canonical acceptance IDs and worker completion template.
 
 This assignment does not authorize merge, deployment, paid provider spend or unrestricted runtime actions by itself. The assigning user's implementation instruction and repository approval rules determine those boundaries.
+
+## Engineering support for this slice
+
+Read [REPOSITORY_MAP.md](REPOSITORY_MAP.md) before choosing checkouts and [ENGINEERING_QUALITY.md](ENGINEERING_QUALITY.md) before verification. Inspect app PR #12 and its pinned handoff before redoing containment. Keep account/consent-epoch isolation and real production conversation wiring explicit. A separate CI/eval owner may establish the first actual verification run and small S0 behavior suite while the integration owner retains shared contracts/migrations. No bulk cleanup, dependency overhaul or second runtime is needed before this proof.
