@@ -16,9 +16,9 @@ accepted ADRs, or `packages/contracts`, explore instead of asking.
 ## Waldo-specific framing
 
 Before grilling, anchor on:
-- **Workstream context** — which locked capability, dependency, and proof gate owns this decision? See `docs/foundation/NEXT-SESSION-PLAN.md` and the August architecture lock.
+- **Workstream context** — which capability, dependency, and proof gate owns this decision? See the September personal-agent build plan and `docs/foundation/NEXT-SESSION-PLAN.md`.
 - **Vocabulary** — use the local rule language plus the relevant `packages/contracts` module and accepted ADR.
-- **Locked architecture** — don't re-litigate the architecture lock or accepted ADRs. If current direction conflicts with ratified history, surface the conflict instead of silently choosing one.
+- **Ratified constraints** — don't silently contradict the current build plan, released contracts, or accepted ADRs. If implementation evidence conflicts with them, surface and resolve the conflict explicitly.
 - **Identity and authority are stable** — no provider, model, surface, package, or executor may redefine Waldo identity, mint authority, or own Acceptance/closure.
 
 ## What to grill on

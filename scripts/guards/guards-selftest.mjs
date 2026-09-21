@@ -13,6 +13,7 @@ const GUARD = 'scripts/guards/guard-health-leak.mjs';
 const FAKE_CALLBACK_GUARD = 'scripts/guards/guard-fake-callbacks.mjs';
 const DO_ONLY_RUNTIME_GUARD = 'scripts/guards/guard-do-only-runtime.mjs';
 const DO_MIGRATION_GUARD = 'scripts/guards/guard-do-migration-lineage.mjs';
+const AGENT_SURFACE_GUARD = 'scripts/guards/guard-agent-surface-stale-refs.mjs';
 
 const LEAK_CASES = [
   { name: 'same-line assignment', code: 'const hrv = 42;\n' },
@@ -42,6 +43,10 @@ function runFakeCallbackGuardOn(root) {
 
 function runDoOnlyRuntimeGuardOn(root) {
   return spawnSync('node', [DO_ONLY_RUNTIME_GUARD, '--root', root], { encoding: 'utf8' });
+}
+
+function runAgentSurfaceGuardOn(root) {
+  return spawnSync('node', [AGENT_SURFACE_GUARD, '--root', root], { encoding: 'utf8' });
 }
 
 function runDoMigrationGuardOn(root, baseRef) {
@@ -151,6 +156,30 @@ function withVersionedDoMigrationFixture(baseSource, baseReservations, source, r
 }
 
 let failures = 0;
+
+const retiredAuthorityViolation = withFixture(
+  'README.md',
+  'Use docs/planning/GROK_BOT_PRODUCT_RESEARCH_2026-08-12.md as authority.\n',
+  runAgentSurfaceGuardOn,
+);
+if (!retiredAuthorityViolation.stderr.includes('README.md:1: retired-dated-authority-doc')) {
+  process.stderr.write(
+    'guards-selftest: guard-agent-surface-stale-refs MISSED retired dated authority\n',
+  );
+  failures += 1;
+}
+
+const canonicalPlanHistoricalReference = withFixture(
+  'docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md',
+  'Historical source: GROK_BOT_PRODUCT_RESEARCH_2026-08-12.md.\n',
+  runAgentSurfaceGuardOn,
+);
+if (!reportsClean(canonicalPlanHistoricalReference)) {
+  process.stderr.write(
+    `guards-selftest: guard-agent-surface-stale-refs FALSE POSITIVE in canonical plan:\n${canonicalPlanHistoricalReference.stderr}`,
+  );
+  failures += 1;
+}
 
 const unversionedDoMigration = withDoMigrationFixture(
   `export const FIRST: DoMigration = { version: 1, name: 'first', up: [], down: [] };

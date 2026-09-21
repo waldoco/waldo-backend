@@ -7,7 +7,7 @@
 
 Tests prove a named invariant at a named proof level. They do not promote architecture, fixtures, fake adapters, or local success into shipped product capability.
 
-Before changing code, read the [current session entrypoint](./NEXT-SESSION-PLAN.md), the [product and architecture convergence](../planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md), the [capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md), the [architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md), the touched source/tests, and the accepted ADRs for the seam.
+Before changing code, read the [personal-agent build plan](../planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md), [current session entrypoint](./NEXT-SESSION-PLAN.md), the touched source/tests, owning issue/PR, released contracts, and accepted ADRs for the seam.
 
 ## Proof levels
 
@@ -105,24 +105,17 @@ Do not claim a command exists until it is present in the current package scripts
 | Cross-repository protocol | Shared golden fixtures, compatibility policy, backend/Kennel consumer conformance, no handwritten parallel truth model |
 | Messaging presence | Verified webhook/interaction secret or signature, server-derived owner binding, normalized untrusted envelope, dedupe/replay/rate-limit tests, deterministic privacy/health redaction, durable delivery intent, reconciliation/terminal ambiguity, revoke/block/removal |
 
-## Production-gate integration order
+## Product-gate integration order
 
-These are dependency and proof gates, not separate products. The [production run contract](./NEXT-BACKEND-SESSION-PROMPT.md) owns their exact issue map and acceptance criteria:
+The canonical build plan owns G0–G9, their dependencies, and their observable exits. Verification follows the next dependency frontier rather than the old B0–B6 launch map. Early complete proofs are:
 
-1. **B0:** reproducible repository baseline plus public route/OpenAPI parity;
-2. **B1:** one contract-defined writer from product WorkUnit to trusted execution;
-3. **B2:** durable Judgment, Evidence, Verification, Acceptance, OpenLoop, and ReEntry;
-4. **B3:** ordered desktop/mobile/messaging presence contracts and daily interaction in health-connected and health-declined states;
-5. **B4:** capability admission, credential custody, service-first Connections, real reversible effects, and real Telegram/Discord adapters;
-6. **B5:** governed context, routines, schedules, recoverable laptop-off execution, and durable channel delivery/recovery;
-7. **B6:** portability, deletion, Electron/mobile/Telegram/Discord staging, recovery, observability, rollback, and canonical production proof.
+- a truthful authenticated app conversation with correctable/deletable memory;
+- an approved Calendar change that survives timeout through source read-back;
+- a meeting-preparation flow that reads admitted mail/meeting context, creates a draft, and tracks the follow-up without silently sending;
+- two owners coordinating a meeting without sharing titles, health, memory, or authority; and
+- a health-connected and health-declined day plan on the appropriate physical-device proof ladder.
 
-Run both complete proofs:
-
-- “Publish this product update by Friday, but do not publish without my approval.”
-- “Prepare me for tomorrow's investor meeting and make sure every follow-up is handled.”
-
-Provider breadth, cloud workspaces, knowledge ingestion, MCP distribution, or dashboard breadth cannot substitute for this loop.
+Provider breadth, cloud workspaces, connector icons, MCP distribution, or dashboard breadth cannot substitute for these loops.
 
 ## Privacy and fixture rules
 

@@ -1,41 +1,40 @@
 # Waldo Backend Contributor Onboarding
 
 **Status:** current onboarding entrypoint
-**Updated:** 2026-08-15
+**Updated:** 2026-09-21
 
 ## What you are joining
 
-Waldo is one private, user-owned agent account across personal assistance and work/agent orchestration. The three primary launch surfaces are Electron Kennel desktop, Waldo mobile with optional Health/Care, and messaging presence. Telegram and Discord are required launch adapters; WhatsApp remains a primary target but vendor approval is non-blocking. Named helpers are bounded roles beneath the account, not separate identities or truth stores. Providers, tools, channels, connectors, people, and local/cloud environments execute bounded capabilities; none owns Waldo identity, canonical personal context, Outcome truth, authority, Acceptance, or Open Loop closure.
+Waldo is one private, user-governed personal agent with a stable personality, correctable memory, health-aware planning, bounded actions, and continuity across the Waldo app and officially supported remote presences. App and push are first; Telegram is the recommended same-agent demonstration/fallback and inbound email is optional. WhatsApp India is currently blocked for a general-purpose AI provider under the public Business Solution Terms unless Meta admits Waldo to its Third Party Agent/provider path or authoritatively confirms another eligible route; no production adapter or launch claim precedes that gate. K0 supplies a bounded Codex-first Kennel work handoff for the joined showcase; broader work orchestration follows. Providers, tools, channels, connectors, people, and environments contribute bounded observations or effects; none owns Waldo identity, canonical personal context, authority, Acceptance, or Open Loop closure.
 
-The repository contains owner-routed responsibility capture, an Outcome/Mission/WorkUnit graph, a guarded public adapter, a bounded zero-tool planning turn, released v0.4 responsibility contracts, one canonical execution writer, a recover-before-issue execution-environment seam, and one authenticated start-only WorkUnit bridge through the trusted Durable Object RunLoop composition. The missing real execution adapters, Evidence/Verification/Acceptance/OpenLoop/ReEntry, multi-presence/Home, real Connection/effect, context/routine, cloud-workspace, deletion, staging, and operations paths prevent any claim that the target product is shipped.
+The repository contains authenticated owner routing, responsibility capture/planning state, one execution writer and start-only bridge, Judgment Authority, RunLoop recovery/effect foundations, ContextComposer/Scribe foundations, and closure contracts. It does not yet contain the production conversation, real connectors, delivery, multi-presence, Trusted Relationships, closure runtime, staging, or operations needed for the target agent. Contract names, fakes, OpenAPI, and green local tests are not shipped capability.
 
 ## Read before changing code
 
 1. [`AGENTS.md`](../../AGENTS.md) and `.claude/rules/INDEX.md`.
-2. [Current session entrypoint](./NEXT-SESSION-PLAN.md).
-3. [Current product and architecture convergence](../planning/WALDO_PRODUCT_ARCHITECTURE_CONVERGENCE_2026-08-11.md).
-4. [Product capability matrix](../planning/WALDO_PRODUCT_CAPABILITY_MATRIX_AND_THESIS_VALIDATION_2026-08-04.md).
-5. [Architecture lock](../planning/WALDO_ARCHITECTURE_LOCK_AND_WHOLE_PRODUCT_BUILD_DIRECTION_2026-08-05.md).
-6. [Source-pinned final architecture](../planning/WALDO_FINAL_HOME_WORK_BACKEND_ARCHITECTURE_PLAN_2026-08-04.md) for retained contract/failure-path detail.
-7. [Execution ledger](./EXECUTION-LEDGER.md), [agent operating workflow](./AGENT-OPERATING-WORKFLOW.md), and [local verification pipeline](./LOCAL-DEV-TESTING-PIPELINE.md).
-8. [Production run contract](./NEXT-BACKEND-SESSION-PROMPT.md), then fresh source, tests, issue/PR state, and accepted ADRs for the touched seam.
+2. [Personal-agent product architecture and build plan](../planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md).
+3. [Current session entrypoint](./NEXT-SESSION-PLAN.md).
+4. [Execution ledger](./EXECUTION-LEDGER.md), [agent operating workflow](./AGENT-OPERATING-WORKFLOW.md), and [local verification pipeline](./LOCAL-DEV-TESTING-PIPELINE.md).
+5. Fresh source/tests, the owning issue/PR, released schemas, and accepted ADRs for the exact seam.
 
-The [production-launch milestone](https://github.com/Pin4sf/waldo-backend/milestone/1) and [umbrella issue #78](https://github.com/Pin4sf/waldo-backend/issues/78) carry the current B0-B6 work map. [Execution ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116) carries live session/worktree ownership and links durable handoffs. GitHub issues, labels, milestones, PRs and linked evidence are the current workflow; Linear/HEY identifiers are historical evidence only. B0 and bounded B1 are complete; #82 is the next candidate frontier after documentation/tracker convergence. Use the [B2–B6 goal execution contract](../planning/WALDO_BACKEND_B2_B6_GOAL_EXECUTION_CONTRACT_2026-08-15.md); do not start one write-capable worktree per gate. Retired plans and ticket handoffs remain in Git history for archaeology. They cannot establish current work order, ownership, product scope, or shipped behavior.
+[Execution ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116) carries live session/worktree ownership and links durable handoffs. GitHub issues, PRs, and linked evidence are the current workflow; copied B0–B6 tables, historical milestones, Linear/HEY identifiers, and dated handoffs cannot establish current work order or shipped behavior. Promote only the next dependency frontier from the canonical build plan; do not start every gate as a parallel writer.
 
 ## Architecture boundaries
 
 - One owner maps to one canonical backend authority root.
-- One named reducer is the durable writer for each aggregate. Use the architecture lock's definitive writer matrix.
+- One named reducer is the durable writer for each aggregate. The current build plan owns the proposed writer/store matrix; accepted ADRs constrain the touched seam.
 - `WaldoCoordinator` authenticates, authorizes, and sequences; it does not bypass owning reducers.
 - `RunLoopEngine` remains the trusted execution kernel and physical effect path during additive migration.
 - Persist `EffectIntent`, frozen arguments, digest, and reconciliation key before external I/O.
 - Never blindly retry an indeterminate effect. Reconcile first and expose a terminal user-visible resolution path.
 - Context is compiled for a declared purpose, audience, destination, and data class. Memory is not permission.
-- Credentials are brokered outside model-visible prompts, events, logs, artifacts, and checkpoints.
+- Resolve the smallest per-turn capability manifest; connecting a service does not expose its whole API to every message.
+- OAuth credentials remain in Vault and are used only by the trusted typed connector proxy; bearer tokens never enter the DO, model-visible prompts, events, logs, artifacts, or checkpoints.
 - Provider `done` is an observation. Evidence, Verification, Acceptance, Outcome state, and Open Loop closure are distinct.
 - A disconnected presence cannot create/queue commands, approve, execute Waldo work, mutate truth, or claim completion under protocol 0.1.
 - User corrections outrank inference. Raw health, full transcripts, credentials, and unrelated personal context are excluded from execution by default.
-- Health First is a recommended first-class enhancement, never a prerequisite. Health-declined fixtures must preserve the complete core agent/orchestration path without invented readiness or pressure.
+- Health-aware planning is a first-class differentiator, while health sharing remains optional. Health-declined fixtures preserve the complete core assistant path without invented readiness or pressure.
+- Trusted Relationships exchange minimal signed proposals. Each owner independently admits, approves, executes, and accepts; no shared memory or transitive authority exists.
 - The primary product Interface is one Waldo account, service-first Connections, “Have Waldo handle this,” understandable authority, and truthful placement/status. Infrastructure vocabulary belongs in optional Inspect/Advanced surfaces.
 - Named helper/agent roles do not receive independent identity, ambient credentials, memory authority, or canonical writers.
 
@@ -46,7 +45,7 @@ The [production-launch milestone](https://github.com/Pin4sf/waldo-backend/milest
 | `packages/contracts` | Versioned schemas, commands/events, adapter contracts, public DTOs, shared fixtures |
 | `packages/runtime` | Durable Object runtime, trusted RunLoop, execution/effect foundations, adapters, persistence |
 | `scripts/guards` | Static invariants for architecture, contracts, tooling, and agent instruction surfaces |
-| `docs/planning` | Current target architecture, capability envelope, source notes, implementation boundaries |
+| `docs/planning` | One current build plan plus short historical redirects |
 | `docs/foundation` | Current contributor, session-handoff, and verification procedures |
 | `supabase` | Migration/RLS/Vault surfaces; never mutate hosted environments without explicit authority |
 
@@ -75,7 +74,7 @@ operational_proof_passed
 
 One status never implies the next. Use “target architecture,” “is designed to,” or “will” until the relevant implementation, conformance, acceptance, and operational proof pass. Do not claim universal uniqueness or operator-inaccessible privacy without the required market evidence or key-protocol proof.
 
-The current dependency order is backend contracts/fixtures first, then parallel Electron Kennel, selected mobile, and messaging clients against those releases; real Telegram/Discord adapters integrate at B4/B5 and all required surfaces converge at B6. It is an integration order, not authorization to remove any launch-surface acceptance from the definition of done.
+The finalized order is S0 composition/truth, S1 conversation/memory, S2 + H health-aware day/Calendar/proactivity, S3 + B email/research, and S4 personal-beta proof. K0 is required for the joined showcase; channels C and later W/K/R have explicit scope. Read the [worker guide](../planning/waldo-agent-mvp/WORKER_GUIDE.md) and complete the [bounded ADR synchronization](../planning/waldo-agent-mvp/ADR_RECONCILIATION.md) before changing conflicting accepted seams. The exact gates and exit criteria live only in the canonical build plan.
 
 ## Verification
 

@@ -25,7 +25,7 @@ A contract module proves vocabulary and validation only. It does not prove that 
 
 **Steps:**
 
-1. Read `.claude/rules/INDEX.md`, `docs/foundation/NEXT-SESSION-PLAN.md`, the architecture lock, and the accepted ADR/foundation source for the adapter seam.
+1. Read `.claude/rules/INDEX.md`, the September personal-agent build plan, `docs/foundation/NEXT-SESSION-PLAN.md`, and the accepted ADR/foundation source for the adapter seam.
 2. Use `/waldo-isa-run-contract` for a non-trivial adapter addition: current state, ideal state, criteria, anti-criteria, test strategy.
 3. Name the Module, Interface, Contract, Seam, Adapter, and Impact Surface.
 4. Add or update the contract module under `packages/contracts/src/adapters/`.
