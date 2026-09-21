@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - beta-mvp
       - greenfield/harness-foundation
       - main
 
