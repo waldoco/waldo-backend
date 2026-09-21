@@ -2,7 +2,7 @@
 
 Status: active cross-session coordination protocol; navigation reconciled 2026-09-17.
 
-Live ownership and evidence: [GitHub issue #116](https://github.com/Pin4sf/waldo-backend/issues/116), owning issues and PRs. Current personal-agent scope: [the pinned master launch contract](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md). Start execution from [NEXT-SESSION-PLAN.md](NEXT-SESSION-PLAN.md).
+Live ownership and evidence: [GitHub issue #116](https://github.com/Pin4sf/waldo-backend/issues/116), owning issues and PRs. Current personal-agent scope: [the finalized canonical plan](../planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md) and its [bounded cross-repository synchronization](../planning/waldo-agent-mvp/ADR_RECONCILIATION.md). Start execution from [NEXT-SESSION-PLAN.md](NEXT-SESSION-PLAN.md).
 
 The older #78/milestone/B0-B6 map is historical delivery context, not a parallel release definition. GitHub issue bodies may also be stale: follow the latest explicit user direction, current contract and linked evidence. Linear/HEY identifiers are historical only.
 

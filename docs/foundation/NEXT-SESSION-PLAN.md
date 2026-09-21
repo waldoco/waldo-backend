@@ -1,75 +1,29 @@
 # Next Session — Waldo Personal Agent
 
-**Status:** sole backend execution entrypoint
+Updated 21 September 2026 · sole backend execution entrypoint
 
-**Updated:** 2026-09-18
+The user has finalized the MVP direction in the [canonical build plan](../planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md). Start with the [worker packet](../planning/waldo-agent-mvp/README.md) and [S0 assignment](../planning/waldo-agent-mvp/FIRST_WORKER_ASSIGNMENT.md). These documents supersede the old G0–G9 release order; historical Brain/app product cuts must be synchronized, not treated as a competing roadmap.
 
-**Candidate build roadmap:** [Personal-agent product architecture and build plan](../planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md). After review/merge it governs backend roadmap, dependency order, and documentation cleanup; conflicting product-scope or architecture seams remain non-authoritative until the Brain launch contract/ADR dispositions are published, the plan/entrypoints are repinned, and `accepted-adrs.json` is regenerated.
+## Current baseline and proof boundary
 
-**Current product-scope authority requiring G0 amendment:** [pinned Brain launch contract](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md)
-**Coordination:** [ledger protocol](EXECUTION-LEDGER.md), [#116](https://github.com/Pin4sf/waldo-backend/issues/116), and the owning issue/PR
+Backend main `e91bee017b0c36759cbfda1353fc11c73e3afe0a` and app main `7218c18fed8b874492e3831bbb5bd1e1c58abe58` were inspected for the September 20–21 audit. PR #138 started this finalization at `10e48fb979f8c775491d0121dbafa18b8624006c`. Re-fetch before implementation. Preserve dirty primary checkouts.
 
-This page says where to resume. It does not duplicate implementation architecture, market research, or the live issue tracker.
+The backend has owner routing, Coordinator/RunLoop, durability, scheduling, context and effect foundations. Production composition still has fail-closed placeholders. The app has real HealthKit/SQLCipher foundations but prototype success, legacy thread-ownership and consent/lifecycle gaps. Source findings are in the [audit](../planning/waldo-agent-mvp/SOURCE_AUDIT.md); none proves a deployed agent. Historical tests are not rerun evidence for a later head.
 
-## Fresh baseline
+## First dependency frontier
 
-Fetched and inspected 2026-09-18:
+1. Register one bounded S0 lane through [the ledger protocol](EXECUTION-LEDGER.md) and [#116](https://github.com/Pin4sf/waldo-backend/issues/116).
+2. Complete the [precise cross-repository synchronization](../planning/waldo-agent-mvp/ADR_RECONCILIATION.md), preserving accepted security/wire invariants. The product direction is selected; protected amendments and generated snapshots must still be published before changing their seams.
+3. Reproduce and contain fictional app success and legacy thread-ownership risk. Prove truthful pending/error/receipt behavior and two-owner isolation.
+4. Wire app → authenticated owner DO → real model → read-only test Calendar → staged durable answer, including stop/reconnect, permission, spend, context and delivery dependencies.
+5. Resolve the generated closure API/runtime mismatch for the touched contract rather than advertising unimplemented routes.
+6. Produce the S0 acceptance evidence, model/config evaluation and measured estimate; release only the shared contracts needed by the next frontier.
 
-- backend `origin/main@e91bee017b0c36759cbfda1353fc11c73e3afe0a`;
-- app `origin/main@7218c18fed8b874492e3831bbb5bd1e1c58abe58`;
-- Brain product contract branch `be08c4afa6f356c66600e73ae0bf54e5d7a3a158`;
-- backend documentation reconciliation branch `c91fa51`;
-- app documentation reconciliation branch `97b43ff2`.
+Advance S1 memory/personality; S2 + H health-aware day/Calendar/cloud follow-through; S3 + B approved email/public research; S4 repeated device/provider/usefulness/cost proof. K0 is required for the joined showcase, while a clearly labeled personal-only pilot is independently useful. C supplies the Telegram demonstration; WhatsApp remains a supported-route workstream. W/K/R expansion follows. Exact dependencies and ownership live in the canonical plan, not duplicated issue queues. No fixed date, budget or exact cohort is agreed.
 
-Backend evidence at `e91bee0`:
+## Stable engineering boundaries
 
-- contracts: 74 files / 1,584 tests passed;
-- runtime: 43 files / 1,152 tests passed;
-- workspace typechecks: passed;
-- static guards: passed;
-- full Supabase/`verify`, staging, live adapters, native device, and production: not run or not proved by this documentation pass.
-
-Re-fetch and re-pin before implementation. Preserve the dirty active backend and app checkouts; use fresh isolated worktrees.
-
-## Current boundary
-
-The backend has a strong owner-routed governance/durability kernel: Coordinator, planning/execution state, RunLoop, Judgment Authority, context/sanitization foundations, and closure contracts. It does not yet have the production conversation, connectors, delivery, memory experience, multi-presence, Trusted Relationships, or deployment needed for an Instinct-class personal agent.
-
-Two truth gaps must be resolved early:
-
-1. closure v0.6 endpoints appear in generated OpenAPI but have no runtime route/module on main;
-2. the current identity module permits one registered Presence per owner, while app + email + WhatsApp requires governed multiple presences.
-
-The app has real HealthKit/SQLCipher and iPhone/watch targets, but false-success chat behavior, contradictory health-upload copy/defaults, incomplete account/consent lifecycle, mock watch state, no App Intents/background HealthKit proof, and no native tests block release claims.
-
-## Next authorized implementation frontier
-
-Do not begin implementation merely because this plan exists. Under a bounded user-authorized issue, take only the first dependency frontier:
-
-1. create clean backend/app worktrees from freshly fetched remote main;
-2. reproduce the exact verification baselines;
-3. publish the amended/superseding Brain launch contract and the plan's ADR disposition packet, repin all entrypoints, and regenerate/diff the backend ADR snapshot;
-4. remove app fictional success and prove pending/error/receipt UI;
-5. decide/version the closure OpenAPI/runtime mismatch;
-6. contract Supabase conversation publication, governed multi-presence, per-account/consent lifecycle, model-route data-class egress, and the Vault/typed-connector-proxy boundary;
-7. write the G1 run contract for one authenticated, durable, real-model app conversation with Profile Claim correction/deletion;
-8. stop before Google implementation until G1's contracts, writer, privacy, tests, and rollback are reviewed.
-
-After the applicable Brain authority changes are published and repinned, advance the plan's gates in dependency order: Calendar; Trusted Relationships; Gmail/Drive/Granola/proactivity; physical-device health; supported health patterns; Swiggy; browser fallback; joined channels; Kennel work bridge.
-
-WhatsApp India activation is currently blocked by the public Business Solution Terms for a general-purpose AI provider. Pursue Meta Third Party Agent/provider admission as a disjoint external lane; do not build a production adapter without an official contract/test tenant and never use an unofficial linked-device workaround.
-
-## Stable rules
-
-- Keep one owner authority root and one durable writer per aggregate.
-- Ordinary chat does not require Mission/Outcome ceremony; durable responsibilities do.
-- Resolve the smallest per-turn capability manifest; a connection is not blanket permission.
-- Persist frozen effect intent before I/O; reconcile ambiguity before retry.
-- Provider or model `done` is an observation, never Verification or Acceptance.
-- User correction outranks inference; memory and relationships are not authority.
-- Raw health and credentials never enter generic prompts, traces, DO memory, or fixtures.
-- Each Waldo in a Trusted Relationship acts only for its own owner.
-- Local/fake/schema/simulator proof is never staging, device, channel, or production proof.
+One owner authority root; one writer per aggregate. Supabase owns visible conversation content; the DO owns run/schedule/outbox order. Freeze effect intent before I/O and reconcile uncertainty before retry. Correction outranks inference; memory never grants authority. Health sharing is optional and purpose-scoped. Provider completion is evidence, not Acceptance. Channels, browser and Kennel retain the same task identity and permission boundaries. Use the [implementation contracts](../planning/waldo-agent-mvp/IMPLEMENTATION_CONTRACTS.md) for exact recovery rules.
 
 ## Verification and handoff
 
@@ -87,4 +41,4 @@ npx -y pnpm@10.34.4 verify
 git diff --check
 ```
 
-App and native claims run in `waldo-app` with its pinned package manager plus simulator/physical-device evidence appropriate to the claim. Every PR records base/head, scope, writer ownership, schemas, evidence, rollback, consumer actions, and worktree disposition. Register/handoff through #116. Deployment and hosted mutations require separate explicit authority.
+App/native claims require their repository gates and appropriate simulator/physical-device proof. Record exact base/head, scope, commands, passed/failed/not-run results, rollback and next owner. Documentation publication is not merge, deployment, runtime proof or permission for hosted mutations.

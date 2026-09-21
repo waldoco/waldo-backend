@@ -1,25 +1,23 @@
 # Waldo Backend Documentation
 
-## Current entrypoints
+## Start here
 
-- [Personal-agent product architecture and build plan](planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md): proposed single backend roadmap, connector sequence, tests, and cleanup authority. After review/merge it governs backend roadmap, dependency order, and documentation cleanup; conflicting product-scope or architecture seams remain non-authoritative until the Brain launch contract/ADR dispositions are published, the plan/entrypoints are repinned, and `accepted-adrs.json` is regenerated.
-- [Personal-agent launch contract — pinned Brain revision](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md): current cross-repository product authority and durable product/privacy baseline; G0 must amend its WhatsApp-complete-release and M0–M8 sequencing before the plan's conflicting release cuts become live.
-- [Next session](foundation/NEXT-SESSION-PLAN.md): short backend execution view; read current source and the owning issue next.
-- [Execution ledger protocol](foundation/EXECUTION-LEDGER.md) and [live #116](https://github.com/Pin4sf/waldo-backend/issues/116): session ownership and evidence.
-- [Contributor onboarding](foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](foundation/LOCAL-DEV-TESTING-PIPELINE.md): engineering method, not a separate release definition.
+1. [Worker packet](planning/waldo-agent-mvp/README.md): selected MVP decisions, read order and source index.
+2. [Canonical product architecture and build plan](planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md): one release definition, stack, ownership, slices and acceptance criteria; finalized 21 September 2026.
+3. [Worker guide](planning/waldo-agent-mvp/WORKER_GUIDE.md) and [first S0 assignment](planning/waldo-agent-mvp/FIRST_WORKER_ASSIGNMENT.md): libraries, role-specific reading, context/tool/harness engineering, verification and completion evidence.
+4. [Next session](foundation/NEXT-SESSION-PLAN.md), [ledger](foundation/EXECUTION-LEDGER.md), [#116](https://github.com/Pin4sf/waldo-backend/issues/116), [onboarding](foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](foundation/LOCAL-DEV-TESTING-PIPELINE.md): bounded delivery workflow.
 
-The old [next-backend prompt](foundation/NEXT-BACKEND-SESSION-PROMPT.md) and dated planning files are compatibility redirects. Do not maintain a second product or sequencing plan in them.
+## Supporting references
 
-## Retained decision and source evidence
+- [Implementation contracts](planning/waldo-agent-mvp/IMPLEMENTATION_CONTRACTS.md): staged conversation publication/deletion, capability dispatch, connections and provider recovery.
+- [ADR synchronization](planning/waldo-agent-mvp/ADR_RECONCILIATION.md): exact cross-repository dispositions; product direction is selected but protected technical amendments and generated snapshots are not silently applied.
+- [Ecosystem strategy](planning/waldo-agent-mvp/ECOSYSTEM_STRATEGY.md): positioning, health/work bridge, partner incentives and later expansion; adds no MVP dependencies.
+- [Source audit](planning/waldo-agent-mvp/SOURCE_AUDIT.md), [competitors](planning/waldo-agent-mvp/COMPETITOR_RESEARCH.md), [runtime/browser research](planning/waldo-agent-mvp/RUNTIME_BROWSER_RESEARCH.md), and [Kennel map](planning/waldo-agent-mvp/KENNEL_K0_SOURCE_MAP.md): dated evidence, not shipped capability.
 
-- Accepted ADRs and released schemas: binding for their exact seam until explicitly amended.
-- Existing `docs/ledger/` handoffs: durable execution evidence, not current sequencing.
-- The dated planning/research paths are short historical redirects to exact Git history. Their unique stable decisions and current source register were migrated into the canonical plan.
+The previous [Brain launch proposal](https://github.com/Pin4sf/waldo-brain/blob/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/product/WALDO_PERSONAL_AGENT_LAUNCH.md) requires the bounded synchronization above; do not let its old sequence compete with the user's finalized MVP. Accepted ADRs and released wire contracts continue to constrain their exact seams until explicitly migrated. No protected Brain file, runtime source, migration or canonical rule mirror is changed by this publication.
 
-The Brain launch contract, accepted ADRs, and released wire contracts are not silently changed by this documentation pass. The canonical plan names the launch-contract and ADR changes required; they become live only when published in Brain, repinned, and resynced here. Historical references to Telegram/Discord or desktop as mandatory launch surfaces do not govern the proposed personal-agent release. Health is a launch capability while consent remains optional per person. WhatsApp provider admission and eligible live activation are separate proposed gates.
+## Evidence and history
 
-## Evidence rules
+Live ownership/progress belongs in issues/PRs, not copied dashboards. Re-pin current source and tests before implementation. Architecture, contracts, module implementation, adapter conformance, cross-surface acceptance and operational proof are distinct. Vendor/competitor claims require fresh verification for the exact capability being built.
 
-Live progress belongs in issues/PRs, not copied tables or new state dashboards. Pin source and test evidence; classify architecture, contracts, module implementation, adapter conformance, cross-surface acceptance and operational proof separately. Existing audit findings are not automatically true of a later head.
-
-No runtime source, migration, protected soul file, or canonical rule mirror was removed by this reconciliation. Retired research/planning prose was removed from the live tree after its current decisions and source register were migrated; every full original remains recoverable at the exact `e91bee0` links in its historical redirect. See the canonical plan's cleanup register for tested replacement/decommission gates.
+Dated planning redirects and existing ledger records retain historical evidence. Full originals remain in Git history. This publication replaces the active build plan and preserves its detailed recovery contracts; it does not delete runtime modules. Cleanup requires caller/deployment inventory, tested replacement and rollback.

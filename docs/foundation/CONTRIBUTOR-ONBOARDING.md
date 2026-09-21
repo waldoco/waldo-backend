@@ -1,11 +1,11 @@
 # Waldo Backend Contributor Onboarding
 
 **Status:** current onboarding entrypoint
-**Updated:** 2026-09-18
+**Updated:** 2026-09-21
 
 ## What you are joining
 
-Waldo is one private, user-governed personal agent with a stable personality, correctable memory, health-aware planning, bounded actions, and continuity across the Waldo app and officially supported remote presences. App is the first complete surface and inbound email follows. WhatsApp India is currently blocked for a general-purpose AI provider under the public Business Solution Terms unless Meta admits Waldo to its Third Party Agent/provider path or authoritatively confirms another eligible route; no production adapter or launch claim precedes that gate. Kennel later supplies a work presence and local executor. Providers, tools, channels, connectors, people, and environments contribute bounded observations or effects; none owns Waldo identity, canonical personal context, authority, Acceptance, or Open Loop closure.
+Waldo is one private, user-governed personal agent with a stable personality, correctable memory, health-aware planning, bounded actions, and continuity across the Waldo app and officially supported remote presences. App and push are first; Telegram is the recommended same-agent demonstration/fallback and inbound email is optional. WhatsApp India is currently blocked for a general-purpose AI provider under the public Business Solution Terms unless Meta admits Waldo to its Third Party Agent/provider path or authoritatively confirms another eligible route; no production adapter or launch claim precedes that gate. K0 supplies a bounded Codex-first Kennel work handoff for the joined showcase; broader work orchestration follows. Providers, tools, channels, connectors, people, and environments contribute bounded observations or effects; none owns Waldo identity, canonical personal context, authority, Acceptance, or Open Loop closure.
 
 The repository contains authenticated owner routing, responsibility capture/planning state, one execution writer and start-only bridge, Judgment Authority, RunLoop recovery/effect foundations, ContextComposer/Scribe foundations, and closure contracts. It does not yet contain the production conversation, real connectors, delivery, multi-presence, Trusted Relationships, closure runtime, staging, or operations needed for the target agent. Contract names, fakes, OpenAPI, and green local tests are not shipped capability.
 
@@ -74,7 +74,7 @@ operational_proof_passed
 
 One status never implies the next. Use “target architecture,” “is designed to,” or “will” until the relevant implementation, conformance, acceptance, and operational proof pass. Do not claim universal uniqueness or operator-inaccessible privacy without the required market evidence or key-protocol proof.
 
-The current dependency order is truthful app/conversation, Google Calendar, Trusted Relationships, Gmail/selected Drive/Granola and proactivity, physical-device health, supported health patterns, Swiggy, browser fallback, joined channels, then Kennel/work integration. The exact gates and exit criteria live only in the canonical build plan.
+The finalized order is S0 composition/truth, S1 conversation/memory, S2 + H health-aware day/Calendar/proactivity, S3 + B email/research, and S4 personal-beta proof. K0 is required for the joined showcase; channels C and later W/K/R have explicit scope. Read the [worker guide](../planning/waldo-agent-mvp/WORKER_GUIDE.md) and complete the [bounded ADR synchronization](../planning/waldo-agent-mvp/ADR_RECONCILIATION.md) before changing conflicting accepted seams. The exact gates and exit criteria live only in the canonical build plan.
 
 ## Verification
 
