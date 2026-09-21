@@ -141,6 +141,8 @@ Next smallest frontier and required owner:
 
 ## 9. Copy-ready worker assignment
 
+For the lead coordinating the complete MVP, use [IMPLEMENTATION_PROMPT.md](IMPLEMENTATION_PROMPT.md). The bounded template below is for one delegated slice.
+
 > Implement only [SLICE] from the consolidated Waldo MVP plan. Read the repository's current instructions, this worker guide, REPOSITORY_MAP.md, ENGINEERING_QUALITY.md and the source/primary references for that slice. Verify the current baseline; preserve dirty checkouts; register a bounded lane and use an isolated worktree. Your required user outcome is [OUTCOME]. You own [FILES]; shared contracts and migrations belong to [INTEGRATION OWNER]. Reproduce the current gap, propose only necessary interface changes, and build the smallest production path. Apply the plan's context, permission, effect and recovery rules. Prove [ACCEPTANCE IDS] with actual evidence at the claimed layer. Do not add later roadmap features or claim success from mocks, tests alone or a provider's completion flag. Leave the completion handoff above and identify the next smallest frontier. If current source contradicts the plan, report the exact contradiction and a bounded correction instead of quietly building another architecture.
 
 ## 10. Cross-verify sources without reopening the entire plan
