@@ -50,4 +50,13 @@ The audit used backend main `e91bee0`, PR #138 head `10e48fb`, and app main `721
 - [ADR reconciliation](ADR_RECONCILIATION.md): exact dispositions and cross-repository synchronization before changing affected seams.
 - [First worker assignment](FIRST_WORKER_ASSIGNMENT.md): copy-ready S0 scope and acceptance; analyze current source, then build only that frontier.
 
+Give the implementation lead the [copy-ready full MVP assignment](IMPLEMENTATION_PROMPT.md). Build and verify the complete MVP first, then use a separate dated competitor comparison to prioritize further quality improvements; the existing MVP usability and reliability criteria still apply.
+
 Share this directory link with workers. Read this page, the worker guide, and the relevant build-plan sections; use the research appendices only for the seam being implemented. The canonical plan remains one file at its established September 18 path, updated September 21.
+
+## Engineering and repository navigation
+
+- [Repository map](REPOSITORY_MAP.md): where the main agent, app, health, Kennel bridge and canonical decisions live; source paths, fresh-ref checks and verification commands.
+- [Engineering quality](ENGINEERING_QUALITY.md): CI and agent evaluations, dependency lifecycle, bounded coding-agent improvement, cleanup order and the measurable Instinct/Meta Muse experience target.
+
+Build the first CI and behavioral proof alongside S0. Preserve the main plan's A1–A16 acceptance and S0–S4/H/B/C/K0 scope; the companions do not establish shipped capability or add a platform prerequisite.

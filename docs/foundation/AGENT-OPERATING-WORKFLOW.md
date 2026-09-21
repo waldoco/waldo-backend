@@ -168,3 +168,7 @@ git diff --check
 ```
 
 For docs-only changes, run a targeted whitespace/trailing-space check and any guard touched by the docs. For UI or runtime behavior, include rendered/browser/log/state evidence. For agent harness behavior, include trace, eval, conformance, replay, ACL, sanitizer, or journal evidence as applicable.
+
+## MVP engineering companion
+
+Use the [repository map](../planning/waldo-agent-mvp/REPOSITORY_MAP.md) for source ownership, fresh checkouts and per-repo verification. Apply the [engineering quality guide](../planning/waldo-agent-mvp/ENGINEERING_QUALITY.md) to CI/evaluations, dependencies, bounded improvement and cleanup. Establish actual CI and first behavior-suite evidence alongside S0; preserve the canonical plan's acceptance criteria and existing repository merge wall.

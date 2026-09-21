@@ -42,3 +42,7 @@ git diff --check
 ```
 
 App/native claims require their repository gates and appropriate simulator/physical-device proof. Record exact base/head, scope, commands, passed/failed/not-run results, rollback and next owner. Documentation publication is not merge, deployment, runtime proof or permission for hosted mutations.
+
+## MVP engineering companion
+
+Use the [repository map](../planning/waldo-agent-mvp/REPOSITORY_MAP.md) for source ownership, fresh checkouts and per-repo verification. Apply the [engineering quality guide](../planning/waldo-agent-mvp/ENGINEERING_QUALITY.md) to CI/evaluations, dependencies, bounded improvement and cleanup. Establish actual CI and first behavior-suite evidence alongside S0; preserve the canonical plan's acceptance criteria and existing repository merge wall.

@@ -524,3 +524,7 @@ Not performed during the source audit: installing/building the app, executing ru
 Supporting evidence: [source audit](waldo-agent-mvp/SOURCE_AUDIT.md), [competitor research](waldo-agent-mvp/COMPETITOR_RESEARCH.md), [browser/open-agent research](waldo-agent-mvp/RUNTIME_BROWSER_RESEARCH.md). Dated evidence is retained as reference; this document remains the single execution plan. Documentation publication checks and remote read-back are recorded separately in PR #138 and ledger #116; they are not runtime evidence.
 
 Worker implementation guidance and the role-specific source/library reading map are in [WORKER_GUIDE.md](waldo-agent-mvp/WORKER_GUIDE.md). It applies this plan; it does not create a second scope or architecture authority.
+
+### Engineering execution companion — 21 September 2026
+
+Use the [repository map](waldo-agent-mvp/REPOSITORY_MAP.md) to assign backend/app/health/Kennel/Brain changes and the [engineering quality guide](waldo-agent-mvp/ENGINEERING_QUALITY.md) for testing, CI, dependency management, bounded automatic improvement and cleanup. Implement those checks alongside the existing slices; A1–A16 and the release cut above remain authoritative. The engineering audit refreshed backend main to `65a334ccf1cb2b7d8298d416680b546cce0e868f` after PR #138 merged. Earlier pins and open-PR observations above are historical audit evidence. CI availability and the behavioral-suite gap are dated in the companion and must be refreshed before claims.

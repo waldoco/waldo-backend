@@ -14,6 +14,8 @@ Keep the full web dashboard, coordination between people's Waldos, broad commerc
 
 ## 2. Read just the context required for your slice
 
+Use the [repository map](REPOSITORY_MAP.md) for exact repo ownership, current-ref precautions, source paths and repo-specific commands. Use [engineering quality](ENGINEERING_QUALITY.md) for CI, executable evaluations, dependency upgrades, bounded improvement and cleanup. These companions implement this guide; they do not add release scope.
+
 Every worker reads the repository's current AGENTS.md and its required rules, this guide, the build-plan sections for its slice, and the issue's current acceptance criteria. Read the relevant implementation and tests before changing it. Treat the source audit as navigation to a pinned snapshot, not as a substitute for checking current source. Competitor research is background, never runtime specification.
 
 | Owner | Read in the build plan | Read in source before changing it | Evidence to produce |
@@ -29,6 +31,8 @@ Every worker reads the repository's current AGENTS.md and its required rules, th
 One integration owner writes shared contracts, migrations and generated client/schema outputs. Other owners propose interface changes. Each lane uses its own worktree and bounded file ownership; preserve unrelated modifications. Register the actual implementation lane through the existing repository workflow. Parallelize independent slices only after their shared contract is released.
 
 ## 3. Dependency and library choices
+
+Apply the [dependency lifecycle](ENGINEERING_QUALITY.md#5-library-and-dependency-lifecycle): source/version verification, compatibility tests, frozen installs, reviewed update proposals and rollback. Library availability is not runtime compatibility or product proof.
 
 Use existing lockfiles. The inspected backend declares Node >=22, pnpm 10.34.4, TypeScript 5.9.3, Wrangler 4.105.0, Vitest 4.1.9, the Cloudflare Workers test pool, fast-check and Stryker. The app declares pnpm 9.15.9, Expo 54, React Native 0.81.5, React 19.1, TanStack Query 5, Zustand 5, Supabase JS 2, Zod 4, OP-SQLite/SQLCipher and a local HealthKit module. These are snapshot manifests, not an instruction to upgrade other repositories or replace resolved lockfile versions.
 
@@ -109,6 +113,8 @@ If the same two people own all lanes, serialize contested work and revise the sc
 
 ## 8. Verification and completion
 
+Follow the [CI and evaluation lanes](ENGINEERING_QUALITY.md#3-tests-evaluations-and-ci-lanes). The September 21 audit found no recorded Actions runs and no general executable behavior suite at its pinned baseline. Recheck current state; implement the first CI/eval evidence alongside S0 and never call a workflow file or run-eval fallback a passing behavior suite.
+
 Create tests for behavior and failure boundaries, not for implementation details. Use deterministic unit/property tests for permission, ordering and conflict behavior; Workers integration tests for storage/restart semantics; provider conformance tests for actual responses; physical-device tests for HealthKit/push; and held-out model scenarios for judgment/personality/usefulness.
 
 The inspected backend scripts include `pnpm typecheck`, `pnpm verify:node`, `pnpm verify:workers`, `pnpm verify:supabase:session-revocation`, `pnpm verify:guards` and the aggregate `pnpm verify`. The aggregate also installs the locked dependencies and performs Supabase checks. Inspect the current script and use the assigned test environment before running it. App scripts include `pnpm check` and `pnpm test`. Kennel Go tests run from `backend/`, for example `go test ./... -count=1`; follow its current repo-specific gates as well. No listed command was run by this planning audit.
@@ -135,7 +141,9 @@ Next smallest frontier and required owner:
 
 ## 9. Copy-ready worker assignment
 
-> Implement only [SLICE] from the consolidated Waldo MVP plan. Read the repository's current instructions, this worker guide and the source/primary references for that slice. Verify the current baseline; preserve dirty checkouts; register a bounded lane and use an isolated worktree. Your required user outcome is [OUTCOME]. You own [FILES]; shared contracts and migrations belong to [INTEGRATION OWNER]. Reproduce the current gap, propose only necessary interface changes, and build the smallest production path. Apply the plan's context, permission, effect and recovery rules. Prove [ACCEPTANCE IDS] with actual evidence at the claimed layer. Do not add later roadmap features or claim success from mocks, tests alone or a provider's completion flag. Leave the completion handoff above and identify the next smallest frontier. If current source contradicts the plan, report the exact contradiction and a bounded correction instead of quietly building another architecture.
+For the lead coordinating the complete MVP, use [IMPLEMENTATION_PROMPT.md](IMPLEMENTATION_PROMPT.md). The bounded template below is for one delegated slice.
+
+> Implement only [SLICE] from the consolidated Waldo MVP plan. Read the repository's current instructions, this worker guide, REPOSITORY_MAP.md, ENGINEERING_QUALITY.md and the source/primary references for that slice. Verify the current baseline; preserve dirty checkouts; register a bounded lane and use an isolated worktree. Your required user outcome is [OUTCOME]. You own [FILES]; shared contracts and migrations belong to [INTEGRATION OWNER]. Reproduce the current gap, propose only necessary interface changes, and build the smallest production path. Apply the plan's context, permission, effect and recovery rules. Prove [ACCEPTANCE IDS] with actual evidence at the claimed layer. Do not add later roadmap features or claim success from mocks, tests alone or a provider's completion flag. Leave the completion handoff above and identify the next smallest frontier. If current source contradicts the plan, report the exact contradiction and a bounded correction instead of quietly building another architecture.
 
 ## 10. Cross-verify sources without reopening the entire plan
 
