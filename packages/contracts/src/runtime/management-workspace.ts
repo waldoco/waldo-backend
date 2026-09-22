@@ -96,3 +96,76 @@ export class ManagementWorkspace {
     return Object.freeze({ ownerId: authenticatedOwnerId, generatedAt, items: Object.freeze(items) });
   }
 }
+
+export type ManagementWorkspaceAttention = Readonly<{
+  kind: ManagementWorkspaceItem['kind'];
+  id: string;
+  reason: 'approval_pending' | 'connection_attention' | 'activity_failed' | 'heartbeat_unhealthy';
+}>;
+
+export type ManagementWorkspaceView = Readonly<{
+  ownerId: string;
+  generatedAt: number;
+  conversations: readonly z.infer<typeof workspaceConversationSchema>[];
+  memoryCorrections: readonly z.infer<typeof workspaceMemoryCorrectionSchema>[];
+  connections: readonly z.infer<typeof workspaceConnectionSchema>[];
+  approvals: readonly z.infer<typeof workspaceApprovalSchema>[];
+  activity: readonly z.infer<typeof workspaceActivitySchema>[];
+  heartbeats: readonly z.infer<typeof workspaceHeartbeatSchema>[];
+  attention: readonly ManagementWorkspaceAttention[];
+}>;
+
+export function projectManagementWorkspace(snapshot: ManagementWorkspaceSnapshot): ManagementWorkspaceView {
+  const conversations = [];
+  const memoryCorrections = [];
+  const connections = [];
+  const approvals = [];
+  const activity = [];
+  const heartbeats = [];
+  const attention: ManagementWorkspaceAttention[] = [];
+
+  for (const input of snapshot.items) {
+    const item = managementWorkspaceItemSchema.parse(input);
+    if (item.ownerId !== snapshot.ownerId) throw new Error('workspace owner mismatch');
+    switch (item.kind) {
+      case 'conversation':
+        conversations.push(item);
+        break;
+      case 'memory_correction':
+        memoryCorrections.push(item);
+        break;
+      case 'connection':
+        connections.push(item);
+        if (item.status !== 'active')
+          attention.push({ kind: item.kind, id: item.id, reason: 'connection_attention' });
+        break;
+      case 'approval':
+        approvals.push(item);
+        if (item.status === 'pending')
+          attention.push({ kind: item.kind, id: item.id, reason: 'approval_pending' });
+        break;
+      case 'activity':
+        activity.push(item);
+        if (item.status === 'failed')
+          attention.push({ kind: item.kind, id: item.id, reason: 'activity_failed' });
+        break;
+      case 'heartbeat':
+        heartbeats.push(item);
+        if (item.status !== 'healthy')
+          attention.push({ kind: item.kind, id: item.id, reason: 'heartbeat_unhealthy' });
+        break;
+    }
+  }
+
+  return Object.freeze({
+    ownerId: snapshot.ownerId,
+    generatedAt: snapshot.generatedAt,
+    conversations: Object.freeze(conversations),
+    memoryCorrections: Object.freeze(memoryCorrections),
+    connections: Object.freeze(connections),
+    approvals: Object.freeze(approvals),
+    activity: Object.freeze(activity),
+    heartbeats: Object.freeze(heartbeats),
+    attention: Object.freeze(attention),
+  });
+}
