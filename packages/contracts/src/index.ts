@@ -46,6 +46,7 @@ export * from './runtime/sink';
 export * from './runtime/routing';
 export * from './runtime/evidence';
 export * from './runtime/conversation-core';
+export * from './runtime/conversation-entry';
 export {
   actorRefSchema,
   agentSessionActivityObservationPayloadSchema,
