@@ -380,6 +380,18 @@ These are deliverable slices, not new runtime entities. Durations are engineerin
 
 **Joined-product beta:** add W + K + R, with at least one eligible messaging surface. W gives the human a place to manage both personal and delegated work; K and R then add distinct work-harness and cross-person coordination proofs. These are explicit subsequent deliverables. Their scope is not silently included in the personal-beta schedule or cost estimate.
 
+### Roadmap addendum: conversation path after S4
+
+The post-S4 order is **S4 → ConversationEntry → Joined Conversation Path → Telegram → S5**. Each step requires a real end-to-end run with the intended app, owner runtime and provider path before the next step is admitted; fixtures, mocks and schema presence are supporting evidence only.
+
+- **ConversationEntry:** make the canonical conversation record the immutable, owner/thread-bound source for the model input and app-visible payload. Model context and app payloads are separate projections; neither may be reconstructed by mutating the other. Branches and threads retain append-only ancestor references so edits, retries and resumptions preserve provenance without rewriting history.
+- **Joined Conversation Path:** prove one conversation continues across the app and the shared owner runtime with ordering, reconnect, cancellation, account isolation and truthful receipts. Record the real-run evidence and failure classifications for each path.
+- **Telegram:** add the app-linked, revocable Telegram presence for the same owner and conversation path. Deduplicate provider events and keep consequential approvals in the trusted app path until Telegram approval is separately proved.
+- **S5:** accept the joined app/channel path only after the Telegram proof and the preceding real-run evidence pass. Treat **S4.5** as the stabilization checkpoint; publish the assistant export only after S4.5, from the canonical append-only conversation and its permitted projections.
+- **S5.5 and later:** add browser execution together with Cloudflare Sandbox when the slice needs isolated Linux/file/process work; do not treat either as evidence for conversation correctness. Add heartbeat/status at **S6.5** so liveness is observable without making a transport connection the task lifetime. **S7** covers pending approvals and the durable Activity ledger, with approval state and activity evidence remaining distinct from conversation prose.
+
+Every named slice publishes its real-run evidence, including source/config pins, account and consent state, observed provider effect, recovery result and sanitized references. No later slice may be marked complete by inheriting an earlier slice's evidence.
+
 ### First frontier: concrete work packets
 
 1. **Kernel/composition owner:** `packages/runtime/src/index.ts`, owner routing, `run-loop/adapters.ts`, `run-loop/do.ts`, `llm/gateway.ts`, ContextComposer, publication/outbox and relevant contracts. Produce the smallest production composition and failure recovery. This owner alone changes shared contracts, migrations, generated schemas and roster. No bypass of fail-closed dependencies.
@@ -528,3 +540,11 @@ Worker implementation guidance and the role-specific source/library reading map 
 ### Engineering execution companion — 21 September 2026
 
 Use the [repository map](waldo-agent-mvp/REPOSITORY_MAP.md) to assign backend/app/health/Kennel/Brain changes and the [engineering quality guide](waldo-agent-mvp/ENGINEERING_QUALITY.md) for testing, CI, dependency management, bounded automatic improvement and cleanup. Implement those checks alongside the existing slices; A1–A16 and the release cut above remain authoritative. The engineering audit refreshed backend main to `65a334ccf1cb2b7d8298d416680b546cce0e868f` after PR #138 merged. Earlier pins and open-PR observations above are historical audit evidence. CI availability and the behavioral-suite gap are dated in the companion and must be refreshed before claims.
+
+#### Harness contracts and later controls
+
+The harness contract families are: authority/consent; identity/addressing; conversation/projection; memory/provenance/correction; action/reconciliation; and monitoring/lifecycle. S7 exposes a pending approval queue, append-only Activity feed, and stop/undo controls through app/dashboard views; Telegram buttons may drive only separately proved approval scopes. Trusted agent-to-agent coordination follows S7. Dashboard views must cover conversation branches, memory corrections, connection status, approvals/activity, schedules/heartbeat and coordination, with acceptance for authority, durability, reconnect and failure recovery.
+
+Founder-alpha Google custody remains native Vault plus the typed connector proxy. Nango Cloud may enter at S5.5 only for long-tail providers behind a Waldo-owned `ConnectionBroker`, after an accepted custody ADR proves account-handle migration/reconnect, deletion parity, cutover/rollback and read-path behavior. Composio is not the connector spine.
+
+Hardening adopted from the Pi/Hermes study includes typed lifecycle/outcome and error events, refusing truncated tool calls, append-only checkpoints and branches, crash-safe delivery obligations, idle heartbeat maintenance, phone approval round trips and audit evidence. Raw wearable streams stay phone-local; only consented aggregate summaries cross into the agent.

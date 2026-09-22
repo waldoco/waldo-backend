@@ -33,6 +33,18 @@ The proposed differentiating promise is: **Waldo turns your priorities and avail
 
 App/health and connector work can parallelize only after their contracts are released. One integration owner controls shared contracts and migrations. Open implementation issues for the next frontier rather than activating every future slice at once.
 
+### Post-S4 roadmap addendum
+
+The next path is **S4 → ConversationEntry → Joined Conversation Path → Telegram → S5**. Each slice needs a real end-to-end run through the intended app, owner runtime and provider path before the next slice is admitted; mocks, fixtures and schema presence do not count as completion evidence.
+
+- **ConversationEntry:** use an immutable, owner/thread-bound canonical entry with separate model and app payload projections. Branches and threads keep append-only ancestor context, so edits, retries and resumptions preserve provenance without rewriting prior entries.
+- **Joined Conversation Path:** prove shared conversation continuity across app and owner runtime, including ordering, reconnect, cancellation, account isolation and truthful receipts.
+- **Telegram:** add an app-linked, revocable presence for the same owner; deduplicate provider events and keep consequential approvals in the trusted app path until Telegram approval is proved.
+- **S5:** admit the joined app/channel path only after Telegram and all preceding real-run evidence pass. After the **S4.5** stabilization checkpoint, publish the assistant export from the canonical append-only conversation and permitted projections.
+- **S5.5 onward:** add browser execution and Cloudflare Sandbox together when isolated Linux/file/process work is required. Add heartbeat/status at **S6.5**. **S7** adds pending approvals and the durable Activity ledger; approval state and activity evidence remain distinct from conversation prose.
+
+Every slice records its own real-run evidence: source/config pins, account and consent state, observed provider effect, recovery result and sanitized evidence references. Later slices cannot inherit completion from an earlier slice's evidence.
+
 No date, budget or exact cohort is fixed. Planning estimates are 3–4 weeks to the internal day loop and 6–8 weeks to the personal beta with two experienced owners and available test accounts. The joined showcase also requires K0; estimate that after a 2–3-day Kennel readiness spike. The illustrative 10-user moderate personal-usage envelope is $600–750/month, subject to actual model/browser use, external costs and the S0 measurements; add measured Kennel harness costs separately. W/K/R are outside these estimates. These are proposals, not commitments or spending authorization.
 
 ## Evidence
@@ -60,3 +72,11 @@ Share this directory link with workers. Read this page, the worker guide, and th
 - [Engineering quality](ENGINEERING_QUALITY.md): CI and agent evaluations, dependency lifecycle, bounded coding-agent improvement, cleanup order and the measurable Instinct/Meta Muse experience target.
 
 Build the first CI and behavioral proof alongside S0. Preserve the main plan's A1–A16 acceptance and S0–S4/H/B/C/K0 scope; the companions do not establish shipped capability or add a platform prerequisite.
+
+#### Harness contracts and later controls
+
+The harness contract families are: authority/consent; identity/addressing; conversation/projection; memory/provenance/correction; action/reconciliation; and monitoring/lifecycle. S7 exposes a pending approval queue, append-only Activity feed, and stop/undo controls through app/dashboard views; Telegram buttons may drive only separately proved approval scopes. Trusted agent-to-agent coordination follows S7. Dashboard views must cover conversation branches, memory corrections, connection status, approvals/activity, schedules/heartbeat and coordination, with acceptance for authority, durability, reconnect and failure recovery.
+
+Founder-alpha Google custody remains native Vault plus the typed connector proxy. Nango Cloud may enter at S5.5 only for long-tail providers behind a Waldo-owned `ConnectionBroker`, after an accepted custody ADR proves account-handle migration/reconnect, deletion parity, cutover/rollback and read-path behavior. Composio is not the connector spine.
+
+Hardening adopted from the Pi/Hermes study includes typed lifecycle/outcome and error events, refusing truncated tool calls, append-only checkpoints and branches, crash-safe delivery obligations, idle heartbeat maintenance, phone approval round trips and audit evidence. Raw wearable streams stay phone-local; only consented aggregate summaries cross into the agent.
