@@ -204,11 +204,14 @@ function normalizeChatCompletionsResponse(
 }
 
 function cloudflareModelName(model: ModelName): string {
-  return CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[model].request;
+  const identity = CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[model];
+  if (identity === undefined) throw new Error(`unsupported Cloudflare model: ${model}`);
+  return identity.request;
 }
 
 function isExpectedCloudflareModelName(returnedModel: string, requestedModel: ModelName): boolean {
   const identity = CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[requestedModel];
+  if (identity === undefined) return false;
   return returnedModel === identity.request || identity.response.includes(returnedModel);
 }
 

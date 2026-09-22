@@ -80,6 +80,7 @@ describe('CloudflareAIGatewayAdapter', () => {
     'uses the documented Cloudflare Anthropic ID and accepts exact response identities for %s',
     async (model) => {
       const cloudflareModel = CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[model];
+      if (cloudflareModel === undefined) throw new Error('Cloudflare model identity missing');
       const acceptedResponses = Array.from(
         new Set([cloudflareModel.request, ...cloudflareModel.response]),
       );
@@ -115,6 +116,8 @@ describe('CloudflareAIGatewayAdapter', () => {
   );
 
   it('rejects a near-miss Anthropic response identity', async () => {
+    const reasoningIdentity = CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.reasoning];
+    if (reasoningIdentity === undefined) throw new Error('Cloudflare model identity missing');
     const adapter = new CloudflareAIGatewayAdapter({
       accountId: 'account-123',
       gatewayId: 'waldo-staging',
@@ -122,14 +125,13 @@ describe('CloudflareAIGatewayAdapter', () => {
       fetch: async () =>
         new Response(
           JSON.stringify({
-            model: `${CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.reasoning].request}-unexpected`,
+            model: `${reasoningIdentity.request}-unexpected`,
             choices: [{ message: { content: 'safe response' } }],
             usage: { prompt_tokens: 1, completion_tokens: 1 },
           }),
           { status: 200 },
         ),
     });
-
     await expect(adapter.complete(request(ROSTER.reasoning))).resolves.toEqual({
       ok: false,
       code: 'invalid_args',

@@ -32,18 +32,28 @@ describe('local CLI adapter', () => {
     expect(result.text).not.toContain('local frozen staged brief content.');
   });
 
-  it('fails unsupported live routes without falling back', async () => {
-    const result = await runLocalChat({
-      message: 'What is ready?',
-      provider: S2_LIVE_PROVIDER,
-      model: S2_LIVE_MODEL,
-    });
+  it('fails the live route without a key and without falling back', async () => {
+    const priorKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    let result;
+    try {
+      result = await runLocalChat({
+        message: 'What is ready?',
+        provider: S2_LIVE_PROVIDER,
+        model: S2_LIVE_MODEL,
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = priorKey;
+    }
 
     expect(result).toMatchObject({
       ok: false,
-      error: `live provider route is deferred to S2: ${S2_LIVE_PROVIDER}/${S2_LIVE_MODEL}`,
+      error: 'OpenAI request failed: auth_failed',
       trace: { provider: S2_LIVE_PROVIDER, model: S2_LIVE_MODEL },
     });
+    if (result.ok) throw new Error('live route unexpectedly succeeded');
+    expect(result.error).not.toContain('Local context composed');
   });
 
   it('rejects empty messages before composing context', async () => {

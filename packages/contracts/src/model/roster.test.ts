@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
   CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS,
+  OPENAI_GPT_5_NANO_MODEL,
   modelNameSchema,
   PROVIDER_OF,
   ROSTER,
 } from './roster';
 
 describe('modelName', () => {
-  it('accepts the three canonical roster ids', () => {
-    expect(modelNameSchema.options).toHaveLength(3);
+  it('accepts the canonical roster ids', () => {
+    expect(modelNameSchema.options).toHaveLength(4);
     for (const id of modelNameSchema.options) {
       expect(modelNameSchema.parse(id)).toBe(id);
     }
@@ -34,11 +35,12 @@ describe('roster', () => {
     expect(PROVIDER_OF['@cf/google/gemma-4-26b-a4b-it']).toBe('workers_ai');
     expect(PROVIDER_OF['claude-sonnet-4-6']).toBe('anthropic');
     expect(PROVIDER_OF['claude-haiku-4-5']).toBe('anthropic');
+    expect(PROVIDER_OF[OPENAI_GPT_5_NANO_MODEL]).toBe('openai');
   });
 
   it('owns exact Cloudflare request and response identities for every internal model', () => {
     expect(Object.keys(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS).sort()).toEqual(
-      [...modelNameSchema.options].sort(),
+      modelNameSchema.options.filter((model) => model !== OPENAI_GPT_5_NANO_MODEL).sort(),
     );
     expect(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.reasoning]).toEqual({
       request: 'anthropic/claude-sonnet-4.6',

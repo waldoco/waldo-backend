@@ -16,7 +16,8 @@
     "test:mutation:context-composer": "stryker run stryker.context-composer.config.mjs"
   },
   "dependencies": {
-    "@waldo/contracts": "workspace:*"
+    "@waldo/contracts": "workspace:*",
+    "openai": "5.12.2"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.16.20",

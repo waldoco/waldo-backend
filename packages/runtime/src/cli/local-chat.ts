@@ -1,13 +1,20 @@
-import { acceptTrustedInvocation } from '@waldo/contracts';
+import {
+  acceptTrustedInvocation,
+  OPENAI_GPT_5_NANO_MODEL,
+  OPENAI_PROVIDER,
+  routingPolicySchema,
+} from '@waldo/contracts';
 import {
   localTrustedBriefScheduleInput,
   resolveRunLoopAdapters,
 } from '../run-loop/adapters';
+import { OpenAIGpt5NanoAdapter, type OpenAIResponseMetadata } from '../llm/openai';
+import { RuntimeLLMProvider } from '../llm/provider';
 
 export const LOCAL_CLI_PROVIDER = 'local-fake';
 export const LOCAL_CLI_MODEL = 'local-fake-v1';
-export const S2_LIVE_PROVIDER = 'cloudflare-ai';
-export const S2_LIVE_MODEL = ['gpt', '5', 'nano'].join('-');
+export const S2_LIVE_PROVIDER = OPENAI_PROVIDER;
+export const S2_LIVE_MODEL = OPENAI_GPT_5_NANO_MODEL;
 
 export type LocalChatRequest = Readonly<{
   message: string;
@@ -25,6 +32,7 @@ export type LocalChatTrace = Readonly<{
   correction: 'trace-only';
   forget: 'trace-only';
   scheduling: 'trace-only';
+  response?: OpenAIResponseMetadata;
 }>;
 
 export type LocalChatResult =
@@ -54,12 +62,8 @@ export async function runLocalChat(request: LocalChatRequest): Promise<LocalChat
   const model = request.model ?? LOCAL_CLI_MODEL;
   const trace = Object.freeze({ ...BASE_TRACE, provider, model });
 
-  if (provider === S2_LIVE_PROVIDER || model === S2_LIVE_MODEL) {
-    return Object.freeze({
-      ok: false as const,
-      error: `live provider route is deferred to S2: ${provider}/${model}`,
-      trace,
-    });
+  if (provider === S2_LIVE_PROVIDER && model === S2_LIVE_MODEL) {
+    return runOpenAIChat(request, trace);
   }
   if (provider !== LOCAL_CLI_PROVIDER || model !== LOCAL_CLI_MODEL) {
     return Object.freeze({
@@ -106,6 +110,67 @@ export async function runLocalChat(request: LocalChatRequest): Promise<LocalChat
     ok: true as const,
     text: `Local context composed. Local reply: ${request.message.trim()}`,
     trace: completedTrace,
+  });
+}
+
+async function runOpenAIChat(
+  request: LocalChatRequest,
+  trace: LocalChatTrace,
+): Promise<LocalChatResult> {
+  if (!process.env.OPENAI_API_KEY?.trim()) {
+    return Object.freeze({
+      ok: false as const,
+      error: 'OpenAI request failed: auth_failed',
+      trace,
+    });
+  }
+  let responseMetadata: OpenAIResponseMetadata | undefined;
+  const safety = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).safety;
+  const gateway = new OpenAIGpt5NanoAdapter({
+    apiKey: process.env.OPENAI_API_KEY,
+    onResponseMetadata: (metadata) => { responseMetadata = metadata; },
+  });
+  const runtime = new RuntimeLLMProvider({ gateway });
+  const route = {
+    trigger: 'user_message' as const,
+    primary: {
+      provider: OPENAI_PROVIDER,
+      model: OPENAI_GPT_5_NANO_MODEL,
+      cache: 'none' as const,
+      max_tokens: 1024,
+    },
+    fallback: [],
+    floor: 'template' as const,
+  };
+  const result = await runtime.complete({
+    trigger: 'user_message',
+    policy: routingPolicySchema.parse({ routes: [route], escalation: [], template_fallback: false }),
+    renderRequest: () => ({
+      system: 'Respond concisely and directly. Do not reveal private source content or credentials.',
+      messages: [{ role: 'user' as const, content: request.message.trim() }],
+      max_tokens: 1024,
+      temperature: 0.2,
+    }),
+  }, {
+    authenticatedUserId: 'local-cli',
+    trigger: 'user_message',
+    canaryTokens: ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'],
+    sourceTaint: null,
+    toolArgSourceTaint: null,
+    sanitise: safety.sanitise,
+    medicalGate: safety.medicalGate,
+  });
+  if (!result.ok) {
+    return Object.freeze({
+      ok: false as const,
+      error: `OpenAI request failed: ${result.code}`,
+      trace,
+    });
+  }
+  return Object.freeze({
+    ok: true as const,
+    text: result.response.text,
+    trace: Object.freeze({ ...trace, response: responseMetadata }),
   });
 }
 

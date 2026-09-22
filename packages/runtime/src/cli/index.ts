@@ -10,7 +10,7 @@ import {
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   if (argv.includes('--help') || argv.includes('-h')) {
     stdout.write('Usage: pnpm --filter @waldo/runtime cli [--provider NAME] [--model NAME]\n');
-    stdout.write('Default: local-fake/local-fake-v1. Live routes are deferred to S2.\n');
+    stdout.write('Default: local-fake/local-fake-v1. OpenAI live route requires OPENAI_API_KEY.\n');
     return;
   }
 

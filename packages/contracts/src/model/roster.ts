@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const OPENAI_GPT_5_NANO_MODEL = 'gpt-5-nano' as const;
+export const OPENAI_PROVIDER = 'openai' as const;
+
 // The only internal model IDs Waldo routes to. Workers AI keeps the documented @cf/<vendor>
 // prefix; Anthropic values are stable internal aliases. The phantom `gemma-4-9b` and
 // superseded `gemma-4-27b` are intentionally absent — the PreLLMCall hook rejects any ID
@@ -8,16 +11,18 @@ export const modelNameSchema = z.enum([
   '@cf/google/gemma-4-26b-a4b-it',
   'claude-sonnet-4-6',
   'claude-haiku-4-5',
+  OPENAI_GPT_5_NANO_MODEL,
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
-export const providerSchema = z.enum(['workers_ai', 'anthropic']);
+export const providerSchema = z.enum(['workers_ai', 'anthropic', OPENAI_PROVIDER]);
 export type Provider = z.infer<typeof providerSchema>;
 
 export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   '@cf/google/gemma-4-26b-a4b-it': 'workers_ai',
   'claude-sonnet-4-6': 'anthropic',
   'claude-haiku-4-5': 'anthropic',
+  [OPENAI_GPT_5_NANO_MODEL]: OPENAI_PROVIDER,
 };
 
 // The documented request ID and exact response identities accepted at the Cloudflare
@@ -31,7 +36,7 @@ export type CloudflareChatCompletionsModelIdentity = Readonly<{
 }>;
 
 export const CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS: Readonly<
-  Record<ModelName, CloudflareChatCompletionsModelIdentity>
+  Partial<Record<ModelName, CloudflareChatCompletionsModelIdentity>>
 > = {
   '@cf/google/gemma-4-26b-a4b-it': {
     request: '@cf/google/gemma-4-26b-a4b-it',
