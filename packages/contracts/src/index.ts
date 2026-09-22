@@ -47,6 +47,7 @@ export * from './runtime/routing';
 export * from './runtime/evidence';
 export * from './runtime/conversation-core';
 export * from './runtime/conversation-entry';
+export * from './runtime/management-workspace';
 export {
   actorRefSchema,
   agentSessionActivityObservationPayloadSchema,
