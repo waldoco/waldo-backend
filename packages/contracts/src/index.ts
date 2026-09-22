@@ -169,3 +169,4 @@ export * from './testing/evidence';
 export * from './runtime/connection';
 export * from './runtime/connector-operation';
 export * from './runtime/browser-session';
+export * from './runtime/browser-policy';
