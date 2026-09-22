@@ -166,3 +166,4 @@ export * from './public/openapi';
 export * from './testing/evidence';
 
 export * from './runtime/connection';
+export * from './runtime/connector-operation';
