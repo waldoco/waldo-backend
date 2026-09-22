@@ -13,6 +13,7 @@ import {
   ContextSourceRejectedError,
   ContextSourceUnavailableError,
   createContextComposer,
+  CONTEXT_LAYERS,
   type ContextComposerDependencies,
   type ContextSource,
   type RuntimeOwnedContextInputs,
@@ -490,6 +491,8 @@ describe('ContextComposer', () => {
     expect(durableCheckpoint).not.toContain('hpr_88888888888888888888888888888888');
     expect(durableCheckpoint).not.toContain('Could you help me plan my afternoon?');
     expect(result.evidence.tool_acl).toEqual(TOOL_PERMISSIONS.user_message);
+    expect(result.evidence.layers).toEqual(CONTEXT_LAYERS);
+    expect(Object.isFrozen(result.evidence.layers)).toBe(true);
     expect(result.evidence.skills.admission_mode).toBe('active_system_only');
     expect(result.evidence.skills.selected).toEqual(['afternoon-planning']);
     expect(result.evidence.recall).toMatchObject({

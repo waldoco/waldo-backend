@@ -213,6 +213,7 @@ export type ContextComposerDependencies = Readonly<{
 }>;
 
 export type ContextCompositionEvidence = Readonly<{
+  layers: readonly ContextLayer[];
   trigger: TriggerType;
   variant: TrustedInvocationEnvelope['runtime_binding']['variant'];
   tool_acl: readonly ToolName[];
@@ -231,6 +232,17 @@ export type ContextCompositionEvidence = Readonly<{
     capability: ContextRecallSnapshot['capability'];
   }>;
 }>;
+
+export const CONTEXT_LAYERS = Object.freeze([
+  'requirements',
+  'identity',
+  'approach',
+  'tools',
+  'operations',
+  'voice',
+  'safety',
+] as const);
+export type ContextLayer = (typeof CONTEXT_LAYERS)[number];
 
 // The content-free failure vocabulary is contract-owned so ContextComposer and RunLoopDO cannot
 // drift into two representations of the same replay-safe fact.

@@ -19,6 +19,9 @@ describe('local CLI adapter', () => {
         authority: 'fixed-local-trusted-brief',
         context: 'canonical-context-composer',
         memory: 'owner-bound-local-temporal-snapshot',
+        context_layers: [
+          'requirements', 'identity', 'approach', 'tools', 'operations', 'voice', 'safety',
+        ],
         tools: expect.arrayContaining(['get_crs', 'read_memory']),
         correction: 'trace-only',
         forget: 'trace-only',

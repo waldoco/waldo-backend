@@ -12,6 +12,7 @@ import type {
   ContextCompositionEvidence,
   ContextCompositionPhase,
 } from './types';
+import { CONTEXT_LAYERS } from './types';
 import { assembleReasonsPrompt, renderProviderPrompt } from './prompt';
 import { snapshotData, validateRuntimeInputs } from './admission';
 import { loadSystemSkills } from './skills';
@@ -111,6 +112,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
 
         const promptDigest = rendered.identity.prompt_digest;
         const evidence: ContextCompositionEvidence = Object.freeze({
+          layers: CONTEXT_LAYERS,
           trigger: invocation.data.runtime_binding.trigger,
           variant: invocation.data.runtime_binding.variant,
           tool_acl: Object.freeze([...TOOL_PERMISSIONS[invocation.data.runtime_binding.trigger]]),

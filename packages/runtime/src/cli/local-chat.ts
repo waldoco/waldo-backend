@@ -10,6 +10,7 @@ import {
 } from '../run-loop/adapters';
 import { OpenAIGpt5NanoAdapter, type OpenAIResponseMetadata } from '../llm/openai';
 import { RuntimeLLMProvider } from '../llm/provider';
+import type { ContextLayer } from '../context-composer/types';
 
 export const LOCAL_CLI_PROVIDER = 'local-fake';
 export const LOCAL_CLI_MODEL = 'local-fake-v1';
@@ -29,6 +30,7 @@ export type LocalChatTrace = Readonly<{
   context: 'canonical-context-composer';
   memory: 'owner-bound-local-temporal-snapshot';
   tools: readonly string[];
+  context_layers: readonly ContextLayer[];
   correction: 'trace-only';
   forget: 'trace-only';
   scheduling: 'trace-only';
@@ -52,6 +54,7 @@ const BASE_TRACE: Omit<LocalChatTrace, 'provider' | 'model'> = {
   context: 'canonical-context-composer',
   memory: 'owner-bound-local-temporal-snapshot',
   tools: [],
+  context_layers: [],
   correction: 'trace-only',
   forget: 'trace-only',
   scheduling: 'trace-only',
@@ -103,6 +106,7 @@ export async function runLocalChat(request: LocalChatRequest): Promise<LocalChat
 
   const completedTrace = Object.freeze({
     ...trace,
+    context_layers: Object.freeze([...composition.evidence.layers]),
     tools: Object.freeze([...composition.evidence.tool_acl]),
   });
 

@@ -1,6 +1,7 @@
 // The sole public ContextComposer seam. Repository, SQL, rendering, provenance, and replay
 // mechanics remain private sibling modules behind createContextComposer(...).compose(...).
 export { createContextComposer } from './composer';
+export { CONTEXT_LAYERS } from './types';
 export {
   ContextRecallFailClosedError,
   ContextRecallUnavailableError,
@@ -15,6 +16,7 @@ export type {
   ContextCompositionFailureCode,
   ContextCompositionPhase,
   ContextCompositionResult,
+  ContextLayer,
   ContextFragment,
   ContextHealthMaterial,
   ContextRecallGateway,
