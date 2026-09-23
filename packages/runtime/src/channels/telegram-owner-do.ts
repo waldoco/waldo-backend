@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { durableConversationStore } from './conversation-store';
 import { createTelegramCaller, createTelegramOwnerApi } from './telegram-api';
 import { TelegramOwnerListener } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
@@ -23,7 +24,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.listener ??= new TelegramOwnerListener({
       ownerTelegramId: Number(owner),
       api: createTelegramOwnerApi(createTelegramCaller(token)),
-      ...createTelegramResponder(key),
+      ...createTelegramResponder(key, durableConversationStore(this.ctx.storage)),
       log: (entry) => console.log(JSON.stringify(entry)),
       saveOffset: (offset) => this.ctx.storage.put('offset', offset),
     });

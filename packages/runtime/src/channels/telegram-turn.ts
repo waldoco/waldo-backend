@@ -1,11 +1,12 @@
 import {
-  acceptTrustedInvocation, OPENAI_GPT_5_NANO_MODEL, OPENAI_PROVIDER, routingPolicySchema,
+  acceptTrustedInvocation, ConversationTree, OPENAI_GPT_5_NANO_MODEL, OPENAI_PROVIDER, routingPolicySchema,
 } from '@waldo/contracts';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIGpt5NanoAdapter } from '../llm/openai';
 import { RuntimeLLMProvider } from '../llm/provider';
 import { messagingSystemPrompt } from '../prompt/messaging-behavior';
+import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions } from './telegram-listener';
 
@@ -13,7 +14,10 @@ const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
-export const createTelegramResponder = (openaiApiKey: string): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
+export const createTelegramResponder = (
+  openaiApiKey: string,
+  store?: ConversationStore,
+): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
   if (!accepted.ok) throw new Error('fixture admission failed');
@@ -35,12 +39,15 @@ export const createTelegramResponder = (openaiApiKey: string): Pick<TelegramOwne
     if (!result.ok) throw new Error(`live model failed: ${result.code}`);
     return result.response.text;
   };
+  const tree = new ConversationTree();
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => ask(messagingSystemPrompt(request.system, request.tools), request.messages.join('\n')),
-  });
+  }, tree);
   let parentId: string | null = null;
+  const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   return {
     async respond(turn, time) {
+      await restored;
       const id = `tg-${turn.updateId}`;
       const publication = await time('joined_path', () => path.submit({
         authenticatedOwnerId: ownerId, invocation,
@@ -48,6 +55,7 @@ export const createTelegramResponder = (openaiApiKey: string): Pick<TelegramOwne
         userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: turn.text, appPayload: turn.text, modelProjection: { mode: 'include' } },
         assistantEntryId: `${id}-reply`,
       }));
+      await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
       parentId = publication.leafId;
       return publication.text;
     },

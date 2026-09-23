@@ -102,7 +102,7 @@ Remote access from the Codespace:
 
 Memory slice (next, in progress):
 
-1. Hot conversation state goes into the owner Durable Object's own storage, written after each turn and restored on wake. After this, eviction loses nothing.
+1. Built: hot conversation state goes into the owner Durable Object's own storage, written after each turn and restored on wake, so eviction loses nothing (`src/channels/conversation-store.ts`).
 2. Canonical long-term memory goes into the per-user Durable Object's SQLite. Four core files come first: MEMORY_CORE, MEMORY_GOALS, MEMORY_FOLLOWUPS and intelligence-summary.
 3. Hybrid recall: full-text search in SQLite plus an external vector index (pgvector or Vectorize), fused by rank.
 4. R2 archives for older conversation and files.

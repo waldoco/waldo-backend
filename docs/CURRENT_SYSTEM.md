@@ -27,7 +27,7 @@ One path is live: a Telegram message from the owner goes through the Joined Conv
 Limits of the live path:
 
 - Staging Worker `waldo-runtime-staging` serves `POST /telegram/webhook` (commit `06c7eb5`), handing each verified update to `TelegramOwnerDO`. The local runner uses the same code path for development.
-- Conversation state lives in memory (`ConversationTree` inside `JoinedConversationPath`). A process restart or Durable Object eviction loses history. Only the last update id is saved.
+- On the staging Worker, each turn's user and assistant entries are saved to the owner Durable Object's storage and restored on wake, so eviction and redeploys keep the conversation. The local runner still keeps history in memory only. The full history goes to the model on every turn; context budgeting is tracked in #145.
 - No tools are granted to the Telegram chat. The model is told so and says so.
 - Consequential approvals are not accepted over Telegram.
 
