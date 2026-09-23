@@ -37,14 +37,14 @@ Every messaging channel follows the same reaction lifecycle on the owner's messa
 
 The model's choice runs alongside the reply and never delays it. Each channel limits which reactions an agent can set, and code enforces the limit, not the prompt.
 
-| Channel | What an agent can set | Done / failed | Status |
-|---|---|---|---|
-| Telegram | One emoji from the Bot API [ReactionTypeEmoji](https://core.telegram.org/bots/api#reactiontypeemoji) allowlist: 73 emoji, `TELEGRAM_REACTIONS` in `packages/runtime/src/channels/reactions.ts`. A new reaction replaces the bot's previous one. ✅ is not on the list. | 👌 / 😢 | Built |
-| WhatsApp | Any emoji, as a [reaction message](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/reaction-messages/) on a received user message. | ✅ / 😢 | Not built |
-| Slack | Any emoji by name, including workspace custom emoji, via [reactions.add](https://docs.slack.dev/reference/methods/reactions.add). | ✅ / 😢 | Not built |
-| Discord | Unicode or custom emoji ([reaction object](https://docs.discord.com/developers/resources/message)). | ✅ / 😢 | Not built |
-| iMessage | Six classic tapbacks, plus any emoji or sticker on [iOS 18 and later](https://support.apple.com/guide/iphone/react-with-tapbacks-iph018d3c336/ios). What an agent can set depends on the hosted phone lane. | ✅ / 😢 | Not built |
-| Waldo app | Our own UI, so any reaction can render. | ✅ / 😢 | Not built |
+| Channel   | What an agent can set                                                                                                                                                                                                                                                  | Done / failed | Status    |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | --------- |
+| Telegram  | One emoji from the Bot API [ReactionTypeEmoji](https://core.telegram.org/bots/api#reactiontypeemoji) allowlist: 73 emoji, `TELEGRAM_REACTIONS` in `packages/runtime/src/channels/reactions.ts`. A new reaction replaces the bot's previous one. ✅ is not on the list. | 👌 / 😢       | Built     |
+| WhatsApp  | Any emoji, as a [reaction message](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/reaction-messages/) on a received user message.                                                                                                                    | ✅ / 😢       | Not built |
+| Slack     | Any emoji by name, including workspace custom emoji, via [reactions.add](https://docs.slack.dev/reference/methods/reactions.add).                                                                                                                                      | ✅ / 😢       | Not built |
+| Discord   | Unicode or custom emoji ([reaction object](https://docs.discord.com/developers/resources/message)).                                                                                                                                                                    | ✅ / 😢       | Not built |
+| iMessage  | Six classic tapbacks, plus any emoji or sticker on [iOS 18 and later](https://support.apple.com/guide/iphone/react-with-tapbacks-iph018d3c336/ios). What an agent can set depends on the hosted phone lane.                                                            | ✅ / 😢       | Not built |
+| Waldo app | Our own UI, so any reaction can render.                                                                                                                                                                                                                                | ✅ / 😢       | Not built |
 
 The Telegram list was copied from the Bot API page on 23 September 2026. Recheck it when upgrading. For channels not yet built, confirm the provider's current reaction support, and whether a new reaction replaces the old one, when the connector is built.
 
@@ -52,16 +52,11 @@ The Telegram list was copied from the Bot API page on 23 September 2026. Recheck
 
 Waldo is a health-forward personal agent. Gym and workout scheduling, sleep, meals and health tracking, coaching and mental wellness are everyday topics, and it talks about them freely.
 
-The output gate (`packages/runtime/src/scribe/medical-gate.ts`) blocks only clinical acts:
+The line between health conversation and clinical acts is a judgment call, so the model makes it. The messaging prompt tells it that health talk is core, that it is not a clinician, and that it never tells the owner they have a condition, reads a diagnosis or risk verdict out of their data, or labels their state for them. It describes what it sees, reflects what the owner said, and suggests a professional when something sounds persistent or serious.
 
-- telling the owner they have a condition, or reading a condition out of their data ("your readings show depression")
-- risk verdicts ("you are at risk for stroke")
-- labeling their state for them ("you are stressed"); describing signals is fine ("your body is showing stress signals")
-- medication, supplement or treatment instructions, doses and dose changes
+The output gate (`packages/runtime/src/scribe/medical-gate.ts`) keeps one hard line deterministic: medication, supplement and dose instructions and dose changes. A blocked reply still gets an honest text answer.
 
-Naming a condition in general, reflecting what the owner said about themselves, and suggesting they see a professional all pass. Scenario tests cover gym scheduling, tracking, coaching and wellness talk on the allowed side, and diagnosis and dosing on the blocked side. A blocked reply still gets an honest text answer.
-
-The gate is still regex today. The narrowed rules (23 September) stop the false positives on gym, tracking and wellness talk. Under the rule that judgment belongs to the model, only dosing and medication instructions stay deterministic. Diagnosis, risk and state-labeling move to model reasoning with scenario tests.
+`scripts/health-scenarios.ts` runs diagnosis-baiting and everyday health messages through the live model so the judgment can be reviewed on real output.
 
 ## Voice
 

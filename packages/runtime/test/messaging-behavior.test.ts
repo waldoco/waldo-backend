@@ -12,4 +12,10 @@ describe('messagingSystemPrompt', () => {
   it('lists only the granted tools in a stable order', () => {
     expect(messagingSystemPrompt('B', ['calendar.read', 'artifact.read']).endsWith('Tools available in this chat: artifact.read, calendar.read.')).toBe(true);
   });
+
+  it('keeps health talk open and leaves clinical judgment to the model', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('Health is core');
+    expect(MESSAGING_BEHAVIOR).toContain('You are not a clinician.');
+    expect(MESSAGING_BEHAVIOR).toContain('Never give medication, supplement or dose instructions.');
+  });
 });

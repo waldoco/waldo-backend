@@ -1417,10 +1417,10 @@ describe('RuntimeLLMProvider', () => {
   });
 
   it.each([
-    'This appears to be a symptom of pneumonia.',
+    'Take 20 units of insulin.',
     'Take .5 tablet of melatonin today.',
     'Take 0.5 tablet of melatonin today.',
-  ])('rejects an immutable medical claim returned by the gateway: %s', async (medicalClaim) => {
+  ])('rejects a dose instruction returned by the gateway: %s', async (medicalClaim) => {
     const gateway = new ScriptedGateway((request) => ({
       ok: true,
       data: response(request.request.model, medicalClaim),

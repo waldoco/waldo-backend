@@ -3,20 +3,10 @@ import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
 
 describe('medical claim gate', () => {
   it.each([
-    'Based on your data, you are at risk for heart disease.',
-    'You have anxiety.',
-    'These readings show depression.',
-    'Your pulse indicates AFib.',
-    'Your sleep data means you have sleep apnea.',
-    'This blood pressure proves hypertension.',
-    'Your glucose reading shows diabetes.',
-    'You are stressed.',
     'You should take aspirin.',
     'Start taking magnesium supplements.',
     'Take 5 mg of melatonin tonight.',
     'Stop your prescribed medication.',
-    'Your symptoms indicate a medical condition.',
-    'You may have a respiratory disorder.',
     'Start taking ibuprofen today.',
     'Take vitamin D for this pattern.',
     'Take metformin now.',
@@ -25,16 +15,10 @@ describe('medical claim gate', () => {
     'Take sertraline now.',
     'Start insulin today.',
     'Stop warfarin immediately.',
-    'This is a symptom of pneumonia.',
-    'Your HRV indicates cardiovascular disease.',
-    'You should see a cardiologist because your recovery looks unusual.',
-    'Based on your data, you could be at risk for stroke.',
     'Take 20 milligrams of melatonin tonight.',
     'Double your insulin tonight.',
     'Take 20 units of insulin.',
     'Inject 12 IU of insulin tonight.',
-    'This might be a symptom of pneumonia.',
-    'This appears to be a symptom of pneumonia.',
     'Take a 20-unit dose of insulin.',
     'Administer twenty units of insulin.',
     'Inject 20 U of insulin.',
@@ -48,12 +32,9 @@ describe('medical claim gate', () => {
     'Use a quarter dose of insulin.',
     'Take .5 tablet of melatonin today.',
     'Take 0.5 tablet of melatonin today.',
-    'You may have sleep apnea based on these readings.',
-    'Sounds like you have anxiety.',
-    'Your data suggests you might have insomnia.',
     'Stop taking your metformin.',
     'Take 400 mg of magnesium tonight.',
-  ])('denies immutable medical claims and direct treatment instructions: %s', (text) => {
+  ])('denies medication, supplement and dose instructions: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: false, reason: 'medical_claim' });
   });
 
@@ -79,6 +60,30 @@ describe('medical claim gate', () => {
     'You mentioned your anxiety has been better since you started journaling.',
     'Depression is worth talking to a professional about if the low mood lasts.',
   ])('allows bounded wellness language: %s', (text) => {
+    expect(evaluateMedicalClaim(text)).toEqual({ ok: true });
+  });
+
+  it.each([
+    'Based on your data, you are at risk for heart disease.',
+    'You have anxiety.',
+    'These readings show depression.',
+    'Your pulse indicates AFib.',
+    'Your sleep data means you have sleep apnea.',
+    'This blood pressure proves hypertension.',
+    'Your glucose reading shows diabetes.',
+    'You are stressed.',
+    'Your symptoms indicate a medical condition.',
+    'You may have a respiratory disorder.',
+    'This is a symptom of pneumonia.',
+    'Your HRV indicates cardiovascular disease.',
+    'You should see a cardiologist because your recovery looks unusual.',
+    'Based on your data, you could be at risk for stroke.',
+    'This might be a symptom of pneumonia.',
+    'This appears to be a symptom of pneumonia.',
+    'You may have sleep apnea based on these readings.',
+    'Sounds like you have anxiety.',
+    'Your data suggests you might have insomnia.',
+  ])('leaves diagnosis and risk judgment to the model: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: true });
   });
 });

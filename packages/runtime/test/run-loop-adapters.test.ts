@@ -153,7 +153,7 @@ describe('resolveRunLoopAdapters', () => {
       reason: 'health_value_leak',
     });
     await expect(
-      Promise.resolve(adapters.safety.medicalGate?.('You may have hypertension.')),
+      Promise.resolve(adapters.safety.medicalGate?.('Take 5 mg of melatonin tonight.')),
     ).resolves.toEqual({
       ok: false,
       reason: 'medical_claim',
