@@ -29,6 +29,7 @@ import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
+import type { TurnControl } from './turn-control';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
@@ -38,6 +39,7 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 type OwnerRuntime = Readonly<{
   owner: number;
   listener: TelegramOwnerListener;
+  control: TurnControl;
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
   desk: ApprovalDesk;
@@ -83,7 +85,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         console.log(JSON.stringify({ hop: 'set_webhook', ok: false, error: String(error) }));
       }
     }
-    await this.serial(() => this.turn(JSON.parse(body) as unknown));
+    const update = JSON.parse(body) as RawUpdate;
+    if (this.intercept(update)) return new Response('ok');
+    await this.serial(() => this.turn(update));
     return new Response('ok');
   }
 
@@ -146,12 +150,38 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     return run;
   }
 
+  // Runs outside the serial queue so it reaches a turn that is still running.
+  private intercept(update: RawUpdate): boolean {
+    if (!this.runtime || update.update_id === undefined) return false;
+    const { owner, control, call, log } = this.runtime;
+    const text = update.message?.text?.trim();
+    if (update.message?.from?.id !== owner || update.message.chat?.id !== owner || !text) return false;
+    const trace = `tg-${update.update_id}`;
+    if (text === '/stop') {
+      const stopping = control.stop();
+      log({ trace, hop: 'stop', ms: 0, ok: true, detail: stopping ? 'stopping the running turn' : 'nothing running' });
+      void call('sendMessage', { chat_id: owner, text: stopping ? 'Stopping.' : 'Nothing is running right now.' }).catch(() => undefined);
+      return true;
+    }
+    if (!text.startsWith('/') && control.steer(update.update_id, text)) log({ trace, hop: 'steer', ms: 0, ok: true, detail: 'queued for the running turn' });
+    return false;
+  }
+
   private async turn(update: unknown): Promise<void> {
-    const { listener, owner, call, desk, ledger, updates, ready } = this.setup();
+    const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup();
     await ready;
     const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
     const raw = update as RawUpdate;
     const fromOwner = raw.message?.from?.id === owner && raw.message.chat?.id === owner;
+    if (fromOwner && raw.update_id !== undefined && raw.update_id >= offset && control.absorbed(raw.update_id)) {
+      await this.ctx.storage.put('offset', raw.update_id + 1);
+      return log({ trace: `tg-${raw.update_id}`, hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
+    }
+    if (fromOwner && raw.message?.text?.trim() === '/stop') {
+      if (raw.update_id === undefined || raw.update_id < offset) return;
+      await this.ctx.storage.put('offset', raw.update_id + 1);
+      return void (await call('sendMessage', { chat_id: owner, text: 'Nothing is running right now.' }));
+    }
     const harness = fromOwner ? parseHarnessCommand(raw.message?.text) : null;
     const handledDirectly = raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger');
     if (handledDirectly) {
@@ -420,7 +450,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log,
+    this.runtime = { owner, listener, control: responder.control, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log,
       view: async (session, notice) => {
         const tokens = await storage.get<GoogleTokens>('google:tokens');
         const now = Date.now();

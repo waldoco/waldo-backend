@@ -17,6 +17,7 @@ import type { TelegramOwnerListenerOptions, TurnLogEntry, TurnTimer } from './te
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
+import { STOPPED_REPLY, turnControl } from './turn-control';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const MAX_TOOL_ROUNDS = 25;
@@ -35,7 +36,7 @@ export const createTelegramResponder = (
   readers: MediaReaders = {},
   clock: OwnerClock = { timezone: 'UTC', now: () => new Date() },
   tools: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [],
-): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string> } => {
+): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
   if (!accepted.ok) throw new Error('fixture admission failed');
@@ -78,6 +79,7 @@ export const createTelegramResponder = (
     return result.response;
   };
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
+  const control = turnControl();
   const tree = new ConversationTree();
   let traceId = '';
   let pending: readonly LLMAttachment[] | undefined;
@@ -88,14 +90,18 @@ export const createTelegramResponder = (
         handlers,
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
-        step: (tools, turns) => complete(trace, 'reply',
+        step: async (tools, turns) => {
+          const added = control.round();
+          if (added === null) return { text: STOPPED_REPLY };
+          return complete(trace, 'reply',
           [messagingSystemPrompt(handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
-          request.messages.join('\n'),
+          request.messages.join('\n') + added,
           undefined,
           pending,
           tools,
           turns,
-        ),
+          );
+        },
         onTool: (event) => log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, text: { input: event.call.arguments, output: event.output } }),
       });
     },
@@ -103,14 +109,15 @@ export const createTelegramResponder = (
   let parentId: string | null = null;
   let settling: Promise<unknown> = Promise.resolve();
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
-  const converse = async (id: string, chatId: number, said: string, time: TurnTimer) => {
+  const converse = async (id: string, chatId: number, said: string, time: TurnTimer, fromOwner = false) => {
     traceId = id;
+    control.begin(fromOwner);
     const publication = await time('joined_path', () => path.submit({
       authenticatedOwnerId: ownerId, invocation,
       context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
       userEntry: { id, ownerId, chatId: `telegram-${chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
       assistantEntryId: `${id}-reply`,
-    }));
+    })).finally(() => control.end());
     await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
     parentId = publication.leafId;
     return publication.text;
@@ -123,10 +130,11 @@ export const createTelegramResponder = (
       const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers)) : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
-      const text = await converse(id, turn.chatId, said, time);
+      const text = await converse(id, turn.chatId, said, time, true);
+      const owner = [turn.text ?? '', ...control.end()].filter(Boolean).join('\n');
       if (memory) {
         const started = Date.now();
-        settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, turn.text ?? '', media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA })
+        settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA })
           .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`) }))
           .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
       }
@@ -161,6 +169,7 @@ export const createTelegramResponder = (
       const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
       return applyPromotion(memory, raw, new Date().toISOString());
     },
+    control,
     planDay: (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
     chooseReaction: async (turn) => (JSON.parse(await ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), turn.text, { name: 'reaction', schema: reactionSchema(TELEGRAM_REACTIONS) })) as { reaction?: string }).reaction ?? null,
   };
