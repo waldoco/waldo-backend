@@ -30,8 +30,8 @@ We also lack one that is central to our own product: an open-loop ledger the own
   - Compaction for long threads.
   - Long jobs in the background. The chat loop is the only loop that runs live.
 - **Nobody flagged:**
-  - Two Telegram messages sent close together start two runs against one DO. Nothing documents whether they queue or race.
-  - No turn has a wall-clock timeout, only a round budget.
+  - Turns are serialized in memory (`telegram-owner-do.ts` serial queue), so two messages queue rather than race. The real race was the two post-turn memory writers running outside that queue. Fixed in 96c7683: the next turn waits for them.
+  - No turn had a wall-clock timeout. Fixed in 96c7683 (150s).
 
 ## 2. Tools
 
@@ -40,8 +40,8 @@ We also lack one that is central to our own product: an open-loop ledger the own
   - `get_context`
   - `search_episodes` (c392457)
   - `set_reminder`, `list_reminders`, `cancel_reminder` (bd93d45)
-  - `propose_calendar_change` (530f91c)
-  - Google read (9df318a, 27c2f1b)
+  - `query_calendar` and `propose_calendar_change` (530f91c)
+  - `draft_email`, which writes Gmail drafts (9df318a, 27c2f1b)
 - **Left:**
   - Web search and page read. WEB_SEARCH_SELECTION.md is waiting on the owner's provider pick.
   - Gmail send and draft.
@@ -107,7 +107,7 @@ We also lack one that is central to our own product: an open-loop ledger the own
   - Standing grants ("always allow X") with a scope and expiry.
   - An approval queue in the console.
 - **Nobody flagged:**
-  - Approval cards don't expire. A tap days later would apply a stale proposal.
+  - Approval cards didn't expire, and moves didn't check the event version. Fixed in 96c7683: 12h expiry plus an etag/If-Match check.
 
 ## 7. Observability
 
@@ -239,3 +239,12 @@ We also lack one that is central to our own product: an open-loop ledger the own
 - Search provider
 - STT key
 - SMS provider for OTP
+
+## Update (96c7683) and decisions for the owner
+
+- Fixed in code: approval expiry and version check, turn timeout, post-turn writers serialized, a specific reply on the second clinical failure, a tool result cap (16k), and late alarm fires shown in /trace.
+- Still open in code: the forget barrier (W1 memory admission).
+- Owner decisions:
+  - Langfuse text-capture retention before beta users.
+  - Whether to mark Gmail and web content as untrusted in the prompt (recommended).
+- See also: OWNER_SETUP_2026-09-24.md and VOCABULARY_AND_BRAND_2026-09-24.md.
