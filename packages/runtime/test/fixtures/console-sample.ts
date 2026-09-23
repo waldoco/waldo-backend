@@ -33,6 +33,10 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     { id: 'card:close', name: 'The Close', defaultTime: '21:30', time: '22:15', reason: 'pinned by you', sent: false, pin: '22:15' },
   ],
   ledger: 'Open approvals: none\nDone: reminder "drink water" set (daily 09:00)\nReminders:\n- 2026-09-24T09:00 drink water (daily)',
+  files: [
+    { id: 2, kind: 'document', file_id: 'f2', name: 'blood-panel-sept.pdf', mime: 'application/pdf', size: 482_000, caption: 'can you read this', at: Date.parse('2026-09-23T12:10:00Z') },
+    { id: 1, kind: 'voice', file_id: 'f1', name: 'voice-note.ogg', mime: 'audio/ogg', size: 38_000, caption: '', at: Date.parse('2026-09-23T04:30:00Z') },
+  ],
   steps: [
     step('Chat reply', '2026-09-23 22:40'), step('Memory update', '2026-09-23 22:40', 'MEMORY_CORE'), step('Spots update', '2026-09-23 22:40', '+1 seen1 dismissed0 forgot0'),
     step('Reminder fired', '2026-09-23 22:45'), step('Day plan', '2026-09-23 03:00'), step('Brief / midday / close card', '2026-09-23 14:00', 'card:midday'),

@@ -1,10 +1,12 @@
 import type { CoreFiles } from '../memory/core-files';
 import type { ConstellationEdge, ConstellationNode, Spot } from '../memory/spots';
 import type { E2EStep, TraceRow } from './harness';
+import type { StoredFile } from './files';
 
 export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_PATH}/google`;
+export const CONSOLE_FILE_PATH = `${CONSOLE_PATH}/file`;
 export const CONSOLE_COOKIE = 'waldo_console';
 const LINK_MS = 10 * 60_000;
 const SESSION_MS = 12 * 60 * 60_000;
@@ -42,7 +44,7 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => ({
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.dismiss', 'spot.forget', 'node.forget', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout'] as const;
+export const CONSOLE_ACTIONS = ['spot.dismiss', 'spot.forget', 'node.forget', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -60,6 +62,8 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
   'google.disconnect': 'Google disconnected. Waldo no longer reads your calendar or mail.',
   'google.connected': 'Google connected.',
+  'file.remove': 'File removed from this list. It stays in your Telegram chat.',
+  'file.unavailable': 'That file could not be fetched from Telegram.',
   invalid: 'That change could not be applied.',
 };
 
@@ -80,6 +84,7 @@ export type ConsoleView = Readonly<{
   edges: readonly ConstellationEdge[];
   cards: readonly ConsoleCard[];
   ledger: string;
+  files: readonly StoredFile[];
   steps: readonly E2EStep[];
   trace: readonly TraceRow[];
 }>;
@@ -132,6 +137,15 @@ const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
   return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${card.sent ? chip('Sent', 'teal') : chip('Upcoming')} ${card.pin ? chip(`Pinned ${card.pin}`, 'teal') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
+
+const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const KIND_LABEL: Readonly<Record<string, string>> = { photo: 'Photo', document: 'Document', voice: 'Voice note', audio: 'Audio' };
+
+const files = (view: ConsoleView) => {
+  const list = view.files.length === 0 ? empty('No files yet. Anything you send Waldo on Telegram shows up here.')
+    : view.files.map((file) => `<div class="row file"><div class="main"><div class="line">${esc(file.name)}</div><div class="sub">${chip(KIND_LABEL[file.kind] ?? file.kind)} <span>${esc([size(file.size), file.caption ? `"${file.caption}"` : ''].filter(Boolean).join(' · '))}</span></div></div><div class="act"><a class="btn quiet" href="${CONSOLE_FILE_PATH}?id=${file.id}">Open</a>${form(view.csrf, 'file.remove', 'Remove', { id: String(file.id) }, { tone: 'danger', confirm: 'Remove this file from the list?' })}</div></div>`).join('');
+  return list + `<div class="row conn"><div><div class="name">Share with someone</div><div class="sub">Send a file or a summary to a person or their Waldo, with your approval each time.</div></div><div class="state">${chip('Not built yet', 'muted')}</div><div class="act"></div></div>`;
+};
 
 const memory = (view: ConsoleView) => {
   const titles: Readonly<Record<string, string>> = { MEMORY_CORE: 'About you', MEMORY_GOALS: 'Goals', MEMORY_FOLLOWUPS: 'Follow-ups', 'intelligence-summary': 'Waldo\'s read (inference)' };
@@ -198,7 +212,7 @@ export const renderConsole = (view: ConsoleView, banner = ''): string => {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#activity">Activity</a></nav>
+<nav><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#activity">Activity</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 <div class="stats"><div class="stat"><b>${view.google.connected ? 'On' : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
 ${section('connections', 'Connections', 'What Waldo can reach, and the switches to change it. Items marked not built yet are on the plan but not wired.', connectors(view))}
@@ -206,6 +220,7 @@ ${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss o
 ${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}
 ${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view))}
 ${section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view))}
+${section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view))}
 ${section('activity', 'Activity', 'What ran, when, and whether it worked.', activity(view))}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>
 </div></body></html>`;

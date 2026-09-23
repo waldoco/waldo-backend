@@ -3,7 +3,8 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { coreFileStore } from '../memory/core-files';
 import { spotStore } from '../memory/spots';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { fileBook, fileResponse } from './files';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
@@ -49,6 +50,7 @@ type OwnerRuntime = Readonly<{
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
   act(action: ConsoleAction): Promise<boolean>;
   googleConnectUrl(): Promise<string | null>;
+  openFile(id: number): Promise<Response | null>;
   traces: TraceBook;
   timezone: string;
   ready: Promise<void>;
@@ -90,13 +92,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401 });
-    const { ready, view, act, googleConnectUrl } = this.setup();
+    const { ready, view, act, googleConnectUrl, openFile } = this.setup();
     await ready;
     const back = (notice: string) => new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${notice}` } });
     if (url.pathname === CONSOLE_GOOGLE_PATH) {
       const consent = await googleConnectUrl();
       return consent ? new Response(null, { status: 302, headers: { location: consent } }) : back('invalid');
     }
+    if (url.pathname === CONSOLE_FILE_PATH) return (await openFile(Number(url.searchParams.get('id')))) ?? back('file.unavailable');
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const action = parseConsoleAction(await request.formData(), session.csrf);
       if (action?.action === 'session.signout') {
@@ -227,15 +230,21 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const plans = dayPlanBook(storage.sql);
     const memory = coreFileStore(storage.sql);
     const spots = spotStore(storage.sql);
+    const files = fileBook(storage.sql);
+    const download = createTelegramFileDownloader(token);
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
       .then(([, , , seeded]) => { if (seeded) void this.serial(() => planToday('day-plan:boot')); });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)], spots,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)], spots,
     );
     const listener = new TelegramOwnerListener({
       ownerTelegramId: owner, api, ...responder, log,
+      respond: (turn, time) => {
+        if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
+        return responder.respond(turn, time);
+      },
       saveOffset: (offset) => this.ctx.storage.put('offset', offset),
     });
     const fire = async (entry: ScheduleEntry) => {
@@ -382,7 +391,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
           }),
-          ledger: desk.ledger(book.list()), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
+          ledger: desk.ledger(book.list()), files: files.list(), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
         };
       },
       act: async ({ action, id, value }) => {
@@ -395,6 +404,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'node.forget') {
           if (!spots.nodes().some((node) => node.id === spotId)) return false;
           spots.forgetNode(spotId);
+        } else if (action === 'file.remove') {
+          if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
           await storage.delete('google:tokens');
         } else {
@@ -411,6 +422,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       },
       googleConnectUrl: () => google.connectUrl(),
+      openFile: async (id) => {
+        const file = Number.isInteger(id) ? files.get(id) : null;
+        if (!file) return null;
+        try {
+          return fileResponse(file, await download(file.file_id));
+        } catch {
+          return null;
+        }
+      },
       timezone: clock.timezone, ready };
     return this.runtime;
   }
