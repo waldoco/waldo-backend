@@ -59,7 +59,7 @@ export const reminderBook = (sql: SqlStorage, scheduler: Scheduler, clock: Owner
 };
 
 const DAY_MS = 24 * 60 * 60_000;
-const nextAfter = (due: number, now: number) => (due > now ? due : due + Math.ceil((now - due + 1) / DAY_MS) * DAY_MS);
+export const nextAfter = (due: number, now: number) => (due > now ? due : due + Math.ceil((now - due + 1) / DAY_MS) * DAY_MS);
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 

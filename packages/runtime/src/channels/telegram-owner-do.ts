@@ -6,6 +6,8 @@ import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turn
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { durableConversationStore } from './conversation-store';
+import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
+import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
 import { googleHandlers } from '../tools/live/google';
@@ -32,6 +34,8 @@ type OwnerRuntime = Readonly<{
   reminders: ReturnType<typeof reminderBook>;
   scheduler: Scheduler;
   fire(entry: ScheduleEntry): Promise<void>;
+  nightly(entry: ScheduleEntry): Promise<void>;
+  ready: Promise<void>;
 }>;
 
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
@@ -66,8 +70,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   override async alarm(): Promise<void> {
     await this.serial(async () => {
-      const { scheduler, fire } = this.setup();
-      await scheduler.dispatchDue({ reminder: fire });
+      const { scheduler, fire, nightly, ready } = this.setup();
+      await ready;
+      await scheduler.dispatchDue({ reminder: fire, dreaming: nightly });
     });
   }
 
@@ -78,7 +83,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async turn(update: unknown): Promise<void> {
-    const { listener, owner, call, desk, reminders } = this.setup();
+    const { listener, owner, call, desk, reminders, ready } = this.setup();
+    await ready;
     const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
     const raw = update as RawUpdate;
     const handledDirectly = raw.callback_query !== undefined
@@ -135,9 +141,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       call, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
       timezone: clock.timezone, log,
     });
+    const episodes = episodeIndex(storage.sql);
+    const kv = durableConversationStore(storage);
+    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now())]).then(() => undefined);
     const responder = createTelegramResponder(
-      key, durableConversationStore(this.ctx.storage), coreFileStore(this.ctx.storage.sql), log,
-      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock)],
+      key, indexedConversationStore(kv, episodes, () => Date.now()), coreFileStore(this.ctx.storage.sql), log,
+      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)],
     );
     const listener = new TelegramOwnerListener({
       ownerTelegramId: owner, api, ...responder, log,
@@ -169,7 +178,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire };
+    const nightly = async (entry: ScheduleEntry) => {
+      const trace = `${entry.id}:${entry.occurrence_at}`;
+      const started = Date.now();
+      const day = episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000);
+      if (day.length === 0) return log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
+      try {
+        const changed = await responder.consolidate(trace, transcript(day, clock.timezone));
+        log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${changed.join(',') || 'no edits'}` });
+      } catch (error) {
+        log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error) });
+        throw error;
+      }
+    };
+    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, ready };
     return this.runtime;
   }
 }

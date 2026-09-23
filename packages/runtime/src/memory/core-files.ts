@@ -49,6 +49,16 @@ export const MEMORY_UPDATE_INSTRUCTION = [
   'Reply with JSON only: {"edits":[{"file":"<file>","content":"<full new file text>","reason":"<short why>"}]}. Use {"edits":[]} when nothing changed.',
 ].join('\n');
 
+export const NIGHTLY_MEMORY_INSTRUCTION = [
+  'It is night. Review the last day of conversation between the owner and Waldo and bring the memory files up to date.',
+  'Keep what still holds, fold in what the day showed, move settled follow-ups out, and add new ones with dates when known.',
+  'The same rules apply: only the owner\'s words are evidence about the owner; keep stated conditions exact; health routines are ordinary memory; never record a diagnosis Waldo inferred.',
+  'Reply with JSON only: {"edits":[{"file":"<file>","content":"<full new file text>","reason":"<short why>"}]}. Use {"edits":[]} when nothing changed.',
+].join('\n');
+
+export const nightlyMemoryInput = (files: CoreFiles, day: string): string =>
+  `${memoryPrompt(files)}\n\nThe last day of conversation:\n<conversation>\n${day}\n</conversation>`;
+
 export const MEMORY_EDITS_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['edits'],
   properties: {
