@@ -127,7 +127,7 @@ What shipped recently:
 | Fetch alerts | **Keep: the proactive brand** | Update cards are the first Fetch mechanism |
 | Signal Pressure, Task Pileup, Mind State, Signal Depth score | Rework before shipping | The owner is working on derivations; see the worksheet in SPOTS_CONSTELLATIONS_AND_DERIVATIONS.md section 5 |
 | Spotify, Todoist, Slack, Discord | Defer until the core loop is proven | Richer behavior and mindset signal later |
-| Wearables | Prioritize HealthKit (Apple Watch), Health Connect, Samsung, WHOOP | Owner priority |
+| Wearables | Prioritize HealthKit (Apple Watch), Health Connect, Samsung; WHOOP last, blocked on terms review of the AI/ML clause | Owner priority; WHOOP rules in CONNECTORS_AND_WEARABLES_2026-09-24.md |
 | Clinical | **Advise and redirect, no hard block** | Basic information with a notice and a physician redirect; no personal dosing |
 
 ## 5. Decisions for the owner (rulings in section 7)

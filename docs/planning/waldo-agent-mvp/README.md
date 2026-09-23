@@ -57,6 +57,7 @@ No date, budget or exact cohort is fixed. Planning estimates are 3–4 weeks to 
 - [Competitor research](COMPETITOR_RESEARCH.md): Instinct, Muse, Grok Bot, Vellum, Poke and Folk; no invented hands-on claims.
 - [Browser/open-agent research](RUNTIME_BROWSER_RESEARCH.md): Cloudflare, Browserbase, Hermes and OpenClaw.
 - [Kennel source map](KENNEL_K0_SOURCE_MAP.md): reusable handoff seams, Codex-first direction and the unproven cloud bridge.
+- [Connectors and wearables](CONNECTORS_AND_WEARABLES_2026-09-24.md): WHOOP terms limits and connector rules; network guardrails required before the invited beta.
 
 The audit used backend main `e91bee0`, PR #138 head `10e48fb`, and app main `7218c18f`. The source audit did not exercise tests or live services. Documentation publication checks are recorded in PR #138 and ledger #116. This packet supplies the selected product/build direction. Start with S0, including the bounded [cross-repository synchronization](ADR_RECONCILIATION.md); do not silently treat older Brain/app release cuts as current or claim an ADR amendment has already landed.
 
