@@ -62,6 +62,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           input: responsesInput(input.request),
           max_output_tokens: input.request.max_tokens,
           reasoning: { effort: 'low', summary: 'auto' },
+          ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
         },
         { signal: controller.signal },
@@ -70,15 +71,17 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
       }
       const text = responseText(response).trim();
+      const toolCalls = response.output.flatMap((item) => item.type === 'function_call' ? [{ call_id: item.call_id, name: item.name, arguments: item.arguments }] : []);
       const parsed = {
         model: input.request.model,
         text,
+        ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
         input_tokens: response.usage?.input_tokens ?? 0,
         output_tokens: response.usage?.output_tokens ?? 0,
         cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
         latency_ms: Date.now() - startedAt,
       };
-      if (text.length === 0) {
+      if (text.length === 0 && toolCalls.length === 0) {
         return { ok: false, code: 'invalid_args', error: 'OpenAI returned empty output' };
       }
       this.onResponseMetadata?.({
@@ -100,19 +103,25 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
 
 function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses.ResponseCreateParams['input'] {
   const text = request.messages.map((message) => `${message.role}: ${message.content}`).join('\n');
-  if (!request.attachments) return text;
-  return [{
-    role: 'user',
-    content: [
-      { type: 'input_text', text },
-      ...request.attachments.map((file): OpenAI.Responses.ResponseInputContent => {
-        const data = `data:${file.mime_type};base64,${file.data_base64}`;
-        return file.kind === 'image'
-          ? { type: 'input_image', image_url: data, detail: 'auto' }
-          : { type: 'input_file', filename: file.filename, file_data: data };
-      }),
-    ],
-  }];
+  if (!request.attachments && !request.tool_turns) return text;
+  return [
+    {
+      role: 'user',
+      content: [
+        { type: 'input_text', text },
+        ...(request.attachments ?? []).map((file): OpenAI.Responses.ResponseInputContent => {
+          const data = `data:${file.mime_type};base64,${file.data_base64}`;
+          return file.kind === 'image'
+            ? { type: 'input_image', image_url: data, detail: 'auto' }
+            : { type: 'input_file', filename: file.filename, file_data: data };
+        }),
+      ],
+    },
+    ...(request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => [
+      { type: 'function_call', call_id: turn.call.call_id, name: turn.call.name, arguments: turn.call.arguments },
+      { type: 'function_call_output', call_id: turn.call.call_id, output: turn.output },
+    ]),
+  ];
 }
 
 function reasoningSummary(response: OpenAI.Responses.Response): string {

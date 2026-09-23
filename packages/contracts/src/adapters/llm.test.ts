@@ -108,11 +108,24 @@ describe('llmResponse metering', () => {
     expect(Object.keys(llmResponseSchema.shape)).toEqual([
       'model',
       'text',
+      'tool_calls',
       'input_tokens',
       'output_tokens',
       'cache_read_input_tokens',
       'latency_ms',
     ]);
+  });
+
+  it('requests may declare tools and replay prior tool turns', () => {
+    const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
+    const tools = [{ name: 'get_context', description: 'Current time and timezone', parameters: { type: 'object', properties: {} } }];
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tools, tool_turns: [{ call, output: '{"ok":true}' }] }).success).toBe(true);
+  });
+
+  it('carries text or tool calls, never neither', () => {
+    const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
+    expect(llmResponseSchema.safeParse({ ...baseResponse, text: '' }).success).toBe(false);
+    expect(llmResponseSchema.safeParse({ ...baseResponse, text: '', tool_calls: [call] }).success).toBe(true);
   });
 
   it('accepts a fully metered success', () => {

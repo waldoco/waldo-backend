@@ -16,6 +16,29 @@ export const llmAttachmentSchema = z.strictObject({
 });
 export type LLMAttachment = z.infer<typeof llmAttachmentSchema>;
 
+export const llmToolSchema = z.strictObject({
+  name: z.string().min(1).max(64),
+  description: z.string().min(1).max(1024),
+  parameters: z.record(z.string(), z.unknown()),
+});
+export type LLMTool = z.infer<typeof llmToolSchema>;
+
+export const toolParameters = (schema: z.ZodType): Record<string, unknown> =>
+  z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+
+export const llmToolCallSchema = z.strictObject({
+  call_id: z.string().min(1).max(128),
+  name: z.string().min(1).max(64),
+  arguments: z.string().max(16_384),
+});
+export type LLMToolCall = z.infer<typeof llmToolCallSchema>;
+
+export const llmToolTurnSchema = z.strictObject({
+  call: llmToolCallSchema,
+  output: z.string().max(32_768),
+});
+export type LLMToolTurn = z.infer<typeof llmToolTurnSchema>;
+
 // No credential field exists here by design: provider keys live in the gateway BYOK store,
 // never in the contract or Worker env (ADR-0069 §5.2).
 export const llmRequestSchema = z.strictObject({
@@ -30,6 +53,8 @@ export const llmRequestSchema = z.strictObject({
   // Owner-sent images and files for the final user message. Kept outside messages so text
   // sanitisation never rewrites binary data; providers without file input reject the request.
   attachments: z.array(llmAttachmentSchema).min(1).max(4).optional(),
+  tools: z.array(llmToolSchema).min(1).max(32).optional(),
+  tool_turns: z.array(llmToolTurnSchema).max(64).optional(),
 });
 export type LLMRequest = z.infer<typeof llmRequestSchema>;
 
@@ -42,11 +67,16 @@ export type LLMRequest = z.infer<typeof llmRequestSchema>;
 export const llmResponseSchema = z
   .strictObject({
     model: modelNameSchema,
-    text: z.string().min(1),
+    text: z.string(),
+    tool_calls: z.array(llmToolCallSchema).min(1).max(16).optional(),
     input_tokens: z.int().nonnegative(),
     output_tokens: z.int().nonnegative(),
     cache_read_input_tokens: z.int().nonnegative(),
     latency_ms: z.int().nonnegative(),
+  })
+  .refine((r) => r.text.length > 0 || r.tool_calls !== undefined, {
+    error: 'a response carries text or tool calls',
+    path: ['text'],
   })
   .refine((r) => PROVIDER_OF[r.model] !== 'workers_ai' || r.cache_read_input_tokens === 0, {
     error: 'workers_ai has no prompt caching: cache_read_input_tokens must be 0',

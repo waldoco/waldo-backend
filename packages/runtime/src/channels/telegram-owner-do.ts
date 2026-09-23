@@ -38,7 +38,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.listener ??= new TelegramOwnerListener({
       ownerTelegramId: Number(owner),
       api: createTelegramOwnerApi(createTelegramCaller(token)),
-      ...createTelegramResponder(key, durableConversationStore(this.ctx.storage), coreFileStore(this.ctx.storage.sql), log, { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }),
+      ...createTelegramResponder(key, durableConversationStore(this.ctx.storage), coreFileStore(this.ctx.storage.sql), log, { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, { timezone: this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', now: () => new Date() }),
       log,
       saveOffset: (offset) => this.ctx.storage.put('offset', offset),
     });

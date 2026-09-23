@@ -3,6 +3,7 @@ export type TelegramWebhookEnv = Readonly<{
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   WALDO_OWNER_TELEGRAM_ID?: string;
+  WALDO_OWNER_TIMEZONE?: string;
   LANGFUSE_PUBLIC_KEY?: string;
   LANGFUSE_SECRET_KEY?: string;
   LANGFUSE_BASE_URL?: string;

@@ -1,6 +1,9 @@
 import {
-  acceptTrustedInvocation, ConversationTree, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  type LLMTool, type LLMToolTurn,
 } from '@waldo/contracts';
+import { runToolLoop } from '../conversation/tool-loop';
+import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
@@ -14,6 +17,7 @@ import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+const MAX_TOOL_ROUNDS = 4;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -23,6 +27,7 @@ export const createTelegramResponder = (
   memory?: CoreFileStore,
   log: (entry: TurnLogEntry) => void = () => undefined,
   readers: MediaReaders = {},
+  clock: OwnerClock = { timezone: 'UTC', now: () => new Date() },
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -32,39 +37,57 @@ export const createTelegramResponder = (
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
-  const ask = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[]) => {
+  const safety = {
+    authenticatedUserId: ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
+    sourceTaint: null, toolArgSourceTaint: null,
+    sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+  };
+  const handlers = [getContextHandler(clock)];
+  const complete = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
     const started = Date.now();
     let reasoning: string | undefined;
     const gateway = new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const result = await new RuntimeLLMProvider({ gateway, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,
-      renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2, ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}) }),
-    }, {
-      authenticatedUserId: ownerId, trigger: 'user_message', canaryTokens: CANARIES,
-      sourceTaint: null, toolArgSourceTaint: null,
-      sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
-    });
-    const input = JSON.stringify([{ role: 'system', content: system }, { role: 'user', content, ...(attachments ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}) }]);
+      renderRequest: () => ({
+        system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2,
+        ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
+        ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
+      }),
+    }, safety);
+    const input = JSON.stringify([{ role: 'system', content: system }, { role: 'user', content, ...(attachments ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}) }, ...(turns ?? [])]);
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, error: [result.code, result.halted_by].filter(Boolean).join(':'), text: { input } });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
-      text: { input, output: result.response.text, ...(reasoning ? { reasoning } : {}) },
+      text: { input, output: result.response.text || JSON.stringify(result.response.tool_calls), ...(reasoning ? { reasoning } : {}) },
     });
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
-    return result.response.text;
+    return result.response;
   };
+  const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
   const tree = new ConversationTree();
   let traceId = '';
   let pending: readonly LLMAttachment[] | undefined;
   const path = new JoinedConversationPath(adapters.contextComposer!, {
-    complete: (request) => ask(traceId, 'reply',
-      [messagingSystemPrompt(request.system, request.tools), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
-      request.messages.join('\n'),
-      undefined,
-      pending,
-    ),
+    complete: (request) => {
+      const trace = traceId;
+      return runToolLoop({
+        handlers,
+        maxSteps: MAX_TOOL_ROUNDS,
+        ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        step: (tools, turns) => complete(trace, 'reply',
+          [messagingSystemPrompt(request.system, request.tools), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
+          request.messages.join('\n'),
+          undefined,
+          pending,
+          tools,
+          turns,
+        ),
+        onTool: (event) => log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, text: { input: event.call.arguments, output: event.output } }),
+      });
+    },
   }, tree);
   let parentId: string | null = null;
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();

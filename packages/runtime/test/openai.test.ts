@@ -111,6 +111,31 @@ describe('OpenAIResponsesAdapter', () => {
     }]);
   });
 
+  it('declares function tools, replays prior tool turns and returns tool calls', async () => {
+    let sent: { tools?: unknown; input?: unknown } = {};
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: { tools?: unknown; input?: unknown }) => {
+        sent = body;
+        return { id: 'r', output_text: '', output: [{ type: 'function_call', call_id: 'c2', name: 'get_context', arguments: '{}' }], usage: { input_tokens: 1, output_tokens: 1 } } as never;
+      }),
+    });
+    const base = gatewayRequest();
+    const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
+    const parameters = { type: 'object', properties: {} };
+    const result = await adapter.complete({
+      ...base,
+      request: { ...base.request, tools: [{ name: 'get_context', description: 'Current time', parameters }], tool_turns: [{ call, output: '{"now":"13:50"}' }] },
+    });
+    expect(sent.tools).toEqual([{ type: 'function', name: 'get_context', description: 'Current time', parameters, strict: false }]);
+    expect(sent.input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'user: Say hello.' }] },
+      { type: 'function_call', ...call },
+      { type: 'function_call_output', call_id: 'c1', output: '{"now":"13:50"}' },
+    ]);
+    expect(result).toMatchObject({ ok: true, data: { text: '', tool_calls: [{ call_id: 'c2', name: 'get_context', arguments: '{}' }] } });
+  });
+
   it('sends a bounded reasoning effort and classifies truncated output as oversize', async () => {
     let sent: unknown;
     const adapter = new OpenAIResponsesAdapter({

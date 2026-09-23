@@ -1375,10 +1375,13 @@ async function sanitiseRequest(
       error: new HookHaltError('llm_provider', 'sanitised messages invalid', 'transient'),
     };
   }
+  const toolTurns = request.tool_turns === undefined ? undefined : await sanitiseValue(request.tool_turns, 'internal_context');
+  if (toolTurns !== undefined && !toolTurns.ok) return { ...toolTurns, scribeDestination: 'internal_context' };
   const parsed = llmRequestSchema.safeParse({
     ...request,
     system: system?.payload,
     messages: messages.payload,
+    ...(toolTurns ? { tool_turns: toolTurns.payload } : {}),
   });
   return parsed.success
     ? { ok: true, request: parsed.data }
