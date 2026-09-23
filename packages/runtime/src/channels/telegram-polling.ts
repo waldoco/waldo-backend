@@ -6,6 +6,7 @@ export type TelegramPollingClient = Readonly<{
 
 export type TelegramInboundTurn = Readonly<{
   updateId: number;
+  messageId: number | null;
   senderId: number;
   chatId: number;
   text: string;
@@ -71,6 +72,7 @@ export class TelegramPollingAdapter {
   private toTurn(update: TelegramMessageUpdate): TelegramInboundTurn {
     return Object.freeze({
       updateId: update.update_id,
+      messageId: update.message.message_id ?? null,
       senderId: update.message.from.id,
       chatId: update.message.chat.id,
       text: update.message.text,
