@@ -1636,11 +1636,13 @@ describe('DeliveryGate runtime policy state', () => {
     const runtime = freshRuntimeStub();
     const admissionAt = futureOccurrence();
     await runInDurableObject(runtime, (_instance, state) => {
-      state.storage.sql.exec(
-        'INSERT INTO daily_push_budget (user_id, local_date, sends_total) VALUES (?, ?, 3)',
-        USER,
-        utcLocalDate(admissionAt),
-      );
+      for (const localDate of new Set([utcLocalDate(Date.now()), utcLocalDate(admissionAt)])) {
+        state.storage.sql.exec(
+          'INSERT INTO daily_push_budget (user_id, local_date, sends_total) VALUES (?, ?, 3)',
+          USER,
+          localDate,
+        );
+      }
     });
     const runId = await runtime.startRun({
       userId: USER,
