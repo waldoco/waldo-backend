@@ -2,6 +2,11 @@ import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv }
 
 export const OWNER_COOKIE = 'waldo_owner';
 
+export type AdminOverview = Readonly<{
+  owners: readonly Readonly<{ email: string | null; state: string; created_at: string; presences: readonly string[] }>[];
+  invites: readonly Readonly<{ id: string; email: string | null; created_at: string; used_at: string | null; revoked_at: string | null }>[];
+}>;
+
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
 
 export type ConsoleAuth = Readonly<{
@@ -9,6 +14,9 @@ export type ConsoleAuth = Readonly<{
   verify(email: string, code: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
+  adminOverview(doName: string): Promise<AdminOverview | null>;
+  invite(doName: string, email: string): Promise<boolean>;
+  revokeInvite(doName: string, invite: string): Promise<boolean>;
   ownerCookie(doName: string): Promise<string>;
   readOwnerCookie(request: Request): Promise<string | null>;
 }>;
@@ -50,6 +58,12 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       const message = `settings.${doName}.${timezone}.${start ?? ''}.${end ?? ''}.${volume}`;
       return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
     },
+    adminOverview: async (doName) => (await rpc('admin_overview', `admin.${doName}`, { p_do_name: doName })) as AdminOverview | null,
+    invite: async (doName, email) => {
+      const address = email.trim().toLowerCase();
+      return (await rpc('admin_invite', `invite.${doName}.${address}`, { p_do_name: doName, p_email: address })) === true;
+    },
+    revokeInvite: async (doName, invite) => (await rpc('admin_revoke', `revoke.${doName}.${invite}`, { p_do_name: doName, p_invite: invite })) === true,
     async ownerCookie(doName) {
       return `${encodeURIComponent(doName)}.${await cookieSig(doName)}`;
     },

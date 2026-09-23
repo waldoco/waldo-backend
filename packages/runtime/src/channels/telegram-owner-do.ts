@@ -6,6 +6,7 @@ import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from '
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, type OwnerSettings } from '../identity/console-auth';
+import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -136,10 +137,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const consent = await googleConnectUrl();
       return consent ? new Response(null, { status: 302, headers: { location: consent } }) : back('invalid');
     }
+    const admin = consoleAuth(this.env);
+    const doName = this.ctx.storage.kv.get<string>('do_name');
+    if (url.pathname === CONSOLE_ADMIN_PATH) {
+      const overview = admin && doName ? await admin.adminOverview(doName) : null;
+      return overview ? new Response(renderAdmin(overview, session.csrf), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } }) : new Response('not found', { status: 404 });
+    }
     if (url.pathname === CONSOLE_FILE_PATH) return (await openFile(Number(url.searchParams.get('id')))) ?? back('file.unavailable');
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const action = parseConsoleAction(await request.formData(), session.csrf);
       if (action?.action === 'telegram.link') return this.telegramLinkPage();
+      if (action?.action === 'invite.create' || action?.action === 'invite.revoke') {
+        const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value) : admin.revokeInvite(doName, action.id)) : false;
+        return new Response(null, { status: 303, headers: { location: done ? CONSOLE_ADMIN_PATH : `${CONSOLE_PATH}?m=invalid` } });
+      }
       if (action?.action === 'session.signout') {
         await access.signOut();
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });

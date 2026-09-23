@@ -1,0 +1,16 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(7);
+select vault.create_secret('test-router-secret', 'waldo_router_hmac');
+create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
+create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(pg_temp.at()::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
+insert into waldo.owners (do_name, email, is_admin) values ('do-admin', 'admin@test.invalid', true), ('do-user', 'user@test.invalid', false);
+select is(waldo.admin_overview('do-user', pg_temp.at(), pg_temp.sig('admin.do-user')), null, 'a normal owner sees no admin data');
+select is(waldo.admin_invite('do-user', 'x@test.invalid', pg_temp.at(), pg_temp.sig('invite.do-user.x@test.invalid')), false, 'a normal owner cannot invite');
+select is(waldo.admin_invite('do-admin', 'New@test.invalid', pg_temp.at(), pg_temp.sig('invite.do-admin.new@test.invalid')), true, 'the admin can invite');
+select is(jsonb_array_length(waldo.admin_overview('do-admin', pg_temp.at(), pg_temp.sig('admin.do-admin'))->'owners'), 2, 'the admin sees every owner');
+select is((select revoked_at is null from waldo.invites where email = 'new@test.invalid'), true, 'the invite is open');
+select is(waldo.admin_revoke('do-admin', (select code_hash from waldo.invites where email = 'new@test.invalid'), pg_temp.at(), pg_temp.sig('revoke.do-admin.' || (select code_hash from waldo.invites where email = 'new@test.invalid'))), true, 'the admin can revoke');
+select throws_ok($$ select waldo.admin_overview('do-admin', pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'a forged admin call is refused');
+select * from finish();
+rollback;

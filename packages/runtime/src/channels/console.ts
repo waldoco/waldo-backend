@@ -56,7 +56,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link', 'timezone.set'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link', 'timezone.set', 'invite.create', 'invite.revoke'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -69,6 +69,8 @@ export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction 
 export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
+  'invite.create': 'Invite saved. That address can now sign in.',
+  'invite.revoke': 'Invite revoked.',
   'timezone.set': 'Time zone saved. Cards and reminders follow it from now on.',
   'spot.confirm': 'Confirmed. It now counts as something you said.',
   'spot.forget': 'Forgotten and deleted. Waldo keeps a short do-not-relearn note so it does not pick it up again.',
