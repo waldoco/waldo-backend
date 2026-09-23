@@ -1,5 +1,5 @@
 import { telegramReaction } from './reactions';
-import type { TelegramInboundTurn, TelegramPollingAdapter } from './telegram-polling';
+import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
 
 export type TelegramOwnerApi = Readonly<{
   setMessageReaction(request: Readonly<{ chat_id: number; message_id: number; reaction: readonly Readonly<{ type: 'emoji'; emoji: string }>[] }>): Promise<unknown>;
@@ -20,9 +20,10 @@ export type TelegramOwnerListenerOptions = Readonly<{
   failedEmoji?: string;
   progressText?: string;
   failureText?: string;
+  unsupportedText?: string;
 }>;
 
-export type TelegramTurnOutcome = 'answered' | 'failed' | 'ignored';
+export type TelegramTurnOutcome = 'answered' | 'failed' | 'ignored' | 'unsupported';
 
 export class TelegramOwnerListener {
   constructor(private readonly options: TelegramOwnerListenerOptions) {
@@ -35,8 +36,21 @@ export class TelegramOwnerListener {
     const polled = await adapter.poll(timeout);
     const outcomes: TelegramTurnOutcome[] = [];
     for (const turn of polled.accepted) outcomes.push(await this.handle(turn));
+    for (const turn of polled.unsupported) outcomes.push(await this.handleUnsupported(turn));
     await this.options.saveOffset(polled.nextOffset);
     return outcomes;
+  }
+
+  async handleUnsupported(turn: TelegramUnsupportedTurn): Promise<TelegramTurnOutcome> {
+    const owner = this.options.ownerTelegramId;
+    if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
+    const { api } = this.options;
+    const chat_id = turn.chatId;
+    await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can only read plain text messages here for now - forwards, media and some formatting do not come through yet.' }).catch(() => undefined);
+    if (turn.messageId !== null) {
+      await api.setMessageReaction({ chat_id, message_id: turn.messageId, reaction: [{ type: 'emoji', emoji: '🤷' }] }).catch(() => undefined);
+    }
+    return 'unsupported';
   }
 
   async handle(turn: TelegramInboundTurn): Promise<TelegramTurnOutcome> {

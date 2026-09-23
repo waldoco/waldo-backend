@@ -1,4 +1,4 @@
-import { telegramMessageUpdateSchema, type TelegramMessageUpdate } from '@waldo/contracts';
+import { telegramMessageUpdateSchema, telegramUnsupportedMessageSchema, type TelegramMessageUpdate } from '@waldo/contracts';
 
 export type TelegramPollingClient = Readonly<{
   getUpdates(request: Readonly<{ offset: number; timeout: number }>): Promise<readonly unknown[]>;
@@ -12,9 +12,12 @@ export type TelegramInboundTurn = Readonly<{
   text: string;
 }>;
 
+export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text'>;
+
 export type TelegramPollResult = Readonly<{
   nextOffset: number;
   accepted: readonly TelegramInboundTurn[];
+  unsupported: readonly TelegramUnsupportedTurn[];
   dropped: number;
 }>;
 
@@ -39,6 +42,7 @@ export class TelegramPollingAdapter {
     }
     const updates = await this.client.getUpdates({ offset: this.nextOffset, timeout });
     const accepted: TelegramInboundTurn[] = [];
+    const unsupported: TelegramUnsupportedTurn[] = [];
     let dropped = 0;
     let highest = this.nextOffset - 1;
     for (const raw of updates) {
@@ -50,7 +54,13 @@ export class TelegramPollingAdapter {
       highest = Math.max(highest, updateId);
       const parsed = telegramMessageUpdateSchema.safeParse(raw);
       if (!parsed.success) {
-        dropped += 1;
+        const other = telegramUnsupportedMessageSchema.safeParse(raw);
+        if (other.success) {
+          const { message } = other.data;
+          unsupported.push(Object.freeze({ updateId, messageId: message.message_id ?? null, senderId: message.from.id, chatId: message.chat.id }));
+        } else {
+          dropped += 1;
+        }
         continue;
       }
       accepted.push(this.toTurn(parsed.data));
@@ -59,6 +69,7 @@ export class TelegramPollingAdapter {
     return Object.freeze({
       nextOffset: this.nextOffset,
       accepted: Object.freeze(accepted),
+      unsupported: Object.freeze(unsupported),
       dropped,
     });
   }

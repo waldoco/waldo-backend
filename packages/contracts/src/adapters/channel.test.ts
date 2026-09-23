@@ -45,6 +45,7 @@ import {
   telegramCallbackQueryUpdateSchema,
   telegramInboundUpdateSchema,
   telegramMessageUpdateSchema,
+  telegramUnsupportedMessageSchema,
   telegramMyChatMemberUpdateSchema,
   telegramUpdateTypeSchema,
   TG_BIND_CONFIRM_KIND,
@@ -360,6 +361,29 @@ describe('telegram gate-2 shapes', () => {
     };
     expect(telegramMessageUpdateSchema.safeParse(real).success).toBe(true);
     expect(telegramMessageUpdateSchema.safeParse({ ...real, message: { ...real.message, entities: [{ type: 'text_link', offset: 0, length: 6, url: 'https://x.test' }] } }).success).toBe(false);
+  });
+
+  it('accepts a reply to an earlier message and reads only the owner text', () => {
+    const reply = {
+      ...baseTgMessage,
+      message: {
+        ...baseTgMessage.message,
+        reply_to_message: { message_id: 3, date: 1, from: { id: 8223740786, is_bot: true, first_name: 'Bot' }, chat: { id: 42, type: 'private' }, text: 'earlier reply' },
+        quote: { text: 'earlier', position: 0, is_manual: true },
+        link_preview_options: { is_disabled: true },
+      },
+    };
+    const parsed = telegramMessageUpdateSchema.safeParse(reply);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.message.text).toBe(baseTgMessage.message.text);
+  });
+
+  it('marks gated-out owner messages as unsupported without reading their content', () => {
+    const { text: _text, ...photo } = baseTgMessage.message;
+    const forwarded = { ...baseTgMessage, message: { ...baseTgMessage.message, forward_origin: { type: 'user' } } };
+    expect(telegramUnsupportedMessageSchema.safeParse({ update_id: 1, message: { ...photo, photo: [] } }).success).toBe(true);
+    expect(telegramUnsupportedMessageSchema.safeParse(forwarded).success).toBe(true);
+    expect(telegramUnsupportedMessageSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, chat: { id: -9, type: 'group' } } }).success).toBe(false);
   });
 
   it('rejects a forwarded message (forward_origin is an unrecognized key)', () => {

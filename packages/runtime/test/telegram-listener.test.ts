@@ -92,6 +92,22 @@ describe('TelegramOwnerListener', () => {
     expect(calls.map(([kind]) => kind)).toEqual(['react', 'typing', 'send', 'react']);
   });
 
+  it('answers owner replies and tells the owner honestly when a message cannot be read', async () => {
+    const { calls, api } = recorder();
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async (turn) => `echo ${turn.text}`, saveOffset: async () => undefined });
+    const reply = update(20);
+    const withReply = { ...reply, message: { ...reply.message, reply_to_message: { message_id: 3, text: 'earlier' } } };
+    const { text: _text, ...photo } = update(21).message;
+    const forwarded = { update_id: 22, message: { ...update(22).message, forward_origin: { type: 'user' } } };
+    const stranger = { update_id: 23, message: { ...photo, from: { id: 42, is_bot: false }, chat: { id: 42, type: 'private' }, sticker: {} } };
+    const adapter = new TelegramPollingAdapter({ getUpdates: async () => [withReply, { update_id: 21, message: { ...photo, photo: [] } }, forwarded, stranger] });
+    await expect(listener.pollOnce(adapter, 0)).resolves.toEqual(['answered', 'unsupported', 'unsupported', 'ignored']);
+    const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text);
+    expect(sends[0]).toBe('echo hi');
+    expect(sends.slice(1)).toEqual(Array(2).fill('I can only read plain text messages here for now - forwards, media and some formatting do not come through yet.'));
+    expect(calls.some(([kind, r]) => kind !== 'typing' && (r as { chat_id: number }).chat_id === 42)).toBe(false);
+  });
+
   it('rejects an invalid owner id', () => {
     const { api } = recorder();
     expect(() => new TelegramOwnerListener({ ownerTelegramId: 0, api, respond: async () => '', saveOffset: async () => undefined })).toThrow('owner id');

@@ -216,9 +216,24 @@ export const telegramMessageUpdateSchema = z.strictObject({
     chat: telegramPrivateChatSchema,
     text: z.string().min(1).max(4096),
     entities: z.array(telegramTextEntitySchema).max(100).optional(),
+    reply_to_message: z.looseObject({ message_id: z.int().positive() }).optional(),
+    quote: z.looseObject({}).optional(),
+    link_preview_options: z.looseObject({}).optional(),
   }),
 });
 export type TelegramMessageUpdate = z.infer<typeof telegramMessageUpdateSchema>;
+
+// Owner-shaped private messages that fail the gate above (media, forwards, unsupported
+// formatting). Only identifiers are read, so the listener can answer honestly instead of
+// going silent; the content is never parsed.
+export const telegramUnsupportedMessageSchema = z.looseObject({
+  update_id: z.int().positive(),
+  message: z.looseObject({
+    message_id: z.int().positive().optional(),
+    from: z.looseObject({ id: z.int().positive(), is_bot: z.literal(false) }),
+    chat: z.looseObject({ id: z.int(), type: z.literal('private') }),
+  }),
+});
 
 // Callbacks carry no top-level chat: the private-chat check binds to
 // callback_query.message.chat (ADR-0067 gate 2). data is an opaque server-issued id —

@@ -18,12 +18,13 @@ describe('TelegramPollingAdapter', () => {
         { updateId: 4, messageId: null, senderId: 7, chatId: 9, text: 'hello' },
         { updateId: 5, messageId: null, senderId: 7, chatId: 9, text: 'hello' },
       ],
+      unsupported: [],
       dropped: 0,
     });
     expect(requests).toEqual([{ offset: 4, timeout: 25 }]);
   });
 
-  it('drops duplicates and invalid/group/bot/media updates while still checkpointing them', async () => {
+  it('drops duplicates and group/bot updates, flags media as unsupported, and checkpoints all of them', async () => {
     const adapter = new TelegramPollingAdapter({
       async getUpdates() {
         return [
@@ -38,7 +39,8 @@ describe('TelegramPollingAdapter', () => {
     expect(await adapter.poll(0)).toEqual({
       nextOffset: 14,
       accepted: [{ updateId: 10, messageId: null, senderId: 7, chatId: 9, text: 'hello' }],
-      dropped: 4,
+      unsupported: [{ updateId: 13, messageId: null, senderId: 7, chatId: 9 }],
+      dropped: 3,
     });
   });
 
