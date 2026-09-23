@@ -118,16 +118,15 @@ What shipped recently:
 | 1-tap card feedback + 14-day feeling check | Cheap ground truth to tune briefs and health reads |
 | User context notes (sick, travelling, bad week) | WHOOP My Memory; changes how briefs read the day |
 
-### Remove or defer
-| Remove / defer | Why |
-|---|---|
-| Spots, Constellations | Mock only; pattern discovery is deferred in the plan |
-| Signal Pressure, Task Pileup, Mind State, Signal Depth score | No data source; a made-up score costs trust |
-| Fetch alerts | Need real continuous health data first |
-| Spotify, Todoist, Slack, Discord | Not built; Google + chat channel covers MVP |
-| Multi-brand wearable picker | Keep Apple Health / Health Connect only until direct integrations exist |
-| Caffeine and profession as onboarding screens | Move to chat (progressive profiling); onboarding stays short |
-| Clinical features (doctor chat) | Oura and WHOOP own this; Waldo stays non-clinical |
+### Remove or defer (revised by the owner 2026-09-23 17:49; see section 9)
+| Item | Status | Why |
+|---|---|---|
+| Spots, Constellations | **Keep: core product** | Short-term and long-term memory/patterns, visible to the user and the agent alike. Design: SPOTS_CONSTELLATIONS_AND_DERIVATIONS.md |
+| Fetch alerts | **Keep: the proactive brand** | Update cards are the first Fetch mechanism |
+| Signal Pressure, Task Pileup, Mind State, Signal Depth score | Rework before shipping | The owner is working on derivations; see the worksheet in SPOTS_CONSTELLATIONS_AND_DERIVATIONS.md section 5 |
+| Spotify, Todoist, Slack, Discord | Defer until the core loop is proven | Richer behavior and mindset signal later |
+| Wearables | Prioritize HealthKit (Apple Watch), Health Connect, Samsung, WHOOP | Owner priority |
+| Clinical | **Advise and redirect, no hard block** | Basic information with a notice and a physician redirect; no personal dosing |
 
 ## 5. Decisions for the owner (rulings in section 7)
 1. Brief delivery: push on the chat channel, in-app only, or a short push that links to the in-app card?
@@ -206,3 +205,43 @@ Sources for the "not exposed" rows: Momentum (above) and https://www.fitmesh.fit
 
 ### To verify on a device
 Series 12 / iOS 27, before building the health ingest: whether RMSSD samples are written; the actual HR sample density in HealthKit; and whether any readiness or sleep-score type appears in the SDK.
+
+## 9. Owner direction 2026-09-23 17:49 and build order
+
+Reversals and rulings are in the table in section 4. The Spots/Constellations design, Fetch and the score worksheet are in https://github.com/waldoco/waldo-backend/blob/beta-mvp/docs/planning/waldo-agent-mvp/SPOTS_CONSTELLATIONS_AND_DERIVATIONS.md
+
+Build order while the owner reads. This is the lead's judgment: foundation first, each step testable on Telegram before the next.
+1. **Clinical advise-and-redirect.** Replace the medication/dose halt with a notice and a physician redirect in the reply. The prompt keeps the "no personal dosing or medication changes" line.
+2. **Spots v0 in the runtime.** A typed spot store with evidence refs. The memory updater and the Fetch sweep emit spots, and the nightly run promotes them to constellation nodes and edges. Chat can answer "what have you spotted" and "why". This moves to the new Supabase when it exists.
+3. **Agent harness hardening for the E2E.** Add an owner-only command to fire any card or Fetch on demand, a run-trace view per turn, and one end-to-end checklist run on Telegram.
+4. **Web console v0** (Worker-served, owner-authenticated by Telegram login or an email OTP):
+   - connectors (Google OAuth connect/disconnect, status);
+   - memory, Spots and Constellations view with correct/forget;
+   - card settings (pin or auto);
+   - files (upload/share into Waldo's context);
+   - activity/ledger.
+5. **WhatsApp channel.** Needs a Meta WhatsApp Business number and token from the owner.
+6. **Waldo-to-Waldo.** A peer channel between two owners' Waldos with explicit per-person permissions. Comes after the console, since permissions need a UI.
+7. **New Supabase + app API.** Onboarding, profile, health ingest, and app reads of briefs, spots and chat. Needs the new Supabase project credentials from the owner.
+
+Blocked on the owner for this list: Google OAuth creds (Fetch, connectors), Meta WhatsApp creds (step 5), new Supabase project (step 7).
+
+## 10. Siri AI (iOS 27) and Waldo
+
+Checked 2026-09-23.
+
+- **What shipped (Sept 14, iOS 27, English beta):** Siri AI, a rebuilt conversational Siri with personal context across messages, mail and photos, onscreen awareness, and systemwide app actions. Third-party apps take part through App Intents. Models are Apple Foundation Models built with Google Gemini, running on device and on Private Cloud Compute. https://www.apple.com/newsroom/2026/09/siri-ai-a-profoundly-more-capable-and-personal-assistant-is-here/
+- **Developer surface (WWDC26):** App Intents with App Schemas/Entities for natural-language actions and questions, the Spotlight semantic index, onscreen-awareness annotations, content transfer, and AppIntentsTesting. https://developer.apple.com/videos/play/wwdc2026/240/ , https://developer.apple.com/videos/play/wwdc2026/343/ , https://developer.apple.com/videos/play/wwdc2026/344/
+- **Siri Extensions / model delegation (letting another AI answer inside Siri):** hooks exist in iOS 27 code but are not enabled, and may be EU-only. Don't plan on it. https://9to5mac.com/2026/09/14/ios-27-code-shows-you-may-be-able-to-replace-siri-ai-with-claude-or-chatgpt-poll/
+
+### What Waldo can do with Siri
+1. **Be callable from Siri** through App Intents in the iOS app: "Ask Waldo …", "What's my Brief?", "Log how I feel", "What have you spotted today?", "Move my next meeting" (through Waldo's approval flow). Siri AI can then chain Waldo actions with other apps.
+2. **Be findable:** index Briefs, Spots and Constellation nodes as App Entities in the Spotlight semantic index, so Siri's personal-context answers can include Waldo's content, subject to the user's permission.
+3. **Onscreen awareness:** annotate Waldo's views so "explain this" or "remind me about this" works while a Brief or Spot is on screen.
+4. **Log Siri interop back into Waldo:** every Siri-invoked Waldo intent goes through the app to the backend, so it lands in episodes and the ledger like any other turn. Waldo's memory stays whole.
+
+### What Waldo can't do
+- Read Siri's personal context, Siri conversation history or Apple's computed scores. There is no API for any of them.
+- Replace Siri's brain, unless Apple enables Extensions and Waldo qualifies.
+
+**Positioning:** Siri AI is the OS assistant. Waldo is the health-aware chief of staff, reachable from inside Siri. That's a distribution gain, not a threat, as long as Waldo's value (body plus calendar plus memory, joined) stays in Waldo.
