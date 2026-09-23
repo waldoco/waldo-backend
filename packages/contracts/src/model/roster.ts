@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const OPENAI_GPT_5_NANO_MODEL = 'gpt-5-nano' as const;
+export const OPENAI_GPT_5_MINI_MODEL = 'gpt-5-mini' as const;
 export const OPENAI_PROVIDER = 'openai' as const;
 
 // The only internal model IDs Waldo routes to. Workers AI keeps the documented @cf/<vendor>
@@ -12,6 +13,7 @@ export const modelNameSchema = z.enum([
   'claude-sonnet-4-6',
   'claude-haiku-4-5',
   OPENAI_GPT_5_NANO_MODEL,
+  OPENAI_GPT_5_MINI_MODEL,
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
@@ -19,6 +21,9 @@ export type ModelName = z.infer<typeof modelNameSchema>;
 // target is already in the roster with an OpenAI provider; a new model also needs its roster
 // entry above, PROVIDER_OF below and a price in packages/runtime/src/llm/pricing.ts.
 export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_5_NANO_MODEL;
+
+// The alternative the W7 evals measure against WALDO_CHAT_MODEL. Nothing routes to it in production.
+export const WALDO_EVAL_ALTERNATIVE_MODEL: ModelName = OPENAI_GPT_5_MINI_MODEL;
 
 // Speech-to-text for owner voice notes. Not chat routes, so they stay outside modelNameSchema.
 // Recommended default is ElevenLabs Scribe v2 (docs/planning/STT_SELECTION.md); smallest.ai Pulse and
@@ -35,6 +40,7 @@ export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   'claude-sonnet-4-6': 'anthropic',
   'claude-haiku-4-5': 'anthropic',
   [OPENAI_GPT_5_NANO_MODEL]: OPENAI_PROVIDER,
+  [OPENAI_GPT_5_MINI_MODEL]: OPENAI_PROVIDER,
 };
 
 // The documented request ID and exact response identities accepted at the Cloudflare

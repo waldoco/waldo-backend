@@ -1,6 +1,6 @@
 import {
   acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
-  type LLMTool, type LLMToolTurn,
+  type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import { runToolLoop } from '../conversation/tool-loop';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
@@ -36,6 +36,7 @@ export const createTelegramResponder = (
   readers: MediaReaders = {},
   clock: OwnerClock = { timezone: 'UTC', now: () => new Date() },
   tools: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [],
+  model: ModelName = WALDO_CHAT_MODEL,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -44,7 +45,7 @@ export const createTelegramResponder = (
   const ownerId = invocation.verified_authority.principal_ref;
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
   const circuitBreaker = new InMemoryCircuitBreaker();
-  const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
+  const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const safety = {
     authenticatedUserId: ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null,
@@ -74,7 +75,7 @@ export const createTelegramResponder = (
     if (!result.ok && result.halted_by === 'medical_gate' && !system.endsWith(CLINICAL_REDIRECT)) {
       return complete(trace, `${purpose}_redirect`, `${system}\n\n${CLINICAL_REDIRECT}`, content, format, attachments, tools, turns);
     }
-    if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model: WALDO_CHAT_MODEL };
+    if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model };
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return result.response;
   };

@@ -9,7 +9,7 @@ import {
 
 describe('modelName', () => {
   it('accepts the canonical roster ids', () => {
-    expect(modelNameSchema.options).toHaveLength(4);
+    expect(modelNameSchema.options).toHaveLength(5);
     for (const id of modelNameSchema.options) {
       expect(modelNameSchema.parse(id)).toBe(id);
     }
@@ -40,7 +40,7 @@ describe('roster', () => {
 
   it('owns exact Cloudflare request and response identities for every internal model', () => {
     expect(Object.keys(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS).sort()).toEqual(
-      modelNameSchema.options.filter((model) => model !== OPENAI_GPT_5_NANO_MODEL).sort(),
+      modelNameSchema.options.filter((model) => PROVIDER_OF[model] !== 'openai').sort(),
     );
     expect(CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS[ROSTER.reasoning]).toEqual({
       request: 'anthropic/claude-sonnet-4.6',
