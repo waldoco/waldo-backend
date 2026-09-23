@@ -44,7 +44,7 @@ Adopted: small, inspectable cores and version-bound provider transforms. Not ado
 
 - **End-of-day bar.** The owner spins up his own Waldo end to end, with his own accounts connected, once the app and dashboard are configured.
 - **Next horizon.** Agent-to-agent communication, and a plugin system for external agents and harnesses (Meta Muse, Codex, Claude and others).
-- **Later ambition (not scheduled).** Train our own orchestrator model for partner agents.
+- **Later ambition (not scheduled).** Train our own orchestrator model for partner agents, in the spirit of [Sakana AI Fugu](https://sakana.ai/fugu/), one model that routes work across other models and agents.
 
 ## Queue
 
