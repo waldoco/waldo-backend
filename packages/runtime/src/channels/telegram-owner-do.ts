@@ -5,7 +5,7 @@ import { claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
-import { consoleAuth } from '../identity/console-auth';
+import { consoleAuth, type OwnerSettings } from '../identity/console-auth';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -64,6 +64,14 @@ type OwnerRuntime = Readonly<{
 }>;
 
 const LATE_FIRE_MS = 5 * 60_000;
+
+const validZone = (zone: string): boolean => {
+  try {
+    return zone.length > 0 && Boolean(new Intl.DateTimeFormat('en', { timeZone: zone }));
+  } catch {
+    return false;
+  }
+};
 
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private runtime?: OwnerRuntime;
@@ -282,6 +290,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     ensureSchema(this.ctx.storage);
     const scheduler = new Scheduler(this.ctx.storage.sql, this.ctx.storage, deps);
     const fallbackZone = this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
+    // Supabase holds the editable settings when configured; the DO applies its copy only after that write lands.
+    const saveSettings = async (settings: OwnerSettings): Promise<boolean> => {
+      const auth = consoleAuth(this.env);
+      const doName = identity.get<string>('do_name');
+      return !auth || !doName || auth.saveSettings(doName, settings);
+    };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const call = createTelegramCaller(token);
@@ -508,8 +522,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (action === 'proactivity.set') {
           const [quietStart = '', quietEnd = '', volume = ''] = (value ?? '').split('|');
           const parsed = setProactivityArgsSchema.safeParse({ quiet_start: quietStart || null, quiet_end: quietEnd || null, volume });
-          if (!parsed.success) return false;
+          if (!parsed.success || !(await saveSettings({ timezone: clock.timezone, ...parsed.data }))) return false;
           loops.setProactivity(parsed.data);
+        } else if (action === 'timezone.set') {
+          if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
+          identity.put('timezone', value);
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           const claim = memory.claims().find((row) => row.id === spotId);
           if (!claim) return false;

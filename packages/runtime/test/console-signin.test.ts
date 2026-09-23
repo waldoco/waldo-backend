@@ -11,6 +11,7 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   sendCode: vi.fn(async () => undefined),
   verify: vi.fn(async () => null),
   issueLinkCode: vi.fn(async () => null),
+  saveSettings: vi.fn(async () => true),
   ownerCookie: vi.fn(async (doName: string) => `${doName}.sig`),
   readOwnerCookie: vi.fn(async () => null),
   ...overrides,

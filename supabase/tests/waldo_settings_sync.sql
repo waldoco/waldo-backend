@@ -1,0 +1,15 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(5);
+select vault.create_secret('test-router-secret', 'waldo_router_hmac');
+create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
+create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(pg_temp.at()::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
+insert into waldo.owners (id, do_name) values ('30000000-0000-0000-0000-00000000000a', 'do-a'), ('30000000-0000-0000-0000-00000000000b', 'do-b');
+insert into waldo.owner_settings (owner_id) values ('30000000-0000-0000-0000-00000000000a'), ('30000000-0000-0000-0000-00000000000b');
+select is(waldo.set_owner_settings('do-a', 'Asia/Kolkata', '22:00', '07:00', 'low', pg_temp.at(), pg_temp.sig('settings.do-a.Asia/Kolkata.22:00.07:00.low')), true, 'a signed write updates the owner');
+select is((select timezone || ' ' || quiet_start::text || ' ' || volume from waldo.owner_settings where owner_id = '30000000-0000-0000-0000-00000000000a'), 'Asia/Kolkata 22:00:00 low', 'the row holds the new settings');
+select is((select timezone from waldo.owner_settings where owner_id = '30000000-0000-0000-0000-00000000000b'), 'UTC', 'the other owner is untouched');
+select is(waldo.set_owner_settings('do-a', 'Mars/Olympus', '', '', 'normal', pg_temp.at(), pg_temp.sig('settings.do-a.Mars/Olympus...normal')), false, 'an unknown time zone is refused');
+select throws_ok($$ select waldo.set_owner_settings('do-b', 'Asia/Kolkata', '', '', 'high', pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'a forged write is refused');
+select * from finish();
+rollback;

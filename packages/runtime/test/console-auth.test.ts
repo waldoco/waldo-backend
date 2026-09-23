@@ -58,4 +58,14 @@ describe('consoleAuth', () => {
     expect(code).toMatch(/^[A-HJ-NP-Z2-9]{10}$/);
     expect(JSON.stringify(fetcher.mock.calls)).not.toContain(code!);
   });
+
+  it('writes settings through the signed function and reports whether they landed', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json(false));
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
+    expect(await auth.saveSettings('do-a', { timezone: 'Asia/Kolkata', quiet_start: '22:00', quiet_end: null, volume: 'low' })).toBe(true);
+    const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://db.test/rest/v1/rpc/set_owner_settings');
+    expect(JSON.parse(String(init.body))).toMatchObject({ p_do_name: 'do-a', p_timezone: 'Asia/Kolkata', p_quiet_start: '22:00', p_quiet_end: '', p_volume: 'low', p_sig: await routerSignature('router', 1_790_000_000, 'settings.do-a.Asia/Kolkata.22:00..low') });
+    expect(await auth.saveSettings('do-a', { timezone: 'Mars/Olympus', quiet_start: null, quiet_end: null, volume: 'normal' })).toBe(false);
+  });
 });

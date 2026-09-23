@@ -56,7 +56,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link', 'timezone.set'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -69,6 +69,7 @@ export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction 
 export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
+  'timezone.set': 'Time zone saved. Cards and reminders follow it from now on.',
   'spot.confirm': 'Confirmed. It now counts as something you said.',
   'spot.forget': 'Forgotten and deleted. Waldo keeps a short do-not-relearn note so it does not pick it up again.',
   'node.forget': 'Pattern forgotten, along with its links. Waldo keeps a short do-not-relearn note.',
@@ -159,6 +160,8 @@ const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a
 
 const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the three day cards'], ['normal', 'Normal: plus updates that change your day'], ['high', 'High: plus smaller useful updates']];
 
+const timezone = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="timezone.set"><label>Time zone <input name="value" id="tz" value="${esc(view.timezone)}" autocomplete="off"></label><button class="btn quiet" type="button" onclick="document.getElementById('tz').value=Intl.DateTimeFormat().resolvedOptions().timeZone">Use this device</button><button class="btn quiet">Save</button></form><div class="sub">Waldo plans your day and fires reminders in this time zone. Change it when you travel.</div>`;
+
 const proactivity = (view: ConsoleView) => `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="action" value="proactivity.set"><label>Quiet from <input type="time" name="quiet_start" value="${esc(view.proactivity.quiet_start ?? '')}"></label><label>until <input type="time" name="quiet_end" value="${esc(view.proactivity.quiet_end ?? '')}"></label><select name="volume">${VOLUMES.map(([value, label]) => `<option value="${value}"${view.proactivity.volume === value ? ' selected' : ''}>${esc(label)}</option>`).join('')}</select><button class="btn quiet">Save</button></form><div class="sub">During quiet hours Waldo holds cards, updates and event briefs. Reminders you set still fire. Leave both times empty for no quiet hours.</div>`;
 
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
@@ -242,7 +245,7 @@ ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${section('connections', 'Connections', 'What Waldo can reach, and the switches to change it. Items marked not built yet are on the plan but not wired.', connectors(view))}
 ${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + retired(view))}
 ${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}
-${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view))}
+${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view))}
 ${section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view))}
 ${section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view))}
 ${section('activity', 'Activity', 'What ran, when, and whether it worked.', activity(view))}

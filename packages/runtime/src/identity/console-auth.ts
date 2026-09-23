@@ -2,10 +2,13 @@ import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv }
 
 export const OWNER_COOKIE = 'waldo_owner';
 
+export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
+
 export type ConsoleAuth = Readonly<{
   sendCode(email: string): Promise<void>;
   verify(email: string, code: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
+  saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   ownerCookie(doName: string): Promise<string>;
   readOwnerCookie(request: Request): Promise<string | null>;
 }>;
@@ -42,6 +45,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       const code = newLinkCode();
       const hash = await linkCodeHash(code);
       return (await rpc('issue_link_code', `link.${doName}.${hash}`, { p_do_name: doName, p_code_hash: hash })) ? code : null;
+    },
+    async saveSettings(doName, { timezone, quiet_start: start, quiet_end: end, volume }) {
+      const message = `settings.${doName}.${timezone}.${start ?? ''}.${end ?? ''}.${volume}`;
+      return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
     },
     async ownerCookie(doName) {
       return `${encodeURIComponent(doName)}.${await cookieSig(doName)}`;
