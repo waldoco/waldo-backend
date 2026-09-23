@@ -1,0 +1,15 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+select plan(5);
+select vault.create_secret('test-router-secret', 'waldo_router_hmac');
+create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
+create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(pg_temp.at()::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
+insert into waldo.owners (do_name, email) values ('do-a', 'a@test.invalid'), ('do-b', 'b@test.invalid');
+insert into waldo.presences (owner_id, provider, subject) select id, 'telegram', case do_name when 'do-a' then '111' else '222' end from waldo.owners;
+select throws_ok($$ select waldo.unlink_presence('do-a', 'telegram', pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'a forged unlink is refused');
+select is(waldo.unlink_presence('do-a', 'telegram', pg_temp.at(), pg_temp.sig('unlink.do-a.telegram')), true, 'the owner unlinks Telegram');
+select is((select count(*)::int from waldo.route_presence('telegram', '111', pg_temp.at(), pg_temp.sig('route.telegram.111'))), 0, 'the unlinked subject no longer routes');
+select is((select count(*)::int from waldo.route_presence('telegram', '222', pg_temp.at(), pg_temp.sig('route.telegram.222'))), 1, 'another owner keeps its presence');
+select is(waldo.unlink_presence('do-a', 'telegram', pg_temp.at(), pg_temp.sig('unlink.do-a.telegram')), false, 'nothing left to unlink');
+select * from finish();
+rollback;

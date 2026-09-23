@@ -56,7 +56,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link', 'timezone.set', 'invite.create', 'invite.revoke'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -71,6 +71,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'proactivity.set': 'Saved. Waldo will reach out on your new settings.',
   'invite.create': 'Invite saved. That address can now sign in.',
   'invite.revoke': 'Invite revoked.',
+  'telegram.unlink': 'Telegram unlinked. Waldo will not message it again until you link an account.',
   'timezone.set': 'Time zone saved. Cards and reminders follow it from now on.',
   'spot.confirm': 'Confirmed. It now counts as something you said.',
   'spot.forget': 'Forgotten and deleted. Waldo keeps a short do-not-relearn note so it does not pick it up again.',
@@ -95,6 +96,7 @@ export type ConsoleView = Readonly<{
   csrf: string;
   notice: string | null;
   google: Readonly<{ connected: boolean; email: string | null; connectAvailable: boolean }>;
+  telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
   spots: readonly Claim[];
@@ -121,7 +123,9 @@ const status = (on: boolean, text: string) => `<span class="status ${on ? 'on' :
 const meter = (value: number) => `<span class="meter"><span style="width:${Math.round(Math.max(0, Math.min(1, value)) * 100)}%"></span></span><span class="num">${value.toFixed(2)}</span>`;
 
 const connectors = (view: ConsoleView) => {
-  const { google, csrf } = view;
+  const { google, telegram, csrf } = view;
+  const telegramAction = form(csrf, 'telegram.link', 'Link a Telegram account', {}, {})
+    + (telegram.linked && telegram.unlinkAvailable ? form(csrf, 'telegram.unlink', 'Unlink', {}, { tone: 'danger', confirm: 'Unlink Telegram? Waldo stops messaging it. Sign in here with your email to link again.' }) : '');
   const googleAction = google.connected
     ? form(csrf, 'google.disconnect', 'Disconnect', {}, { tone: 'danger', confirm: 'Disconnect Google? Waldo stops reading your calendar and mail.' })
     : google.connectAvailable ? `<a class="btn primary" href="${CONSOLE_GOOGLE_PATH}">Connect Google</a>` : '<span class="note">OAuth app keys are not set on this server yet</span>';
@@ -130,7 +134,7 @@ const connectors = (view: ConsoleView) => {
   return [
     row('Google Calendar and Gmail', google.connected ? `Signed in as <b>${esc(google.email ?? 'unknown account')}</b>. Waldo reads your calendar and new mail and can save drafts.` : 'Lets Waldo read your calendar, watch new mail and save email drafts. Nothing is sent without your approval.',
       status(google.connected, google.connected ? 'Connected' : 'Not connected'), googleAction),
-    row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(true, 'Connected'), form(csrf, 'telegram.link', 'Link a Telegram account', {}, {})),
+    row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
     row('Console session', `Signed in until ${esc(view.sessionUntil)}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out')),
     row('WhatsApp', 'Chat with Waldo on WhatsApp. Needs a Meta WhatsApp Business number and token.', chip('Not built yet', 'muted'), ''),

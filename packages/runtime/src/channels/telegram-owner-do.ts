@@ -25,7 +25,7 @@ import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type 
 import { googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
-import { createTelegramCaller, createTelegramOwnerApi } from './telegram-api';
+import { createTelegramCaller, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
@@ -109,6 +109,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private bindIdentity(headers: Headers): void {
     const { kv } = this.ctx.storage;
     const subject = headers.get('x-waldo-telegram-subject');
+    if (subject) kv.delete('telegram_unlinked');
     if (subject && kv.get<string>('telegram_subject') !== subject) {
       kv.put('telegram_subject', subject);
       this.runtime = undefined;
@@ -150,6 +151,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (action?.action === 'invite.create' || action?.action === 'invite.revoke') {
         const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value) : admin.revokeInvite(doName, action.id)) : false;
         return new Response(null, { status: 303, headers: { location: done ? CONSOLE_ADMIN_PATH : `${CONSOLE_PATH}?m=invalid` } });
+      }
+      if (action?.action === 'telegram.unlink') {
+        const done = admin && doName ? await admin.unlinkTelegram(doName) : false;
+        if (done) this.ctx.storage.kv.put('telegram_unlinked', true);
+        return back(done ? 'telegram.unlink' : 'invalid');
       }
       if (action?.action === 'session.signout') {
         await access.signOut();
@@ -309,7 +315,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
-    const call = createTelegramCaller(token);
+    const call = gatedCaller(createTelegramCaller(token), () => identity.get<boolean>('telegram_unlinked') === true);
     const api = createTelegramOwnerApi(call);
     const storage = this.ctx.storage;
     const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: stateSecret } = this.env;
@@ -518,6 +524,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), csrf: session.csrf, notice,
           google: { connected: tokens !== undefined, email: tokens?.email ?? null, connectAvailable: (await google.connectUrl()) !== null },
+          telegram: { linked: identity.get<boolean>('telegram_unlinked') !== true, unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {

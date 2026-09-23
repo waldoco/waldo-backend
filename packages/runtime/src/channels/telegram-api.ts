@@ -10,6 +10,14 @@ export const createTelegramCaller = (token: string, fetcher: typeof fetch = fetc
     return json.result;
   };
 
+// Once the owner unlinks Telegram, nothing more goes out to that chat, including queued reminders and cards.
+export const gatedCaller = (call: ReturnType<typeof createTelegramCaller>, unlinked: () => boolean): ReturnType<typeof createTelegramCaller> =>
+  async (method, body) => {
+    if (!unlinked()) return call(method, body);
+    console.log(JSON.stringify({ hop: 'telegram_send', ok: false, skipped: 'unlinked', method }));
+    return undefined;
+  };
+
 export const createTelegramOwnerApi = (call: ReturnType<typeof createTelegramCaller>): TelegramOwnerApi => ({
   setMessageReaction: (request) => call('setMessageReaction', request),
   sendChatAction: (request) => call('sendChatAction', request),

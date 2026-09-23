@@ -17,6 +17,7 @@ export type ConsoleAuth = Readonly<{
   adminOverview(doName: string): Promise<AdminOverview | null>;
   invite(doName: string, email: string): Promise<boolean>;
   revokeInvite(doName: string, invite: string): Promise<boolean>;
+  unlinkTelegram(doName: string): Promise<boolean>;
   ownerCookie(doName: string): Promise<string>;
   readOwnerCookie(request: Request): Promise<string | null>;
 }>;
@@ -64,6 +65,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return (await rpc('admin_invite', `invite.${doName}.${address}`, { p_do_name: doName, p_email: address })) === true;
     },
     revokeInvite: async (doName, invite) => (await rpc('admin_revoke', `revoke.${doName}.${invite}`, { p_do_name: doName, p_invite: invite })) === true,
+    unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
     async ownerCookie(doName) {
       return `${encodeURIComponent(doName)}.${await cookieSig(doName)}`;
     },
