@@ -64,6 +64,10 @@ export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[
 export type GoogleClient = Readonly<{
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
+  event(id: string): Promise<CalendarItem>;
+  createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
+  moveEvent(id: string, start: string, end: string): Promise<CalendarItem>;
+  cancelEvent(id: string): Promise<void>;
 }>;
 
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch): GoogleClient {
@@ -76,11 +80,20 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   };
   const call = async (url: string, init: RequestInit = {}) => {
     const response = await fetcher(url, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${await bearer()}` } });
-    const json = await response.json() as Record<string, unknown>;
+    const json = response.status === 204 ? {} : await response.json() as Record<string, unknown>;
     if (!response.ok) throw new Error(`google ${response.status}: ${(json.error as { message?: string } | undefined)?.message ?? 'request failed'}`);
     return json;
   };
+  const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+  const send = async (url: string, method: string, body: unknown) =>
+    toItem(await call(url, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
   return {
+    event: async (id) => toItem(await call(`${EVENTS}/${encodeURIComponent(id)}`) as unknown as GoogleEvent),
+    createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
+    moveEvent: (id, start, end) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }),
+    async cancelEvent(id) {
+      await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    },
     async events(from, to, limit, includeDeclined) {
       const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
       url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit) }).toString();
@@ -88,13 +101,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return (json.items ?? [])
         .filter((event) => event.status !== 'cancelled')
         .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
-        .map((event) => ({
-          id: event.id, title: event.summary ?? '(no title)',
-          start: event.start.dateTime ?? event.start.date ?? '', end: event.end.dateTime ?? event.end.date ?? '',
-          all_day: event.start.dateTime === undefined,
-          ...(event.location ? { location: event.location } : {}),
-          ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
-        }));
+        .map(toItem);
     },
     async draft(input) {
       const clean = (value: string) => value.replace(/[\r\n]+/g, ' ');
@@ -114,6 +121,14 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
     },
   };
 }
+
+const toItem = (event: GoogleEvent): CalendarItem => ({
+  id: event.id, title: event.summary ?? '(no title)',
+  start: event.start.dateTime ?? event.start.date ?? '', end: event.end.dateTime ?? event.end.date ?? '',
+  all_day: event.start.dateTime === undefined,
+  ...(event.location ? { location: event.location } : {}),
+  ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
+});
 
 type GoogleEvent = {
   id: string; status?: string; summary?: string; location?: string;

@@ -9,6 +9,8 @@ import { durableConversationStore } from './conversation-store';
 import { reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
 import { googleHandlers } from '../tools/live/google';
+import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
+import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, createTelegramOwnerApi } from './telegram-api';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
@@ -17,10 +19,17 @@ import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
+const WEBHOOK_UPDATES = ['message', 'callback_query'];
+
+type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?: { text?: string; from?: { id: number }; chat?: { id: number } } };
+
 type OwnerRuntime = Readonly<{
   owner: number;
   listener: TelegramOwnerListener;
   api: ReturnType<typeof createTelegramOwnerApi>;
+  call: ReturnType<typeof createTelegramCaller>;
+  desk: ApprovalDesk;
+  reminders: ReturnType<typeof reminderBook>;
   scheduler: Scheduler;
   fire(entry: ScheduleEntry): Promise<void>;
 }>;
@@ -37,6 +46,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const origin = request.headers.get('x-waldo-origin');
     if (origin) await this.ctx.storage.put('origin', origin);
+    if (origin && this.env.TELEGRAM_WEBHOOK_SECRET && (await this.ctx.storage.get('webhook_updates')) !== WEBHOOK_UPDATES.join(',')) {
+      try {
+        await this.setup().call('setWebhook', { url: `${origin}${TELEGRAM_WEBHOOK_PATH}`, secret_token: this.env.TELEGRAM_WEBHOOK_SECRET, allowed_updates: WEBHOOK_UPDATES });
+        await this.ctx.storage.put('webhook_updates', WEBHOOK_UPDATES.join(','));
+      } catch (error) {
+        console.log(JSON.stringify({ hop: 'set_webhook', ok: false, error: String(error) }));
+      }
+    }
     await this.serial(() => this.turn(JSON.parse(body) as unknown));
     return new Response('ok');
   }
@@ -61,8 +78,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async turn(update: unknown): Promise<void> {
-    const { listener } = this.setup();
+    const { listener, owner, call, desk, reminders } = this.setup();
     const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
+    const raw = update as RawUpdate;
+    const handledDirectly = raw.callback_query !== undefined
+      || (raw.message?.text?.trim() === '/ledger' && raw.message.from?.id === owner && raw.message.chat?.id === owner);
+    if (handledDirectly) {
+      if (raw.update_id === undefined || raw.update_id < offset) return;
+      if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${raw.update_id}`);
+      else await call('sendMessage', { chat_id: owner, text: desk.ledger(reminders.list()) });
+      await this.ctx.storage.put('offset', raw.update_id + 1);
+      return;
+    }
     await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
   }
 
@@ -86,7 +113,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const scheduler = new Scheduler(this.ctx.storage.sql, this.ctx.storage, deps);
     const clock = { timezone: this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
-    const api = createTelegramOwnerApi(createTelegramCaller(token));
+    const call = createTelegramCaller(token);
+    const api = createTelegramOwnerApi(call);
     const storage = this.ctx.storage;
     const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: stateSecret } = this.env;
     const googleApp = async () => {
@@ -103,17 +131,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, String(owner), Date.now())) : null;
       },
     };
-    storage.sql.exec('CREATE TABLE IF NOT EXISTS calendar_proposals (id TEXT PRIMARY KEY, proposal_json TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL)');
-    const proposals = {
-      add(proposal: unknown) {
-        const id = `proposal:${deps.newRunId().slice(0, 8)}`;
-        storage.sql.exec("INSERT INTO calendar_proposals (id, proposal_json, status, created_at) VALUES (?, ?, 'proposed', ?)", id, JSON.stringify(proposal), Date.now());
-        return id;
-      },
-    };
+    const desk = approvalDesk(storage.sql, {
+      call, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
+      timezone: clock.timezone, log,
+    });
     const responder = createTelegramResponder(
       key, durableConversationStore(this.ctx.storage), coreFileStore(this.ctx.storage.sql), log,
-      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, proposals, clock)],
+      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock)],
     );
     const listener = new TelegramOwnerListener({
       ownerTelegramId: owner, api, ...responder, log,
@@ -145,7 +169,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, scheduler, fire };
+    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire };
     return this.runtime;
   }
 }

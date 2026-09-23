@@ -55,7 +55,7 @@ describe('google client', () => {
 });
 
 describe('google tools', () => {
-  const proposals = { add: () => 'proposal:1' };
+  const proposals = { propose: async () => 'proposal:1', record: () => undefined };
   it('return a connect link when Google is not connected', async () => {
     const google: GoogleAccess = { client: async () => null, connectUrl: async () => 'https://accounts.google.com/x' };
     const [query] = googleHandlers(google, proposals, clock);
