@@ -12,7 +12,8 @@ import { messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { applyMemoryEdits, MEMORY_EDITS_SCHEMA, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema, TELEGRAM_REACTIONS } from './reactions';
-import type { TelegramOwnerListenerOptions, TurnLogEntry } from './telegram-listener';
+import type { TelegramOwnerListenerOptions, TurnLogEntry, TurnTimer } from './telegram-listener';
+import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 
@@ -28,7 +29,8 @@ export const createTelegramResponder = (
   log: (entry: TurnLogEntry) => void = () => undefined,
   readers: MediaReaders = {},
   clock: OwnerClock = { timezone: 'UTC', now: () => new Date() },
-): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
+  tools: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [],
+): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string> } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
   if (!accepted.ok) throw new Error('fixture admission failed');
@@ -42,7 +44,7 @@ export const createTelegramResponder = (
     sourceTaint: null, toolArgSourceTaint: null,
     sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
   };
-  const handlers = [getContextHandler(clock)];
+  const handlers = [getContextHandler(clock), ...tools];
   const complete = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
     const started = Date.now();
     let reasoning: string | undefined;
@@ -91,30 +93,39 @@ export const createTelegramResponder = (
   }, tree);
   let parentId: string | null = null;
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
+  const converse = async (id: string, chatId: number, said: string, time: TurnTimer) => {
+    traceId = id;
+    const publication = await time('joined_path', () => path.submit({
+      authenticatedOwnerId: ownerId, invocation,
+      context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
+      userEntry: { id, ownerId, chatId: `telegram-${chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
+      assistantEntryId: `${id}-reply`,
+    }));
+    await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
+    parentId = publication.leafId;
+    return publication.text;
+  };
   return {
     async respond(turn, time) {
       await restored;
       const id = `tg-${turn.updateId}`;
-      traceId = id;
       const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers)) : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
-      const publication = await time('joined_path', () => path.submit({
-        authenticatedOwnerId: ownerId, invocation,
-        context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
-        assistantEntryId: `${id}-reply`,
-      }));
-      await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
-      parentId = publication.leafId;
+      const text = await converse(id, turn.chatId, said, time);
       if (memory) {
         const files = memory.read();
         const started = Date.now();
-        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, said, publication.text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
+        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, said, text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
           .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyMemoryEdits(memory, raw, new Date().toISOString()).join(',') }))
           .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
       }
-      return publication.text;
+      return text;
+    },
+    async remind(id, chatId, note, time) {
+      await restored;
+      pending = undefined;
+      return converse(id, chatId, `[Reminder due now, set earlier by the owner: "${note}"] Send them this reminder now, in your own words.`, time);
     },
     chooseReaction: async (turn) => (JSON.parse(await ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), turn.text, { name: 'reaction', schema: reactionSchema(TELEGRAM_REACTIONS) })) as { reaction?: string }).reaction ?? null,
   };

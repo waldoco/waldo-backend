@@ -24,7 +24,7 @@ const baseEntry = {
 };
 
 describe('scheduleKind', () => {
-  it('is exactly the seven ADR-0065 scheduler kinds, in priority order', () => {
+  it('is the seven ADR-0065 scheduler kinds plus owner reminders, in priority order', () => {
     expect(scheduleKindSchema.options).toEqual([
       'journal',
       'handoff',
@@ -33,6 +33,7 @@ describe('scheduleKind', () => {
       'pre_brief_sweep',
       'patrol',
       'dreaming',
+      'reminder',
     ]);
     expect(scheduleKindPriority).toEqual({
       journal: 0,
@@ -42,6 +43,7 @@ describe('scheduleKind', () => {
       pre_brief_sweep: 4,
       patrol: 5,
       dreaming: 6,
+      reminder: 7,
     });
   });
 
@@ -54,6 +56,7 @@ describe('scheduleKind', () => {
       pre_brief_sweep: 'pre_brief_sweep',
       patrol: 'patrol',
       dreaming: 'dreaming_mode',
+      reminder: null,
     });
   });
 

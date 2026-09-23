@@ -26,6 +26,7 @@ Sources:
   - brand-standards.md and the ADR nomenclature handoff
 - Code: `packages/runtime/src` on beta-mvp.
 - Repo plan: `docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md`.
+- Reference repos for agent loops and tool surfaces (reference only, no feature import): Hermes Agent, pi, OpenClaw, and superset-sh/superset (https://github.com/superset-sh/superset), which the owner added on Sep 23. Superset is a local orchestrator for parallel CLI agents over isolated git worktrees, Elastic License 2.0.
 
 ## 0. Where we actually stand
 

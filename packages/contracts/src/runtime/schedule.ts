@@ -9,6 +9,7 @@ export const scheduleKindSchema = z.enum([
   'pre_brief_sweep',
   'patrol',
   'dreaming',
+  'reminder',
 ]);
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 
@@ -20,6 +21,7 @@ export const scheduleKindPriority: Readonly<Record<ScheduleKind, number>> = {
   pre_brief_sweep: 4,
   patrol: 5,
   dreaming: 6,
+  reminder: 7,
 };
 
 export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | null>> = {
@@ -30,6 +32,7 @@ export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | nu
   pre_brief_sweep: 'pre_brief_sweep',
   patrol: 'patrol',
   dreaming: 'dreaming_mode',
+  reminder: null,
 };
 
 export const scheduleStatusSchema = z.enum(['armed', 'quarantined']);

@@ -29,6 +29,7 @@ export * from './tools/permissions';
 export * from './tools/handler';
 export * from './tools/schemas/reads';
 export * from './tools/schemas/writes';
+export * from './tools/schemas/reminders';
 export * from './tools/schemas/threading';
 export * from './runtime/delivery-policy';
 export * from './runtime/run';
