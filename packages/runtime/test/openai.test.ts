@@ -45,6 +45,7 @@ describe('OpenAIGpt5NanoAdapter', () => {
       client: client(async () => ({
         id: 'resp_test_1',
         output_text: 'Hello from OpenAI.',
+        output: [{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'Greet briefly.' }] }],
         usage: { input_tokens: 4, output_tokens: 3, input_tokens_details: { cached_tokens: 0 } },
       } as never)),
       onResponseMetadata: (value) => { metadata = value; },
@@ -61,7 +62,7 @@ describe('OpenAIGpt5NanoAdapter', () => {
         latency_ms: expect.any(Number),
       },
     });
-    expect(metadata).toMatchObject({ response_id: 'resp_test_1', model: OPENAI_GPT_5_NANO_MODEL });
+    expect(metadata).toMatchObject({ response_id: 'resp_test_1', model: OPENAI_GPT_5_NANO_MODEL, reasoning: 'Greet briefly.' });
   });
 
   it('sends a bounded reasoning effort and classifies truncated output as oversize', async () => {
@@ -76,7 +77,7 @@ describe('OpenAIGpt5NanoAdapter', () => {
     await expect(adapter.complete(gatewayRequest())).resolves.toEqual({
       ok: false, code: 'oversize', error: 'OpenAI output incomplete: max_output_tokens',
     });
-    expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low' } });
+    expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
   });
 
   it('fails explicitly when the key is missing', async () => {

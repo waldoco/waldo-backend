@@ -2,7 +2,7 @@ import type { TurnLogEntry } from '../channels/telegram-listener';
 import { modelCost } from '../llm/pricing';
 
 export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<string, string>> }>;
-export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string; sessionId: string }>;
+export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string; sessionId: string; captureText: boolean }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number }>;
@@ -43,7 +43,7 @@ const tagsFor = (context: TraceContext, spans: readonly Span[]) => [
 ];
 
 // Exports each owner turn as one Langfuse trace: a root span for the turn, a child per hop,
-// and a generation per model call with tokens and USD cost. Never message text.
+// and a generation per model call with tokens and USD cost. Message text only when captureText is on.
 export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send: Send = fetch, now: () => number = Date.now) => {
   const pending = new Map<string, Span[]>();
   const exported = new Map<string, Readonly<{ traceId: string; rootId: string }>>();
@@ -56,6 +56,14 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       attr('langfuse.observation.model.name', usage.model),
       attr('langfuse.observation.usage_details', JSON.stringify({ input: usage.input - usage.cached, input_cached_tokens: usage.cached, output: usage.output })),
       ...(cost ? [attr('langfuse.observation.cost_details', JSON.stringify(cost))] : []),
+    ];
+  };
+
+  const io = ({ text }: TurnLogEntry) => {
+    if (!context.captureText || !text) return [];
+    return [
+      attr('langfuse.observation.input', text.input),
+      ...(text.output === undefined ? [] : [attr('langfuse.observation.output', text.reasoning ? JSON.stringify({ reasoning: text.reasoning, text: text.output }) : text.output)]),
     ];
   };
 
@@ -81,6 +89,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       attr('langfuse.observation.metadata.trace_key', entry.trace),
       ...(entry.detail ? [attr('langfuse.observation.metadata.detail', entry.detail)] : []),
       ...generation(entry),
+      ...io(entry),
       ...extra,
     ],
     status: entry.ok ? { code: 1 } : { code: 2, message: entry.error ?? 'failed' },

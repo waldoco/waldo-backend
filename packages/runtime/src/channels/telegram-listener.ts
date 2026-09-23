@@ -8,7 +8,8 @@ export type TelegramOwnerApi = Readonly<{
   sendMessage(request: Readonly<{ chat_id: number; text: string }>): Promise<unknown>;
 }>;
 
-export type TurnLogEntry = Readonly<{ trace: string; hop: string; ms: number; ok: boolean; error?: string; detail?: string; usage?: ModelUsage }>;
+export type TurnLogEntry = Readonly<{ trace: string; hop: string; ms: number; ok: boolean; error?: string; detail?: string; usage?: ModelUsage; text?: TurnText }>;
+export type TurnText = Readonly<{ input: string; output?: string; reasoning?: string }>;
 export type TurnTimer = <T>(hop: string, work: () => Promise<T>) => Promise<T>;
 
 export type TelegramOwnerListenerOptions = Readonly<{
@@ -103,7 +104,7 @@ export class TelegramOwnerListener {
       await time('send', () => api.sendMessage({ chat_id, text }));
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
-      log('turn', now() - started, true);
+      this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });
       return 'answered';
     } catch (error) {
       clearTimeout(progressTimer);

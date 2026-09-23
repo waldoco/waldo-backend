@@ -4,7 +4,7 @@ import {
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIGpt5NanoAdapter } from '../llm/openai';
-import { RuntimeLLMProvider } from '../llm/provider';
+import { InMemoryCircuitBreaker, RuntimeLLMProvider } from '../llm/provider';
 import { messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
@@ -27,11 +27,13 @@ export const createTelegramResponder = (
   const invocation = accepted.value;
   const ownerId = invocation.verified_authority.principal_ref;
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
-  const runtime = new RuntimeLLMProvider({ gateway: new OpenAIGpt5NanoAdapter({ apiKey: openaiApiKey }) });
+  const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const ask = async (trace: string, purpose: string, system: string, content: string) => {
     const started = Date.now();
-    const result = await runtime.complete({
+    let reasoning: string | undefined;
+    const gateway = new OpenAIGpt5NanoAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const result = await new RuntimeLLMProvider({ gateway, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,
       renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2 }),
@@ -40,8 +42,13 @@ export const createTelegramResponder = (
       sourceTaint: null, toolArgSourceTaint: null,
       sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
     });
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, error: [result.code, result.halted_by].filter(Boolean).join(':') });
-    else log({ trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true, usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens } });
+    const input = JSON.stringify([{ role: 'system', content: system }, { role: 'user', content }]);
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, error: [result.code, result.halted_by].filter(Boolean).join(':'), text: { input } });
+    else log({
+      trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
+      usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
+      text: { input, output: result.response.text, ...(reasoning ? { reasoning } : {}) },
+    });
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return result.response.text;
   };

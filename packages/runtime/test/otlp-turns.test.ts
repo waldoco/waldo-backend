@@ -7,7 +7,7 @@ type Attr = { key: string; value: { stringValue?: string; arrayValue?: { values:
 type OtlpSpan = { traceId: string; spanId: string; parentSpanId?: string; name: string; startTimeUnixNano: string; endTimeUnixNano: string; attributes: Attr[]; status: { code: number; message?: string } };
 type Body = { resourceSpans: [{ scopeSpans: [{ spans: OtlpSpan[] }] }] };
 
-const context = { environment: 'staging', release: 'abc1234', channel: 'telegram', userId: 'telegram:1', sessionId: 'telegram-dm:1' };
+const context = { environment: 'staging', release: 'abc1234', channel: 'telegram', userId: 'telegram:1', sessionId: 'telegram-dm:1', captureText: false };
 const attrs = (span: OtlpSpan) => Object.fromEntries(span.attributes.map((a) => [a.key, a.value.stringValue ?? a.value.arrayValue!.values.map((v) => v.stringValue)]));
 
 const capture = () => {
@@ -92,6 +92,16 @@ describe('otlpTurnExporter', () => {
     expect(JSON.parse(gen['langfuse.observation.cost_details'] as string).total).toBeCloseTo((176 * 0.05 + 1024 * 0.005 + 80 * 0.4) / 1e6, 12);
     expect(attrs(root!)).toMatchObject({ 'langfuse.trace.metadata.model_calls': '1', 'langfuse.trace.metadata.tokens_input': '1200', 'langfuse.trace.metadata.tokens_output': '80' });
     expect(attrs(root!)['langfuse.observation.type']).toBe('agent');
+  });
+
+  it('carries input, output and reasoning only when text capture is on', async () => {
+    const text = { input: '[{"role":"user","content":"hi"}]', output: 'hello', reasoning: 'greet back' };
+    const off = capture();
+    await otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, off.send, () => 5_000)({ trace: 'tg-5', hop: 'turn', ms: 10, ok: true, text });
+    expect(attrs(off.spans(0)[0]!)['langfuse.observation.input']).toBeUndefined();
+    const on = capture();
+    await otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: true }, on.send, () => 5_000)({ trace: 'tg-5', hop: 'turn', ms: 10, ok: true, text });
+    expect(attrs(on.spans(0)[0]!)).toMatchObject({ 'langfuse.observation.input': text.input, 'langfuse.observation.output': JSON.stringify({ reasoning: 'greet back', text: 'hello' }) });
   });
 
   it('attaches hops that finish after the turn to the same trace and marks failures', async () => {

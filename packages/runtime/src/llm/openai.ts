@@ -22,6 +22,7 @@ export type OpenAIResponseMetadata = Readonly<{
   input_tokens: number;
   output_tokens: number;
   latency_ms: number;
+  reasoning?: string;
 }>;
 
 export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
@@ -59,7 +60,7 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
           instructions: input.request.system,
           input: input.request.messages.map((message) => `${message.role}: ${message.content}`).join('\n'),
           max_output_tokens: input.request.max_tokens,
-          reasoning: { effort: 'low' },
+          reasoning: { effort: 'low', summary: 'auto' },
         },
         { signal: controller.signal },
       );
@@ -84,6 +85,7 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
         input_tokens: parsed.input_tokens,
         output_tokens: parsed.output_tokens,
         latency_ms: parsed.latency_ms,
+        ...(reasoningSummary(response) ? { reasoning: reasoningSummary(response) } : {}),
       });
       return { ok: true, data: parsed };
     } catch (error) {
@@ -92,6 +94,12 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
       clearTimeout(timeout);
     }
   }
+}
+
+function reasoningSummary(response: OpenAI.Responses.Response): string {
+  return response.output
+    .flatMap((item) => item.type === 'reasoning' ? item.summary.map((part) => part.text) : [])
+    .join('\n\n');
 }
 
 function responseText(response: OpenAI.Responses.Response): string {
