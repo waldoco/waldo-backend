@@ -1,3 +1,4 @@
+import type { ModelUsage } from '../llm/pricing';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
 
@@ -7,7 +8,7 @@ export type TelegramOwnerApi = Readonly<{
   sendMessage(request: Readonly<{ chat_id: number; text: string }>): Promise<unknown>;
 }>;
 
-export type TurnLogEntry = Readonly<{ trace: string; hop: string; ms: number; ok: boolean; error?: string; detail?: string }>;
+export type TurnLogEntry = Readonly<{ trace: string; hop: string; ms: number; ok: boolean; error?: string; detail?: string; usage?: ModelUsage }>;
 export type TurnTimer = <T>(hop: string, work: () => Promise<T>) => Promise<T>;
 
 export type TelegramOwnerListenerOptions = Readonly<{

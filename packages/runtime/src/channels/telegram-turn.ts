@@ -29,7 +29,8 @@ export const createTelegramResponder = (
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
   const runtime = new RuntimeLLMProvider({ gateway: new OpenAIGpt5NanoAdapter({ apiKey: openaiApiKey }) });
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
-  const ask = async (system: string, content: string) => {
+  const ask = async (trace: string, purpose: string, system: string, content: string) => {
+    const started = Date.now();
     const result = await runtime.complete({
       trigger: 'user_message',
       policy,
@@ -39,12 +40,15 @@ export const createTelegramResponder = (
       sourceTaint: null, toolArgSourceTaint: null,
       sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
     });
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, error: [result.code, result.halted_by].filter(Boolean).join(':') });
+    else log({ trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true, usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens } });
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return result.response.text;
   };
   const tree = new ConversationTree();
+  let traceId = '';
   const path = new JoinedConversationPath(adapters.contextComposer!, {
-    complete: (request) => ask(
+    complete: (request) => ask(traceId, 'reply',
       [messagingSystemPrompt(request.system, request.tools), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
       request.messages.join('\n'),
     ),
@@ -55,6 +59,7 @@ export const createTelegramResponder = (
     async respond(turn, time) {
       await restored;
       const id = `tg-${turn.updateId}`;
+      traceId = id;
       const publication = await time('joined_path', () => path.submit({
         authenticatedOwnerId: ownerId, invocation,
         context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
@@ -66,12 +71,12 @@ export const createTelegramResponder = (
       if (memory) {
         const files = memory.read();
         const started = Date.now();
-        void ask(MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text))
+        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text))
           .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyMemoryEdits(memory, raw, new Date().toISOString()).join(',') }))
           .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
       }
       return publication.text;
     },
-    chooseReaction: (turn) => ask(reactionInstruction(TELEGRAM_REACTIONS), turn.text),
+    chooseReaction: (turn) => ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), turn.text),
   };
 };

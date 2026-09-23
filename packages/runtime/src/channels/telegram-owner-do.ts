@@ -24,7 +24,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key, WALDO_OWNER_TELEGRAM_ID: owner } = this.env;
     if (!token || !key || !owner) throw new Error('telegram owner runtime is unconfigured');
     const otlp = langfuseOtlpConfig(this.env);
-    const exportTurn = otlp ? otlpTurnExporter(otlp) : undefined;
+    const exportTurn = otlp ? otlpTurnExporter(otlp, {
+      environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
+      channel: 'telegram', userId: `telegram:${owner}`, sessionId: `telegram-dm:${owner}`,
+    }) : undefined;
     const log = (entry: TurnLogEntry) => {
       console.log(JSON.stringify(entry));
       if (exportTurn) this.ctx.waitUntil(exportTurn(entry).catch((error: unknown) => console.log(JSON.stringify({ trace: entry.trace, hop: 'otlp_export', ok: false, error: String(error) }))));
