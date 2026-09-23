@@ -36,3 +36,5 @@ Adopted: small, inspectable cores and version-bound provider transforms. Not ado
 3. Lease and heartbeat UX vocabulary.
 4. Crash-visible receipts and outcome-unknown states.
 5. Waldo app chat wiring: chat management, threading, AG-UI rendering and generated UI (cards, option chips, forms).
+6. Discord connector with full threading, as the threading test channel.
+7. Slack threading, later.

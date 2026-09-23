@@ -21,7 +21,14 @@ Each user gets connectors that run whether or not a dev process is up.
 | Email | Inbound webhook for the user's agent address. Outbound mail goes through the same identity. |
 | iMessage | No public API. Needs a hosted phone infrastructure lane. |
 
-Every connector keeps today's rules: owner-only acceptance enforced in code, duplicate provider events dropped, consequential approvals only on proved approval paths, and the [messaging behavior](../behavior/MESSAGING_BEHAVIOR.md) of ack, typing, progress and honest failure.
+Full threading comes first on the Waldo app and on Discord, then Slack. Discord is the chosen test channel for threading: a real bot API with native threads, reactions and typing, the same shape as Slack. The Discord connector comes later in the program. For now it is the documented choice.
+
+Two latency fixes belong in the connector design:
+
+- **Webhooks, not polling.** A webhook delivers the message as it is sent, which removes the poll pickup delay of the dev runner.
+- **Streamed replies.** Streaming the model output (or sending the first useful line early) gets the answer in front of the user sooner.
+
+Every connector keeps today's rules: owner-only acceptance enforced in code, duplicate provider events dropped, consequential approvals only on proved approval paths, and the [messaging behavior](../behavior/MESSAGING_BEHAVIOR.md) of ack, typing, progress and honest failure, and the receipt-to-resolved reaction lifecycle.
 
 ## Lanes
 
