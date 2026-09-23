@@ -5,7 +5,7 @@ import { claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
@@ -90,9 +90,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async console(request: Request): Promise<Response> {
     const access = consoleAccess(this.ctx.storage);
     const url = new URL(request.url);
-    const link = url.searchParams.get('t');
-    if (link) {
-      const session = await access.redeem(link);
+    const link = url.pathname === CONSOLE_PATH ? url.searchParams.get('t') : null;
+    if (link && request.method === 'GET') return signInPage(link);
+    const posted = url.pathname === CONSOLE_PATH && request.method === 'POST' ? String((await request.formData()).get('t') ?? '') : '';
+    if (posted) {
+      const session = await access.redeem(posted);
       if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
     }
@@ -157,7 +159,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (harness?.kind === 'console') {
         await this.ctx.storage.put('offset', raw.update_id + 1);
         const origin = await this.ctx.storage.get<string>('origin');
-        await call('sendMessage', { chat_id: owner, text: origin ? `Console (link works once, for 10 minutes): ${await consoleAccess(this.ctx.storage).mintLink(origin)}` : 'Console origin is not known yet; send any message first.' });
+        await call('sendMessage', { chat_id: owner, text: origin ? `Console (link works once, for 10 minutes): ${await consoleAccess(this.ctx.storage).mintLink(origin)}` : 'Console origin is not known yet; send any message first.', link_preview_options: { is_disabled: true } });
         return;
       }
       if (harness) {

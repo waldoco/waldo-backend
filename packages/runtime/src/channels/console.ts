@@ -41,6 +41,13 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => ({
   },
 });
 
+// Link previews (Telegram fetches URLs it sees) must not burn the one-time token, so opening the
+// link only shows a button; the token is spent by the POST that button sends.
+export const signInPage = (token: string): Response => new Response(
+  `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{text-align:center}button{font:inherit;font-size:18px;padding:12px 28px;border:0;border-radius:10px;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body><form method="post" action="${CONSOLE_PATH}"><p>Waldo console</p><input type="hidden" name="t" value="${token.replace(/[^0-9a-f]/g, '')}"><button>Open console</button></form></body></html>`,
+  { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } },
+);
+
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 

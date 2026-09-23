@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { consoleAccess, parseConsoleAction, renderConsole, sessionCookie } from '../src/channels/console';
+import { consoleAccess, signInPage, parseConsoleAction, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 const memoryStore = () => {
@@ -17,6 +17,13 @@ const formOf = (fields: Record<string, string>) => {
 };
 
 describe('owner console', () => {
+  it('opening a link only shows a sign-in button, so link previews cannot spend the token', async () => {
+    const html = await signInPage('ab12"><zz>').text();
+    expect(html).toContain('<form method="post" action="/console">');
+    expect(html).toContain('name="t" value="ab12"');
+    expect(html).not.toContain('<zz>');
+  });
+
   it('redeems a link once, before it expires, into a session with its own csrf token', async () => {
     let now = 1_000;
     const access = consoleAccess(memoryStore(), () => now);
@@ -55,7 +62,7 @@ describe('owner console', () => {
     const html = renderConsole(view);
     for (const id of ['connections', 'spots', 'constellation', 'day', 'memory', 'activity']) expect(html).toContain(`id="${id}"`);
     expect(html).toContain('&#60;script&#62;x&#60;/script&#62;');
-    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<zz>');
     expect(html).toContain('href="/console/google">Connect Google');
     expect(html).toContain(`name="csrf" value="${view.csrf}"`);
     expect(html).toContain('value="spot.forget"');
