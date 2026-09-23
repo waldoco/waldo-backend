@@ -27,10 +27,10 @@ describe('google oauth state', () => {
     expect(await verifyOauthState('s', state, 1_000 + 16 * 60_000)).toBeNull();
   });
 
-  it('asks for offline calendar and draft scopes only', () => {
+  it('asks for the owner-approved offline workspace scopes', () => {
     const url = new URL(googleConsentUrl(app, 'st'));
     expect(url.searchParams.get('access_type')).toBe('offline');
-    expect(url.searchParams.get('scope')).toBe('openid email https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/gmail.compose');
+    expect(url.searchParams.get('scope')!.split(' ')).toEqual(['openid', 'email', ...['calendar.events', 'calendar.readonly', 'gmail.modify', 'gmail.compose', 'gmail.send', 'tasks', 'drive', 'documents', 'spreadsheets', 'presentations', 'contacts'].map((scope) => `https://www.googleapis.com/auth/${scope}`)]);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
   });
 });

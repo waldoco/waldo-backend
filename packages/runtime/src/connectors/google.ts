@@ -1,10 +1,22 @@
 // Google connector for the owner's own account: OAuth (offline, one refresh token held in the
 // owner's Durable Object, never in the repo or prompt), Calendar reads and Gmail drafts.
+// Owner decision 2026-09-23: consent once to the workspace set Waldo will grow into, so new
+// tools don't force re-consent. Scope is not permission: each tool still gates its own effects.
+// Unverified app, so only listed test users can connect (post-mvp-cleanup: Google verification).
 export const GOOGLE_SCOPES = [
   'openid',
   'email',
   'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/calendar.readonly',
+  'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/gmail.compose',
+  'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/tasks',
+  'https://www.googleapis.com/auth/drive',
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/presentations',
+  'https://www.googleapis.com/auth/contacts',
 ] as const;
 
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
