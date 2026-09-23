@@ -3,6 +3,7 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { coreFileStore } from '../memory/core-files';
 import { spotStore } from '../memory/spots';
+import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
@@ -43,6 +44,9 @@ type OwnerRuntime = Readonly<{
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
+  updateCheck(trace: string): Promise<void>;
+  traces: TraceBook;
+  timezone: string;
   ready: Promise<void>;
 }>;
 
@@ -95,16 +99,40 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     await ready;
     const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
     const raw = update as RawUpdate;
-    const handledDirectly = raw.callback_query !== undefined
-      || (raw.message?.text?.trim() === '/ledger' && raw.message.from?.id === owner && raw.message.chat?.id === owner);
+    const fromOwner = raw.message?.from?.id === owner && raw.message.chat?.id === owner;
+    const harness = fromOwner ? parseHarnessCommand(raw.message?.text) : null;
+    const handledDirectly = raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger');
     if (handledDirectly) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
+      if (harness) {
+        await this.ctx.storage.put('offset', raw.update_id + 1);
+        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, raw.update_id)).slice(0, 4000) });
+        return;
+      }
       if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${raw.update_id}`);
       else await call('sendMessage', { chat_id: owner, text: desk.ledger(reminders.list()) });
       await this.ctx.storage.put('offset', raw.update_id + 1);
       return;
     }
     await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
+  }
+
+  private async runHarness(command: NonNullable<ReturnType<typeof parseHarnessCommand>>, updateId: number): Promise<string> {
+    const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup();
+    if (command.kind === 'trace') return traces.recent(timezone, command.filter);
+    if (command.kind === 'e2e') return traces.checklist(timezone);
+    if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
+    const trace = `harness-${updateId}`;
+    const entry = { id: command.target, occurrence_at: Date.now(), attempts: 0 } as unknown as ScheduleEntry;
+    try {
+      if (command.target === 'fetch') await updateCheck(trace);
+      else if (command.target === 'briefs') await briefs(entry);
+      else if (command.target === 'nightly') await nightly(entry);
+      else await cards(entry);
+    } catch (error) {
+      return `Fired ${command.target}; it failed: ${String(error)}\n\n${traces.recent(timezone, null, 10)}`;
+    }
+    return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
   }
 
   private setup(): OwnerRuntime {
@@ -118,7 +146,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       channel: 'telegram', userId: `telegram:${owner}`, sessionId: `telegram-dm:${owner}`,
       captureText: this.env.LANGFUSE_CAPTURE_TEXT === 'true',
     }) : undefined;
+    const traces = traceBook(this.ctx.storage.sql);
     const log = (entry: TurnLogEntry) => {
+      traces.record(entry, Date.now());
       console.log(JSON.stringify({ ...entry, text: undefined }));
       if (exportTurn) this.ctx.waitUntil(exportTurn(entry).catch((error: unknown) => console.log(JSON.stringify({ trace: entry.trace, hop: 'otlp_export', ok: false, error: String(error) }))));
     };
@@ -290,7 +320,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, ready };
+    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, timezone: clock.timezone, ready };
     return this.runtime;
   }
 }
