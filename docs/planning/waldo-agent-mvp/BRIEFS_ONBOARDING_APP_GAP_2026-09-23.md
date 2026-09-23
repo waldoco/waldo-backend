@@ -1,0 +1,137 @@
+# Briefs, onboarding and app gap analysis (2026-09-23)
+
+Analysis only. Nothing here is built yet.
+
+Sources read:
+- Old app Figma (prototype/reference only): nodes 724-16295, 722-15216 (onboarding), 969-2016 and 969-2021 (tier-1), plus the spec notes frame.
+- waldo-app at 895ed6e4 (2026-09-21): `app/`, `src/stores/onboarding.store.ts`, `Docs/STATUS.md`, `Docs/planning/onboarding-signal-map.md`.
+- waldo-backend beta-mvp at 63d8c41: `packages/runtime/src/prompt/day-cards.ts`, `channels/day-cards.ts`, `memory/core-files.ts`, `index.ts`.
+- Competitors: `docs/planning/waldo-agent-mvp/COMPETITOR_RESEARCH.md`, `docs/research/WALDO_PEER_EXPERIENCE_REVERSE_ENGINEERING_AND_BUILD_ORDER_2026-09-19.md`, and September 2026 news (links in section 4).
+
+## 1. How the briefs should be generated
+
+### What runs today (63d8c41)
+- Three cards at fixed local times: The Brief 08:00, Afternoon check-in 14:00, The Close 21:30. All three are hardcoded in `DAY_CARDS`.
+- Each card prompt contains the calendar window, the ledger and today's conversation. There is no routine, no health signal and no carryover from yesterday's Close.
+- The recurrence is `daily_local` at a fixed time. It does not move on a late start, a weekend or an early first meeting.
+
+### Proposed design
+1. **Routine profile.** A backend-owned record holding wake time, wind-down time, day shape, peak hours, work start, quiet hours, timezone and preferred channel. It is seeded from onboarding and kept current from chat ("I'm up at 6 now") and observed behavior (first message of the day, first calendar event). It fits in `MEMORY_CORE` as a structured section, or in its own small table if the app needs typed reads.
+2. **Times planned nightly by the model, per day.** The nightly memory run already exists. Add one step: the model gets the routine profile plus tomorrow's calendar and returns the times for tomorrow's cards as structured output. For example: Brief about 30-45 minutes after wake, earlier if the first meeting comes sooner; check-in after the peak window, or none on a light day; Close about 60-90 minutes before wind-down. The runtime arms one-shot occurrences for that day instead of a fixed daily recurrence.
+   - Hard limits stay deterministic: quiet hours, a daily push cap, and never after the owner's wind-down time.
+   - Explicit user settings win. The Figma Notification settings already have Brief time and Close time. A set time pins that card; "auto" lets the model plan it.
+   - Fallback when the nightly step fails: use yesterday's times, then the onboarding wake/bedtime anchors.
+3. **Content is a composed read, not a template.** Inputs per card: calendar window, open follow-ups and reminders, goals, memory core, yesterday's Close carryover (morning only), and health signals once real data exists. Each card has one job:
+   - The Brief: what today looks like, the one thing to protect, one action.
+   - The check-in: only what changed plus the next decision. Skip it on a quiet day (this already works).
+   - The Close: done, carried over, the first things tomorrow. No new asks.
+4. **Feedback loop.** Add a 1-tap reaction on each card (useful / not now / wrong). For the first 14 days, end the Brief with "How do you actually feel?" (rough / okay / sharp). This follows `onboarding-signal-map.md`. Feed the answers into the routine profile and the next night's plan.
+
+### Backend work
+- Routine profile store plus read/update tools the model can call from chat.
+- Nightly planning step with a structured output schema, then one-shot scheduling (the scheduler already supports `occurrenceAt`).
+- Settings override (pinned vs auto) per card.
+- Brief store (id, card, text, created_at) so the app can show today's Brief and history. Today cards only go out on Telegram.
+
+### Conflict to resolve
+The app's settings screen says "The Brief is an in-app briefing, never a push (WALDO_THE_BRIEF_FLOW)". The runtime currently pushes all three cards on Telegram. Pick one: push on the chat channel, in-app only, or push a short line that links to the in-app card.
+
+## 2. Mobile onboarding design
+
+### What the app already has
+There are 19 onboarding screens in `app/(onboarding)/`: hello, name, day shape, wake, bedtime, peak hours, caffeine, goals, stress signs, autonomy ("how much rope"), profession, connect-watch, connect-healthkit, signal-depth, permissions, notifications, legal, few-days, splash.
+- Answers live in an in-memory Zustand store (`onboarding.store.ts`). The comment says they are "flushed to Supabase/profile at the end of the flow", but no write call exists in the onboarding screens. **Nothing the user answers reaches any backend today.**
+- Missing from the owner's ask: how the user is feeling right now, and habits beyond caffeine (exercise, sleep habits, what restores them).
+
+### Proposed flow (about 3 minutes of taps plus an optional 3-5 minute interview)
+1. **Hello + name** (keep).
+2. **Rhythm:** wake time, wind-down time, day shape, peak hours (keep all four; these anchor the brief times).
+3. **What matters:** goals as chips plus one free-text line: "What do you want to be different in a month?"
+4. **Right now:** "How have you been feeling lately?" (chips: running on empty / stretched / steady / good) plus optional free text. This sets tone. It is not a diagnosis and is never scored.
+5. **When things go sideways** (stress signs, keep) and **how much rope** (autonomy, keep).
+6. **Connect:** Google (calendar/mail) and Apple Health or Health Connect. Wearable brands only where an integration actually exists.
+7. **Waldo interview (new, optional, in chat, voice or text).** Waldo asks at most 4 open questions: a normal weekday start to finish; habits that help or hurt (exercise, caffeine, screens, sleep); what's weighing on you this week; how you want Waldo to talk to you. The model extracts routine, habits, goals and open loops into memory.
+8. **"Here's what I got" (new).** An editable summary of routine, goals and habits, plus the derived schedule: "The Brief around 7:15, The Close around 22:00." The user can edit or confirm.
+9. **Channel + notifications + legal** (keep), then **All set:** "First Brief arrives tomorrow morning" (keep).
+
+Move to later, in chat (progressive profiling as in the signal map): caffeine detail, profession, calendar anchors, recovery menu, exercise pattern.
+
+### Backend work
+- An authenticated app API. The runtime today exposes only the Telegram webhook and the Google OAuth callback, for one owner. It needs app identity, `POST /onboarding`, `GET/PUT /profile` (routine + settings), and an interview session over the same agent loop.
+- Map the owner's app identity to the runtime owner (Telegram id today).
+- Write onboarding answers into the routine profile and core memory files, with source = onboarding.
+
+## 3. Figma vs app vs backend
+
+Legend: **Built** = UI exists in waldo-app; **Runtime** = what the new backend (beta-mvp) provides.
+
+| Figma screen | waldo-app | Runtime (beta-mvp) | Verdict |
+|---|---|---|---|
+| Onboarding sections 1-4 | Built, 19 screens, answers not persisted | Nothing | Keep; add interview + summary; persist |
+| Overview: morning narrative brief | Built (`brief.tsx`, BriefDeck) on legacy Supabase `agent` function | Brief generated, sent to Telegram only | Need brief store + read API |
+| Overview: checklist | Partial | Reminders + follow-ups exist, no API | Need API |
+| Today's Brief calendar timeline | Built (CalendarIntelligenceCard, legacy `calendar` function) | Google Calendar read per owner | Point the app at the runtime |
+| Health Stats rings, tier-1 Form/Recovery/Weight | Built; computed on device. iOS HealthKit exists; Android health/wear modules are JS stubs | Nothing | Keep iOS; Android needs native work |
+| Tier-2 cards (Sleep, HRV, Resting, Motion, Stress, Stack, Signal Pressure, Task Pileup, Mind State) | Partial (`health/[metric].tsx`, 26 lines) | Nothing | Keep Sleep/HRV/Resting/Motion; defer the rest |
+| The Patrol log + full log | Built on mock data (`@/mocks/waldo`) | Ledger exists | Feed Patrol from the ledger (renamed Activity) |
+| The Spots + detail | Built on mock data | Nothing (pattern discovery deferred in plan) | Remove for MVP |
+| Constellations | Built screen (greyed in Figma) | Nothing | Remove for MVP |
+| Connectors home/detail | Built | Google only | Show Google + health source only |
+| Chat list / thread | `chats.tsx` built; `chat.tsx` is a 7-line route | Chat works on Telegram only | Need app chat API (same agent loop) |
+| Profile, Notification settings (Brief time, Fetch, Close time, channel) | Built (`settings.tsx`) | No settings API; times hardcoded | Need profile/settings API |
+| Data & Privacy | Partial | No export/delete | Need export + delete |
+| In-app Fetch alert | Not wired | No live stress detection | Defer until health data is real |
+
+### New screens needed
+1. Waldo interview (onboarding step 7).
+2. "What Waldo knows": view and edit routine, goals, habits and memory. Muse and WHOOP "My Memory" both ship this.
+3. Approvals inbox. The runtime already has approvals; the app has no surface for them.
+4. Activity: what Waldo did and why, from the ledger. This replaces the mock Patrol.
+5. Brief history (today plus past Briefs and Closes).
+6. Proactivity control: one dial for how often Waldo speaks up, next to autonomy.
+
+### What the old app shows that the build can't back today
+- Form/Recovery scores on Android (native modules not written) and any HRV-driven Fetch alert.
+- Spots, Constellations, Signal Pressure, Task Pileup, Mind State and the Signal Depth score.
+- Spotify, Todoist and Slack connectors; Oura, WHOOP and Ultrahuman direct integrations; Discord as a channel.
+- WhatsApp as a channel (runtime is Telegram only).
+- Any in-app Brief, chat or settings until the runtime has an app API.
+
+## 4. Market grounding and add/remove list
+
+What shipped recently:
+- **Meta Muse (Sep 8, 2026):** one persistent conversation plus side chats; proactive messages with controls to reduce, increase or disable; activity log; editable Memory files; Goals tab; approval cards; artifacts. https://www.testingcatalog.com/meta-introduces-muse-as-a-proactive-personal-agent/ , https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/
+- **WHOOP:** "My Memory" (user-supplied context such as illness, travel, stress, medication changes) and "Proactive Check-Ins" when data warrants, plus on-demand clinicians. https://www.aidatanews.com/whoop-adds-on-demand-doctors-and-new-ai-coaching-features-pushing-deeper-into-health-care/
+- **Oura:** AI Advisor; clinician chat via Counsel Health. https://ouraring.com/blog/cms-access-model/
+- **Apple iOS 27 Health:** AI insights and a daily readiness score (reported). https://gadgets.beebom.com/news/apple-revamps-health-app-ios-27-with-ai-insights-new-readiness-score
+- **Poke:** messaging-native assistant (iMessage, WhatsApp, Telegram) with an Oura integration; acquired by Cognition. https://softwareontheweb.com/product/poke , https://www.xix.ai/ainews/why-cognition-bought-poke-ai-personality-is-becoming-a-competitive-advantage.html
+- Internal note (COMPETITOR_RESEARCH.md): health-aware help alone is not unique. Waldo has to win on reliably joining body, calendar and action.
+
+### Add
+| Add | Why |
+|---|---|
+| Routine-driven brief times (section 1) | Fixed 08:00/21:30 is wrong for anyone off that schedule; the owner asked for it |
+| Waldo interview + "Here's what I got" | Captures habits and feelings that taps miss; the confirm step builds trust (Muse editable memory) |
+| "What Waldo knows" editable memory | Muse Memory files and WHOOP My Memory set this expectation |
+| Proactivity dial | Muse ships reduce/increase/disable; this pairs with the push cap |
+| Activity (ledger) + approvals inbox | Muse's activity log and approval cards make background work legible; the runtime already has the data |
+| 1-tap card feedback + 14-day feeling check | Cheap ground truth to tune briefs and health reads |
+| User context notes (sick, travelling, bad week) | WHOOP My Memory; changes how briefs read the day |
+
+### Remove or defer
+| Remove / defer | Why |
+|---|---|
+| Spots, Constellations | Mock only; pattern discovery is deferred in the plan |
+| Signal Pressure, Task Pileup, Mind State, Signal Depth score | No data source; a made-up score costs trust |
+| Fetch alerts | Need real continuous health data first |
+| Spotify, Todoist, Slack, Discord | Not built; Google + chat channel covers MVP |
+| Multi-brand wearable picker | Keep Apple Health / Health Connect only until direct integrations exist |
+| Caffeine and profession as onboarding screens | Move to chat (progressive profiling); onboarding stays short |
+| Clinical features (doctor chat) | Oura and WHOOP own this; Waldo stays non-clinical |
+
+## 5. Decisions for the owner
+1. Brief delivery: push on the chat channel, in-app only, or a short push that links to the in-app card?
+2. Brief times: model-planned per day with user pin/auto override (proposed), or user-set only?
+3. Onboarding answers: write to the new runtime (proposed) or to the legacy Supabase profile?
+4. Accept the remove/defer list as is?
+5. Build order: routine profile + dynamic times first (backend only, testable on Telegram now), then the app API?
