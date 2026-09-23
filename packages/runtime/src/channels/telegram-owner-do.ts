@@ -1,8 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import { coreFileStore } from '../memory/core-files';
+import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { durableConversationStore } from './conversation-store';
 import { createTelegramCaller, createTelegramOwnerApi } from './telegram-api';
-import { TelegramOwnerListener } from './telegram-listener';
+import { TelegramOwnerListener, type TurnLogEntry } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -22,7 +23,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async turn(update: unknown): Promise<void> {
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key, WALDO_OWNER_TELEGRAM_ID: owner } = this.env;
     if (!token || !key || !owner) throw new Error('telegram owner runtime is unconfigured');
-    const log = (entry: object) => console.log(JSON.stringify(entry));
+    const otlp = langfuseOtlpConfig(this.env);
+    const exportTurn = otlp ? otlpTurnExporter(otlp) : undefined;
+    const log = (entry: TurnLogEntry) => {
+      console.log(JSON.stringify(entry));
+      if (exportTurn) this.ctx.waitUntil(exportTurn(entry).catch((error: unknown) => console.log(JSON.stringify({ trace: entry.trace, hop: 'otlp_export', ok: false, error: String(error) }))));
+    };
     this.listener ??= new TelegramOwnerListener({
       ownerTelegramId: Number(owner),
       api: createTelegramOwnerApi(createTelegramCaller(token)),

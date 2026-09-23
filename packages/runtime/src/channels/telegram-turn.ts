@@ -9,7 +9,7 @@ import { messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, TELEGRAM_REACTIONS } from './reactions';
-import type { TelegramOwnerListenerOptions } from './telegram-listener';
+import type { TelegramOwnerListenerOptions, TurnLogEntry } from './telegram-listener';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 
@@ -19,7 +19,7 @@ export const createTelegramResponder = (
   openaiApiKey: string,
   store?: ConversationStore,
   memory?: CoreFileStore,
-  log: (entry: object) => void = () => undefined,
+  log: (entry: TurnLogEntry) => void = () => undefined,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -65,9 +65,10 @@ export const createTelegramResponder = (
       parentId = publication.leafId;
       if (memory) {
         const files = memory.read();
+        const started = Date.now();
         void ask(MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text))
-          .then((raw) => log({ trace: id, hop: 'memory', ok: true, changed: applyMemoryEdits(memory, raw, new Date().toISOString()) }))
-          .catch((error: unknown) => log({ trace: id, hop: 'memory', ok: false, error: String(error) }));
+          .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyMemoryEdits(memory, raw, new Date().toISOString()).join(',') }))
+          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
       }
       return publication.text;
     },
