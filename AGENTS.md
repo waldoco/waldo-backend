@@ -83,3 +83,5 @@ Canonical source: `.claude/skills/`. `.agents/skills/` is a compatibility mirror
 - `/code-review` — two-axis Standards vs Spec review
 - `/compound-learning-capture` — preserve reusable lessons from fixes, reviews, research, and repeated agent failures
 - `/writing-great-skills` — reference for predictable, maintainable skill design
+
+- Before shipping a slice, walk docs/planning/waldo-agent-mvp/ENGINEERING_FUNDAMENTALS.md. Every bug found adds an adversarial test and a checklist line in the same commit.

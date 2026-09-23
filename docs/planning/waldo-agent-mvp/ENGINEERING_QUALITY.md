@@ -1,5 +1,7 @@
 # Engineering quality, dependencies and improvement loop
 
+> Every slice also walks [ENGINEERING_FUNDAMENTALS.md](ENGINEERING_FUNDAMENTALS.md): the fundamentals checklist and bug log. Each bug class found gets an adversarial test and a checklist line in the same commit.
+
 Updated 21 September 2026. Implementation guidance for the [canonical MVP plan](../WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md), applied through the [worker guide](WORKER_GUIDE.md) and [repository map](REPOSITORY_MAP.md). This document defines work to implement; it does not claim those systems are operating. S0–S4/H/B/C/K0 scope and A1–A16 acceptance remain in the canonical plan.
 
 ## 1. Current evidence and first engineering frontier
