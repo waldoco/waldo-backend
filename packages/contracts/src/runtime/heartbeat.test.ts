@@ -36,5 +36,8 @@ describe('HeartbeatStatusModule', () => {
     const module = new HeartbeatStatusModule();
     module.put('owner-a', heartbeat());
     expect(module.status('owner-b', 150)).toEqual({ ownerId: 'owner-b', generatedAt: 150, overall: 'healthy', components: [] });
+    module.put('owner-b', heartbeat({ ownerId: 'owner-b', state: 'degraded' }));
+    expect(module.status('owner-a', 150).overall).toBe('healthy');
+    expect(module.status('owner-b', 150).overall).toBe('degraded');
   });
 });

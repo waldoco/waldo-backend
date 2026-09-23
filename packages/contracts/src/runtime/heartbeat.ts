@@ -25,12 +25,13 @@ export class HeartbeatStatusModule {
     const next = componentHeartbeatSchema.parse(input);
     if (next.ownerId !== authenticatedOwnerId) throw new Error('heartbeat owner mismatch');
     if (next.expiresAt < next.checkedAt) throw new Error('heartbeat expiry precedes check');
-    const prior = this.components.get(next.component);
-    if (prior && (prior.ownerId !== next.ownerId || next.generation < prior.generation || next.checkedAt < prior.checkedAt)) {
+    const key = JSON.stringify([next.ownerId, next.component]);
+    const prior = this.components.get(key);
+    if (prior && (next.generation < prior.generation || next.checkedAt < prior.checkedAt)) {
       throw new Error('heartbeat stale update');
     }
     const stored = Object.freeze({ ...next });
-    this.components.set(stored.component, stored);
+    this.components.set(key, stored);
     return stored;
   }
 
