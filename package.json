@@ -1,18 +1,23 @@
 {
   "name": "waldo-backend",
-  "version": "1.0.0",
   "private": true,
-  "workspaces": [
-    "cloudflare/waldo-worker"
-  ],
+  "type": "module",
+  "packageManager": "pnpm@10.34.4",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "check": "npm run typecheck",
-    "typecheck": "npm -w @pin4sf/waldo-worker run typecheck",
-    "test": "npm -w @pin4sf/waldo-worker run test",
-    "test:watch": "npm -w @pin4sf/waldo-worker run test:watch",
-    "dev": "npm -w @pin4sf/waldo-worker run dev",
-    "deploy:staging": "npm -w @pin4sf/waldo-worker run deploy:staging",
-    "deploy:prod": "npm -w @pin4sf/waldo-worker run deploy:production",
-    "supabase:push": "supabase db push"
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "verify:node": "pnpm --filter @waldo/contracts test",
+    "generate:openapi": "node scripts/generate-public-openapi.mjs",
+    "generate:responsibility-handshake": "node scripts/generate-responsibility-handshake-v0-1.mjs && node scripts/generate-responsibility-handshake-v0-2.mjs && node scripts/generate-responsibility-planning-turn-v0-3.mjs && node scripts/generate-responsibility-presence-channel-v0-4.mjs && node scripts/generate-responsibility-execution-v0-4.mjs && node scripts/generate-responsibility-obligation-context-v0-4.mjs && node scripts/generate-responsibility-acceptance-check-v0-4.mjs && node scripts/generate-responsibility-judgment-authority-v0-4.mjs && node scripts/generate-responsibility-judgment-authority-v0-5.mjs && node scripts/generate-responsibility-closure-v0-4.mjs && node scripts/generate-responsibility-continuity-v0-4.mjs && node scripts/generate-responsibility-effect-v0-4.mjs && node scripts/generate-responsibility-closure-v0-6.mjs",
+    "verify:supabase": "node scripts/verify-supabase.mjs",
+    "verify:supabase:session-revocation": "pnpm --filter @waldo/runtime test:responsibility-integration",
+    "verify:workers": "pnpm --filter @waldo/runtime test",
+    "verify:property": "pnpm --filter @waldo/runtime test:property",
+    "verify:mutation": "pnpm --filter @waldo/runtime test:mutation",
+    "verify:guards": "node scripts/guards/run-all.mjs",
+    "verify": "node scripts/guards/guard-package-manager.mjs && pnpm install --frozen-lockfile && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:workers && pnpm verify:supabase:session-revocation && pnpm verify:guards"
   }
 }

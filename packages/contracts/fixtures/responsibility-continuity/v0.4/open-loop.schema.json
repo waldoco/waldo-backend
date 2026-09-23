@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "id": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "ownerId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "revision": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "outcome": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "workUnit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/__schema0"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema1"
+            }
+          },
+          "required": [
+            "id",
+            "revision"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unresolvedConsequence": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "ref": {
+          "$ref": "#/$defs/__schema0"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "responsibleParty": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "waldo",
+            "person",
+            "organization"
+          ]
+        },
+        "ref": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "nextTrigger": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "time",
+                "event",
+                "judgment",
+                "manual"
+              ]
+            },
+            "ref": {
+              "$ref": "#/$defs/__schema0"
+            }
+          },
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evidenceGapRefs": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema0"
+      }
+    },
+    "reEntryPointId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "attentionClass": {
+      "type": "string",
+      "enum": [
+        "background",
+        "normal",
+        "needs_you"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "open",
+        "waiting",
+        "needs_judgment",
+        "ready",
+        "resolved",
+        "released",
+        "superseded"
+      ]
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "id",
+    "ownerId",
+    "revision",
+    "outcome",
+    "workUnit",
+    "unresolvedConsequence",
+    "responsibleParty",
+    "nextTrigger",
+    "evidenceGapRefs",
+    "reEntryPointId",
+    "attentionClass",
+    "state",
+    "updatedAt"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema1": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-continuity:0.4:open-loop",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
+}

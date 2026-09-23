@@ -1,0 +1,15 @@
+{
+  "protocolVersion": "0.5",
+  "requestId": "answer_judgment_refusal_fixture_01",
+  "judgmentRequest": {
+    "id": "judgment_request_fixture_01",
+    "revision": 3
+  },
+  "judgmentDecision": {
+    "id": "judgment_decision_refusal_fixture_01",
+    "revision": 1
+  },
+  "selectedOptionId": "option_reject",
+  "projectionCursor": 27,
+  "authorityDisposition": "refused"
+}

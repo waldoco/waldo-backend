@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "0.4",
+  "id": "settlement_fixture",
+  "ownerId": "owner_fixture",
+  "deliveryIntentId": "delivery_fixture",
+  "deliveryIntentRevision": 1,
+  "adapter": {
+    "category": "channel_adapter",
+    "id": "fake_channel_fixture",
+    "version": "1.0.0",
+    "manifest": {
+      "id": "channel_manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "state": "delivered",
+  "transportMessageRef": "transport_message_fixture",
+  "observationDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+  "observedAt": "2026-08-13T12:02:00.000Z"
+}

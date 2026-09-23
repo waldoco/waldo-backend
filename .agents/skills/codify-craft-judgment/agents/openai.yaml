@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codify Craft Judgment"
+  short_description: "Turn expert judgment into skills."
+  default_prompt: "Use $codify-craft-judgment to turn this expert judgment into a reusable skill."

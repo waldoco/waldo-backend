@@ -1,0 +1,74 @@
+{
+  "protocolVersion": "0.1",
+  "events": [
+    {
+      "schemaVersion": "0.1",
+      "eventId": "event_activity_01",
+      "eventType": "agent_session.activity_observed",
+      "ownerId": "owner_server_01",
+      "aggregate": {
+        "kind": "agent_session",
+        "id": "agent_session_01",
+        "revision": 2
+      },
+      "ownerCursor": 14,
+      "correlationId": "correlation_capture_01",
+      "occurredAt": "2026-08-05T12:05:00Z",
+      "payload": {
+        "trust": "untrusted",
+        "sessionId": "agent_session_01",
+        "workUnitId": "work_unit_01",
+        "activity": "provider_done",
+        "observedAt": "2026-08-05T12:04:59Z"
+      }
+    },
+    {
+      "schemaVersion": "0.1",
+      "eventId": "event_judgment_01",
+      "eventType": "agent_session.judgment_needed_observed",
+      "ownerId": "owner_server_01",
+      "aggregate": {
+        "kind": "agent_session",
+        "id": "agent_session_01",
+        "revision": 3
+      },
+      "ownerCursor": 15,
+      "correlationId": "correlation_capture_01",
+      "occurredAt": "2026-08-05T12:05:01Z",
+      "payload": {
+        "trust": "untrusted",
+        "sessionId": "agent_session_01",
+        "workUnitId": "work_unit_01",
+        "reasonCode": "choice_required",
+        "optionRefs": [
+          "option_a",
+          "option_b"
+        ],
+        "observedAt": "2026-08-05T12:05:01Z"
+      }
+    },
+    {
+      "schemaVersion": "0.1",
+      "eventId": "event_evidence_01",
+      "eventType": "agent_session.candidate_evidence_observed",
+      "ownerId": "owner_server_01",
+      "aggregate": {
+        "kind": "agent_session",
+        "id": "agent_session_01",
+        "revision": 4
+      },
+      "ownerCursor": 16,
+      "correlationId": "correlation_capture_01",
+      "occurredAt": "2026-08-05T12:05:02Z",
+      "payload": {
+        "trust": "untrusted",
+        "sessionId": "agent_session_01",
+        "workUnitId": "work_unit_01",
+        "subjectRef": "artifact_reviewed_01",
+        "evidenceRef": "candidate_evidence_01",
+        "contentDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "observedAt": "2026-08-05T12:05:02Z"
+      }
+    }
+  ]
+}

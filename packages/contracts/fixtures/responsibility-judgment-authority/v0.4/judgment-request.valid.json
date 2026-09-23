@@ -1,0 +1,76 @@
+{
+  "protocolVersion": "0.4",
+  "id": "judgment_request_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "revision": 2,
+  "subject": {
+    "kind": "work_unit",
+    "id": "work_unit_fixture_01",
+    "revision": 4
+  },
+  "question": {
+    "ref": "judgment_question_fixture_01",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "options": [
+    {
+      "id": "option_approve",
+      "authorityDisposition": "grant",
+      "content": {
+        "ref": "option_content_approve",
+        "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    },
+    {
+      "id": "option_reject",
+      "authorityDisposition": "refuse",
+      "content": {
+        "ref": "option_content_reject",
+        "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      }
+    }
+  ],
+  "recommendation": "option_approve",
+  "evidence": [
+    {
+      "ref": "evidence_summary_fixture_01",
+      "digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    }
+  ],
+  "risk": {
+    "ref": "risk_summary_fixture_01",
+    "digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "reversibility": {
+    "ref": "reversibility_summary_fixture_01",
+    "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  },
+  "affectedDigest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+  "requestedAuthority": {
+    "purpose": "calendar.follow_up.schedule",
+    "effectFamily": "calendar.event.create",
+    "resources": [
+      {
+        "kind": "calendar",
+        "ref": "calendar_primary"
+      }
+    ],
+    "scopes": [
+      "calendar.event.create"
+    ],
+    "audiences": [
+      "calendar.account"
+    ],
+    "argumentDigest": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    "contextDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    "artifactDigest": null,
+    "useLimit": 1,
+    "validUntil": "2026-08-08T18:30:00.000Z"
+  },
+  "reEntryPointId": "reentry_fixture_01",
+  "expiresAt": "2026-08-08T18:30:00.000Z",
+  "decisionId": null,
+  "state": "open",
+  "createdAt": "2026-08-08T18:05:00.000Z",
+  "updatedAt": "2026-08-08T18:05:00.000Z"
+}

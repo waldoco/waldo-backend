@@ -1,0 +1,357 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheckId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "acceptanceCheckRevision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "claimRef": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "claimDigest": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "source": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "artifactRefs": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "state": {
+          "type": "string",
+          "const": "candidate"
+        },
+        "admittedAt": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "subject",
+        "acceptanceCheckId",
+        "acceptanceCheckRevision",
+        "claimRef",
+        "claimDigest",
+        "source",
+        "artifactRefs",
+        "state",
+        "admittedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheckId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "acceptanceCheckRevision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "claimRef": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "claimDigest": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "source": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "artifactRefs": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "state": {
+          "type": "string",
+          "const": "admitted"
+        },
+        "admittedAt": {
+          "$ref": "#/$defs/__schema8"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "subject",
+        "acceptanceCheckId",
+        "acceptanceCheckRevision",
+        "claimRef",
+        "claimDigest",
+        "source",
+        "artifactRefs",
+        "state",
+        "admittedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheckId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "acceptanceCheckRevision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "claimRef": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "claimDigest": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "source": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "artifactRefs": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "state": {
+          "type": "string",
+          "const": "stale"
+        },
+        "admittedAt": {
+          "$ref": "#/$defs/__schema8"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "subject",
+        "acceptanceCheckId",
+        "acceptanceCheckRevision",
+        "claimRef",
+        "claimDigest",
+        "source",
+        "artifactRefs",
+        "state",
+        "admittedAt"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "acceptanceCheckId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "acceptanceCheckRevision": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "claimRef": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "claimDigest": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "source": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "artifactRefs": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "state": {
+          "type": "string",
+          "const": "invalidated"
+        },
+        "admittedAt": {
+          "$ref": "#/$defs/__schema8"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "subject",
+        "acceptanceCheckId",
+        "acceptanceCheckRevision",
+        "claimRef",
+        "claimDigest",
+        "source",
+        "artifactRefs",
+        "state",
+        "admittedAt"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "outcome",
+            "work_unit"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema4": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "__schema5": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "provider",
+            "execution_environment",
+            "effect_adapter",
+            "person"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "__schema6": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema7"
+      }
+    },
+    "__schema7": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema4"
+        }
+      },
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema8": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-closure:0.4:evidence",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
+}

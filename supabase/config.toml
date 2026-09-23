@@ -1,4 +1,4 @@
-project_id = "waldo-backend"
+project_id = "oqcjjcytjvrckvylagsl"
 
 [db]
 port = 54322
@@ -10,3 +10,7 @@ enabled = true
 
 [db.seed]
 enabled = false
+
+[functions.mint-agent-jwt]
+verify_jwt = false
+

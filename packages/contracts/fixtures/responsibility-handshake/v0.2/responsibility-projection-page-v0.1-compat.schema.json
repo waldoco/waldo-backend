@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "ownerId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "projectionName": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "snapshotId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "snapshotBaseCursor": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "fromExclusiveCursor": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "highWaterCursor": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "nextCursor": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "items": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "hasMore": {
+      "$ref": "#/$defs/__schema10"
+    },
+    "generatedAt": {
+      "$ref": "#/$defs/__schema6"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "ownerId",
+    "projectionName",
+    "snapshotId",
+    "snapshotBaseCursor",
+    "fromExclusiveCursor",
+    "highWaterCursor",
+    "nextCursor",
+    "items",
+    "hasMore",
+    "generatedAt"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.1"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema3": {
+      "maxItems": 256,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema4"
+      }
+    },
+    "__schema4": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "aggregateId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "outcomeId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema5"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/__schema6"
+            },
+            "itemType": {
+              "$ref": "#/$defs/__schema7"
+            },
+            "state": {
+              "$ref": "#/$defs/__schema8"
+            },
+            "userStatement": {
+              "$ref": "#/$defs/__schema9"
+            }
+          },
+          "required": [
+            "cursor",
+            "aggregateId",
+            "outcomeId",
+            "revision",
+            "createdAt",
+            "itemType",
+            "state",
+            "userStatement"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "aggregateId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "outcomeId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema5"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/__schema6"
+            },
+            "itemType": {
+              "type": "string",
+              "const": "mission"
+            },
+            "state": {
+              "type": "string",
+              "const": "proposed"
+            },
+            "brief": {
+              "$ref": "#/$defs/__schema9"
+            }
+          },
+          "required": [
+            "cursor",
+            "aggregateId",
+            "outcomeId",
+            "revision",
+            "createdAt",
+            "itemType",
+            "state",
+            "brief"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "aggregateId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "outcomeId": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema5"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/__schema6"
+            },
+            "itemType": {
+              "type": "string",
+              "const": "work_unit"
+            },
+            "missionId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/__schema1"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "position": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "state": {
+              "type": "string",
+              "const": "planned"
+            },
+            "responsibility": {
+              "$ref": "#/$defs/__schema9"
+            },
+            "dependencyIds": {
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            },
+            "requiredCapabilities": {
+              "maxItems": 32,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema1"
+              }
+            }
+          },
+          "required": [
+            "cursor",
+            "aggregateId",
+            "outcomeId",
+            "revision",
+            "createdAt",
+            "itemType",
+            "missionId",
+            "position",
+            "state",
+            "responsibility",
+            "dependencyIds",
+            "requiredCapabilities"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "__schema5": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema6": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema7": {
+      "type": "string",
+      "const": "outcome"
+    },
+    "__schema8": {
+      "type": "string",
+      "const": "captured"
+    },
+    "__schema9": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "pattern": "\\S"
+    },
+    "__schema10": {
+      "type": "boolean"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-handshake:0.2:responsibility-projection-page-v0.1-compat",
+  "title": "Waldo responsibility-handshake v0.2 responsibility-projection-page-v0.1-compat",
+  "description": "Structural interoperability schema. Canonical admission also requires the listed Waldo runtime invariants.",
+  "x-waldo-validation-level": "structural",
+  "x-waldo-runtime-validator-required": true,
+  "x-waldo-runtime-invariants": {
+    "compatibility": "released v0.1 generic page carrying responsibility summary items",
+    "itemCursorOrder": "strictly ascending global owner cursors within the scanned range"
+  },
+  "x-waldo-offline-commands": "none"
+}

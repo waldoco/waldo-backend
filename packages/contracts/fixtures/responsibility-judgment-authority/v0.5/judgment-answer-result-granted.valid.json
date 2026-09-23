@@ -1,0 +1,26 @@
+{
+  "protocolVersion": "0.5",
+  "requestId": "answer_judgment_fixture_01",
+  "judgmentRequest": {
+    "id": "judgment_request_fixture_01",
+    "revision": 3
+  },
+  "judgmentDecision": {
+    "id": "judgment_decision_fixture_01",
+    "revision": 1
+  },
+  "selectedOptionId": "option_approve",
+  "projectionCursor": 27,
+  "authorityDisposition": "granted",
+  "grant": {
+    "id": "authority_grant_fixture_01",
+    "revision": 1,
+    "grantee": {
+      "kind": "service",
+      "id": "effect_engine"
+    },
+    "state": "active",
+    "expiresAt": "2026-08-15T18:30:00.000Z",
+    "revocationGeneration": 0
+  }
+}

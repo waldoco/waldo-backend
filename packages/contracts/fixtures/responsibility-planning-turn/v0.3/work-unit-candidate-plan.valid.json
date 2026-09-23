@@ -1,0 +1,13 @@
+{
+  "summary": "Prepare a reviewable product update plan without publishing it.",
+  "proposedSteps": [
+    "Draft the update from the supplied fixture.",
+    "Present it for review."
+  ],
+  "openQuestions": [
+    "Who is the primary audience?"
+  ],
+  "constraints": [
+    "Do not publish or perform an external effect."
+  ]
+}

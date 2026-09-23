@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "requestId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "commandType": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "presenceRegistrationId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "clientIssuedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "disposition": {
+          "type": "string",
+          "const": "resolve"
+        },
+        "acceptanceId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "reEntryPointId": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "commandType",
+        "presenceRegistrationId",
+        "aggregate",
+        "clientIssuedAt",
+        "disposition",
+        "acceptanceId",
+        "reEntryPointId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "requestId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "commandType": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "presenceRegistrationId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "clientIssuedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "disposition": {
+          "type": "string",
+          "const": "release"
+        },
+        "acceptanceId": {
+          "type": "null"
+        },
+        "reEntryPointId": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "commandType",
+        "presenceRegistrationId",
+        "aggregate",
+        "clientIssuedAt",
+        "disposition",
+        "acceptanceId",
+        "reEntryPointId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "requestId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "commandType": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "presenceRegistrationId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "clientIssuedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "disposition": {
+          "type": "string",
+          "const": "reopen"
+        },
+        "acceptanceId": {
+          "type": "null"
+        },
+        "reEntryPointId": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "commandType",
+        "presenceRegistrationId",
+        "aggregate",
+        "clientIssuedAt",
+        "disposition",
+        "acceptanceId",
+        "reEntryPointId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "requestId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "commandType": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "presenceRegistrationId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "clientIssuedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "disposition": {
+          "type": "string",
+          "const": "defer"
+        },
+        "acceptanceId": {
+          "type": "null"
+        },
+        "reEntryPointId": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "commandType",
+        "presenceRegistrationId",
+        "aggregate",
+        "clientIssuedAt",
+        "disposition",
+        "acceptanceId",
+        "reEntryPointId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "requestId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "commandType": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "presenceRegistrationId": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "aggregate": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "clientIssuedAt": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "disposition": {
+          "type": "string",
+          "const": "transfer"
+        },
+        "acceptanceId": {
+          "type": "null"
+        },
+        "reEntryPointId": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "commandType",
+        "presenceRegistrationId",
+        "aggregate",
+        "clientIssuedAt",
+        "disposition",
+        "acceptanceId",
+        "reEntryPointId"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "string",
+      "const": "open_loop.disposition"
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "open_loop"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "expectedRevision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema4": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-continuity:0.4:open-loop-disposition-command",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
+}

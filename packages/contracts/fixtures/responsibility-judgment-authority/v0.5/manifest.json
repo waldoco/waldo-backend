@@ -1,0 +1,128 @@
+{
+  "protocolName": "responsibility-judgment-authority",
+  "protocolVersion": "0.5",
+  "mediaType": "application/vnd.waldo.responsibility.v0.5+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "source": {
+    "path": "packages/contracts/src/protocol/responsibility-judgment-authority-v0-5.ts",
+    "sha256": "sha256:dc53cef12b1d04341e93324a9b744635be8568e55e021a1c41019c8359916cd4"
+  },
+  "fixturePayloadRootSha256": "sha256:0f448d0119ab9924b48f323c5e61ea3860418330bb8a0ccf705e079abbd3b239",
+  "compatibilityWindow": {
+    "predecessor": "0.4",
+    "mode": "parallel_additive",
+    "promise": "v0.4 source, tests, and fixture bytes remain preserved",
+    "removal": "none_authorized"
+  },
+  "consumers": [
+    {
+      "name": "waldo-backend-runtime",
+      "contractRole": "canonical_runtime"
+    },
+    {
+      "name": "kennel",
+      "contractRole": "owner_surface"
+    },
+    {
+      "name": "waldo-mobile",
+      "contractRole": "owner_surface"
+    },
+    {
+      "name": "telegram",
+      "contractRole": "messaging_presence"
+    },
+    {
+      "name": "discord",
+      "contractRole": "messaging_presence"
+    }
+  ],
+  "bytePreservation": {
+    "throughVersion": "0.4",
+    "guard": "scripts/guards/guard-responsibility-released-v0-1-v0-4-bytes.mjs",
+    "compositeSha256": "sha256:e2674177d5852b15b83ae59d6f9faef62f13ff03b99b89ebb33cee14e491a0ca"
+  },
+  "retrySemantics": {
+    "identity": "requestId",
+    "exactDuplicate": "return_persisted_result_byte_for_byte",
+    "changedDuplicate": "reject_request_conflict"
+  },
+  "files": [
+    {
+      "path": "authority-grant.schema.json",
+      "sha256": "sha256:59d766e8f614afea29bfb81dddc76d75de27a0efd7eeb256f6b1a49a07098bd3"
+    },
+    {
+      "path": "authority-grant.valid.json",
+      "sha256": "sha256:f3b9f56fcf20455f684c4d17fe6ccba4cd4545c481a7235de901fbeab7d68dac"
+    },
+    {
+      "path": "judgment-answer-result-granted.valid.json",
+      "sha256": "sha256:33fb9bfd2d6f60b8c84f4b4c9631b8b644f33cb8fd118ee5a2c516449cd9002b"
+    },
+    {
+      "path": "judgment-answer-result-refused.valid.json",
+      "sha256": "sha256:c68f7862d4bea845ba859716cba3974ffdec0bb37f1cdbbc2c7ec24805a48d58"
+    },
+    {
+      "path": "judgment-answer-result.schema.json",
+      "sha256": "sha256:854322539c239a01a19ef91cfbdbf0a326883b128fd1ae592625ed0cf02f05fe"
+    },
+    {
+      "path": "judgment-answer.schema.json",
+      "sha256": "sha256:5f2b6075d57fd26544b49ea045c35747d41fd2c44a74782cd9ac8af62bde120b"
+    },
+    {
+      "path": "judgment-answer.valid.json",
+      "sha256": "sha256:115cf5d4ee055a79f6dc345b28c4404169cf99073079f8a1a5c4dd153dc3ee50"
+    },
+    {
+      "path": "judgment-authority-binding.schema.json",
+      "sha256": "sha256:43ca238947c54bd5d0ee71c899dfb3752da48ca4ae3f109bddae0122b276a183"
+    },
+    {
+      "path": "judgment-authority-binding.valid.json",
+      "sha256": "sha256:d19949211e150ea63ed34877c376013c14089312978f9626cd647b78f8602bb9"
+    },
+    {
+      "path": "judgment-authority-refusal.valid.json",
+      "sha256": "sha256:a5415690a2b4831eb491dbb7fc942542d82eac7bcebb505bcc7c81c1ec9ad32c"
+    },
+    {
+      "path": "judgment-authority.rejections.json",
+      "sha256": "sha256:40df017a0ffe62596beda315a6f0c8a2ac5c26fcd5a12411fa927e585c7c4bbe"
+    },
+    {
+      "path": "judgment-decision.schema.json",
+      "sha256": "sha256:5ecd7a446620b48bd539bbe62bf26583ec45017a27508328574829b6630fff06"
+    },
+    {
+      "path": "judgment-decision.valid.json",
+      "sha256": "sha256:48795ffd040495b5359cfbb7f04679f27425c3721cc8124e6a185cf004e0aa9b"
+    },
+    {
+      "path": "judgment-projection-page.schema.json",
+      "sha256": "sha256:c077316bbfe6a3de7c8624871b15d1d0f48d99d7e6e2e9f49e718ee6e9852389"
+    },
+    {
+      "path": "judgment-projection-page.valid.json",
+      "sha256": "sha256:a9002aff2e0f7d1b1ab6e414c6df37321da648664b47c495104992375e6e1359"
+    },
+    {
+      "path": "judgment-projection-query.schema.json",
+      "sha256": "sha256:7e4505d358f0aaedbf38a356c56563a78d2d76a422b027122b8d6917204b80a2"
+    },
+    {
+      "path": "judgment-projection-query.valid.json",
+      "sha256": "sha256:d084872c7d3f21c4bd96c087f9fe9ca95f5da46b4fae4f53388574b3023014ec"
+    },
+    {
+      "path": "judgment-request.schema.json",
+      "sha256": "sha256:a304853d1932ed83138470f22586e3c7e0d348f22005c3abd5b917f6640dfa3b"
+    },
+    {
+      "path": "judgment-request.valid.json",
+      "sha256": "sha256:92a4953c32a7d53881cdff5e56ad168e0cf21d2aab034392517c4070e2852561"
+    }
+  ]
+}

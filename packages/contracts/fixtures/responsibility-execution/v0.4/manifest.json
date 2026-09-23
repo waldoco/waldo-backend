@@ -1,0 +1,21 @@
+{
+  "protocolVersion": "0.4",
+  "family": "responsibility-execution",
+  "files": {
+    "execution-request.schema.json": "sha256:ac0f574c4535d989e0cffd8ccfacd3f8345067faf1cab187f1bf315d98d18e3d",
+    "execution-lease.schema.json": "sha256:2ad2ee489872a7dfa154cea43846824bf834ece193405f9840891180d5433b22",
+    "execution-attempt.schema.json": "sha256:5e35bb7e4dca66128677eeebb0492d23b044fc1a5d308a39729c072ef056e1c5",
+    "execution-session.schema.json": "sha256:b53a885090b7c9efeb9a90f77c784a106e66000e91759e3047fb1b9205d16531",
+    "executor-observation.schema.json": "sha256:5850bc4bd1e34d641a10bdd5d14481a0221e4ca7ca7de6f8a0e006ae99901856",
+    "execution-reconciliation.schema.json": "sha256:67fe1e2364f1ce26552f03d7707fb0f176f537143ba0f6572c2971217a65bba4",
+    "execution-cancel-request.schema.json": "sha256:6e288ccc3a4488fd67277b73e64ba19a61f1e33ed0d89a5ae4bd41a1624cb8fb",
+    "execution-request.valid.json": "sha256:42ec99a6f7d683305d51c8ab9fe161955b7b4ea8707fd9efb86f916f26fc9a25",
+    "execution-lease.valid.json": "sha256:b9492af4c6408313e966f3e8a0e830f8922e8bafe865306f382ce750ed7c0fd0",
+    "execution-attempt.valid.json": "sha256:0bda5ba60fc82fcf8e5fe041e275c46209f0cb551bc725a49ad09891c24b5def",
+    "execution-session.valid.json": "sha256:eb9e07fe954fdace0afebe27b6f0c8e6989dbd3c4b5f8e6c517a156c94a82f5c",
+    "executor-observation.valid.json": "sha256:545570dcf33611be4fa07ee89cd4663a18ba6cf58fe9f70238ace3f88deb03c3",
+    "execution-reconciliation.valid.json": "sha256:92558f81aab30512238c4a20389d3308937fc3f979c98f6a1c758e0a8fa0081a",
+    "execution-cancel-request.valid.json": "sha256:331d31b8165956ffa584e38ce8f0a72e91419746446ca70bfaddb318b4ac2ce7",
+    "execution.rejections.json": "sha256:00889f3c583071913094b0d74a475477625413f7117be482df388154eb30ce32"
+  }
+}

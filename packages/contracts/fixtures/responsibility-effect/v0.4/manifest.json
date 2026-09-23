@@ -1,0 +1,61 @@
+{
+  "protocolName": "responsibility-effect",
+  "protocolVersion": "0.4",
+  "mediaType": "application/vnd.waldo.responsibility.v0.4+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "files": [
+    {
+      "path": "effect-intent.schema.json",
+      "sha256": "sha256:2b26abb4220cb20f9a4d3fe336252ac5b29a94ffef3bc2ea24d41521878be19d"
+    },
+    {
+      "path": "effect-intent.valid.json",
+      "sha256": "sha256:75e1ddb5d11ae73dcf8dae16a02fb67b25740d077e27cc6ef1ba3b08466f2805"
+    },
+    {
+      "path": "effect-receipt.schema.json",
+      "sha256": "sha256:ee399c62d4ab75aa3451da43c7f6364d7cf04534768418d0957d325726afae79"
+    },
+    {
+      "path": "effect-receipt.valid.json",
+      "sha256": "sha256:23e15200e4212172a416d142cd1ff32774abe52ddab874a25ff133032331c64c"
+    },
+    {
+      "path": "effect-reconciliation-applied.valid.json",
+      "sha256": "sha256:a4e39204db1fb2c920967f17bc9ae418d8402cc70a1bd956cbdb95532dc6a12a"
+    },
+    {
+      "path": "effect-reconciliation-issue.valid.json",
+      "sha256": "sha256:1196c7c3e2362375b2e9610e65b8293c22893d40ee5979cb662f6c3a5bfa2096"
+    },
+    {
+      "path": "effect-reconciliation-not-applied.valid.json",
+      "sha256": "sha256:da8403d6713b40e7c041002afe2a9b4329c0b804f80f191f6dac274f13169d43"
+    },
+    {
+      "path": "effect-reconciliation-retry.valid.json",
+      "sha256": "sha256:d2afaa5d5ed96f18e465918391e80c626a7f7b3c51510e3e86eedc587857878b"
+    },
+    {
+      "path": "effect-reconciliation-terminal-ambiguity.valid.json",
+      "sha256": "sha256:061fe8d1ecc3a1ebf0438efc1e186d82192874bb78693f28b2b0fc931b85435f"
+    },
+    {
+      "path": "effect-reconciliation-unavailable.valid.json",
+      "sha256": "sha256:eb87585f769006f6307dc3e09c598ec82f0967ebbdd8ee64ef1188d17364b878"
+    },
+    {
+      "path": "effect-reconciliation-unknown.valid.json",
+      "sha256": "sha256:3c583e5d1899421108240ecdd1aaf41d6b641760b1a955d94d9d0e1a2e1de9f2"
+    },
+    {
+      "path": "effect-reconciliation.schema.json",
+      "sha256": "sha256:277c3a7d49765dd6db5d0f27aee32a33e77804342a5f36fa470448af9c720596"
+    },
+    {
+      "path": "responsibility-effect.rejections.json",
+      "sha256": "sha256:0d6e9f6fa50994f092af98ce14b3eee929ba759bbba38f156329cd053dc709c9"
+    }
+  ]
+}

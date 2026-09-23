@@ -1,0 +1,10 @@
+{
+  "protocolVersion": "0.1",
+  "requestId": "request_capture_01",
+  "commandType": "responsibility.capture",
+  "presenceRegistrationId": "presence_registration_01",
+  "clientIssuedAt": "2026-08-05T12:00:00Z",
+  "payload": {
+    "userStatement": "Make sure the reviewed update is handled."
+  }
+}

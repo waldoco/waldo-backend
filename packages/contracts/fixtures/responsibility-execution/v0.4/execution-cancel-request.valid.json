@@ -1,0 +1,9 @@
+{
+  "protocolVersion": "0.4",
+  "requestId": "cancel_request_fixture",
+  "commandType": "execution.cancel",
+  "presenceRegistrationId": "presence_fixture",
+  "executionRequestId": "execution_request_fixture",
+  "expectedCancellationGeneration": 1,
+  "clientIssuedAt": "2026-08-13T12:00:04.000Z"
+}

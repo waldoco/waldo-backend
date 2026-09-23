@@ -1,0 +1,20 @@
+{
+  "protocolVersion": "0.6",
+  "requestId": "verification_request_fixture",
+  "presenceRegistrationId": "presence_fixture",
+  "commandType": "verification.request",
+  "aggregate": {
+    "kind": "acceptance_check",
+    "id": "check_fixture",
+    "expectedRevision": 1
+  },
+  "payload": {
+    "evidence": [
+      {
+        "id": "evidence_fixture",
+        "revision": 1,
+        "digest": "sha256:70f386f4deb1f593ab903a9a4cbda160439bcd24dfff7a689e40eb77e7a1a115"
+      }
+    ]
+  }
+}

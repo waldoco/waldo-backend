@@ -1,0 +1,25 @@
+{
+  "protocolVersion": "0.4",
+  "id": "judgment_decision_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "revision": 1,
+  "judgmentRequestId": "judgment_request_fixture_01",
+  "judgmentRequestRevision": 2,
+  "subject": {
+    "kind": "work_unit",
+    "id": "work_unit_fixture_01",
+    "revision": 4
+  },
+  "selectedOptionId": "option_approve",
+  "displayedRequestDigest": "sha256:b0fcec3497ebd61f2cb436f02ae734529bd8d86dd0b21c706e4c305cb31b9435",
+  "actor": {
+    "kind": "owner",
+    "id": "owner_fixture_01"
+  },
+  "presenceId": "presence_fixture_01",
+  "authenticatedSessionId": "authenticated_session_fixture_01",
+  "ownerPolicyRevision": 7,
+  "authAssurance": "verified_session",
+  "state": "recorded",
+  "decidedAt": "2026-08-08T18:11:00.000Z"
+}

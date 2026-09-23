@@ -1,0 +1,10 @@
+{
+  "protocolVersion": "0.1",
+  "requestId": "request_http_v01_01",
+  "commandType": "responsibility.capture",
+  "presenceRegistrationId": "presence_registration_01",
+  "clientIssuedAt": "2026-08-06T12:00:00.000Z",
+  "payload": {
+    "userStatement": "Prepare a reviewable update, but do not publish it."
+  }
+}

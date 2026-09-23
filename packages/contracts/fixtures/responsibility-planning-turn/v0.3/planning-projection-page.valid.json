@@ -1,0 +1,37 @@
+{
+  "protocolVersion": "0.3",
+  "ownerId": "owner_fixture_01",
+  "projectionName": "work_unit.planning_activity",
+  "snapshotId": "snapshot_01",
+  "snapshotBaseCursor": 0,
+  "fromExclusiveCursor": 0,
+  "highWaterCursor": 6,
+  "nextCursor": 6,
+  "items": [
+    {
+      "cursor": 6,
+      "itemType": "work_unit_candidate_plan",
+      "outcomeId": "outcome_01",
+      "workUnitId": "work_unit_01",
+      "executionRequestId": "execution_request_01",
+      "agentSessionId": "agent_session_01",
+      "resultDigest": "sha256:924574552a796fafa2bc5e50445ef93e0d33575a7572849443d9469043e9b268",
+      "candidatePlan": {
+        "summary": "Prepare a reviewable product update plan without publishing it.",
+        "proposedSteps": [
+          "Draft the update from the supplied fixture.",
+          "Present it for review."
+        ],
+        "openQuestions": [
+          "Who is the primary audience?"
+        ],
+        "constraints": [
+          "Do not publish or perform an external effect."
+        ]
+      },
+      "createdAt": "2026-08-07T08:00:03.000Z"
+    }
+  ],
+  "hasMore": false,
+  "generatedAt": "2026-08-07T08:00:04.000Z"
+}

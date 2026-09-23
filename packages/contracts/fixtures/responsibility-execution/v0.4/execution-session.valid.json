@@ -1,0 +1,31 @@
+{
+  "protocolVersion": "0.4",
+  "id": "session_fixture",
+  "ownerId": "owner_fixture",
+  "attemptId": "attempt_fixture",
+  "provider": {
+    "category": "provider",
+    "id": "provider_fixture",
+    "version": "1.0.0",
+    "modelRef": "model_fixture",
+    "manifest": {
+      "id": "manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "environment": {
+    "category": "execution_environment",
+    "id": "environment_fixture",
+    "version": "1.0.0",
+    "environmentKind": "local",
+    "manifest": {
+      "id": "manifest_fixture",
+      "version": "1.0.0",
+      "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+    }
+  },
+  "providerSessionRef": "provider_session_fixture",
+  "state": "active",
+  "lastObservationSequence": 0
+}

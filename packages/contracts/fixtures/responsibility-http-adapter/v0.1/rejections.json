@@ -1,0 +1,161 @@
+{
+  "cases": [
+    {
+      "name": "duplicate-key",
+      "request": {
+        "method": "POST",
+        "path": "/public/responsibilities",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "authorization": "Bearer fixture-token",
+          "content-type": "application/vnd.waldo.responsibility.v0.2+json"
+        },
+        "bodyUtf8": "{\"protocolVersion\":\"0.2\",\"protocolVersion\":\"0.2\",\"requestId\":\"request_fixture_duplicate_01\",\"commandType\":\"responsibility.capture\",\"presenceRegistrationId\":\"presence_registration_01\",\"clientIssuedAt\":\"2026-08-06T12:00:00.000Z\",\"payload\":{\"userStatement\":\"Prepare a reviewable update.\"}}"
+      },
+      "harnessState": "allow",
+      "expected": {
+        "status": 400,
+        "problem": { "type": "https://api.heywaldo.com/problems/invalid-request", "title": "Request rejected", "status": 400, "code": "invalid_request" }
+      }
+    },
+    {
+      "name": "malformed-unicode",
+      "request": {
+        "method": "POST",
+        "path": "/public/responsibilities",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "authorization": "Bearer fixture-token",
+          "content-type": "application/vnd.waldo.responsibility.v0.2+json"
+        },
+        "bodyBase64": "eyJwcm90b2NvbFZlcnNpb24iOiIwLjIiLCJyZXF1ZXN0SWQiOiJyZXF1ZXN0X2ZpeHR1cmVfdW5pY29kZV8wMSIsImNvbW1hbmRUeXBlIjoicmVzcG9uc2liaWxpdHkuY2FwdHVyZSIsInByZXNlbmNlUmVnaXN0cmF0aW9uSWQiOiJwcmVzZW5jZV9yZWdpc3RyYXRpb25fMDEiLCJjbGllbnRJc3N1ZWRBdCI6IjIwMjYtMDgtMDZUMTI6MDA6MDAuMDAwWiIsInBheWxvYWQiOnsidXNlclN0YXRlbWVudCI6Iv8ifX0="
+      },
+      "harnessState": "allow",
+      "expected": {
+        "status": 400,
+        "problem": { "type": "https://api.heywaldo.com/problems/invalid-request", "title": "Request rejected", "status": 400, "code": "invalid_request" }
+      }
+    },
+    {
+      "name": "server-owned-field",
+      "request": {
+        "method": "POST",
+        "path": "/public/responsibilities",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "authorization": "Bearer fixture-token",
+          "content-type": "application/vnd.waldo.responsibility.v0.2+json"
+        },
+        "bodyUtf8": "{\"protocolVersion\":\"0.2\",\"requestId\":\"request_fixture_smuggle_01\",\"commandType\":\"responsibility.capture\",\"presenceRegistrationId\":\"presence_registration_01\",\"clientIssuedAt\":\"2026-08-06T12:00:00.000Z\",\"ownerId\":\"owner_attacker\",\"payload\":{\"userStatement\":\"Prepare a reviewable update.\"}}"
+      },
+      "harnessState": "allow",
+      "expected": {
+        "status": 400,
+        "problem": { "type": "https://api.heywaldo.com/problems/invalid-request", "title": "Request rejected", "status": 400, "code": "invalid_request" }
+      }
+    },
+    {
+      "name": "protocol-downgrade",
+      "request": {
+        "method": "POST",
+        "path": "/public/responsibilities",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.3+json",
+          "authorization": "Bearer fixture-token",
+          "content-type": "application/vnd.waldo.responsibility.v0.3+json"
+        },
+        "bodyUtf8": "{}"
+      },
+      "harnessState": "allow",
+      "expected": {
+        "status": 406,
+        "problem": { "type": "https://api.heywaldo.com/problems/not-acceptable", "title": "Unsupported representation", "status": 406, "code": "not_acceptable" }
+      }
+    },
+    {
+      "name": "missing-or-revoked-auth",
+      "request": {
+        "method": "POST",
+        "path": "/public/responsibilities",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "content-type": "application/vnd.waldo.responsibility.v0.2+json"
+        },
+        "bodyUtf8": "{\"protocolVersion\":\"0.2\",\"requestId\":\"request_fixture_auth_01\",\"commandType\":\"responsibility.capture\",\"presenceRegistrationId\":\"presence_registration_01\",\"clientIssuedAt\":\"2026-08-06T12:00:00.000Z\",\"payload\":{\"userStatement\":\"Prepare a reviewable update.\"}}"
+      },
+      "harnessState": "auth_denied",
+      "expected": {
+        "status": 401,
+        "problem": { "type": "https://api.heywaldo.com/problems/unauthorized", "title": "Authentication required", "status": 401, "code": "unauthorized" }
+      }
+    },
+    {
+      "name": "wrong-owner-root",
+      "request": {
+        "method": "POST",
+        "path": "/public/responsibilities",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "authorization": "Bearer fixture-token",
+          "content-type": "application/vnd.waldo.responsibility.v0.2+json"
+        },
+        "bodyUtf8": "{\"protocolVersion\":\"0.2\",\"requestId\":\"request_fixture_owner_01\",\"commandType\":\"responsibility.capture\",\"presenceRegistrationId\":\"presence_registration_01\",\"clientIssuedAt\":\"2026-08-06T12:00:00.000Z\",\"payload\":{\"userStatement\":\"Prepare a reviewable update.\"}}"
+      },
+      "harnessState": "owner_root_mismatch",
+      "expected": {
+        "status": 404,
+        "problem": { "type": "https://api.heywaldo.com/problems/not-found", "title": "Resource not found", "status": 404, "code": "not_found" }
+      }
+    },
+    {
+      "name": "digest-conflict",
+      "request": {
+        "method": "POST",
+        "path": "/public/responsibilities",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "authorization": "Bearer fixture-token",
+          "content-type": "application/vnd.waldo.responsibility.v0.2+json"
+        },
+        "bodyUtf8": "{\"protocolVersion\":\"0.2\",\"requestId\":\"request_fixture_digest_01\",\"commandType\":\"responsibility.capture\",\"presenceRegistrationId\":\"presence_registration_01\",\"clientIssuedAt\":\"2026-08-06T12:00:00.000Z\",\"payload\":{\"userStatement\":\"Prepare a reviewable update.\"}}"
+      },
+      "harnessState": "digest_conflict",
+      "expected": {
+        "status": 409,
+        "problem": { "type": "https://api.heywaldo.com/problems/request-conflict", "title": "Request conflict", "status": 409, "code": "request_conflict" }
+      }
+    },
+    {
+      "name": "stale-snapshot-or-cursor",
+      "request": {
+        "method": "GET",
+        "path": "/public/responsibilities/projection?fromExclusiveCursor=14&limit=25&snapshotId=snapshot_stale_01",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "authorization": "Bearer fixture-token"
+        }
+      },
+      "harnessState": "cursor_rejected",
+      "expected": {
+        "status": 409,
+        "problem": { "type": "https://api.heywaldo.com/problems/request-conflict", "title": "Request conflict", "status": 409, "code": "request_conflict" }
+      }
+    },
+    {
+      "name": "rate-limited",
+      "request": {
+        "method": "GET",
+        "path": "/public/responsibilities/projection?fromExclusiveCursor=0&limit=25",
+        "headers": {
+          "accept": "application/vnd.waldo.responsibility.v0.2+json",
+          "authorization": "Bearer fixture-token"
+        }
+      },
+      "harnessState": "rate_limited",
+      "expected": {
+        "status": 429,
+        "problem": { "type": "https://api.heywaldo.com/problems/rate-limited", "title": "Rate limited", "status": 429, "code": "rate_limited" }
+      }
+    }
+  ]
+}

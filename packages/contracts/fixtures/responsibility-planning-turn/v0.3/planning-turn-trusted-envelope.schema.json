@@ -1,0 +1,334 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.3"
+    },
+    "commandId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "commandType": {
+      "type": "string",
+      "const": "work_unit.request_planning_turn"
+    },
+    "ownerId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "owner",
+            "presence",
+            "service",
+            "provider",
+            "person"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "presenceId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "authenticatedSessionId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "ownerPolicyRevision": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "authAssurance": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "ownerRootRoutingVersion": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "aggregate": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "work_unit"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "expectedRevision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "expectedRevision"
+      ],
+      "additionalProperties": false
+    },
+    "requestDigest": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "correlationId": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "receivedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "adapterId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "adapterVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "modelRef": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "capabilityManifest": {
+          "$ref": "#/$defs/__schema3"
+        }
+      },
+      "required": [
+        "adapterId",
+        "adapterVersion",
+        "modelRef",
+        "capabilityManifest"
+      ],
+      "additionalProperties": false
+    },
+    "executor": {
+      "type": "object",
+      "properties": {
+        "executorId": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "executorVersion": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "capabilityManifest": {
+          "$ref": "#/$defs/__schema3"
+        }
+      },
+      "required": [
+        "executorId",
+        "executorVersion",
+        "capabilityManifest"
+      ],
+      "additionalProperties": false
+    },
+    "capabilityManifest": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "type": "string",
+          "const": "0.3"
+        },
+        "tools": {
+          "maxItems": 0,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "connectors": {
+          "maxItems": 0,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema0"
+          }
+        },
+        "filesystem": {
+          "type": "string",
+          "const": "none"
+        },
+        "shell": {
+          "type": "string",
+          "const": "none"
+        },
+        "network": {
+          "type": "string",
+          "const": "none"
+        },
+        "externalEffects": {
+          "type": "string",
+          "const": "none"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "tools",
+        "connectors",
+        "filesystem",
+        "shell",
+        "network",
+        "externalEffects"
+      ],
+      "additionalProperties": false
+    },
+    "authorityCeiling": {
+      "type": "object",
+      "properties": {
+        "providerPlanningTurns": {
+          "type": "number",
+          "const": 1
+        },
+        "tools": {
+          "type": "string",
+          "const": "none"
+        },
+        "connectors": {
+          "type": "string",
+          "const": "none"
+        },
+        "externalEffects": {
+          "type": "string",
+          "const": "none"
+        },
+        "outcomeMutation": {
+          "type": "string",
+          "const": "none"
+        },
+        "evidence": {
+          "type": "string",
+          "const": "none"
+        },
+        "verification": {
+          "type": "string",
+          "const": "none"
+        },
+        "acceptance": {
+          "type": "string",
+          "const": "none"
+        },
+        "closure": {
+          "type": "string",
+          "const": "none"
+        }
+      },
+      "required": [
+        "providerPlanningTurns",
+        "tools",
+        "connectors",
+        "externalEffects",
+        "outcomeMutation",
+        "evidence",
+        "verification",
+        "acceptance",
+        "closure"
+      ],
+      "additionalProperties": false
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "governedInputs": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema4"
+          }
+        }
+      },
+      "required": [
+        "governedInputs"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "commandId",
+    "commandType",
+    "ownerId",
+    "actor",
+    "presenceId",
+    "authenticatedSessionId",
+    "ownerPolicyRevision",
+    "authAssurance",
+    "ownerRootRoutingVersion",
+    "aggregate",
+    "requestDigest",
+    "correlationId",
+    "receivedAt",
+    "provider",
+    "executor",
+    "capabilityManifest",
+    "authorityCeiling",
+    "payload"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema1": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema2": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "__schema3": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "revision": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema4": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/__schema0"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema2"
+        }
+      },
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-planning-turn:0.3:trusted-envelope",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}

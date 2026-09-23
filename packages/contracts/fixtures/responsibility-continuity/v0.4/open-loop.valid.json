@@ -1,0 +1,30 @@
+{
+  "protocolVersion": "0.4",
+  "id": "loop_fixture",
+  "ownerId": "owner_fixture",
+  "revision": 1,
+  "outcome": {
+    "id": "outcome_fixture",
+    "revision": 1
+  },
+  "workUnit": null,
+  "unresolvedConsequence": {
+    "kind": "unverified",
+    "ref": "consequence_fixture"
+  },
+  "responsibleParty": {
+    "kind": "waldo",
+    "ref": null
+  },
+  "nextTrigger": {
+    "kind": "manual",
+    "ref": "trigger_fixture"
+  },
+  "evidenceGapRefs": [
+    "gap_fixture"
+  ],
+  "reEntryPointId": "reentry_fixture",
+  "attentionClass": "normal",
+  "state": "open",
+  "updatedAt": "2026-08-13T12:00:00.000Z"
+}

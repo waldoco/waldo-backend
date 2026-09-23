@@ -1,0 +1,9 @@
+{
+  "protocolVersion": "0.3",
+  "requestId": "planning_cancel_fixture_01",
+  "commandType": "work_unit.cancel_planning_turn",
+  "presenceRegistrationId": "presence_registration_01",
+  "executionRequestId": "execution_request_01",
+  "expectedCancellationGeneration": 0,
+  "clientIssuedAt": "2026-08-07T08:00:03.000Z"
+}

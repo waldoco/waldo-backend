@@ -1,0 +1,766 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/__schema0"
+    },
+    {
+      "$ref": "#/$defs/__schema33"
+    }
+  ],
+  "$defs": {
+    "__schema0": {
+      "type": "object",
+      "properties": {
+        "requestDigest": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "request": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "answer": {
+          "$ref": "#/$defs/__schema21"
+        },
+        "decision": {
+          "$ref": "#/$defs/__schema22"
+        },
+        "authorityDisposition": {
+          "type": "string",
+          "const": "granted"
+        },
+        "grant": {
+          "type": "object",
+          "properties": {
+            "protocolVersion": {
+              "$ref": "#/$defs/__schema3"
+            },
+            "id": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "ownerId": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "revision": {
+              "$ref": "#/$defs/__schema5"
+            },
+            "judgmentRequestId": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "judgmentRequestRevision": {
+              "$ref": "#/$defs/__schema5"
+            },
+            "judgmentDecisionId": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "grantor": {
+              "$ref": "#/$defs/__schema23"
+            },
+            "grantee": {
+              "$ref": "#/$defs/__schema26"
+            },
+            "subject": {
+              "$ref": "#/$defs/__schema27"
+            },
+            "purpose": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "effectFamily": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "resources": {
+              "$ref": "#/$defs/__schema13"
+            },
+            "scopes": {
+              "$ref": "#/$defs/__schema15"
+            },
+            "audiences": {
+              "$ref": "#/$defs/__schema16"
+            },
+            "argumentDigest": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "contextDigest": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "artifactDigest": {
+              "$ref": "#/$defs/__schema28"
+            },
+            "useLimit": {
+              "$ref": "#/$defs/__schema29"
+            },
+            "usesConsumed": {
+              "$ref": "#/$defs/__schema30"
+            },
+            "nextUseIndex": {
+              "$ref": "#/$defs/__schema31"
+            },
+            "validFrom": {
+              "$ref": "#/$defs/__schema17"
+            },
+            "expiresAt": {
+              "$ref": "#/$defs/__schema17"
+            },
+            "revocationGeneration": {
+              "$ref": "#/$defs/__schema24"
+            },
+            "state": {
+              "$ref": "#/$defs/__schema32"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/__schema17"
+            },
+            "updatedAt": {
+              "$ref": "#/$defs/__schema17"
+            }
+          },
+          "required": [
+            "protocolVersion",
+            "id",
+            "ownerId",
+            "revision",
+            "judgmentRequestId",
+            "judgmentRequestRevision",
+            "judgmentDecisionId",
+            "grantor",
+            "grantee",
+            "subject",
+            "purpose",
+            "effectFamily",
+            "resources",
+            "scopes",
+            "audiences",
+            "argumentDigest",
+            "contextDigest",
+            "artifactDigest",
+            "useLimit",
+            "usesConsumed",
+            "nextUseIndex",
+            "validFrom",
+            "expiresAt",
+            "revocationGeneration",
+            "state",
+            "createdAt",
+            "updatedAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "requestDigest",
+        "request",
+        "answer",
+        "decision",
+        "authorityDisposition",
+        "grant"
+      ],
+      "additionalProperties": false
+    },
+    "__schema1": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "__schema2": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "question": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "options": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "recommendation": {
+          "$ref": "#/$defs/__schema10"
+        },
+        "evidence": {
+          "$ref": "#/$defs/__schema11"
+        },
+        "risk": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "reversibility": {
+          "$ref": "#/$defs/__schema7"
+        },
+        "affectedDigest": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "requestedAuthority": {
+          "$ref": "#/$defs/__schema12"
+        },
+        "reEntryPointId": {
+          "$ref": "#/$defs/__schema18"
+        },
+        "expiresAt": {
+          "$ref": "#/$defs/__schema17"
+        },
+        "decisionId": {
+          "$ref": "#/$defs/__schema19"
+        },
+        "state": {
+          "$ref": "#/$defs/__schema20"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/__schema17"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/__schema17"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "subject",
+        "question",
+        "options",
+        "recommendation",
+        "evidence",
+        "risk",
+        "reversibility",
+        "affectedDigest",
+        "requestedAuthority",
+        "reEntryPointId",
+        "expiresAt",
+        "decisionId",
+        "state",
+        "createdAt",
+        "updatedAt"
+      ],
+      "additionalProperties": false
+    },
+    "__schema3": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "__schema4": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema5": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema6": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "outcome",
+            "work_unit"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema7": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "digest": {
+          "$ref": "#/$defs/__schema1"
+        }
+      },
+      "required": [
+        "ref",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema8": {
+      "minItems": 2,
+      "maxItems": 8,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema9"
+      }
+    },
+    "__schema9": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "authorityDisposition": {
+          "type": "string",
+          "enum": [
+            "grant",
+            "refuse"
+          ]
+        },
+        "content": {
+          "$ref": "#/$defs/__schema7"
+        }
+      },
+      "required": [
+        "id",
+        "authorityDisposition",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "__schema10": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema4"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema11": {
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema7"
+      }
+    },
+    "__schema12": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "purpose": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "effectFamily": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "resources": {
+              "$ref": "#/$defs/__schema13"
+            },
+            "scopes": {
+              "$ref": "#/$defs/__schema15"
+            },
+            "audiences": {
+              "$ref": "#/$defs/__schema16"
+            },
+            "argumentDigest": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "contextDigest": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "artifactDigest": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/__schema1"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "useLimit": {
+              "type": "number",
+              "const": 1
+            },
+            "validUntil": {
+              "$ref": "#/$defs/__schema17"
+            }
+          },
+          "required": [
+            "purpose",
+            "effectFamily",
+            "resources",
+            "scopes",
+            "audiences",
+            "argumentDigest",
+            "contextDigest",
+            "artifactDigest",
+            "useLimit",
+            "validUntil"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema13": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema14"
+      }
+    },
+    "__schema14": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "ref": {
+          "$ref": "#/$defs/__schema4"
+        }
+      },
+      "required": [
+        "kind",
+        "ref"
+      ],
+      "additionalProperties": false
+    },
+    "__schema15": {
+      "minItems": 1,
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema4"
+      }
+    },
+    "__schema16": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema4"
+      }
+    },
+    "__schema17": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema18": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema4"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema19": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema4"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema20": {
+      "type": "string",
+      "enum": [
+        "open",
+        "answered",
+        "expired",
+        "withdrawn",
+        "superseded"
+      ]
+    },
+    "__schema21": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "requestId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "commandType": {
+          "type": "string",
+          "const": "judgment.answer"
+        },
+        "presenceRegistrationId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "aggregate": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "judgment_request"
+            },
+            "id": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "expectedRevision": {
+              "$ref": "#/$defs/__schema5"
+            }
+          },
+          "required": [
+            "kind",
+            "id",
+            "expectedRevision"
+          ],
+          "additionalProperties": false
+        },
+        "correlationId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "clientIssuedAt": {
+          "$ref": "#/$defs/__schema17"
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "selectedOptionId": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "displayedRequestDigest": {
+              "$ref": "#/$defs/__schema1"
+            }
+          },
+          "required": [
+            "selectedOptionId",
+            "displayedRequestDigest"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "requestId",
+        "commandType",
+        "presenceRegistrationId",
+        "aggregate",
+        "clientIssuedAt",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "__schema22": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "ownerId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "judgmentRequestId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "judgmentRequestRevision": {
+          "$ref": "#/$defs/__schema5"
+        },
+        "subject": {
+          "$ref": "#/$defs/__schema6"
+        },
+        "selectedOptionId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "displayedRequestDigest": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "actor": {
+          "$ref": "#/$defs/__schema23"
+        },
+        "presenceId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "authenticatedSessionId": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "ownerPolicyRevision": {
+          "$ref": "#/$defs/__schema24"
+        },
+        "authAssurance": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "state": {
+          "$ref": "#/$defs/__schema25"
+        },
+        "decidedAt": {
+          "$ref": "#/$defs/__schema17"
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "id",
+        "ownerId",
+        "revision",
+        "judgmentRequestId",
+        "judgmentRequestRevision",
+        "subject",
+        "selectedOptionId",
+        "displayedRequestDigest",
+        "actor",
+        "presenceId",
+        "authenticatedSessionId",
+        "ownerPolicyRevision",
+        "authAssurance",
+        "state",
+        "decidedAt"
+      ],
+      "additionalProperties": false
+    },
+    "__schema23": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "owner"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema4"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "__schema24": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema25": {
+      "type": "string",
+      "const": "recorded"
+    },
+    "__schema26": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "service",
+            "presence",
+            "person"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/__schema4"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "__schema27": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "work_unit"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema4"
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema5"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision"
+      ],
+      "additionalProperties": false
+    },
+    "__schema28": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/__schema1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema29": {
+      "type": "number",
+      "const": 1
+    },
+    "__schema30": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "__schema31": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2
+    },
+    "__schema32": {
+      "type": "string",
+      "enum": [
+        "active",
+        "exhausted",
+        "expired",
+        "revoked",
+        "superseded"
+      ]
+    },
+    "__schema33": {
+      "type": "object",
+      "properties": {
+        "requestDigest": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "request": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "answer": {
+          "$ref": "#/$defs/__schema21"
+        },
+        "decision": {
+          "$ref": "#/$defs/__schema22"
+        },
+        "authorityDisposition": {
+          "type": "string",
+          "const": "refused"
+        }
+      },
+      "required": [
+        "requestDigest",
+        "request",
+        "answer",
+        "decision",
+        "authorityDisposition"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-judgment-authority:0.4:judgment-authority-binding",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}

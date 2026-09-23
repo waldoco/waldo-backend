@@ -1,0 +1,98 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "client-owned-authority",
+      "value": {
+        "protocolVersion": "0.4",
+        "trust": "untrusted_content",
+        "adapter": {
+          "category": "channel_adapter",
+          "id": "fake_channel_fixture",
+          "version": "1.0.0",
+          "manifest": {
+            "id": "channel_manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "sourceAccountRef": "external_account_fixture",
+        "conversationRef": "conversation_fixture",
+        "messageRef": "message_fixture",
+        "dedupeKey": "dedupe_fixture",
+        "content": "Handle this fixture.",
+        "contentDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "receivedAt": "2026-08-13T12:00:00.000Z",
+        "authorityGrant": "attacker"
+      }
+    },
+    {
+      "name": "transport-done-closes-outcome",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "settlement_fixture",
+        "ownerId": "owner_fixture",
+        "deliveryIntentId": "delivery_fixture",
+        "deliveryIntentRevision": 1,
+        "adapter": {
+          "category": "channel_adapter",
+          "id": "fake_channel_fixture",
+          "version": "1.0.0",
+          "manifest": {
+            "id": "channel_manifest_fixture",
+            "version": "1.0.0",
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        },
+        "state": "delivered",
+        "transportMessageRef": "transport_message_fixture",
+        "observationDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "observedAt": "2026-08-13T12:02:00.000Z",
+        "outcomeState": "completed"
+      }
+    },
+    {
+      "name": "channel-as-presence",
+      "value": {
+        "category": "channel_adapter",
+        "id": "fake_channel_fixture",
+        "version": "1.0.0",
+        "manifest": {
+          "id": "channel_manifest_fixture",
+          "version": "1.0.0",
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        }
+      }
+    },
+    {
+      "name": "conversation-client-owned-owner",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "conversation_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "clientIssuedAt": "2026-08-13T12:00:00.000Z",
+        "commandType": "conversation.send",
+        "payload": {
+          "content": "Continue this work.",
+          "contentDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "ownerId": "owner_attacker"
+      }
+    },
+    {
+      "name": "capture-client-owned-authority",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "capture_request_fixture",
+        "presenceRegistrationId": "presence_fixture",
+        "clientIssuedAt": "2026-08-13T12:00:00.000Z",
+        "commandType": "responsibility.capture",
+        "payload": {
+          "userStatement": "Handle this fixture.",
+          "statementDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "authorityGrant": "grant_attacker"
+      }
+    }
+  ]
+}

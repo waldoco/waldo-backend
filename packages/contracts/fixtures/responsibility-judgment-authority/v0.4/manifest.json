@@ -1,0 +1,57 @@
+{
+  "protocolName": "responsibility-judgment-authority",
+  "protocolVersion": "0.4",
+  "mediaType": "application/vnd.waldo.responsibility.v0.4+json",
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "files": [
+    {
+      "path": "authority-grant.schema.json",
+      "sha256": "sha256:1d30509ba4f5c5b069a0ac3d0d7e91cf70c7d4b378e1d9106ac29623eeb1241c"
+    },
+    {
+      "path": "authority-grant.valid.json",
+      "sha256": "sha256:a9fe34a5a49c888e5821a0f2076f2357f7a0db6e2ab5d921f07ddb61e1872fce"
+    },
+    {
+      "path": "judgment-answer.schema.json",
+      "sha256": "sha256:b525493ad1706e10631b957209cc668cd1932689b74f1d8d35edbb41d6df915c"
+    },
+    {
+      "path": "judgment-answer.valid.json",
+      "sha256": "sha256:acd8beaa916a7c964ba3783fe2ef1363e9d064ac3ff8ed3a0b7d046cc396d61e"
+    },
+    {
+      "path": "judgment-authority-binding.schema.json",
+      "sha256": "sha256:5daa808b4d5d2d4f9b709847bc8542ec89a8481363ff03d5d9d1167dafcf5f04"
+    },
+    {
+      "path": "judgment-authority-binding.valid.json",
+      "sha256": "sha256:031affd1253ef12a9c67cfbccf5795f5b5fe4447e13d8ccce76ed72a9eff8177"
+    },
+    {
+      "path": "judgment-authority-refusal.valid.json",
+      "sha256": "sha256:a84b7d27966e206c5031850eaf80376dc3440734bc75bcd6afe28f4a92382225"
+    },
+    {
+      "path": "judgment-authority.rejections.json",
+      "sha256": "sha256:1686e1b4041be613fbe60b5da7299845a669aff6a62ca35b9b1ff96597ca63e3"
+    },
+    {
+      "path": "judgment-decision.schema.json",
+      "sha256": "sha256:45bb5fbde5f68876c6ce0bdee675c62dcdf811cb1edfb6ee771467d1140d9e8d"
+    },
+    {
+      "path": "judgment-decision.valid.json",
+      "sha256": "sha256:dbf17af36ca5fd2d4d39b296ac59f7ef01680cc10db72eebbf90141467845686"
+    },
+    {
+      "path": "judgment-request.schema.json",
+      "sha256": "sha256:c4ad6ef3580bc06e5eb6375622552ed3945d22c750a73d8f13b7ff63942fe7a2"
+    },
+    {
+      "path": "judgment-request.valid.json",
+      "sha256": "sha256:a53e488d8f14868f9e016bcabef93eae8ac4cc7665ab76f285970aeae73cc473"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "protocolVersion": "0.1",
+      "query": "fromExclusiveCursor=0&limit=25"
+    },
+    {
+      "protocolVersion": "0.2",
+      "query": "fromExclusiveCursor=14&limit=25&snapshotId=snapshot_01"
+    }
+  ]
+}

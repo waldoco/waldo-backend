@@ -1,0 +1,26 @@
+{
+  "protocolVersion": "0.4",
+  "id": "reentry_fixture",
+  "ownerId": "owner_fixture",
+  "revision": 1,
+  "subject": {
+    "kind": "outcome",
+    "id": "outcome_fixture",
+    "revision": 1
+  },
+  "mode": "verification",
+  "summary": "Verify the remaining consequence.",
+  "lastStableEventId": "event_fixture",
+  "nextAction": {
+    "kind": "verify",
+    "ref": "check_fixture"
+  },
+  "requiredContextRecipeRef": "recipe_fixture",
+  "requiredContextRecipeDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+  "evidenceGapRefs": [
+    "gap_fixture"
+  ],
+  "artifactRefs": [],
+  "eventCursor": 1,
+  "expiresAt": null
+}

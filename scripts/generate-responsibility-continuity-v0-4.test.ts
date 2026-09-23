@@ -1,0 +1,10 @@
+import { describe, it } from 'vitest';
+import { buildResponsibilityContinuityV04Bundle } from '../packages/contracts/src';
+import { writeResponsibilityV04FixtureBundle } from './write-responsibility-v0-4-fixture-bundle';
+describe('generate continuity v0.4', () => {
+  it('writes fixtures', () =>
+    writeResponsibilityV04FixtureBundle(
+      new URL('../packages/contracts/fixtures/responsibility-continuity/v0.4/', import.meta.url),
+      buildResponsibilityContinuityV04Bundle,
+    ));
+});

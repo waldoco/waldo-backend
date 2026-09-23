@@ -1,0 +1,220 @@
+{
+  "protocolVersion": "0.4",
+  "cases": [
+    {
+      "name": "provider-self-acceptance",
+      "value": {
+        "protocolVersion": "0.4",
+        "submissionId": "submission_fixture",
+        "source": {
+          "kind": "provider",
+          "id": "provider_fixture",
+          "version": "1.0.0"
+        },
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_fixture",
+          "revision": 1
+        },
+        "acceptanceCheckId": "check_fixture",
+        "claim": {
+          "ref": "claim_fixture",
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "artifactRefs": [],
+        "observedAt": "2026-08-13T12:00:00.000Z",
+        "acceptance": "accepted"
+      }
+    },
+    {
+      "name": "unavailable-as-passed",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "verification_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture",
+          "revision": 1
+        },
+        "acceptanceCheck": {
+          "id": "check_fixture",
+          "revision": 1,
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "evidence": [
+          {
+            "id": "evidence_fixture",
+            "revision": 1,
+            "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+          }
+        ],
+        "evidenceSetDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "methodVersion": "1.0.0",
+        "findings": null,
+        "verifier": {
+          "id": "verifier_fixture",
+          "version": "1.0.0",
+          "availability": "unavailable",
+          "independentFromProducer": true,
+          "disclosureRef": "disclosure_fixture"
+        },
+        "state": "passed",
+        "verifiedAt": "2026-08-13T12:02:00.000Z"
+      }
+    },
+    {
+      "name": "inline-evidence",
+      "value": {
+        "protocolVersion": "0.4",
+        "submissionId": "submission_fixture",
+        "source": {
+          "kind": "provider",
+          "id": "provider_fixture",
+          "version": "1.0.0"
+        },
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_fixture",
+          "revision": 1
+        },
+        "acceptanceCheckId": "check_fixture",
+        "claim": {
+          "ref": "claim_fixture",
+          "digest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
+        },
+        "artifactRefs": [],
+        "observedAt": "2026-08-13T12:00:00.000Z",
+        "inlineEvidence": {
+          "secret": true
+        }
+      }
+    },
+    {
+      "name": "provider-explicit-acceptance",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture",
+          "revision": 1
+        },
+        "evidenceSetDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "verificationIds": [
+          "verification_fixture"
+        ],
+        "decision": "accepted",
+        "reasonRef": null,
+        "recordedAt": "2026-08-13T12:03:00.000Z",
+        "actor": {
+          "kind": "provider",
+          "id": "provider_fixture"
+        },
+        "mode": "explicit_owner",
+        "delegatedPolicy": null
+      }
+    },
+    {
+      "name": "delegated-without-policy",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "acceptance_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "outcome": {
+          "id": "outcome_fixture",
+          "revision": 1
+        },
+        "evidenceSetDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "verificationIds": [
+          "verification_fixture"
+        ],
+        "decision": "accepted",
+        "reasonRef": null,
+        "recordedAt": "2026-08-13T12:03:00.000Z",
+        "actor": {
+          "kind": "service",
+          "id": "service_fixture"
+        },
+        "mode": "delegated_policy",
+        "delegatedPolicy": null
+      }
+    },
+    {
+      "name": "acceptance-command-client-authority",
+      "value": {
+        "protocolVersion": "0.4",
+        "requestId": "acceptance_request_fixture",
+        "commandType": "acceptance.record",
+        "presenceRegistrationId": "presence_fixture",
+        "aggregate": {
+          "kind": "outcome",
+          "id": "outcome_fixture",
+          "expectedRevision": 1
+        },
+        "decision": "accept",
+        "evidenceSetDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "verificationIds": [
+          "verification_fixture"
+        ],
+        "reasonRef": null,
+        "clientIssuedAt": "2026-08-13T12:03:00.000Z",
+        "authorityGrant": "grant_attacker"
+      }
+    },
+    {
+      "name": "candidate-with-admitted-time",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "evidence_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_fixture",
+          "revision": 1
+        },
+        "acceptanceCheckId": "check_fixture",
+        "acceptanceCheckRevision": 1,
+        "claimRef": "claim_fixture",
+        "claimDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "source": {
+          "kind": "provider",
+          "id": "provider_fixture",
+          "version": "1.0.0"
+        },
+        "artifactRefs": [],
+        "state": "candidate",
+        "admittedAt": "2026-08-13T12:01:00.000Z"
+      }
+    },
+    {
+      "name": "admitted-without-time",
+      "value": {
+        "protocolVersion": "0.4",
+        "id": "evidence_fixture",
+        "ownerId": "owner_fixture",
+        "revision": 1,
+        "subject": {
+          "kind": "work_unit",
+          "id": "work_fixture",
+          "revision": 1
+        },
+        "acceptanceCheckId": "check_fixture",
+        "acceptanceCheckRevision": 1,
+        "claimRef": "claim_fixture",
+        "claimDigest": "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        "source": {
+          "kind": "provider",
+          "id": "provider_fixture",
+          "version": "1.0.0"
+        },
+        "artifactRefs": [],
+        "state": "admitted",
+        "admittedAt": null
+      }
+    }
+  ]
+}

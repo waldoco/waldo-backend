@@ -1,0 +1,290 @@
+{
+  "protocolVersion": "0.1",
+  "cases": [
+    {
+      "name": "owner",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "ownerId": "client_claim"
+      }
+    },
+    {
+      "name": "actor",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "actor": {
+          "kind": "owner",
+          "id": "client_claim"
+        }
+      }
+    },
+    {
+      "name": "actor role",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "actorRole": "owner"
+      }
+    },
+    {
+      "name": "routing target",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "targetDurableObjectId": "client_claim"
+      }
+    },
+    {
+      "name": "routing version",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "ownerRootRoutingVersion": 1
+      }
+    },
+    {
+      "name": "authority grant",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "authorityGrant": {
+          "id": "client_claim"
+        }
+      }
+    },
+    {
+      "name": "credential",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "credential": {
+          "ref": "client_claim"
+        }
+      }
+    },
+    {
+      "name": "credential handle",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "credentialHandle": "client_claim"
+      }
+    },
+    {
+      "name": "provider selector",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "provider": "client_claim"
+      }
+    },
+    {
+      "name": "model selector",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "model": "client_claim"
+      }
+    },
+    {
+      "name": "acceptance",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "acceptance": {
+          "decision": "accepted"
+        }
+      }
+    },
+    {
+      "name": "closure",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled."
+        },
+        "closure": {
+          "state": "closed"
+        }
+      }
+    },
+    {
+      "name": "nested owner",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled.",
+          "ownerId": "client_claim"
+        }
+      }
+    },
+    {
+      "name": "nested authority grant",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled.",
+          "authorityGrant": {
+            "id": "client_claim"
+          }
+        }
+      }
+    },
+    {
+      "name": "nested credential",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled.",
+          "credential": {
+            "ref": "client_claim"
+          }
+        }
+      }
+    },
+    {
+      "name": "nested provider selector",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled.",
+          "provider": "client_claim"
+        }
+      }
+    },
+    {
+      "name": "nested model selector",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled.",
+          "model": "client_claim"
+        }
+      }
+    },
+    {
+      "name": "nested acceptance",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled.",
+          "acceptance": {
+            "decision": "accepted"
+          }
+        }
+      }
+    },
+    {
+      "name": "nested closure",
+      "request": {
+        "protocolVersion": "0.1",
+        "requestId": "request_capture_01",
+        "commandType": "responsibility.capture",
+        "presenceRegistrationId": "presence_registration_01",
+        "clientIssuedAt": "2026-08-05T12:00:00Z",
+        "payload": {
+          "userStatement": "Make sure the reviewed update is handled.",
+          "closure": {
+            "state": "closed"
+          }
+        }
+      }
+    }
+  ]
+}

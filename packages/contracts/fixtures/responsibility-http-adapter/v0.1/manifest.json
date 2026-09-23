@@ -1,0 +1,12 @@
+{
+  "adapterContractVersion": "0.1",
+  "responsibilityProtocolVersions": ["0.1", "0.2"],
+  "offlineCommands": "none",
+  "proofLevel": "adapter_conformance_fixture",
+  "files": [
+    { "path": "capture-v0.1.valid.json", "sha256": "sha256:e52373cab7be93aebe8070d5bd55442eefe389bfef9e15420770f5d88b5d43b0" },
+    { "path": "capture-v0.2.valid.json", "sha256": "sha256:1c3c822ff5b3fe8345a650f416b1272b190314c19e9176ea0cf9f7bb512d6965" },
+    { "path": "projection-queries.valid.json", "sha256": "sha256:d01e4a5ac94fbc8fa7a2fcf9b0c53fd7c166de8a6b8a25de0a4cd5b46b41055a" },
+    { "path": "rejections.json", "sha256": "sha256:030e500cd4ee58fe6024d5d9e18804134d18370cc46480a6e2b300770e6ec648" }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "protocolVersion": "0.4",
+  "id": "effect_reconciliation_not_applied_fixture_01",
+  "ownerId": "owner_fixture_01",
+  "intentId": "effect_intent_fixture_01",
+  "intentDigest": "sha256:262e5d32c602c896410bfeb4c7cc0a26fd4b5b291f01d953938cba007f478c89",
+  "reconciliationKey": "effect_reconciliation_fixture_01",
+  "revision": 1,
+  "attempt": 1,
+  "checkedAt": "2026-08-08T18:11:03.000Z",
+  "state": "authoritative_not_applied",
+  "receiptId": "effect_receipt_fixture_01",
+  "observation": {
+    "ref": "reconciliation_observation_fixture_01",
+    "digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "kind": "authoritative_read_back"
+  }
+}

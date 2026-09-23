@@ -1,0 +1,63 @@
+{
+  "formatVersion": 1,
+  "protocolVersion": "0.1",
+  "previousVersionCompatibility": "not_run",
+  "files": [
+    {
+      "path": "canonicalization-vectors.json",
+      "sha256": "sha256:8cd17b5c982b42621ce103595513a49d1a8d118515a5d51e9f06940325b85866"
+    },
+    {
+      "path": "domain-event.schema.json",
+      "sha256": "sha256:b5b16a06fceafc03cc864f72790eb614f4d7426c89ea86137b5c0cd951f4f4b4"
+    },
+    {
+      "path": "observations.json",
+      "sha256": "sha256:947237e332f85678d5baf33448161ec62d733f9aab91b4225c4d94ba185b6cd0"
+    },
+    {
+      "path": "presence-capability-v0.1.schema.json",
+      "sha256": "sha256:6fec88df234ecce0bfb57852db6cb2b373ca5e7564fa83c828456c9b93ff7627"
+    },
+    {
+      "path": "presence-capability.json",
+      "sha256": "sha256:f38b95e895d3540f140c0b2b5848676bab2bcae0c3e162832e62ccde2338cbd2"
+    },
+    {
+      "path": "projection-delivery.json",
+      "sha256": "sha256:4f40dcea3545039749c8163fde5d7b1e965084482dfb3487a9d366c335f72821"
+    },
+    {
+      "path": "projection-page.schema.json",
+      "sha256": "sha256:df359a15cf4497e414c7a0181889d5fbba5687057c3db797e87e76c577008905"
+    },
+    {
+      "path": "request-digests.json",
+      "sha256": "sha256:f0dfd94d60d71fa6c6bbaa2b4171e0af49c87442c6007c241f7090eb3dbf321c"
+    },
+    {
+      "path": "surface-command-request.schema.json",
+      "sha256": "sha256:4041acc19ef858a663045e45064b1befce56ec08e2e47bf83e79a71fe6ea53ec"
+    },
+    {
+      "path": "surface-command.rejections.json",
+      "sha256": "sha256:bc699b4a1384de05c0a3ddce9b49905933b1f85a3406e3c18f104544bc9de1b6"
+    },
+    {
+      "path": "surface-command.valid.json",
+      "sha256": "sha256:5c7462ad98684981b6a59ae9d442f0ba43638468fe1b0b37dc0c91770985d6c0"
+    },
+    {
+      "path": "trusted-command-envelope.schema.json",
+      "sha256": "sha256:375aea1d1ee684cb83a8d3ae593307f2ab1f0e122b15c8d630ad4e4c0be222c4"
+    },
+    {
+      "path": "trusted-command.valid.json",
+      "sha256": "sha256:bbce0348f1ff13e084a79ca9041769c9f621efb8204ce89124b6d475c2e7b6b6"
+    },
+    {
+      "path": "waldo-json-sorted-keys-v1.md",
+      "sha256": "sha256:d7dcb3827d80c7546d242071607bd533596e54c903ee0878450b268acafa2fa0"
+    }
+  ]
+}

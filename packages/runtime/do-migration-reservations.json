@@ -1,0 +1,33 @@
+{
+  "allocation": "rebase_then_append",
+  "migrations": [
+    {
+      "version": 1,
+      "name": "hey10-base-context-schema"
+    },
+    {
+      "version": 2,
+      "name": "hey144-goals-schema"
+    },
+    {
+      "version": 3,
+      "name": "responsibility-domain-v0-2"
+    },
+    {
+      "version": 4,
+      "name": "responsibility-canonical-authority-v0-1"
+    },
+    {
+      "version": 5,
+      "name": "responsibility-planning-harness-v0-3"
+    },
+    {
+      "version": 6,
+      "name": "responsibility-execution-writer-v0-4"
+    },
+    {
+      "version": 7,
+      "name": "responsibility-judgment-authority-v0-5"
+    }
+  ]
+}

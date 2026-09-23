@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "const": "0.5"
+    },
+    "fromExclusiveCursor": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 256
+    },
+    "snapshotId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "fromExclusiveCursor",
+    "limit"
+  ],
+  "additionalProperties": false,
+  "$id": "urn:waldo:protocol:responsibility-judgment-authority:0.5:judgment-projection-query",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants",
+  "x-waldo-offline-commands": "none"
+}

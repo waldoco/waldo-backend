@@ -1,0 +1,501 @@
+[
+  {
+    "_note": "Read-only snapshot reconstructed from waldo-brain ADR Markdown frontmatter for guard-adr-status.mjs. Do not hand-edit ADR statuses here; resync from the pinned source directory and apply accepted supersedes relationships.",
+    "_resyncSource": "https://github.com/Pin4sf/waldo-brain/tree/be08c4afa6f356c66600e73ae0bf54e5d7a3a158/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29",
+    "_resyncMethod": "agent-rules/scripts/sync.mjs frontmatter scan at _sourceCommit, plus accepted supersedes relationships such as ADR-0084 over ADR-0043",
+    "_sourceCommit": "be08c4afa6f356c66600e73ae0bf54e5d7a3a158",
+    "_snapshot": true
+  },
+  {
+    "adr": "0001",
+    "title": "Separate app/backend/web repos with backend-owned contracts and generated public API boundary",
+    "status": "accepted",
+    "file": "0001-three-repos-not-monorepo.md"
+  },
+  {
+    "adr": "0002",
+    "title": "Agent runtime in Cloudflare Durable Objects; health data in Supabase Postgres",
+    "status": "accepted",
+    "file": "0002-cf-durable-objects-agent-supabase-health.md"
+  },
+  {
+    "adr": "0003",
+    "title": "Gemma 4 27B (CF Workers AI) for ~95% of LLM calls; Claude Sonnet 4.6 reserved for ~5% pattern analysis",
+    "status": "superseded",
+    "file": "0003-gemma4-primary-sonnet-for-reasoning.md"
+  },
+  {
+    "adr": "0004",
+    "title": "All LLM traffic routes through Cloudflare AI Gateway with a single project-scoped key",
+    "status": "accepted",
+    "file": "0004-cf-ai-gateway-single-llm-gateway.md"
+  },
+  {
+    "adr": "0005",
+    "title": "Memory blocks are typed into 5 halls (`facts` / `events` / `discoveries` / `preferences` / `advice`), not a flat key-value table",
+    "status": "accepted",
+    "file": "0005-five-typed-memory-halls.md"
+  },
+  {
+    "adr": "0006",
+    "title": "Tools never write to `memory_blocks` directly; they stage to `memory_inbox` and the Scribe applies on a nightly merge",
+    "status": "accepted",
+    "file": "0006-scribe-inbox-merge-not-direct-writes.md"
+  },
+  {
+    "adr": "0007",
+    "title": "Episodes older than 90 days move from DO SQLite to Cloudflare R2 JSONL archive; pgvector in Supabase handles semantic recall beyond that",
+    "status": "accepted",
+    "file": "0007-r2-cold-archive-after-90-days.md"
+  },
+  {
+    "adr": "0008",
+    "title": "Tools are scoped per trigger type via a static ACL map; no trigger gets all 13 tools",
+    "status": "accepted",
+    "file": "0008-per-trigger-tool-acl-scoping.md"
+  },
+  {
+    "adr": "0009",
+    "title": "Hard cap of 3 proactive pushes per user per day, enforced in DO `daily_push_budget` table",
+    "status": "proposed",
+    "file": "0009-three-pushes-per-day-hard-cap.md"
+  },
+  {
+    "adr": "0010",
+    "title": "HealthKit Background Delivery (with `HKAnchoredObjectQuery` anchors) is the sanctioned 24/7 stress-detection path on iOS, not polling",
+    "status": "accepted",
+    "file": "0010-healthkit-background-delivery.md"
+  },
+  {
+    "adr": "0011",
+    "title": "CRS algorithm is grounded in SAFTE-FAST (US Army fatigue research), not derived from OURA-style readiness",
+    "status": "accepted",
+    "file": "0011-safte-fast-grounding-for-crs.md"
+  },
+  {
+    "adr": "0012",
+    "title": "Channel priority: Telegram (grammY) and APNs/FCM for V1; WhatsApp deferred to Phase 2",
+    "status": "accepted",
+    "file": "0012-telegram-apns-first-whatsapp-phase2.md"
+  },
+  {
+    "adr": "0013",
+    "title": "Chat renders inline rich cards (Generative UI), not plain text only",
+    "status": "accepted",
+    "file": "0013-inline-generative-ui-cards-in-chat.md"
+  },
+  {
+    "adr": "0014",
+    "title": "Waldo can inject new messages into existing chat threads when new biological data is relevant to that thread's topic",
+    "status": "accepted",
+    "file": "0014-proactive-thread-injection.md"
+  },
+  {
+    "adr": "0015",
+    "title": "Single `brief` trigger type with a `variant` field, replacing `morning_wag` as the canonical trigger",
+    "status": "accepted",
+    "file": "0015-brief-trigger-shape-with-variant-field.md"
+  },
+  {
+    "adr": "0016",
+    "title": "Two-tier subscription pricing: Pup (free) · Pro $14.99/mo (soft caps) · Pro Max $29.99/mo (uncapped usage)",
+    "status": "accepted",
+    "file": "0016-two-tier-pricing-pro-and-pro-max.md"
+  },
+  {
+    "adr": "0017",
+    "title": "Patrol pass cadence: every 15 minutes during waking hours, plus an explicit pre-Brief sweep 30 minutes before each Brief variant",
+    "status": "accepted",
+    "file": "0017-patrol-cadence-with-pre-brief-sweep.md"
+  },
+  {
+    "adr": "0018",
+    "title": "The Adjustment autonomy enforcement: L1 = never act, L2 = propose with one-tap, L3 = auto + Patrol audit",
+    "status": "accepted",
+    "file": "0018-adjustment-autonomy-enforcement.md"
+  },
+  {
+    "adr": "0019",
+    "title": "The Window scheduling decision rules: Form-driven trigger conditions, three durations, autonomy-gated via ADR-0018",
+    "status": "accepted",
+    "file": "0019-window-scheduling-decision-rules.md"
+  },
+  {
+    "adr": "0020",
+    "title": "The Intervention: composite trigger (Form floor + Load ceiling + complex-task signal + 3-Patrol-entry pattern), 2h cooldown with Form-drop override, learning in `hall_advice`",
+    "status": "accepted",
+    "file": "0020-intervention-triggers-cooldown-learning.md"
+  },
+  {
+    "adr": "0021",
+    "title": "Copilot tool surface expansion: 7 new tools (write_task, update_task, draft_document, draft_email, propose_schedule, write_sheet_cell, execute_code) + search_connector reclassified to tool, all gated by ADR-0018 autonomy + ADR-0008 ACL",
+    "status": "accepted",
+    "file": "0021-copilot-tool-surface-expansion.md"
+  },
+  {
+    "adr": "0022",
+    "title": "Skill system architecture: 15 bundled system skills (immutable), connector skills (auto-loaded), user/agent-authored skills (mutable in R2), agentskills.io-compatible markdown shape, rule-based + nightly LLM-judge effectiveness scoring",
+    "status": "accepted",
+    "file": "0022-skill-system-architecture.md"
+  },
+  {
+    "adr": "0023",
+    "title": "`execute_code` primitive backed by Cloudflare Sandbox SDK: Python + JS, 30s hard timeout, empty egress allowlist by default, Scribe-sanitised stdout/stderr before model sees results",
+    "status": "accepted",
+    "file": "0023-execute-code-cf-sandbox-sdk.md"
+  },
+  {
+    "adr": "0024",
+    "title": "Scribe sanitiser canonical spec: rule-based PII strip + health value lockout + canary token check + size cap, applied to memory writes / sandbox stdout / draft document body / skill bodies / inbox merge — single seam",
+    "status": "accepted",
+    "file": "0024-scribe-sanitiser-canonical-spec.md"
+  },
+  {
+    "adr": "0025",
+    "title": "DocAdapter contract: unified read/search/write across Drive + Notion + Confluence + R2-scratch, with `parent_folder_id` normalised to opaque string, search returning `Hit[]` with title+url+snippet+date, write returning `{ doc_id, url }` and idempotency_key",
+    "status": "accepted",
+    "file": "0025-doc-adapter-contract.md"
+  },
+  {
+    "adr": "0026",
+    "title": "SheetProvider contract: normalised A1 range syntax across Sheets + Excel/Graph, idempotent cell writes with `commit_hash`, read returns typed cells with formatting metadata, write always-confirms (connector_write rule)",
+    "status": "accepted",
+    "file": "0026-sheet-provider-contract.md"
+  },
+  {
+    "adr": "0027",
+    "title": "EmailProvider drafts extension: Gmail + Outlook drafts API only (never sends from Waldo), unified MIME-builder, body sanitised by Scribe before provider, send_draft becomes its own user-tap-only execute_action invocation",
+    "status": "accepted",
+    "file": "0027-email-provider-drafts-extension.md"
+  },
+  {
+    "adr": "0028",
+    "title": "Skill loader + REASONS Canvas integration: 5-stage filter pipeline, top-K (default 5) by effectiveness, skill body slotted into A (Approach) layer wrapped in `<available-skills>` tag, ACL pre-check + recall-before-act wiring",
+    "status": "accepted",
+    "file": "0028-skill-loader-prompt-builder-integration.md"
+  },
+  {
+    "adr": "0029",
+    "title": "Backend-owned workspace contract spine: waldo-backend/packages/contracts exports internal Zod/TS schemas and emits public OpenAPI/JSON-Schema clients; published waldo-types package path retired",
+    "status": "accepted",
+    "file": "0029-waldo-types-package-contract.md"
+  },
+  {
+    "adr": "0030",
+    "title": "Verification layer: 4-component eval stack (LLM-judge with calibrated rubrics + Waldo Improvement Score + trace-native production eval + memory eval harness with Recall@K/MRR), Phase E starts, Phase G is the deep instrumentation",
+    "status": "proposed",
+    "file": "0030-verification-layer-llm-judge-wis.md"
+  },
+  {
+    "adr": "0031",
+    "title": "Recall-before-act explicit wiring: deterministic memory retrieval injected into every invocation's prompt as `<recall>` block, queries all 5 halls + episodes + agent_evolutions in parallel, fails open (no recall = no blocker), shipped Sprint 1",
+    "status": "accepted",
+    "file": "0031-recall-before-act-wiring.md"
+  },
+  {
+    "adr": "0032",
+    "title": "Hooks-based safety layers: 7 zero-token middleware hooks (PreToolUse · PostToolUse · PrePromptBuild · PostPromptBuild · PreLLMCall · PostLLMCall · OnError) running deterministically around every invocation, independent traversal (no shared bottleneck), audit log + rate limit + sanitiser + JWT + canary as hook implementations",
+    "status": "accepted",
+    "file": "0032-hooks-based-safety-layers.md"
+  },
+  {
+    "adr": "0033",
+    "title": "Session trust reset on every DO alarm wake: memory persists, permissions reset, canary tokens regenerated, ACL rebuilt from TOOL_PERMISSIONS[triggerType], deny-first invariant — no prior-session authorisation ever carries forward",
+    "status": "accepted",
+    "file": "0033-session-trust-reset-on-do-alarm-wake.md"
+  },
+  {
+    "adr": "0034",
+    "title": "Tool output compression (37% token reduction) + lazy tool discovery via `search_tools(query)` first-class tool (85% token reduction for large registries), both implemented as hooks per ADR-0032, sanitiser runs BEFORE compression (priority 100 → 200) — combined ~50%+ token savings on tool-heavy invocations",
+    "status": "accepted",
+    "file": "0034-tool-output-compression-and-lazy-tool-discovery.md"
+  },
+  {
+    "adr": "0035",
+    "title": "Channel persona slicing: same underlying agent + memory, channel-specific context slice + tone modifier + UI affordances — Telegram (personal, full memory, inline buttons), APNs/iOS (structured cards, display-optimised), Slack/Discord/in-app (work context, filtered, redacted health data per workspace rules)",
+    "status": "accepted",
+    "file": "0035-channel-persona-slicing.md"
+  },
+  {
+    "adr": "0036",
+    "title": "Background Learning Agent — separate from Dreaming Mode, fires on 3 triggers (10-turn conversation rollup · 15-iteration tool-sequence detection · 4-AM multi-day inactivity deep analysis), writes to memory_inbox via Scribe, no user-facing surface, Phase G",
+    "status": "proposed",
+    "file": "0036-background-learning-agent-triggers.md"
+  },
+  {
+    "adr": "0037",
+    "title": "Append-only event log (agent_logs immutable, no UPDATE/DELETE allowed) + stable `pattern_id` on memory_blocks (md5(normalize(claim) + sorted_conditions)[:12]) — enables superseded_by chains, rejection_count tracking, decision audit logs, rollback as production capability per ai-agent-ecosystem takeaway 29",
+    "status": "accepted",
+    "file": "0037-append-only-event-log-stable-pattern-id.md"
+  },
+  {
+    "adr": "0038",
+    "title": "RBAO (Ratchet-Based Autonomous Optimisation) + WIS (Waldo Improvement Score) instrumentation: instrument in Phase D-E, activate ratchet in Phase G, immutable baseline = soul files + CRS algorithm + safety rules, mutation zone = behavioural parameters + skill effectiveness weights, single canonical metric (WIS), git-style keep-or-revert per experiment, never optimises identity",
+    "status": "proposed",
+    "file": "0038-rbao-wis-ratchet-instrumentation.md"
+  },
+  {
+    "adr": "0039",
+    "title": "Chat threading model: persistent threads (NOT day-bound), grouped-by-topic in list, message-level soft delete + recovery, branching via parent_message_id + branch_depth, expand/collapse driven by branch_depth, four new-thread entry points (chat list / Overview swipe / long-press card / \"Talk about this with Waldo\" button), topic classification rule-based first → LLM fallback",
+    "status": "accepted",
+    "file": "0039-chat-threading-model.md"
+  },
+  {
+    "adr": "0040",
+    "title": "CalendarProvider moves from Phase 2 to Phase 1",
+    "status": "accepted",
+    "file": "0040-calendar-provider-phase-1.md"
+  },
+  {
+    "adr": "0041",
+    "title": "Voice memo pipeline — Phase 1 user-initiated audio → memory",
+    "status": "accepted",
+    "file": "0041-voice-memo-pipeline.md"
+  },
+  {
+    "adr": "0042",
+    "title": "`pre_activity_spot` trigger — calendar-aware proactive Spot before high-stakes meetings",
+    "status": "accepted",
+    "file": "0042-pre-activity-spot-trigger.md"
+  },
+  {
+    "adr": "0043",
+    "title": "Cross-Session Bus for Multi-Developer, Multi-Machine, Multi-Repo Claude Code Work",
+    "status": "superseded",
+    "file": "0043-cross-session-bus.md"
+  },
+  {
+    "adr": "0046",
+    "title": "External truth invalidates memory: deterministic trust-class priority (system-of-record > user-stated > committed memory > provisional inbox > LLM inference), supersedence executed only through the Scribe seam on the bi-temporal model, point-in-time recall for superseded blocks, and the \"Waldo updated its understanding\" surfacing rule",
+    "status": "accepted",
+    "file": "0046-external-truth-invalidates-memory.md"
+  },
+  {
+    "adr": "0049",
+    "title": "General-agent tools (`web_search`, `read_document`, `call_mcp_tool`) ship in V1",
+    "status": "accepted",
+    "file": "0049-general-agent-tools-in-v1.md"
+  },
+  {
+    "adr": "0050",
+    "title": "`execute_code` deferred to Phase 3; removed from V1 tool permissions",
+    "status": "accepted",
+    "file": "0050-execute-code-deferred-to-phase-3.md"
+  },
+  {
+    "adr": "0051",
+    "title": "Tier-aware spend cap, decoupled from the abuse circuit-breaker",
+    "status": "accepted",
+    "file": "0051-tier-aware-spend-cap-decoupled-from-abuse-breaker.md"
+  },
+  {
+    "adr": "0052",
+    "title": "DO-only agent runtime; L1 `invoke-agent` removed; service-role key off the agent loop",
+    "status": "accepted",
+    "file": "0052-do-only-runtime-l1-invoke-agent-removed.md"
+  },
+  {
+    "adr": "0053",
+    "title": "Agent-Native Dev-Loop — SessionStart context hook + @pin4sf/agent-rules sync package + 3-layer enforcement stack",
+    "status": "accepted",
+    "file": "0053-agent-native-dev-loop-enforcement.md"
+  },
+  {
+    "adr": "0054",
+    "title": "Durable agent execution: a per-run state journal + transactional outbox in DO SQLite, keyed by run identity (not a time bucket)",
+    "status": "accepted",
+    "file": "0054-durable-agent-execution-run-journal-and-outbox.md"
+  },
+  {
+    "adr": "0055",
+    "title": "GDPR deletion runbook must enumerate every store that holds personal or derived-health data, not just the three primary ones",
+    "status": "accepted",
+    "file": "0055-gdpr-deletion-runbook-all-stores.md"
+  },
+  {
+    "adr": "0056",
+    "title": "DO SQLite compaction & lifecycle: per-table retention, archive-don't-delete to R2, single federated retrieval path",
+    "status": "proposed",
+    "file": "0056-do-sqlite-compaction-and-lifecycle.md"
+  },
+  {
+    "adr": "0057",
+    "title": "In-context working memory: capped carryover buckets that survive compaction and crash-resume",
+    "status": "accepted",
+    "file": "0057-in-context-working-memory-carryover-buckets.md"
+  },
+  {
+    "adr": "0058",
+    "title": "Per-tier recovery posture: Supabase PITR (health SoR) + Durable Object SQLite PITR (built-in, 30-day, per-object) + R2/outbox for the longer horizon",
+    "status": "proposed",
+    "file": "0058-supabase-pitr-backups-and-recovery.md"
+  },
+  {
+    "adr": "0059",
+    "title": "Two Supabase access paths, not one pooler: user-scoped reads via PostgREST/supabase-js (HTTPS, JWT→RLS); Supavisor transaction pooling only for raw service/admin SQL",
+    "status": "proposed",
+    "file": "0059-supabase-connection-pooling-supavisor.md"
+  },
+  {
+    "adr": "0060",
+    "title": "A fixed Supabase platform-hardening baseline as a launch gate — and the one real trade-off: Network Restrictions cover all DB routes but not the HTTPS APIs, vs Cloudflare's dynamic egress",
+    "status": "proposed",
+    "file": "0060-supabase-security-hardening-baseline.md"
+  },
+  {
+    "adr": "0061",
+    "title": "Range-partition the high-volume Postgres tables by month (pg_partman) — decided now because the partition key must be in the PRIMARY KEY, which is near-impossible to retrofit on a billion-row table",
+    "status": "proposed",
+    "file": "0061-partition-high-volume-postgres-tables.md"
+  },
+  {
+    "adr": "0062",
+    "title": "Database-tier observability + published SLOs, reusing the existing OTel/Sentry stack — and the constraint that makes it non-trivial: the log/metric pipeline is itself a PHI surface",
+    "status": "proposed",
+    "file": "0062-database-tier-observability-and-slos.md"
+  },
+  {
+    "adr": "0063",
+    "title": "Canonical Rule Files in waldo-brain, Mirrored Verbatim to Code Repos",
+    "status": "accepted",
+    "file": "0063-canonical-rule-files-mirroring.md"
+  },
+  {
+    "adr": "0064",
+    "title": "Persistent goals (GoalRecord) + skill Curator-lifecycle fields — contract now, loop later",
+    "status": "accepted",
+    "file": "0064-persistent-goals-and-skill-curator-lifecycle-contract.md"
+  },
+  {
+    "adr": "0065",
+    "title": "DO alarm multiplexer and fleet liveness",
+    "status": "accepted",
+    "file": "0065-do-alarm-multiplexer.md"
+  },
+  {
+    "adr": "0066",
+    "title": "DO→Supabase per-user RLS JWT custody",
+    "status": "accepted",
+    "file": "0066-do-supabase-rls-jwt-custody.md"
+  },
+  {
+    "adr": "0067",
+    "title": "ADR-0067 — Telegram identity binding completion + inbound auth",
+    "status": "accepted",
+    "file": "0067-telegram-identity-webhook-auth.md"
+  },
+  {
+    "adr": "0068",
+    "title": "ADR-0068 — Canonical delivery-policy table (push-budget composition)",
+    "status": "accepted",
+    "file": "0068-delivery-policy-table.md"
+  },
+  {
+    "adr": "0069",
+    "title": "ADR-0069 — Model roster + routing policy v1 + shadow-eval harness",
+    "status": "accepted",
+    "file": "0069-model-roster-and-routing-v1.md"
+  },
+  {
+    "adr": "0070",
+    "title": "WIS / keep-rate per-channel engagement contract",
+    "status": "accepted",
+    "file": "0070-wis-keeprate-per-channel-engagement-contract.md"
+  },
+  {
+    "adr": "0071",
+    "title": "V1 Scope Cut — Brief + shadow-Fetch + Spots + Chat; nine deferrals with re-entry criteria",
+    "status": "accepted",
+    "file": "0071-v1-scope-cut-four-pillars.md"
+  },
+  {
+    "adr": "0072",
+    "title": "The Fetch ships shadow-first behind a measured false-positive bar",
+    "status": "accepted",
+    "file": "0072-fetch-ships-shadow-first-behind-measured-fp-bar.md"
+  },
+  {
+    "adr": "0073",
+    "title": "Compliance regime — GDPR-as-baseline engineering, EU/EEA/UK excluded for beta, DPDP-aware",
+    "status": "accepted",
+    "file": "0073-compliance-regime-gdpr-baseline-beta-geography.md"
+  },
+  {
+    "adr": "0074",
+    "title": "Loop Governor — deterministic cross-loop governance seam",
+    "status": "accepted",
+    "file": "0074-loop-governor.md"
+  },
+  {
+    "adr": "0075",
+    "title": "Connector-OAuth token custody (Copilot write-surface)",
+    "status": "accepted",
+    "file": "0075-connector-oauth-custody.md"
+  },
+  {
+    "adr": "0076",
+    "title": "R2 workspace mount contract for agent-readable and agent-writable files",
+    "status": "accepted",
+    "file": "0076-r2-workspace-mount.md"
+  },
+  {
+    "adr": "0077",
+    "title": "Conversation spaces, nested threading, context pins, health bundles, and replay",
+    "status": "accepted",
+    "file": "0077-conversation-spaces-threading-context-pins-and-replay.md"
+  },
+  {
+    "adr": "0078",
+    "title": "Memory edges activation graph",
+    "status": "proposed",
+    "file": "0078-memory-edges-activation-graph.md"
+  },
+  {
+    "adr": "0079",
+    "title": "Prospective commitments as explicit memory",
+    "status": "proposed",
+    "file": "0079-prospective-commitments.md"
+  },
+  {
+    "adr": "0080",
+    "title": "Handoff state as a resumable planning surface",
+    "status": "proposed",
+    "file": "0080-handoff-state.md"
+  },
+  {
+    "adr": "0081",
+    "title": "Versioned backend authority for health-derived fields and Form/CRS",
+    "status": "accepted",
+    "file": "0081-health-derived-fields-form-crs-computation-authority.md"
+  },
+  {
+    "adr": "0082",
+    "title": "Per-account encrypted device cache with per-account key and consent epoch",
+    "status": "accepted",
+    "file": "0082-device-local-sensitive-cache-account-consent-lifecycle.md"
+  },
+  {
+    "adr": "0083",
+    "title": "Mutable workspace-skill read admission and model-aware prompt budget",
+    "status": "accepted",
+    "file": "0083-mutable-workspace-skill-read-admission-and-prompt-budget.md"
+  },
+  {
+    "adr": "0084",
+    "title": "Retire HEY-109 session bus and fixed agent-cluster workflow",
+    "status": "accepted",
+    "file": "0084-retire-hey-109-session-bus-and-cluster-workflow.md"
+  },
+  {
+    "adr": "2026",
+    "title": "2026-04-18 · WHOOP Web Console Integration — Finalized",
+    "status": "active",
+    "file": "2026-04-18-whoop-web-console-finalized.md"
+  },
+  {
+    "adr": "2026",
+    "title": "iOS-First + CF DO as Agent Brain — Locked April 2026",
+    "status": "unknown",
+    "file": "2026-04-24-ios-first-cf-do-locked.md"
+  }
+]

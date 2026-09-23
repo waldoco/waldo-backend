@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "protocolVersion": {
+      "$ref": "#/$defs/__schema0"
+    },
+    "id": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "ownerId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "executionRequestId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "attemptId": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "holder": {
+      "$ref": "#/$defs/__schema2"
+    },
+    "fencingGeneration": {
+      "$ref": "#/$defs/__schema3"
+    },
+    "cancellationGeneration": {
+      "$ref": "#/$defs/__schema4"
+    },
+    "acquiredAt": {
+      "$ref": "#/$defs/__schema5"
+    },
+    "expiresAt": {
+      "$ref": "#/$defs/__schema5"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "id",
+    "ownerId",
+    "executionRequestId",
+    "attemptId",
+    "holder",
+    "fencingGeneration",
+    "cancellationGeneration",
+    "acquiredAt",
+    "expiresAt"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "__schema0": {
+      "type": "string",
+      "const": "0.4"
+    },
+    "__schema1": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "__schema2": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string",
+          "const": "execution_environment"
+        },
+        "id": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "version": {
+          "$ref": "#/$defs/__schema1"
+        },
+        "environmentKind": {
+          "type": "string",
+          "enum": [
+            "local",
+            "cloud",
+            "human"
+          ]
+        },
+        "manifest": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "version": {
+              "$ref": "#/$defs/__schema1"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "category",
+        "id",
+        "version",
+        "environmentKind",
+        "manifest"
+      ],
+      "additionalProperties": false
+    },
+    "__schema3": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema4": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "__schema5": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    }
+  },
+  "$id": "urn:waldo:protocol:responsibility-execution:0.4:execution-lease",
+  "x-waldo-validation-level": "structural-plus-runtime-invariants"
+}
