@@ -31,6 +31,7 @@ Adopted: small, inspectable cores and version-bound provider transforms. Not ado
 
 ## Architecture directions
 
+- **Health-forward.** Waldo is a health-aware personal agent. Gym scheduling, health and meal tracking, coaching and mental wellness are core scenarios. Context engineering for them has to be strong: the model reasons over the owner's routines, preferences and signals and turns them into the right memories and actions. Health routines and preferences are first-class memory content. The line is clinical acts (diagnosis, treatment, dosing), not health topics; see [messaging behavior](../behavior/MESSAGING_BEHAVIOR.md#health-conversation).
 - **Multimodal input.** Text-only today is a channel gate, not a model limit. The owner can send text, emoji, images and files; Waldo reads each through the model's image and file inputs and says plainly when a type is not supported yet.
 - **Direct or Kennel.** Waldo handles small requests directly in chat. Larger work becomes a Kennel packet for structured execution, and the chat keeps the owner informed.
 

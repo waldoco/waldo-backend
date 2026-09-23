@@ -12,6 +12,10 @@ GitHub inspection on 21 September: Actions enabled; workflow `verify` active; Ac
 
 Build the first small behavior evaluation runner alongside S0 and grow it with each slice. This is supporting work for the existing build order, not a new platform prerequisite.
 
+## Judgment belongs to the model
+
+Owner rule, 23 September 2026. Judgment belongs to the model. Do not add regex or other fixed rules for anything that is a judgment call (tone, intent, topic, health vs clinical, what to remember). The harness gives the model context, reasoning room, tools and autonomy. Deterministic rejection is allowed only for hard security and safety boundaries where a reject must be guaranteed: auth, secrets, canaries, owner checks, egress, schema validation, and medication dosing. When you find a fixed rule making a judgment call, file it under `post-mvp-cleanup` or move it to model reasoning with scenario tests.
+
 ## 2. Coding-agent delivery loop
 
 1. Read only the current slice, owning source, contracts, relevant tests and exact-version references. Register one owner and bounded files in the existing issue/ledger; use an isolated worktree.

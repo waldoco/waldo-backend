@@ -16,6 +16,10 @@ The agent roster + dev-QA loop below is repo-specific. It sits on top of the uni
 
 ---
 
+## Judgment belongs to the model
+
+Judgment belongs to the model. Do not add regex or other fixed rules for anything that is a judgment call (tone, intent, topic, health vs clinical, what to remember). The harness gives the model context, reasoning room, tools and autonomy. Deterministic rejection is allowed only for hard security and safety boundaries where a reject must be guaranteed: auth, secrets, canaries, owner checks, egress, schema validation, and medication dosing. When you find a fixed rule making a judgment call, file it under `post-mvp-cleanup` or move it to model reasoning with scenario tests.
+
 ## Available Agents (invoke via Claude Code Agent tool)
 
 ### Planning

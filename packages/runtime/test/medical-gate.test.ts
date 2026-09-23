@@ -48,6 +48,11 @@ describe('medical claim gate', () => {
     'Use a quarter dose of insulin.',
     'Take .5 tablet of melatonin today.',
     'Take 0.5 tablet of melatonin today.',
+    'You may have sleep apnea based on these readings.',
+    'Sounds like you have anxiety.',
+    'Your data suggests you might have insomnia.',
+    'Stop taking your metformin.',
+    'Take 400 mg of magnesium tonight.',
   ])('denies immutable medical claims and direct treatment instructions: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: false, reason: 'medical_claim' });
   });
@@ -62,6 +67,17 @@ describe('medical claim gate', () => {
     'The recipe says take half a cup.',
     'Use half the tablet width in the layout.',
     'Take .5 day to review the document.',
+    'Got it. Your gym is usually around 11 am, with evenings around 7:30-8 pm on days that do not fit.',
+    'Want me to remind you to start your workout today at 11?',
+    'Start stretching daily - even 5 minutes helps.',
+    'You have gym at 11 and a call at 3.',
+    'Try 3 sets of 12 squats and increase the weight next week.',
+    'You slept 6h 10m last night, about 40 minutes less than your weekly average.',
+    'Logged: oats, banana and two eggs for breakfast, about 450 kcal.',
+    'Your resting heart rate data shows you have been recovering well this week.',
+    'Sounds like work has been stressful. If anxiety keeps creeping in at night, a short wind-down routine might help.',
+    'You mentioned your anxiety has been better since you started journaling.',
+    'Depression is worth talking to a professional about if the low mood lasts.',
   ])('allows bounded wellness language: %s', (text) => {
     expect(evaluateMedicalClaim(text)).toEqual({ ok: true });
   });

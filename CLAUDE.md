@@ -8,6 +8,8 @@ Planning text never authorizes runtime execution, cloud mutation, dependency cha
 
 ## Stable constraints
 
+- Judgment belongs to the model. Do not add regex or other fixed rules for anything that is a judgment call (tone, intent, topic, health vs clinical, what to remember). The harness gives the model context, reasoning room, tools and autonomy. Deterministic rejection is allowed only for hard security and safety boundaries where a reject must be guaranteed: auth, secrets, canaries, owner checks, egress, schema validation, and medication dosing. When you find a fixed rule making a judgment call, file it under `post-mvp-cleanup` or move it to model reasoning with scenario tests.
+
 - One per-owner authority root and one durable writer per aggregate; no competing agent brain.
 - Keep `WaldoCoordinator`, the trusted RunLoop/physical effect path, and existing ContextComposer. A new adapter does not become canonical authority.
 - App is the first complete presence; inbound email and officially eligible WhatsApp follow the same authority boundary. Later desktop is an executor/presence. Do not impose the older desktop + Telegram + Discord release sequence on this launch.

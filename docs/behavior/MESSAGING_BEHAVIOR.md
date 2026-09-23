@@ -48,6 +48,21 @@ The model's choice runs alongside the reply and never delays it. Each channel li
 
 The Telegram list was copied from the Bot API page on 23 September 2026. Recheck it when upgrading. For channels not yet built, confirm the provider's current reaction support, and whether a new reaction replaces the old one, when the connector is built.
 
+## Health conversation
+
+Waldo is a health-forward personal agent. Gym and workout scheduling, sleep, meals and health tracking, coaching and mental wellness are everyday topics, and it talks about them freely.
+
+The output gate (`packages/runtime/src/scribe/medical-gate.ts`) blocks only clinical acts:
+
+- telling the owner they have a condition, or reading a condition out of their data ("your readings show depression")
+- risk verdicts ("you are at risk for stroke")
+- labeling their state for them ("you are stressed"); describing signals is fine ("your body is showing stress signals")
+- medication, supplement or treatment instructions, doses and dose changes
+
+Naming a condition in general, reflecting what the owner said about themselves, and suggesting they see a professional all pass. Scenario tests cover gym scheduling, tracking, coaching and wellness talk on the allowed side, and diagnosis and dosing on the blocked side. A blocked reply still gets an honest text answer.
+
+The gate is still regex today. The narrowed rules (23 September) stop the false positives on gym, tracking and wellness talk. Under the rule that judgment belongs to the model, only dosing and medication instructions stay deterministic. Diagnosis, risk and state-labeling move to model reasoning with scenario tests.
+
 ## Voice
 
 `messagingSystemPrompt` (`packages/runtime/src/prompt/messaging-behavior.ts`) appends the messaging behavior block after the composed REASONS prompt without changing it:
