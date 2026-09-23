@@ -118,7 +118,6 @@ const roots = [
   'CLAUDE.md',
   'docs/README.md',
   'docs/foundation/NEXT-SESSION-PLAN.md',
-  'docs/foundation/NEXT-BACKEND-SESSION-PROMPT.md',
   'docs/foundation/EXECUTION-LEDGER.md',
   'docs/foundation/CONTRIBUTOR-ONBOARDING.md',
   'docs/foundation/AGENT-OPERATING-WORKFLOW.md',

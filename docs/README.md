@@ -21,4 +21,4 @@ The previous [Brain launch proposal](https://github.com/Pin4sf/waldo-brain/blob/
 
 Live ownership/progress belongs in issues/PRs, not copied dashboards. Re-pin current source and tests before implementation. Architecture, contracts, module implementation, adapter conformance, cross-surface acceptance and operational proof are distinct. Vendor/competitor claims require fresh verification for the exact capability being built.
 
-Dated planning redirects and existing ledger records retain historical evidence. Full originals remain in Git history. This publication replaces the active build plan and preserves its detailed recovery contracts; it does not delete runtime modules. Cleanup requires caller/deployment inventory, tested replacement and rollback.
+Retired dated plans, redirects and August ledger handoffs were removed on 23 September 2026. Full originals remain in Git history at `e91bee0`. This publication replaces the active build plan and preserves its detailed recovery contracts; it does not delete runtime modules. Cleanup requires caller/deployment inventory, tested replacement and rollback.

@@ -30,6 +30,6 @@ PRs link their issue and session record, pin base/head, state whether shared con
 
 ## Retained evidence
 
-Existing dated records in `docs/ledger/` remain intact. The [pre-reconciliation ledger index](https://github.com/Pin4sf/waldo-backend/blob/e91bee017b0c36759cbfda1353fc11c73e3afe0a/docs/foundation/EXECUTION-LEDGER.md) links the August B0/B1/contract/bridge handoffs. They preserve historical verification and sole-writer decisions; do not promote old counts or frontiers into current proof.
+The August B0/B1 handoffs in `docs/ledger/` were removed on 23 September 2026. The originals and their index stay at [e91bee0](https://github.com/Pin4sf/waldo-backend/blob/e91bee017b0c36759cbfda1353fc11c73e3afe0a/docs/foundation/EXECUTION-LEDGER.md). They are history, not current proof.
 
 This reconciliation deliberately adds no separate mutable session dashboard. The current change's start/handoff records are on #116.
