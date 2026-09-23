@@ -8,7 +8,8 @@ import { productionDeps } from '../seams/deps';
 import { durableConversationStore } from './conversation-store';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
-import { armDayCards, cardFor, composeDayCard, isSkip } from './day-cards';
+import { applyDayPlan, armDayCards, cardFor, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
+import { dayPlanInput } from '../prompt/day-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
@@ -147,7 +148,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
     const episodes = episodeIndex(storage.sql);
     const kv = durableConversationStore(storage);
-    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, clock.timezone, Date.now())]).then(() => undefined);
+    const plans = dayPlanBook(storage.sql);
+    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
+      .then(([, , , seeded]) => { if (seeded) void this.serial(() => planToday('day-plan:boot')); });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), coreFileStore(this.ctx.storage.sql), log,
       { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)],
@@ -182,18 +185,35 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
+    const planToday = async (trace: string) => {
+      const started = Date.now();
+      const now = Date.now();
+      const cards = plans.pending(localIso(now, clock.timezone).slice(0, 10));
+      if (cards.length === 0) return;
+      try {
+        const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), null);
+        const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards });
+        const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards));
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: applied.map((plan) => `${plan.card}=${plan.time ?? 'skip'} (${plan.reason})`).join('; ') });
+      } catch (error) {
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error) });
+      }
+    };
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       const day = episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000);
-      if (day.length === 0) return log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
-      try {
-        const changed = await responder.consolidate(trace, transcript(day, clock.timezone));
-        log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${changed.join(',') || 'no edits'}` });
-      } catch (error) {
-        log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error) });
-        throw error;
+      if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
+      else {
+        try {
+          const changed = await responder.consolidate(trace, transcript(day, clock.timezone));
+          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${changed.join(',') || 'no edits'}` });
+        } catch (error) {
+          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error) });
+        }
       }
+      await armDayCards(scheduler, plans, clock.timezone, Date.now());
+      await planToday(`${trace}:plan`);
     };
     const briefBook = eventBriefs(storage.sql, clock.timezone);
     const briefs = async (entry: ScheduleEntry) => {
@@ -227,6 +247,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
         const skipped = !text || isSkip(text);
         if (!skipped) await api.sendMessage({ chat_id: owner, text });
+        plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
       } catch (error) {
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: false, error: String(error) });
