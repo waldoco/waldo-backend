@@ -55,7 +55,7 @@ Day program, in order:
 3. Memory layer: hybrid full-text, vector, SQLite and files design, then build. First persistence hop: hot conversation state in the owner Durable Object's own storage, so eviction loses nothing. Then R2 archives and the Supabase queryable layer.
 4. Langfuse observability slice on Langfuse Cloud.
 5. Multimodal slice and a rigorous end-to-end test pass.
-6. AG-UI projection, onboarding, and surfaces: Waldo mobile app, Discord, then WhatsApp or iMessage where possible.
+6. AG-UI projection, onboarding, and surfaces: Waldo mobile app in parallel with Discord, then iMessage. WhatsApp is on hold under Meta's AI Provider terms. See [channel options](CHANNEL_OPTIONS.md).
 7. Web dashboard.
 8. Extended competitor matrix (features, behavior, capabilities) in this document.
 9. Secrets and vault: the agent creates its own vault files and shares them with the owner.

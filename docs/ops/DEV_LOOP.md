@@ -121,7 +121,7 @@ Program after memory, in order ([ADOPTION_DIRECTION.md](../planning/ADOPTION_DIR
 
 Tools, hooks and adapters still needed (all planned, none built):
 
-- Channel adapters: Discord (the threading test channel), then WhatsApp and iMessage on hosted phone infrastructure, with Slack threading later. Each follows the inbound contract in [MESSAGING_BEHAVIOR.md](../behavior/MESSAGING_BEHAVIOR.md).
+- Channel adapters: Discord first (the threading test channel), then iMessage (BlueBubbles prototype, then a hosted provider). WhatsApp is on hold, and Slack threading comes later. See [channel options](../planning/CHANNEL_OPTIONS.md). Each follows the inbound contract in [MESSAGING_BEHAVIOR.md](../behavior/MESSAGING_BEHAVIOR.md).
 - Real per-user admission and isolation, to replace the fixture.
 - Tool grants through the existing tool dispatcher, one reviewed capability at a time. Mail and calendar come first, each with an independent read-back after any change.
 - A per-user email identity for the agent.
