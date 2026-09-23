@@ -174,14 +174,30 @@ export interface ChannelAdapter {
 // strictObject makes forwards (forward_origin), edits, and unknown update types
 // unrecognized keys; the literals make bot senders and group chats unparseable. Bound
 // values are defensive ceilings pending ADR-0067's platform re-verification pass.
+const telegramProfileName = z.string().min(1).max(256).optional();
+
 const telegramSenderSchema = z.strictObject({
   id: z.int().positive(),
   is_bot: z.literal(false),
+  first_name: telegramProfileName,
+  last_name: telegramProfileName,
+  username: telegramProfileName,
+  language_code: z.string().min(1).max(35).optional(),
+  is_premium: z.literal(true).optional(),
 });
 
 const telegramPrivateChatSchema = z.strictObject({
   id: z.int(),
   type: z.literal('private'),
+  first_name: telegramProfileName,
+  last_name: telegramProfileName,
+  username: telegramProfileName,
+});
+
+const telegramTextEntitySchema = z.strictObject({
+  type: z.enum(['mention', 'hashtag', 'cashtag', 'bot_command', 'url', 'email', 'phone_number', 'bold', 'italic', 'underline', 'strikethrough', 'spoiler', 'code']),
+  offset: z.int().nonnegative(),
+  length: z.int().positive(),
 });
 
 // Registered server-side via setWebhook allowed_updates; the union below mirrors it 1:1
@@ -194,9 +210,12 @@ export type TelegramUpdateType = z.infer<typeof telegramUpdateTypeSchema>;
 export const telegramMessageUpdateSchema = z.strictObject({
   update_id: z.int().positive(),
   message: z.strictObject({
+    message_id: z.int().positive().optional(),
+    date: z.int().positive().optional(),
     from: telegramSenderSchema,
     chat: telegramPrivateChatSchema,
     text: z.string().min(1).max(4096),
+    entities: z.array(telegramTextEntitySchema).max(100).optional(),
   }),
 });
 export type TelegramMessageUpdate = z.infer<typeof telegramMessageUpdateSchema>;

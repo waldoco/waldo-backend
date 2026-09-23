@@ -346,6 +346,22 @@ describe('telegram gate-2 shapes', () => {
     expect(telegramMessageUpdateSchema.safeParse(baseTgMessage).success).toBe(true);
   });
 
+  it('accepts the standard fields every real private text message carries', () => {
+    const real = {
+      update_id: 904957468,
+      message: {
+        message_id: 12,
+        date: 1790131265,
+        from: { id: 42, is_bot: false, first_name: 'Owner', username: 'owner', language_code: 'en' },
+        chat: { id: 42, type: 'private', first_name: 'Owner', username: 'owner' },
+        text: '/start hello',
+        entities: [{ type: 'bot_command', offset: 0, length: 6 }],
+      },
+    };
+    expect(telegramMessageUpdateSchema.safeParse(real).success).toBe(true);
+    expect(telegramMessageUpdateSchema.safeParse({ ...real, message: { ...real.message, entities: [{ type: 'text_link', offset: 0, length: 6, url: 'https://x.test' }] } }).success).toBe(false);
+  });
+
   it('rejects a forwarded message (forward_origin is an unrecognized key)', () => {
     expect(
       telegramMessageUpdateSchema.safeParse({
