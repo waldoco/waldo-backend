@@ -30,7 +30,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
   edges: [{ from_id: 1, to_id: 2, relation: 'tends to precede', strength: 0.55, evidence_count: 3 }, { from_id: 2, to_id: 3, relation: 'worsens', strength: 0.4, evidence_count: 2 }],
   cards: [
     { id: 'card:brief', name: 'The Brief', defaultTime: '08:00', time: '08:30', reason: 'gym at 11, first call at 10', sent: true, pin: null },
-    { id: 'card:midday', name: 'Afternoon check-in', defaultTime: '14:00', time: '14:00', reason: 'default time', sent: true, pin: null },
+    { id: 'card:midday', name: 'Check-in', defaultTime: '14:00', time: '14:00', reason: 'default time', sent: true, pin: null },
     { id: 'card:close', name: 'The Close', defaultTime: '21:30', time: '22:15', reason: 'pinned by you', sent: false, pin: '22:15' },
   ],
   proactivity: { quiet_start: '23:00', quiet_end: '07:30', volume: 'normal' },

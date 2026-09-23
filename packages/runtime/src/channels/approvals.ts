@@ -20,8 +20,8 @@ export type ApprovalDesk = Readonly<{
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
 
-// The owner's "door" for effects: proposals become Telegram cards with Approve / Change / Skip,
-// nothing reaches the calendar before Approve, and every effect lands in one ledger with a
+// The owner's "door" for effects: proposals become Telegram cards with Do it / Modify / Not now,
+// nothing reaches the calendar before Do it, and every effect lands in one ledger with a
 // 10-minute undo where the provider allows it.
 export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   call: TelegramCall;
@@ -79,7 +79,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
       const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
-      await say(`Proposed: ${summary}`, [['Approve', `a:${id}`], ['Change', `e:${id}`], ['Skip', `s:${id}`]]);
+      await say(`Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
       return id;
     },
     record(kind, summary, payload) {
@@ -102,8 +102,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           await say(`That proposal expired, so I left your calendar as it is: ${describe(proposal)}. Ask me again if you still want it.`);
         } else if (action === 's') {
           setStatus(id, 'skipped');
-          await answer('Skipped');
-          await say('Skipped. Nothing changed.');
+          await answer('Not now');
+          await say('Left it. Nothing changed.');
         } else if (action === 'e') {
           setStatus(id, 'changing');
           await answer('Tell me what to change');

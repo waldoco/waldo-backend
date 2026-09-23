@@ -1,5 +1,7 @@
 # Owner setup: credentials and keys (2026-09-24)
 
+> Vocabulary: the owner settled all product words on 2026-09-24. [VOCABULARY_AND_BRAND_2026-09-24.md](VOCABULARY_AND_BRAND_2026-09-24.md) is the source; where this doc uses an older word (Afternoon check-in, update cards, Approve / Change / Skip, Weight as demand, Readiness), read it by that doc. Form / Load / Recovery are the body and day words; Weight is body mass only; Fetch is the sweep and its output is a fetch alert; Handoff is work Waldo offered or took on, tracked as an open loop.
+
 Everything the build needs from the owner, in one list. The staging Worker is `waldo-runtime-staging` at https://waldo-runtime-staging.piyushfulper3210.workers.dev.
 
 Secrets already set on staging:

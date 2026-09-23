@@ -20,7 +20,7 @@ export const DAY_CARDS: readonly DayCard[] = [
     ].join('\n'),
   },
   {
-    id: 'card:midday', name: 'Afternoon check-in', defaultTime: '14:00', calendar: 'rest_of_today',
+    id: 'card:midday', name: 'Check-in', defaultTime: '14:00', calendar: 'rest_of_today',
     instruction: [
       'It is early afternoon. Send the owner a short afternoon check-in: what still matters today and what comes next.',
       'Cover what is left on the calendar, anything still waiting on them, and what changed since the morning. Offer one decision that would steady the rest of the day.',
@@ -50,7 +50,7 @@ export const dayCardPrompt = (card: DayCard, localNow: string, context: Readonly
 export const DAY_PLAN_INSTRUCTION = [
   "You plan when Waldo sends today's cards to its owner, in the owner's local time.",
   '- The Brief: the morning read of the day. It should land soon after they usually wake and before their first commitment.',
-  '- Afternoon check-in: what still matters and what comes next. It fits a natural pause after their focused hours. Skip it on a light day.',
+  '- Check-in: the midday update of the Brief, only what changed and what comes next. It fits a natural pause after their focused hours. Skip it on a light day.',
   '- The Close: the end-of-day wrap. It should land about an hour before they usually wind down.',
   'Use their routine and preferences from memory and today\'s calendar; weekends and unusual days can differ. A time the owner explicitly asked for wins. Never plan a card inside their quiet hours; move it to just after they end, or skip it.',
   'When memory says nothing useful about their routine, use the default times.',

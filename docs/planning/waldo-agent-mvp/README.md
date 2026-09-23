@@ -1,5 +1,7 @@
 # Waldo MVP planning packet
 
+> Vocabulary: the owner settled all product words on 2026-09-24. [VOCABULARY_AND_BRAND_2026-09-24.md](VOCABULARY_AND_BRAND_2026-09-24.md) is the source; where this doc uses an older word (Afternoon check-in, update cards, Approve / Change / Skip, Weight as demand, Readiness), read it by that doc. Form / Load / Recovery are the body and day words; Weight is body mass only; Fetch is the sweep and its output is a fetch alert; Handoff is work Waldo offered or took on, tracked as an open loop.
+
 Updated 21 September 2026 · user-selected MVP baseline · documentation publication in PR #138 · implementation and runtime proof remain outstanding
 
 This packet is the target. For what is built today, read [What is built](../../CURRENT_SYSTEM.md).

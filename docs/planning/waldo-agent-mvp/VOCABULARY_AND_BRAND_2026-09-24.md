@@ -1,115 +1,112 @@
-# Waldo vocabulary and brand reference (2026-09-24)
+# Waldo vocabulary and brand (final, 2026-09-24)
 
-This doc compares the words used in three places. Figma is not in this pass; it will be added when the owner shares the files.
+The owner ruled on every open conflict on 2026-09-24. This doc is now the one source for Waldo's product words, voice and brand. Planning docs, prompts and app copy follow it. Figma brand files get folded in when the owner shares them.
 
-Sources:
-- **WaldoBrain.** From Pin4sf/waldo-brain I pulled text from 37 HTML pages: the System Viewer brand and tech glossaries, the Technical Brief, Founder Canvas, the Form/Recovery/Weight metric map, the harness deepwiki pages, and the Build Brief. I also read `01-Waldo/design/brand-standards.md` and "Rebrand, Nomenclature & Mascot Pivot".
-- **Planning docs** in waldo-backend: the brainstorm list section 3 and the reconciliation doc section 4.
-- **The brief**: the owner's 2026-09-24 build brief, Part 2, sections 1-11.
+Sources: the owner's rulings of 2026-09-24 (via WhatsApp), WaldoBrain (`01-Waldo/design/brand-standards.md`, the Voice Solidification and Alfred formula notes, the System Viewer glossary, the Form/Recovery/Weight metric map), and the 2026-09-24 build brief.
 
-Nothing here is changed in code or prompts until the owner rules on the "Needs ruling" rows.
+## 1. Body and day
 
-## 1. Terms the owner sees
-
-| Term | WaldoBrain meaning | The brief | Status |
-|---|---|---|---|
-| Waldo | The dalmatian agent. The mascot is the brand symbol, not the voice. Tagline "Already on it." | Same. "The dog never speaks." Casing is Waldo or waldo, never WALDO. | Agreed |
-| The Brief | Umbrella name for 4 variants (morning, midday, evening, event). Sits at the top of Overview and is never pushed. | The morning card only. The other cards are Check-in, The Close and Prep. | **Needs ruling** |
-| Morning Wag | Brand word for the morning Brief. Kept in copy and the SOUL_MORNING file name (ADR-0015). | Retired. Use The Brief. | **Needs ruling** |
-| Check-in | Not a term. WaldoBrain has "The Intervention", an overload check-in card. | The midday card. | New in the brief. The Intervention is dropped without a mention. |
-| The Close | Evening review, in the app only. | An evening card, also sent on Telegram. | Channel differs. The code already sends it on Telegram. |
-| Prep | Not a term. It was the "event" variant of The Brief. | A card before a meeting (was "pre-event brief" or "event brief"). | New name. The code says `event-briefs`. |
-| The Fetch | A stress alert: stress confidence of at least 0.60 held for 10+ minutes, max 3 a day, 2h cooldown. Found by The Sniff. | The brand for all unscheduled proactivity. Each one has a trigger, a why-now line, a stop control and feedback. No cap (owner ruling of 17:49). | Much wider meaning. **Needs ruling:** does the stress alert keep its own name? |
-| The Adjustment | Waldo moved a meeting, blocked time or deferred a task. Undo is always there. | A change to the day, always an Effect. | Agreed |
-| The Handoff | The day plan synced to the calendar: "Sync it" / "Walk me through it", explore, plan, act. | Listed in the vocabulary block but not defined. | **Needs ruling.** The brainstorm list proposed using Handoff for open loops. |
-| The Window | A focus block Waldo puts on the calendar. | Listed but not defined. | Agreed (keep the WaldoBrain meaning) |
-| Spot | A single observation in 6 categories. Confidence of 0.80+ makes it eligible for the home screen. | An inferred claim. Actions: right, not quite, forget. When the owner confirms one, it moves into the Profile. | Compatible. The brief adds actions, WaldoBrain adds categories. |
-| The Constellation | A long-term pattern map from day 30+. Clusters are named by Waldo ("Wednesday Peak"), and the user can't rename them. The first one gets its own push. It has a share card. | Observational links. Correct and forget reach it. It never claims cause. | Mostly compatible. **Needs ruling:** can the user rename or forget a cluster? The brief implies yes; WaldoBrain says no. |
-| The Patrol | (a) The action-log screen. (b) An internal background consolidator inside Dreaming Mode that runs "Patrol passes" (ADR-0017). | The Activity screen only. There is no 24/7 job. | The brief drops meaning (b). Low risk, since (b) was internal. |
-| Profile ("About you") | Not a term. The nearest thing is the core memory files. | Generated from stated or confirmed claims. It replaces "core memory". | New. Engineering-side. |
-| Open loop | The Technical Brief keeps three states: agent session, outcome verification, open loop. | Same three states. | Agreed |
-| The Slope | A 4-week trajectory: better or worse? | Not mentioned. | **Missing from the brief** |
-| Waldo Moods | 6 dalmatian visual states tied to the Form zone. | Not mentioned. | **Missing from the brief** (app and Figma scope) |
-| Thread, inline rich card, context card, prompt chips | Chat-surface terms from WALDO_CHAT_FLOW | Not mentioned. | App scope. Keep them. |
-| Approval card buttons | [Do it] / [Not now] / [Modify] | "Exact approval card" | **Needs ruling.** The live Telegram cards say Approve / Change / Skip. |
-
-## 2. Body and day
-
-This is the biggest conflict. WaldoBrain's metric map (which follows ADR-0011) and the System Viewer glossary say:
-- **Form** is "what can you do right now?", cognitive readiness 0-100. Form = Recovery×0.50 + HRV/CASS×0.35 + Circadian×0.075 + Motion×0.075.
-- **Recovery** is "what did last night give you?". Recovery = Sleep×0.50 + HRV×0.25 + resting HR trend×0.15 + respiratory rate×0.10. It is fixed at wake.
-- **Weight** is "what is today asking of you?": total demand, with a higher score meaning a heavier day. Target: Load + Stack + Signal + Task + Mind. The current app uses Day Strain / 21 × 100.
-- **Load** is cardio load on a 0-21 scale, and it is one part of Weight.
-- **Motion** is a Tier 2 card under Form.
-- Overview shows Form, Recovery and Weight as three rings.
-
-The brief says:
-- Form is body capacity.
-- **Load is day demand.**
-- **Weight is body mass only.**
-- Recovery is a driver of Form, not a headline.
-- It retires "Today's Weight (as demand)" in favour of Load.
-- Signal Pressure and Task Pileup become drivers of Load, not scores.
-- There is no Mind State score, and Readiness and CRS are retired from user copy.
-
-**Needs ruling**, because the choice changes app screens and Figma:
-1. Is the demand score called Weight (WaldoBrain) or Load (the brief)?
-2. Is Recovery a headline ring or only a driver?
-3. Is Form described as "cognitive readiness" (WaldoBrain, and one of the brand-standards owned words) or "body capacity" (the brief)?
-
-Both sides agree on four things:
-- Scores come from code, never from the model (the brief adds that numeric Form only appears once it has been validated).
-- Readiness is not a Waldo word.
-- Compare the owner to their own normal, not to the population.
-- Detailed health stays out of channel messages.
-
-## 3. Internal terms
-
-| WaldoBrain | The brief | Note |
+| Term | Meaning | Rules |
 |---|---|---|
-| Dreaming Mode (6 phases, nightly) | Consolidation | Rename. The code uses `dreaming` as a schedule kind. |
-| The Sniff (stress detection engine) | Not mentioned | Needed if the stress Fetch survives. Keep it internal. |
-| Heartbeat | Wake | Rename |
-| Hands, Facets | Skill | The brief agrees with brainstorm list section 3 |
-| L0/L1/L2 | Say which: data tier, context tier or initiative level | Agreed with brainstorm list section 3 |
-| Pup / Pro / Pack | Plan names, used in billing only | WaldoBrain also uses "Pack" for teams. Flag it. |
-| — | Run, Occurrence, Admission, Projection, Evidence level, Release ladder | New in the brief. Engineering only, so no ruling needed. |
+| **Form** | The owner's body capacity right now. The one headline score. | Computed in code, never by the model. A number only shows once it is validated for this owner. |
+| **Load** | What the day is asking of the owner: its demand and pressure, compared with their own normal. | Meetings, tasks, messages and commitments drive it. Signal pressure and task pileup are drivers, not separate scores. |
+| **Recovery** | What last night gave back. A driver of Form, not a headline. | Fixed at wake. |
+| **Weight** | Body mass only. | Never used for day demand. |
+| **The Slope** | The 4-week trajectory: is the long arc going up or down? | Shown weekly, never alarmist. |
 
-## 4. Voice
+Retired from owner copy: Readiness, Readiness Score, CRS, "Today's Weight" as demand, Mind State score. The WaldoBrain rings become Form / Load / Recovery.
 
-The two sources agree on:
-- Wit lands once, then stops.
-- Always give the reason.
-- Never self-congratulate.
-- Silence is the default.
-- "Already on it."
+Always compare the owner to their own normal, never to population averages. Detailed health stays out of channel messages.
 
-WaldoBrain's brand standards add:
-- The "Open Waldo, shift to Alfred, close Alfred-dry" formula, at 40% Alfred and 60% friendly.
-- An 8th-grade reading level.
-- Owned words: biological intelligence, cognitive readiness, signal, before, pattern, baseline, capacity, reads, intervention, already knows.
-- Locked voice lines, such as the Fetch line "Waldo did a thing. Your 2pm and 3pm swapped...".
+## 2. The daily rhythm
 
-Conflicts:
-- **Greeting.** The brief says "Good morning", not "Morning". The locked WaldoBrain example starts "Morning. Bit of a rough night...". **Needs ruling.**
-- **Banned words.** The brief bans: wellness, mindfulness, optimize, hustle, journey, holistic, empower, unlock, leverage, deep dive, circle back. WaldoBrain bans: wellness, wellbeing, mindfulness, holistic, optimize, AI-powered, health tracker, health app, unlock your potential, burnout (as a self-descriptor), monitors, tracks, smart/intelligent (standalone), hustle, empower. Proposal: ban the union of both lists. That is an engineering call unless he objects.
+| Term | Meaning |
+|---|---|
+| **The Brief** | One main, living brief for the day. In the morning it is the anchor. In the app it sits on top of a swipeable stack: the main brief first, then smaller sub-briefs and context cards (a new learning, a spot, a prep for a meeting). An on-demand "catch me up" is the Brief rendered now. |
+| **Check-in** | The midday update of the same Brief: only what changed. |
+| **The Close** | The night close of the Brief: what happened, what carries over, tomorrow. |
+| **Prep** | A context card before a meeting or event. One card in the Brief stack. |
+| **Morning.** | The greeting. Not "Good morning". |
 
-## 5. Positioning
+Retired: Morning Wag, "Daily Brief" as a separate product, "Afternoon check-in".
 
-The two sources frame Waldo differently:
-- **Early WaldoBrain brand:** "Health on autopilot." "The biological intelligence layer."
-- **The Technical Brief** (newer): "a private personal agent that carries your health context, priorities, commitments, boundaries and outcome history", with Kennel as the first surface.
-- **The brief:** "One durable Waldo per person... more done within what their body and day can take."
+## 3. Proactivity
 
-The brief matches the Technical Brief, and health comes first in both. Worth one line of confirmation from the owner. The code follows the Technical Brief framing today.
+| Term | Meaning | Rules |
+|---|---|---|
+| **Fetch** | The run itself. Every few minutes Waldo sweeps the owner's tools, accounts, plugins and health for anything new. Detection is cheap code; the model only runs when something actually changed. | No model call on a timer when nothing changed. Every Fetch output has a trigger, a why-now line, a stop control and feedback. |
+| **Fetch alert** | What a Fetch surfaces: a meaningful change or a new spot. | Owner feedback (Useful / Not useful) tunes what gets sent. Quiet hours and volume are the owner's. |
+| **Body-state Fetch** | The old WaldoBrain stress alert, now one Fetch type. | Opt-in after baseline validation. Same threshold logic. |
+| **Intervention** | A critical check-in when Load runs hot or the body needs protecting. It can come out of a Fetch or stand alone. | Targeted, timed, protective. Rare. |
+| **The Sniff** | Internal name for the stress detection engine. | Never in owner copy. |
 
-## 6. What the code says today
+## 4. Doing things
 
-These code names still use the old words and change once the rulings above land:
-- `update-cards` (would become Fetch / change sweep)
+| Term | Meaning | Rules |
+|---|---|---|
+| **Handoff** | Something actionable a Fetch turned up that Waldo offers to do or takes on for the owner. | Tracked as an open loop until it is done or dropped. The "Waldo took care of it" and "Waldo is on it" surfaces show handoffs. |
+| **Open loop** | The tracking record behind a handoff or any "I'll do it later". | Shown in the ledger under "Waldo is on". |
+| **The Adjustment** | A change Waldo makes or proposes to the day, such as moving a meeting. | Always an approved Effect. Undo where the provider allows it. |
+| **The Window** | A focus block Waldo guards on the calendar. | |
+| **Sync to calendar** | A button, not a noun. | |
+| **Approval buttons** | **Do it / Modify / Not now** | Replace Approve / Change / Skip. |
+| **Activity** | The screen that shows what Waldo did and why, from the ledger. | Replaces the mock Patrol log. |
+
+## 5. Memory
+
+| Term | Meaning | Rules |
+|---|---|---|
+| **Spot** | One thing Waldo noticed. Starts as an inferred claim. | Owner actions: that's right, not quite, forget. Confirming moves it into the Profile. |
+| **The Constellation** | The long-term memory layer: a graph of patterns across weeks. | Waldo builds, names and maintains it. The owner can't rename clusters but can correct or forget them. It never claims cause. |
+| **Profile** ("About you") | Generated from what the owner said or confirmed. Replaces the old core memory files. | Inferred claims never enter it on their own. |
+
+## 6. Personality and surfaces
+
+- **Waldo** is the agent. Written Waldo or waldo, never WALDO. Tagline: "Already on it."
+- **The mascot** is a Dalmatian with a bow tie: smart but goofy, head tilted, one ear up. It is a brand symbol and never speaks.
+- **Waldo Moods** are the avatar's states, tied to the owner's Form zone. Pure personality, no information the owner needs.
+- **App chat:** threads, the AG-UI pattern, inline rich cards, prompt chips, and generative forms instead of plain-text questions.
+- **Plans:** Pup / Pro / Pack, billing only.
+
+## 7. Voice
+
+The formula: open Waldo, shift to Alfred, close dry. About 60% friendly, 40% Alfred. In back-and-forth chat the register moves fully to Alfred: precise, unhurried, never clinical.
+
+Rules:
+1. Always give the reason.
+2. Wit once, then stop.
+3. Never self-congratulate. The action speaks.
+4. Always offer the door.
+5. Silence is the default. No filler check-ins or encouragement.
+6. 8th-grade reading level. No exclamation marks, no slang sign-offs.
+7. Greeting: "Morning." (owner ruling 2026-09-24; overrides the older "Good morning" rule).
+8. An agent that knows when not to speak: when Form is low, say less.
+
+Banned words: wellness, wellbeing, mindfulness, holistic, optimize, AI-powered, health tracker, health app, unlock (your potential), burnout as a self-descriptor, monitors, tracks, smart or intelligent on their own, hustle, empower, journey, leverage, deep dive, circle back.
+
+Owned words: signal, before, pattern, baseline, capacity, reads, already knows.
+
+Locked lines (updated to the current vocabulary):
+- Brief: "Morning. Bit of a rough night, your sleep was short by about 40 minutes. I've nudged your 9am to 10:30. Nothing drastic. The rest of your day looks good."
+- Adjustment: "Waldo did a thing. Your 2pm and 3pm swapped, the harder one's now when you're sharper. You can undo it if you want, but you probably don't."
+- Spot: "Spotted something. Your Wednesdays are quietly your best day, consistently. I've been saving your hardest work for then. It appears to be working."
+- Strong action: "Last night was a difficult one. I've cleared your morning and pushed your first meeting to 10:30. I'd suggest a light start."
+
+## 8. Internal terms
+
+| Old | Now |
+|---|---|
+| Dreaming Mode | Consolidation (the nightly pass) |
+| Heartbeat | Wake |
+| Hands, Facets | Skill |
+| The Patrol (background engine) | Fetch |
+| L0/L1/L2 | Say which: data tier, context tier or initiative level |
+
+## 9. Code names that still use old words
+
+User-facing strings were updated with this ruling. These identifiers stay until a cleanup pass (label `post-mvp-cleanup`):
+- `update-cards` / `update_card` (Fetch alerts)
 - `event-briefs` (Prep)
-- the `dreaming` schedule kind (consolidation)
-- `MEMORY_CORE` and friends (Profile)
-- the `brief` card id with midday and close variants
-
-Renaming is cheap and happens after the ruling.
+- the `dreaming` schedule kind (Consolidation)
+- `card:midday` (Check-in)
+- `spots` in console HTML ids and `supporting_spots` columns

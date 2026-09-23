@@ -60,7 +60,7 @@ describe('owner console', () => {
     expect(html).toContain(`name="csrf" value="${view.csrf}"`);
     expect(html).toContain('value="spot.forget"');
     expect(html).toContain('Not built yet');
-    expect(html.indexOf('The Brief')).toBeLessThan(html.indexOf('Afternoon check-in'));
+    expect(html.indexOf('The Brief')).toBeLessThan(html.indexOf('Check-in'));
     expect(renderConsole({ ...view, google: { connected: false, email: null, connectAvailable: false } })).toContain('OAuth app keys are not set');
   });
 });

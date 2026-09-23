@@ -51,12 +51,12 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
-    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets Approve / Change / Skip buttons; nothing changes until they approve. Include the event title.",
+    description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets Do it / Modify / Not now buttons; nothing changes until they approve. Include the event title.",
     schema: proposeCalendarChangeArgsSchema,
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
     async handle(args: ProposeCalendarChangeArgs) {
-      return { ok: true, data: { proposal_id: await desk.propose(args), status: 'sent to the owner with Approve / Change / Skip buttons', applied: false }, source_taint: null };
+      return { ok: true, data: { proposal_id: await desk.propose(args), status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false }, source_taint: null };
     },
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {

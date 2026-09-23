@@ -1,5 +1,7 @@
 # Harness gap inventory (2026-09-24)
 
+> Vocabulary: the owner settled all product words on 2026-09-24. [VOCABULARY_AND_BRAND_2026-09-24.md](VOCABULARY_AND_BRAND_2026-09-24.md) is the source; where this doc uses an older word (Afternoon check-in, update cards, Approve / Change / Skip, Weight as demand, Readiness), read it by that doc. Form / Load / Recovery are the body and day words; Weight is body mass only; Fetch is the sweep and its output is a fetch alert; Handoff is work Waldo offered or took on, tracked as an open loop.
+
 The building blocks a complete personal-agent harness needs, checked against the peer set and against waldo-backend on `beta-mvp`. Waldo claims come from the code as of `7f76435`. Peer claims come from COMPETITOR_RESEARCH.md, the PEER_EXPERIENCE doc (sections 2.6 Hermes and 2.7 OpenClaw), TOOL_LOOP_BUDGET.md, WEB_SEARCH_SELECTION.md, ADOPTION_DIRECTION.md, WALDO_BRAINSTORM_LIST.md and WALDO_BRAIN_RECONCILIATION.md. These are secondhand summaries; I didn't re-check any peer repo for this pass.
 
 Labels: **Built** means it is in code and deployed to staging. **Contract** means it has tests only, with no live run yet. **None** means it doesn't exist.

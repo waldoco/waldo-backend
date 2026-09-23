@@ -1,5 +1,7 @@
 # Spots, Constellations, Fetch and score derivations (2026-09-23)
 
+> Vocabulary: the owner settled all product words on 2026-09-24. [VOCABULARY_AND_BRAND_2026-09-24.md](VOCABULARY_AND_BRAND_2026-09-24.md) is the source; where this doc uses an older word (Afternoon check-in, update cards, Approve / Change / Skip, Weight as demand, Readiness), read it by that doc. Form / Load / Recovery are the body and day words; Weight is body mass only; Fetch is the sweep and its output is a fetch alert; Handoff is work Waldo offered or took on, tracked as an open loop.
+
 Owner direction, 2026-09-23 17:49 IST (WhatsApp). This doc turns it into a design and a derivation worksheet for his reading pass. Nothing here is built yet.
 
 ## 1. The concept, in the owner's words

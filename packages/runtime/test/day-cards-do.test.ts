@@ -14,7 +14,7 @@ const now = Date.parse('2026-09-23T10:00:00Z');
 describe('scheduled day cards', () => {
   it('covers the morning brief, an afternoon check-in and the close', () => {
     expect(DAY_CARDS.map((card) => [card.id, card.name, card.defaultTime])).toEqual([
-      ['card:brief', 'The Brief', '08:00'], ['card:midday', 'Afternoon check-in', '14:00'], ['card:close', 'The Close', '21:30'],
+      ['card:brief', 'The Brief', '08:00'], ['card:midday', 'Check-in', '14:00'], ['card:close', 'The Close', '21:30'],
     ]);
     expect(cardFor('card:close')?.calendar).toBe('tomorrow');
     expect(cardFor('nope')).toBeNull();
