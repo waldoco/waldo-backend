@@ -1,8 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
-import { coreFileStore } from '../memory/core-files';
-import { spotStore } from '../memory/spots';
+import { claimStore, profile } from '../memory/claims';
+import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
@@ -236,17 +236,33 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const episodes = episodeIndex(storage.sql);
     const kv = durableConversationStore(storage);
     const plans = dayPlanBook(storage.sql);
-    const memory = coreFileStore(storage.sql);
-    const spots = spotStore(storage.sql);
+    const memory = claimStore(storage.sql);
+    const copied = backupAndCopySpots(storage.sql, memory, new Date().toISOString());
+    if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);
     const download = createTelegramFileDownloader(token);
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
-      .then(([, , , seeded]) => { if (seeded) void this.serial(() => planToday('day-plan:boot')); });
+      .then(([, , , seeded]) => {
+        void this.serial(() => migrateCoreFiles('memory:migration'));
+        if (seeded) void this.serial(() => planToday('day-plan:boot'));
+      });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)], spots,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)],
     );
+    const migrateCoreFiles = async (trace: string) => {
+      const input = pendingCoreFiles(storage.sql, memory);
+      if (input === null) return;
+      const started = Date.now();
+      try {
+        const detail = await responder.migrate(trace, input);
+        markCoreFilesMigrated(memory, detail, new Date().toISOString());
+        log({ trace, hop: 'memory_migration', ms: Date.now() - started, ok: true, detail });
+      } catch (error) {
+        log({ trace, hop: 'memory_migration', ms: Date.now() - started, ok: false, error: String(error) });
+      }
+    };
     const listener = new TelegramOwnerListener({
       ownerTelegramId: owner, api, ...responder, log,
       respond: (turn, time) => {
@@ -298,12 +314,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
+      await migrateCoreFiles(`${trace}:migration`);
       const day = episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000);
       if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
       else {
         try {
-          const changed = await responder.consolidate(trace, transcript(day, clock.timezone));
-          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${changed.join(',') || 'no edits'}` });
+          const detail = await responder.consolidate(trace, transcript(day, clock.timezone));
+          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${detail}` });
         } catch (error) {
           log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error) });
         }
@@ -393,8 +410,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), csrf: session.csrf, notice,
           google: { connected: tokens !== undefined, email: tokens?.email ?? null, connectAvailable: (await google.connectUrl()) !== null },
-          memory: memory.read(), spots: spots.spots(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => spots.spots(status)),
-          nodes: spots.nodes(), edges: spots.edges(),
+          profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),
+          nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
@@ -405,13 +422,20 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       act: async ({ action, id, value }) => {
         const now = Date.now();
         const spotId = Number(id);
-        if (action === 'spot.dismiss' || action === 'spot.forget') {
-          if (!spots.spots().some((spot) => spot.id === spotId)) return false;
-          if (action === 'spot.dismiss') spots.setSpot(spotId, 'dismissed');
-          else spots.forgetSpot(spotId);
+        if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
+          const claim = memory.claims().find((row) => row.id === spotId);
+          if (!claim) return false;
+          if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
+          else if (action === 'spot.confirm') memory.confirm(spotId, 'owner, console', new Date(now).toISOString());
+          else {
+            memory.forget(spotId);
+            memory.barrier(claim.text, new Date(now).toISOString());
+          }
         } else if (action === 'node.forget') {
-          if (!spots.nodes().some((node) => node.id === spotId)) return false;
-          spots.forgetNode(spotId);
+          const node = memory.nodes().find((row) => row.id === spotId);
+          if (!node) return false;
+          memory.forgetNode(spotId);
+          memory.barrier(node.label, new Date(now).toISOString());
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

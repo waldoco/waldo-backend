@@ -3,7 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { reminderBook } from '../src/channels/reminders';
 import { ensureSchema } from '../src/tracer/schema';
-import { coreFileStore } from '../src/memory/core-files';
+import { claimStore } from '../src/memory/claims';
 import { Scheduler } from '../src/scheduler/multiplexer';
 import { productionDeps } from '../src/seams/deps';
 
@@ -11,7 +11,7 @@ describe('reminder book on the Telegram owner object', () => {
   it('schedules, lists, fires and cancels reminders beside chat memory', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('reminder-book'));
     await runInDurableObject(stub, async (_instance, state) => {
-      coreFileStore(state.storage.sql);
+      claimStore(state.storage.sql);
       ensureSchema(state.storage);
       const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
       const now = Date.parse('2036-09-23T08:00:00Z');

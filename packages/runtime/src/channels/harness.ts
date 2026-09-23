@@ -28,7 +28,7 @@ export const parseHarnessCommand = (text: string | undefined): HarnessCommand | 
 export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[] }>[] = [
   { step: 'Chat reply', hops: ['llm_reply'] },
   { step: 'Memory update', hops: ['memory'] },
-  { step: 'Spots update', hops: ['spots'] },
+  { step: 'Memory migration', hops: ['memory_backup', 'memory_migration'] },
   { step: 'Reminder fired', hops: ['reminder'] },
   { step: 'Day plan', hops: ['day_plan'] },
   { step: 'Brief / midday / close card', hops: ['day_card'] },

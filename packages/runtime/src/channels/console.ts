@@ -1,5 +1,4 @@
-import type { CoreFiles } from '../memory/core-files';
-import type { ConstellationEdge, ConstellationNode, Spot } from '../memory/spots';
+import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
 import type { E2EStep, TraceRow } from './harness';
 import type { StoredFile } from './files';
 
@@ -44,7 +43,7 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => ({
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.dismiss', 'spot.forget', 'node.forget', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -55,8 +54,9 @@ export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction 
 
 export const NOTICES: Readonly<Record<string, string>> = {
   'spot.dismiss': 'Spot dismissed. Waldo will stop using it.',
-  'spot.forget': 'Spot forgotten and deleted.',
-  'node.forget': 'Node forgotten, along with its links.',
+  'spot.confirm': 'Confirmed. It now counts as something you said.',
+  'spot.forget': 'Forgotten and deleted. Waldo keeps a short do-not-relearn note so it does not pick it up again.',
+  'node.forget': 'Pattern forgotten, along with its links. Waldo keeps a short do-not-relearn note.',
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
@@ -77,9 +77,10 @@ export type ConsoleView = Readonly<{
   csrf: string;
   notice: string | null;
   google: Readonly<{ connected: boolean; email: string | null; connectAvailable: boolean }>;
-  memory: CoreFiles;
-  spots: readonly Spot[];
-  retiredSpots: readonly Spot[];
+  profile: ReturnType<typeof profile>;
+  barriers: number;
+  spots: readonly Claim[];
+  retiredSpots: readonly Claim[];
   nodes: readonly ConstellationNode[];
   edges: readonly ConstellationEdge[];
   cards: readonly ConsoleCard[];
@@ -119,8 +120,10 @@ const connectors = (view: ConsoleView) => {
   ].join('');
 };
 
+const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: 'Waldo\'s inference' };
+
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(spot.source === 'stated' ? 'You said this' : 'Waldo\'s inference', spot.source === 'stated' ? 'teal' : 'plain')} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Why: ${esc(spot.evidence)}</div></div><div class="act">${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('');
+  : view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? spot.source, spot.source === 'inferred' ? 'plain' : 'teal')} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Why: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('');
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
@@ -148,8 +151,9 @@ const files = (view: ConsoleView) => {
 };
 
 const memory = (view: ConsoleView) => {
-  const titles: Readonly<Record<string, string>> = { MEMORY_CORE: 'About you', MEMORY_GOALS: 'Goals', MEMORY_FOLLOWUPS: 'Follow-ups', 'intelligence-summary': 'Waldo\'s read (inference)' };
-  return `<div class="grid2">${Object.entries(view.memory).map(([file, text]) => `<div class="panel"><div class="panel-title">${esc(titles[file] ?? file)}</div>${text ? `<pre>${esc(text)}</pre>` : empty('Empty')}</div>`).join('')}</div>`;
+  const panels = view.profile.length === 0 ? empty('Nothing yet. Your profile fills in from what you tell Waldo.')
+    : `<div class="grid2">${view.profile.map((section) => `<div class="panel"><div class="panel-title">${esc(section.title)}</div><pre>${esc(section.lines.join('\n'))}</pre></div>`).join('')}</div>`;
+  return panels + (view.barriers ? `<div class="sub">${view.barriers} do-not-relearn ${view.barriers === 1 ? 'note' : 'notes'} from things you asked Waldo to forget.</div>` : '');
 };
 
 const activity = (view: ConsoleView) => {

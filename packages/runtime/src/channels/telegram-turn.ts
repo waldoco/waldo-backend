@@ -10,8 +10,7 @@ import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider } from '../llm/provider';
 import { CLINICAL_REDIRECT, messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
-import { applyMemoryEdits, MEMORY_EDITS_SCHEMA, MEMORY_UPDATE_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyMemoryInput, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
-import { applyPromotion, applySpotOps, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, SPOT_INSTRUCTION, SPOT_OPS_SCHEMA, spotInput, spotsPrompt, type SpotStore } from '../memory/spots';
+import { applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions, TurnLogEntry, TurnTimer } from './telegram-listener';
@@ -31,13 +30,12 @@ const CLINICAL_FALLBACK = {
 export const createTelegramResponder = (
   openaiApiKey: string,
   store?: ConversationStore,
-  memory?: CoreFileStore,
+  memory?: ClaimStore,
   log: (entry: TurnLogEntry) => void = () => undefined,
   readers: MediaReaders = {},
   clock: OwnerClock = { timezone: 'UTC', now: () => new Date() },
   tools: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [],
-  spots?: SpotStore,
-): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<readonly string[]>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string> } => {
+): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string> } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
   if (!accepted.ok) throw new Error('fixture admission failed');
@@ -91,7 +89,7 @@ export const createTelegramResponder = (
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: (tools, turns) => complete(trace, 'reply',
-          [messagingSystemPrompt(handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory.read())] : []), ...(spots ? [spotsPrompt(spots)] : [])].join('\n\n'),
+          [messagingSystemPrompt(handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
           request.messages.join('\n'),
           undefined,
           pending,
@@ -126,21 +124,12 @@ export const createTelegramResponder = (
       pending = media?.attachment ? [media.attachment] : undefined;
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
       const text = await converse(id, turn.chatId, said, time);
-      const writes: Promise<unknown>[] = [];
       if (memory) {
-        const files = memory.read();
         const started = Date.now();
-        writes.push(ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, said, text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
-          .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyMemoryEdits(memory, raw, new Date().toISOString()).join(',') }))
-          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) })));
+        settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, turn.text ?? '', media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA })
+          .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`) }))
+          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
       }
-      if (spots) {
-        const started = Date.now();
-        writes.push(ask(id, 'spots', SPOT_INSTRUCTION, spotInput(spots, said, text), { name: 'spot_ops', schema: SPOT_OPS_SCHEMA })
-          .then((raw) => log({ trace: id, hop: 'spots', ms: Date.now() - started, ok: true, detail: applySpotOps(spots, raw, new Date().toISOString()) }))
-          .catch((error: unknown) => log({ trace: id, hop: 'spots', ms: Date.now() - started, ok: false, error: String(error) })));
-      }
-      settling = Promise.all(writes);
       return text;
     },
     async remind(id, chatId, note, time) {
@@ -157,17 +146,22 @@ export const createTelegramResponder = (
     },
     async consolidate(trace, day) {
       await settling;
-      if (!memory) return [];
-      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyMemoryInput(memory.read(), day), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA });
-      return applyMemoryEdits(memory, raw, new Date().toISOString());
+      if (!memory) return 'no memory';
+      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
+      return applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`);
+    },
+    async migrate(trace, input) {
+      if (!memory) return 'no memory';
+      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
+      return applyClaimOps(memory, raw, new Date().toISOString());
     },
     async promote(trace) {
       await settling;
-      if (!spots || spots.spots().length === 0) return 'no spots';
-      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, spotsPrompt(spots), { name: 'promotion', schema: PROMOTION_SCHEMA });
-      return applyPromotion(spots, raw, new Date().toISOString());
+      if (!memory || memory.claims().length === 0) return 'no claims';
+      const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
+      return applyPromotion(memory, raw, new Date().toISOString());
     },
-    planDay: (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory.read())}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
+    planDay: (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
     chooseReaction: async (turn) => (JSON.parse(await ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), turn.text, { name: 'reaction', schema: reactionSchema(TELEGRAM_REACTIONS) })) as { reaction?: string }).reaction ?? null,
   };
 };
