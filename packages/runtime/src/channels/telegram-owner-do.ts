@@ -8,8 +8,9 @@ import { productionDeps } from '../seams/deps';
 import { durableConversationStore } from './conversation-store';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
+import { armDayCards, cardFor, composeDayCard, isSkip } from './day-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
-import { reminderBook, reminderHandlers } from './reminders';
+import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
 import { googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
@@ -37,6 +38,7 @@ type OwnerRuntime = Readonly<{
   fire(entry: ScheduleEntry): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
+  cards(entry: ScheduleEntry): Promise<void>;
   ready: Promise<void>;
 }>;
 
@@ -72,9 +74,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   override async alarm(): Promise<void> {
     await this.serial(async () => {
-      const { scheduler, fire, nightly, briefs, ready } = this.setup();
+      const { scheduler, fire, nightly, briefs, cards, ready } = this.setup();
       await ready;
-      await scheduler.dispatchDue({ reminder: fire, dreaming: nightly, pre_activity_spot: briefs });
+      await scheduler.dispatchDue({ reminder: fire, dreaming: nightly, pre_activity_spot: briefs, brief: cards });
     });
   }
 
@@ -145,7 +147,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
     const episodes = episodeIndex(storage.sql);
     const kv = durableConversationStore(storage);
-    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now())]).then(() => undefined);
+    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, clock.timezone, Date.now())]).then(() => undefined);
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), coreFileStore(this.ctx.storage.sql), log,
       { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)],
@@ -209,7 +211,29 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: false, error: String(error) });
       }
     };
-    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, ready };
+    const cards = async (entry: ScheduleEntry) => {
+      const card = cardFor(entry.id);
+      if (card === null) return;
+      const trace = `${entry.id}:${entry.occurrence_at}`;
+      const started = Date.now();
+      const now = Date.now();
+      const client = await google.client();
+      const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
+      const said = await composeDayCard(card, now, clock.timezone, {
+        google: client, connectUrl: client ? null : await google.connectUrl(),
+        ledger: desk.ledger(book.list()), today: transcript(episodes.since(midnight, 30_000), clock.timezone),
+      });
+      try {
+        const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
+        const skipped = !text || isSkip(text);
+        if (!skipped) await api.sendMessage({ chat_id: owner, text });
+        log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
+      } catch (error) {
+        log({ trace, hop: 'day_card', ms: Date.now() - started, ok: false, error: String(error) });
+        throw error;
+      }
+    };
+    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, ready };
     return this.runtime;
   }
 }
