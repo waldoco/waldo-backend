@@ -6,6 +6,16 @@ How Waldo behaves on messaging surfaces (Telegram today). The code is the source
 
 `TelegramOwnerListener` (`packages/runtime/src/channels/telegram-listener.ts`) answers only when both the sender and the private chat match the configured owner Telegram id. Every other update is ignored: no model call, no reaction, no reply. The poll offset still advances so ignored updates are not re-read.
 
+## Inbound contract for every channel
+
+Every channel adapter follows these rules, so a new adapter does not relearn them:
+
+- Accept the fields a normal owner message carries (replies, quotes, link previews), reading only the owner's own text.
+- Never drop an owner message silently. When a message fails the gate (media, forwards, unsupported formatting), reply honestly that it cannot be read yet and mark it with the channel's failure-style reaction.
+- Keep ignoring everyone who is not the owner: no model call, no reaction, no reply.
+
+On Telegram, `telegramMessageUpdateSchema` is the gate and `telegramUnsupportedMessageSchema` reads only identifiers for the honest reply (`packages/contracts/src/adapters/channel.ts`).
+
 ## Never feel stalled
 
 For each owner message the listener:

@@ -2,7 +2,7 @@
 
 ## Start here
 
-0. [What is built](CURRENT_SYSTEM.md): current state at a pinned SHA, with [messaging behavior](behavior/MESSAGING_BEHAVIOR.md), [production architecture](architecture/PRODUCTION_ARCHITECTURE.md) and [adoption direction](planning/ADOPTION_DIRECTION.md).
+0. [What is built](CURRENT_SYSTEM.md): current state at a pinned SHA, with [messaging behavior](behavior/MESSAGING_BEHAVIOR.md), [production architecture](architecture/PRODUCTION_ARCHITECTURE.md) and [adoption direction](planning/ADOPTION_DIRECTION.md). Staging cleanup: [teardown](ops/TEARDOWN.md).
 1. [Worker packet](planning/waldo-agent-mvp/README.md): selected MVP decisions, read order and source index.
 2. [Canonical product architecture and build plan](planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md): one release definition, stack, ownership, slices and acceptance criteria; finalized 21 September 2026.
 3. [Worker guide](planning/waldo-agent-mvp/WORKER_GUIDE.md) and [first S0 assignment](planning/waldo-agent-mvp/FIRST_WORKER_ASSIGNMENT.md): libraries, role-specific reading, context/tool/harness engineering, verification and completion evidence.

@@ -29,7 +29,29 @@ Adopted: prove one clean conversation before adding channels and automation, whi
 
 Adopted: small, inspectable cores and version-bound provider transforms. Not adopted: unrestricted local filesystem and shell defaults. Source: [Pi coding agent](https://mariozechner.at/posts/2025-11-30-pi-coding-agent/).
 
+## Architecture directions
+
+- **Multimodal input.** Text-only today is a channel gate, not a model limit. The owner can send text, emoji, images and files; Waldo reads each through the model's image and file inputs and says plainly when a type is not supported yet.
+- **Direct or Kennel.** Waldo handles small requests directly in chat. Larger work becomes a Kennel packet for structured execution, and the chat keeps the owner informed.
+
+## End-of-day bar and next horizon
+
+- **End-of-day bar.** The owner spins up his own Waldo end to end, with his own accounts connected, once the app and dashboard are configured.
+- **Next horizon.** Agent-to-agent communication, and a plugin system for external agents and harnesses (Meta Muse, Codex, Claude and others).
+
 ## Queue
+
+Day program, in order:
+
+1. Current queue: drop fix, observability, Telegram webhook deploy, dev loop on the owner's Mac.
+2. Multimodal slice and a rigorous end-to-end test pass.
+3. AG-UI projection, onboarding, and surfaces: Waldo mobile app, Discord, then WhatsApp or iMessage where possible.
+4. Web dashboard.
+5. Extended competitor matrix (features, behavior, capabilities) in this document.
+6. Secrets and vault: the agent creates its own vault files and shares them with the owner.
+7. Performance work throughout.
+
+Carried from earlier:
 
 1. AG-UI projection (contract level).
 2. Management workspace UI in the Waldo app.
