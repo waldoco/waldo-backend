@@ -104,7 +104,7 @@ describe('TelegramOwnerListener', () => {
     await expect(listener.pollOnce(adapter, 0)).resolves.toEqual(['answered', 'unsupported', 'unsupported', 'ignored']);
     const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text);
     expect(sends[0]).toBe('echo hi');
-    expect(sends.slice(1)).toEqual(Array(2).fill('I can read text, photos and documents here. Voice notes, videos, stickers, forwards and some formatting do not come through yet.'));
+    expect(sends.slice(1)).toEqual(Array(2).fill('I can read text, photos, documents and voice notes here. Videos, stickers, forwards and some formatting do not come through yet.'));
     expect(calls.some(([kind, r]) => kind !== 'typing' && (r as { chat_id: number }).chat_id === 42)).toBe(false);
   });
 

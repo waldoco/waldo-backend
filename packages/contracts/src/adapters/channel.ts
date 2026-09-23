@@ -210,8 +210,8 @@ const telegramFileSchema = z.looseObject({
   file_size: z.int().positive().optional(),
 });
 
-// A message is text, a photo or a document; photos and documents may carry a caption.
-// Voice, video, stickers and forwards stay unparseable and get the honest static reply.
+// A message is text, a photo, a document, a voice note or an audio file; media may carry a caption.
+// Video, stickers and forwards stay unparseable and get the honest static reply.
 export const telegramMessageUpdateSchema = z.strictObject({
   update_id: z.int().positive(),
   message: z.strictObject({
@@ -225,12 +225,14 @@ export const telegramMessageUpdateSchema = z.strictObject({
     caption_entities: z.array(telegramTextEntitySchema).max(100).optional(),
     photo: z.array(telegramFileSchema).min(1).max(10).optional(),
     document: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
+    voice: telegramFileSchema.extend({ mime_type: z.string().min(1).max(128).optional() }).optional(),
+    audio: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
     reply_to_message: z.looseObject({ message_id: z.int().positive() }).optional(),
     quote: z.looseObject({}).optional(),
     link_preview_options: z.looseObject({}).optional(),
   }).refine(
-    (m) => [m.text, m.photo, m.document].filter((part) => part !== undefined).length === 1 && (m.caption === undefined || m.text === undefined),
-    'exactly one of text, photo or document',
+    (m) => [m.text, m.photo, m.document, m.voice, m.audio].filter((part) => part !== undefined).length === 1 && (m.caption === undefined || m.text === undefined),
+    'exactly one of text, photo, document, voice or audio',
   ),
 });
 export type TelegramMessageUpdate = z.infer<typeof telegramMessageUpdateSchema>;

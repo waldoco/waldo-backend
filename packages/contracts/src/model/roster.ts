@@ -20,6 +20,13 @@ export type ModelName = z.infer<typeof modelNameSchema>;
 // entry above, PROVIDER_OF below and a price in packages/runtime/src/llm/pricing.ts.
 export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_5_NANO_MODEL;
 
+// Speech-to-text for owner voice notes. Not chat routes, so they stay outside modelNameSchema.
+// Recommended default is ElevenLabs Scribe v2 (docs/planning/STT_SELECTION.md); smallest.ai Pulse and
+// OpenAI transcription are configured options.
+export const ELEVENLABS_TRANSCRIBE_MODEL = 'scribe_v2' as const;
+export const SMALLEST_TRANSCRIBE_MODEL = 'pulse' as const;
+export const WALDO_TRANSCRIBE_MODEL = 'gpt-4o-mini-transcribe' as const;
+
 export const providerSchema = z.enum(['workers_ai', 'anthropic', OPENAI_PROVIDER]);
 export type Provider = z.infer<typeof providerSchema>;
 

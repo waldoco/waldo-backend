@@ -5,7 +5,7 @@ export type TelegramPollingClient = Readonly<{
 }>;
 
 export type TelegramMedia = Readonly<{
-  kind: 'photo' | 'document';
+  kind: 'photo' | 'document' | 'voice' | 'audio';
   fileId: string;
   fileName: string | null;
   mimeType: string | null;
@@ -97,7 +97,11 @@ export class TelegramPollingAdapter {
       ? { kind: 'photo', fileId: photo.file_id, fileName: null, mimeType: 'image/jpeg', fileSize: photo.file_size ?? null }
       : message.document
         ? { kind: 'document', fileId: message.document.file_id, fileName: message.document.file_name ?? null, mimeType: message.document.mime_type ?? null, fileSize: message.document.file_size ?? null }
-        : undefined;
+        : message.voice
+          ? { kind: 'voice', fileId: message.voice.file_id, fileName: 'voice.ogg', mimeType: message.voice.mime_type ?? 'audio/ogg', fileSize: message.voice.file_size ?? null }
+          : message.audio
+            ? { kind: 'audio', fileId: message.audio.file_id, fileName: message.audio.file_name ?? 'audio', mimeType: message.audio.mime_type ?? null, fileSize: message.audio.file_size ?? null }
+            : undefined;
     return Object.freeze({
       updateId: update.update_id,
       messageId: message.message_id ?? null,

@@ -10,7 +10,7 @@ import { applyMemoryEdits, MEMORY_EDITS_SCHEMA, MEMORY_UPDATE_INSTRUCTION, memor
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions, TurnLogEntry } from './telegram-listener';
-import { loadTelegramMedia, type TelegramFileDownloader } from './telegram-media';
+import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
@@ -22,7 +22,7 @@ export const createTelegramResponder = (
   store?: ConversationStore,
   memory?: CoreFileStore,
   log: (entry: TurnLogEntry) => void = () => undefined,
-  download?: TelegramFileDownloader,
+  readers: MediaReaders = {},
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -73,7 +73,7 @@ export const createTelegramResponder = (
       await restored;
       const id = `tg-${turn.updateId}`;
       traceId = id;
-      const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, download)) : undefined;
+      const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers)) : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
       const publication = await time('joined_path', () => path.submit({

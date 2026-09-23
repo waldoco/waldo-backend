@@ -369,6 +369,7 @@ describe('telegram gate-2 shapes', () => {
     const document = { ...baseTgMessage, message: { ...bare, document: { file_id: 'd', file_unique_id: 'u', file_name: 'plan.pdf', mime_type: 'application/pdf' } } };
     expect(telegramMessageUpdateSchema.safeParse(photo).success).toBe(true);
     expect(telegramMessageUpdateSchema.safeParse(document).success).toBe(true);
+    expect(telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...bare, voice: { file_id: "v", file_unique_id: "u", duration: 2, mime_type: "audio/ogg" } } }).success).toBe(true);
     expect(telegramMessageUpdateSchema.safeParse({ ...photo, message: { ...photo.message, text: 'hi' } }).success).toBe(false);
     expect(telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, caption: 'x' } }).success).toBe(false);
     expect(telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: bare }).success).toBe(false);

@@ -14,6 +14,8 @@ const FILE_EXTENSIONS: Readonly<Record<string, string>> = {
 };
 
 export type TelegramFileDownloader = (fileId: string) => Promise<Uint8Array>;
+export type Transcriber = (audio: Uint8Array, filename: string, mimeType: string) => Promise<string>;
+export type MediaReaders = Readonly<{ download?: TelegramFileDownloader; transcribe?: Transcriber }>;
 
 export type LoadedMedia = Readonly<{ note: string; attachment?: LLMAttachment }>;
 
@@ -36,7 +38,8 @@ const readableAs = (media: TelegramMedia): Omit<LLMAttachment, 'data_base64'> | 
   return mime ? { kind: 'file', mime_type: mime, filename } : null;
 };
 
-const label = (media: TelegramMedia): string => media.kind === 'photo' ? 'photo' : `file "${media.fileName ?? 'unnamed'}"`;
+const label = (media: TelegramMedia): string =>
+  media.kind === 'photo' ? 'photo' : media.kind === 'voice' ? 'voice note' : media.kind === 'audio' ? `audio file "${media.fileName ?? 'unnamed'}"` : `file "${media.fileName ?? 'unnamed'}"`;
 
 export const toBase64 = (bytes: Uint8Array): string => {
   let binary = '';
@@ -46,8 +49,9 @@ export const toBase64 = (bytes: Uint8Array): string => {
 
 // The note goes into the conversation text so later turns know what was shared;
 // the bytes ride only on the turn that received them.
-export const loadTelegramMedia = async (media: TelegramMedia, download: TelegramFileDownloader | undefined): Promise<LoadedMedia> => {
+export const loadTelegramMedia = async (media: TelegramMedia, { download, transcribe }: MediaReaders): Promise<LoadedMedia> => {
   const what = label(media);
+  if (media.kind === 'voice' || media.kind === 'audio') return transcribeMedia(media, what, download, transcribe);
   const readable = readableAs(media);
   if (!readable) return { note: `[Owner sent a ${what}. This file type cannot be read yet.]` };
   if (media.fileSize !== null && media.fileSize > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { note: `[Owner sent a ${what} larger than 20 MB, which cannot be downloaded here.]` };
@@ -58,5 +62,16 @@ export const loadTelegramMedia = async (media: TelegramMedia, download: Telegram
     return { note: `[Owner sent a ${what}, attached.]`, attachment: { ...readable, data_base64: toBase64(bytes) } };
   } catch {
     return { note: `[Owner sent a ${what}, but it could not be downloaded.]` };
+  }
+};
+
+const transcribeMedia = async (media: TelegramMedia, what: string, download?: TelegramFileDownloader, transcribe?: Transcriber): Promise<LoadedMedia> => {
+  if (media.fileSize !== null && media.fileSize > TELEGRAM_DOWNLOAD_LIMIT_BYTES) return { note: `[Owner sent a ${what} larger than 20 MB, which cannot be downloaded here.]` };
+  if (!download || !transcribe) return { note: `[Owner sent a ${what}, but voice reading is not set up here.]` };
+  try {
+    const text = (await transcribe(await download(media.fileId), media.fileName ?? 'audio', media.mimeType ?? 'application/octet-stream')).trim();
+    return { note: text.length > 0 ? `[Owner sent a ${what}. Transcript: ${text}]` : `[Owner sent a ${what} with no speech that could be made out.]` };
+  } catch {
+    return { note: `[Owner sent a ${what}, but it could not be transcribed.]` };
   }
 };

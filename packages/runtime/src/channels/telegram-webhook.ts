@@ -10,6 +10,9 @@ export type TelegramWebhookEnv = Readonly<{
   WALDO_ENVIRONMENT?: string;
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
+  SMALLEST_AI_API_KEY?: string;
+  ELEVENLABS_API_KEY?: string;
+  WALDO_STT_PROVIDER?: string;
 }>;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
