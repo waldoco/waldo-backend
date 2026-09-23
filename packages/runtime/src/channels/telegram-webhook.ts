@@ -14,6 +14,8 @@ export type TelegramWebhookEnv = Readonly<{
   SMALLEST_AI_API_KEY?: string;
   ELEVENLABS_API_KEY?: string;
   WALDO_STT_PROVIDER?: string;
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
 }>;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
@@ -40,6 +42,6 @@ export const handleTelegramWebhook = async (
   }
   const body = await request.text();
   const stub = env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(env.WALDO_OWNER_TELEGRAM_ID));
-  waitUntil(stub.fetch('https://telegram-owner/turn', { method: 'POST', body }));
+  waitUntil(stub.fetch('https://telegram-owner/turn', { method: 'POST', body, headers: { 'x-waldo-origin': new URL(request.url).origin } }));
   return new Response('ok');
 };

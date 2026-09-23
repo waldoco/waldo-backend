@@ -121,7 +121,7 @@ export const trustedRunV2EvidenceSchema = z
     source_count: z.int().nonnegative().max(32),
     source_taint: sourceTaintSchema,
     recall_status: z.enum(['partial', 'failed', 'skipped']).nullable(),
-    tool_acl: z.array(toolNameSchema).max(32),
+    tool_acl: z.array(toolNameSchema).max(toolNameSchema.options.length),
     provider_calls: z.int().nonnegative().max(16),
     total_tokens: z.int().nonnegative().max(100_000),
   })

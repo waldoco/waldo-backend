@@ -1518,7 +1518,7 @@ describe('ContextComposer', () => {
     if (!first.ok || !second.ok) return;
     expect(second.prompt).toBe(first.prompt);
     expect(second.checkpoint).toEqual(first.checkpoint);
-    expect(first.checkpoint.context_ref).toBe('ctx_aa7bd83b9ae53fdf1def026822e3cadb');
+    expect(first.checkpoint.context_ref).toBe('ctx_b0d1fedb6201051d62c3278ef1a96066');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );

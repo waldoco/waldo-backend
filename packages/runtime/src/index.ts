@@ -10,6 +10,8 @@ import {
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
 import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
+import { handleGoogleCallback } from './channels/google-oauth';
+import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
 import {
@@ -63,6 +65,8 @@ declare global {
       TELEGRAM_OWNER_DO?: DurableObjectNamespace;
       TELEGRAM_BOT_TOKEN?: string;
       TELEGRAM_WEBHOOK_SECRET?: string;
+      GOOGLE_CLIENT_ID?: string;
+      GOOGLE_CLIENT_SECRET?: string;
       WALDO_OWNER_TELEGRAM_ID?: string;
       OPENAI_API_KEY?: string;
       WALDO_ENV?: string;
@@ -110,6 +114,9 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     if (new URL(request.url).pathname === TELEGRAM_WEBHOOK_PATH) {
       return handleTelegramWebhook(request, env, (work) => ctx?.waitUntil(work));
+    }
+    if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
+      return handleGoogleCallback(request, env);
     }
     if (env.RESPONSIBILITY_PUBLIC_API_ENABLED !== 'true') {
       return new Response('not found', {

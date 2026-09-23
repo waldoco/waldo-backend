@@ -19,7 +19,7 @@ describe('handleTelegramWebhook', () => {
     expect(response.status).toBe(200);
     await Promise.all(pending);
     expect(idFromName).toHaveBeenCalledWith('42');
-    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/turn', { method: 'POST', body: '{"update_id":1}' });
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/turn', { method: 'POST', body: '{"update_id":1}', headers: { 'x-waldo-origin': 'https://w.test' } });
   });
 
   it('rejects a missing or wrong secret and hides the route when unconfigured', async () => {
