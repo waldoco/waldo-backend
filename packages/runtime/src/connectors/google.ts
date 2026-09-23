@@ -1,29 +1,24 @@
-// Google connector for the owner's own account: OAuth (offline, one refresh token held in the
-// owner's Durable Object, never in the repo or prompt), Calendar reads and Gmail drafts.
-// Owner decision 2026-09-23: consent once to the workspace set Waldo will grow into, so new
-// tools don't force re-consent. Scope is not permission: each tool still gates its own effects.
+// Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
+// Scopes are requested per feature, when that feature is turned on (brief 2026-09-24, W3). Consent adds to
+// what the account already granted. Scope is not permission: each tool still gates its own effects.
 // Unverified app, so only listed test users can connect (post-mvp-cleanup: Google verification).
-export const GOOGLE_SCOPES = [
-  'openid',
-  'email',
-  'https://www.googleapis.com/auth/calendar.events',
-  'https://www.googleapis.com/auth/calendar.readonly',
-  'https://www.googleapis.com/auth/gmail.modify',
-  'https://www.googleapis.com/auth/gmail.compose',
-  'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/tasks',
-  'https://www.googleapis.com/auth/drive',
-  'https://www.googleapis.com/auth/documents',
-  'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/presentations',
-  'https://www.googleapis.com/auth/contacts',
-] as const;
+// gmail.compose stays until Waldo keeps its own drafts (W6 follow-up loop); then it goes (post-mvp-cleanup).
+const AUTH = 'https://www.googleapis.com/auth/';
+export const GOOGLE_FEATURE_SCOPES = {
+  calendar: [`${AUTH}calendar.events`],
+  mail: [`${AUTH}gmail.readonly`, `${AUTH}gmail.send`, `${AUTH}gmail.compose`],
+  tasks: [`${AUTH}tasks`],
+} as const;
+export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
+export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
+export const googleHas = (scopes: readonly string[] | undefined, feature: GoogleFeature): boolean =>
+  GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 const STATE_TTL_MS = 15 * 60_000;
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
-export type GoogleTokens = Readonly<{ refresh_token: string; email?: string }>;
+export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] }>;
 type Fetch = typeof fetch;
 
 const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -44,30 +39,30 @@ export async function verifyOauthState(secret: string, state: string, now: numbe
   return (await sign(secret, `${owner}.${expires}`)) === mac ? owner : null;
 }
 
-export function googleConsentUrl(app: GoogleApp, state: string): string {
+export function googleConsentUrl(app: GoogleApp, state: string, feature: GoogleFeature = 'calendar'): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.search = new URLSearchParams({
-    client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: GOOGLE_SCOPES.join(' '),
-    access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state,
+    client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: ['openid', 'email', ...GOOGLE_FEATURE_SCOPES[feature]].join(' '),
+    access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'true', state,
   }).toString();
   return url.toString();
 }
 
-async function token(app: GoogleApp, body: Record<string, string>, fetcher: Fetch): Promise<{ access_token: string; refresh_token?: string; id_token?: string }> {
+async function token(app: GoogleApp, body: Record<string, string>, fetcher: Fetch): Promise<{ access_token: string; refresh_token?: string; id_token?: string; scope?: string }> {
   const response = await fetcher('https://oauth2.googleapis.com/token', {
     method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ client_id: app.clientId, client_secret: app.clientSecret, ...body }).toString(),
   });
   const json = await response.json() as { access_token?: string; refresh_token?: string; id_token?: string; error?: string };
   if (!response.ok || !json.access_token) throw new Error(`google token failed: ${json.error ?? response.status}`);
-  return json as { access_token: string; refresh_token?: string; id_token?: string };
+  return json as { access_token: string; refresh_token?: string; id_token?: string; scope?: string };
 }
 
 export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: Fetch = fetch): Promise<GoogleTokens> {
   const result = await token(app, { code, grant_type: 'authorization_code', redirect_uri: app.redirectUri }, fetcher);
   if (!result.refresh_token) throw new Error('google returned no refresh token');
   const claims = result.id_token ? JSON.parse(atob(result.id_token.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as { email?: string } : {};
-  return { refresh_token: result.refresh_token, ...(claims.email ? { email: claims.email } : {}) };
+  return { refresh_token: result.refresh_token, scopes: (result.scope ?? '').split(' ').filter(Boolean), ...(claims.email ? { email: claims.email } : {}) };
 }
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string }>;
@@ -90,11 +85,16 @@ export type GoogleClient = Readonly<{
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
 }>;
 
-export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch): GoogleClient {
+// health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
+export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void): GoogleClient {
   let access: { token: string; until: number } | null = null;
   const bearer = async () => {
     if (access && access.until > Date.now()) return access.token;
-    const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher);
+    const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
+      health?.(error instanceof Error ? error.message : String(error));
+      throw error;
+    });
+    health?.('');
     access = { token: result.access_token, until: Date.now() + 50 * 60_000 };
     return access.token;
   };

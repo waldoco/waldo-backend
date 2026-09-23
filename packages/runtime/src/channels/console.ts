@@ -95,7 +95,7 @@ export type ConsoleView = Readonly<{
   sessionUntil: string;
   csrf: string;
   notice: string | null;
-  google: Readonly<{ connected: boolean; email: string | null; connectAvailable: boolean }>;
+  google: Readonly<{ connected: boolean; email: string | null; connectAvailable: boolean; error: string | null; mail: boolean }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
@@ -126,14 +126,19 @@ const connectors = (view: ConsoleView) => {
   const { google, telegram, csrf } = view;
   const telegramAction = form(csrf, 'telegram.link', 'Link a Telegram account', {}, {})
     + (telegram.linked && telegram.unlinkAvailable ? form(csrf, 'telegram.unlink', 'Unlink', {}, { tone: 'danger', confirm: 'Unlink Telegram? Waldo stops messaging it. Sign in here with your email to link again.' }) : '');
-  const googleAction = google.connected
-    ? form(csrf, 'google.disconnect', 'Disconnect', {}, { tone: 'danger', confirm: 'Disconnect Google? Waldo stops reading your calendar and mail.' })
+  const disconnect = form(csrf, 'google.disconnect', 'Disconnect', {}, { tone: 'danger', confirm: 'Disconnect Google? Waldo stops reading your calendar and mail.' });
+  const googleAction = google.connected && google.error && google.connectAvailable
+    ? `<a class="btn primary" href="${CONSOLE_GOOGLE_PATH}">Reconnect</a>${disconnect}`
+    : google.connected
+    ? `${!google.mail && google.connectAvailable ? `<a class="btn quiet" href="${CONSOLE_GOOGLE_PATH}?feature=mail">Allow Gmail</a>` : ''}${disconnect}`
     : google.connectAvailable ? `<a class="btn primary" href="${CONSOLE_GOOGLE_PATH}">Connect Google</a>` : '<span class="note">OAuth app keys are not set on this server yet</span>';
   const row = (name: string, detail: string, state: string, action: string) =>
     `<div class="row conn"><div><div class="name">${esc(name)}</div><div class="sub">${detail}</div></div><div class="state">${state}</div><div class="act">${action}</div></div>`;
   return [
-    row('Google Calendar and Gmail', google.connected ? `Signed in as <b>${esc(google.email ?? 'unknown account')}</b>. Waldo reads your calendar and new mail and can save drafts.` : 'Lets Waldo read your calendar, watch new mail and save email drafts. Nothing is sent without your approval.',
-      status(google.connected, google.connected ? 'Connected' : 'Not connected'), googleAction),
+    row('Google Calendar and Gmail', google.connected && google.error ? `Waldo could not refresh access for <b>${esc(google.email ?? 'your account')}</b> (${esc(google.error)}). Reconnect to fix it.`
+      : google.connected ? `Signed in as <b>${esc(google.email ?? 'unknown account')}</b>. Waldo reads your calendar${google.mail ? ' and mail, and sends mail only after you approve it' : '. Allow Gmail to let Waldo read mail and send what you approve'}.`
+      : 'Lets Waldo read your calendar. Gmail is a separate step. Nothing is sent without your approval.',
+      status(google.connected && !google.error, google.connected ? (google.error ? 'Needs reconnect' : 'Connected') : 'Not connected'), googleAction),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
     row('Console session', `Signed in until ${esc(view.sessionUntil)}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out')),

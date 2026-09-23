@@ -2,13 +2,13 @@ import {
   draftEmailArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type DraftEmailArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import type { GoogleClient } from '../../connectors/google';
+import { GoogleError, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
   client(): Promise<GoogleClient | null>;
-  connectUrl(): Promise<string | null>;
+  connectUrl(feature: GoogleFeature): Promise<string | null>;
 }>;
 
 export type EffectDesk = Readonly<{
@@ -19,10 +19,10 @@ export type EffectDesk = Readonly<{
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const DAY_MS = 24 * 60 * 60_000;
 
-async function withGoogle<T>(google: GoogleAccess, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
+async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
   const client = await google.client();
   if (client === null) {
-    const url = await google.connectUrl();
+    const url = await google.connectUrl(feature);
     return {
       ok: false, code: 'auth_failed',
       error: url ? `Google is not connected yet. Give the owner this link to connect their Google account: ${url}` : 'Google is not set up on this Waldo yet, so calendar and email are unavailable.',
@@ -31,6 +31,9 @@ async function withGoogle<T>(google: GoogleAccess, work: (client: GoogleClient) 
   try {
     return { ok: true, data: await work(client), source_taint: 'external' };
   } catch (error) {
+    // A 403 means this feature's scope was never granted; consent adds it to the same account.
+    const more = error instanceof GoogleError && error.status === 403 ? await google.connectUrl(feature) : null;
+    if (more) return { ok: false, code: 'auth_failed', error: `Google has not granted access for this yet. Give the owner this link to allow it: ${more}` };
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
   }
 }
@@ -42,7 +45,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
-    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs) => withGoogle(google, async (client) => {
+    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
@@ -65,7 +68,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
-    handle: (args: DraftEmailArgs) => withGoogle(google, async (client) => {
+    handle: (args: DraftEmailArgs) => withGoogle(google, 'mail', async (client) => {
       const draft = await client.draft({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),

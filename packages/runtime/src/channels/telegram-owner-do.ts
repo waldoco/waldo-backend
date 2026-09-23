@@ -21,7 +21,8 @@ import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
-import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
+import { googleClient, googleConsentUrl, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, oauthState, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { connectionVault } from '../connectors/connections';
 import { googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
@@ -37,6 +38,8 @@ import type { TelegramWebhookEnv } from './telegram-webhook';
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
 
 type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?: { text?: string; from?: { id: number }; chat?: { id: number } } };
+
+type GoogleConnection = Readonly<{ id: string; email: string | null; scopes: readonly string[] }>;
 
 type OwnerRuntime = Readonly<{
   owner: number;
@@ -56,7 +59,8 @@ type OwnerRuntime = Readonly<{
   updateCheck(trace: string): Promise<void>;
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
   act(action: ConsoleAction): Promise<boolean>;
-  googleConnectUrl(): Promise<string | null>;
+  googleConnectUrl(feature: GoogleFeature): Promise<string | null>;
+  google: Readonly<{ keep(tokens: GoogleTokens): Promise<boolean> }>;
   openFile(id: number): Promise<Response | null>;
   traces: TraceBook;
   timezone: string;
@@ -135,7 +139,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     await ready;
     const back = (notice: string) => new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${notice}` } });
     if (url.pathname === CONSOLE_GOOGLE_PATH) {
-      const consent = await googleConnectUrl();
+      const feature = url.searchParams.get('feature') ?? 'calendar';
+      const consent = isGoogleFeature(feature) ? await googleConnectUrl(feature) : null;
       return consent ? new Response(null, { status: 302, headers: { location: consent } }) : back('invalid');
     }
     const admin = consoleAuth(this.env);
@@ -180,9 +185,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async connectGoogle(tokens: GoogleTokens): Promise<void> {
-    await this.ctx.storage.put('google:tokens', tokens);
-    const { owner, api } = this.setup();
-    await api.sendMessage({ chat_id: owner, text: `Google is connected${tokens.email ? ` (${tokens.email})` : ''}. I can read your calendar and save email drafts now.` });
+    const { owner, api, google } = this.setup();
+    await google.keep(tokens);
+    const can = [googleHas(tokens.scopes, 'calendar') ? 'read your calendar' : '', googleHas(tokens.scopes, 'mail') ? 'read and send mail you approve' : ''].filter(Boolean).join(' and ');
+    await api.sendMessage({ chat_id: owner, text: `Google is connected${tokens.email ? ` (${tokens.email})` : ''}.${can ? ` I can ${can} now.` : ''}` });
   }
 
   override async alarm(): Promise<void> {
@@ -323,14 +329,59 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const origin = await storage.get<string>('origin');
       return clientId && clientSecret && origin ? { clientId, clientSecret, redirectUri: `${origin}${GOOGLE_CALLBACK_PATH}` } : null;
     };
+    const vault = connectionVault(this.env);
+    const vaultOwner = () => identity.get<string>('do_name');
+    const noteHealth = (id: string | null, error: string) => {
+      if (error) void storage.put('google:health', { error, at: Date.now() });
+      else void storage.delete('google:health');
+      const doName = vaultOwner();
+      if (id && vault && doName) this.ctx.waitUntil(vault.health(doName, id, error).catch(() => false));
+    };
     const google = {
-      async client() {
-        const [app, tokens] = [await googleApp(), await storage.get<GoogleTokens>('google:tokens')];
-        return app && tokens ? googleClient(app, tokens) : null;
+      // With Supabase configured the token goes to Vault and the DO keeps only the connection id.
+      async keep(tokens: GoogleTokens): Promise<boolean> {
+        const doName = vaultOwner();
+        const id = vault && doName ? await vault.store(doName, tokens.email ?? 'google', tokens.scopes ?? [], tokens.refresh_token).catch(() => null) : null;
+        if (!id) {
+          await storage.put('google:tokens', tokens);
+          return false;
+        }
+        await storage.put('google:connection', { id, email: tokens.email ?? null, scopes: tokens.scopes ?? [] });
+        await storage.delete('google:tokens');
+        await storage.delete('google:health');
+        return true;
       },
-      async connectUrl() {
+      async link() {
+        const legacy = await storage.get<GoogleTokens>('google:tokens');
+        if (legacy && (await google.keep(legacy))) log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: 'moved to vault' });
+        return storage.get<GoogleConnection>('google:connection');
+      },
+      async client() {
         const app = await googleApp();
-        return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, String(owner), Date.now())) : null;
+        if (!app) return null;
+        const [link, doName] = [await google.link(), vaultOwner()];
+        if (link && vault && doName) {
+          const refresh = await vault.secret(doName, link.id);
+          if (!refresh) return noteHealth(link.id, 'token missing'), null;
+          return googleClient(app, { refresh_token: refresh, ...(link.email ? { email: link.email } : {}) }, fetch, (error) => noteHealth(link.id, error));
+        }
+        const tokens = await storage.get<GoogleTokens>('google:tokens');
+        return tokens ? googleClient(app, tokens, fetch, (error) => noteHealth(null, error)) : null;
+      },
+      async state() {
+        const link = await google.link();
+        const tokens = link ? null : await storage.get<GoogleTokens>('google:tokens');
+        const health = await storage.get<{ error: string }>('google:health');
+        return { connected: link !== undefined || tokens !== undefined, email: link?.email ?? tokens?.email ?? null, scopes: link?.scopes ?? tokens?.scopes, error: health?.error ?? null };
+      },
+      async disconnect() {
+        const [link, doName] = [await storage.get<GoogleConnection>('google:connection'), vaultOwner()];
+        if (link && vault && doName) await vault.revoke(doName, link.id);
+        await storage.delete(['google:tokens', 'google:connection', 'google:health']);
+      },
+      async connectUrl(feature: GoogleFeature) {
+        const app = await googleApp();
+        return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, String(owner), Date.now()), feature) : null;
       },
     };
     const desk = approvalDesk(storage.sql, {
@@ -498,7 +549,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const client = await google.client();
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
       const said = await composeDayCard(card, now, clock.timezone, {
-        google: client, connectUrl: client ? null : await google.connectUrl(),
+        google: client, connectUrl: client ? null : await google.connectUrl('calendar'),
         ledger: ledger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
       });
       try {
@@ -513,9 +564,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, control: responder.control, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log,
+    this.runtime = { owner, listener, control: responder.control, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
       view: async (session, notice) => {
-        const tokens = await storage.get<GoogleTokens>('google:tokens');
+        const linked = await google.state();
         const now = Date.now();
         const today = localIso(now, clock.timezone).slice(0, 10);
         const planned = new Map(plans.read(today).map((row) => [row.card, row]));
@@ -523,7 +574,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), csrf: session.csrf, notice,
-          google: { connected: tokens !== undefined, email: tokens?.email ?? null, connectAvailable: (await google.connectUrl()) !== null },
+          google: { connected: linked.connected, email: linked.email, connectAvailable: (await google.connectUrl('calendar')) !== null, error: linked.error, mail: googleHas(linked.scopes, 'mail') },
           telegram: { linked: identity.get<boolean>('telegram_unlinked') !== true, unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
@@ -562,7 +613,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
-          await storage.delete('google:tokens');
+          await google.disconnect();
         } else {
           const card = cardFor(id);
           if (card === null) return false;
@@ -576,7 +627,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: `${action} ${id}`.trim() });
         return true;
       },
-      googleConnectUrl: () => google.connectUrl(),
+      googleConnectUrl: (feature) => google.connectUrl(feature),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
         if (!file) return null;

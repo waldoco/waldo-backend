@@ -27,10 +27,15 @@ describe('google oauth state', () => {
     expect(await verifyOauthState('s', state, 1_000 + 16 * 60_000)).toBeNull();
   });
 
-  it('asks for the owner-approved offline workspace scopes', () => {
+  it('asks only for the feature being turned on, offline, adding to what was granted', () => {
     const url = new URL(googleConsentUrl(app, 'st'));
     expect(url.searchParams.get('access_type')).toBe('offline');
-    expect(url.searchParams.get('scope')!.split(' ')).toEqual(['openid', 'email', ...['calendar.events', 'calendar.readonly', 'gmail.modify', 'gmail.compose', 'gmail.send', 'tasks', 'drive', 'documents', 'spreadsheets', 'presentations', 'contacts'].map((scope) => `https://www.googleapis.com/auth/${scope}`)]);
+    expect(url.searchParams.get('include_granted_scopes')).toBe('true');
+    expect(url.searchParams.get('prompt')).toBe('consent select_account');
+    expect(url.searchParams.get('scope')!.split(' ')).toEqual(['openid', 'email', 'https://www.googleapis.com/auth/calendar.events']);
+    const mail = new URL(googleConsentUrl(app, 'st', 'mail')).searchParams.get('scope')!;
+    expect(mail).toContain('gmail.readonly');
+    expect(mail).not.toMatch(/drive|documents|spreadsheets|presentations|contacts|gmail\.modify/);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
   });
 });
