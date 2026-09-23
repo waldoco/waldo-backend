@@ -57,18 +57,19 @@ const listener = new TelegramOwnerListener({
     sendChatAction: (r) => telegram('sendChatAction', r),
     sendMessage: (r) => telegram('sendMessage', r),
   },
-  async respond(turn) {
+  async respond(turn, time) {
     const id = `tg-${turn.updateId}`;
-    const publication = await path.submit({
+    const publication = await time('joined_path', () => path.submit({
       authenticatedOwnerId: ownerId, invocation,
       context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: canaries, replay_context_ref: null },
       userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: turn.text, appPayload: turn.text, modelProjection: { mode: 'include' } },
       assistantEntryId: `${id}-reply`,
-    });
+    }));
     parentId = publication.leafId;
     return publication.text;
   },
   chooseReaction: (turn) => ask(reactionInstruction(TELEGRAM_REACTIONS), turn.text),
+  log: (entry) => console.log(JSON.stringify({ ts: new Date().toISOString(), ...entry })),
   saveOffset: (offset) => writeFile(offsetFile, String(offset)),
 });
 

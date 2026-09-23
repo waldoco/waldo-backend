@@ -15,8 +15,8 @@ describe('TelegramPollingAdapter', () => {
     expect(await adapter.poll()).toEqual({
       nextOffset: 6,
       accepted: [
-        { updateId: 4, messageId: null, senderId: 7, chatId: 9, text: 'hello' },
-        { updateId: 5, messageId: null, senderId: 7, chatId: 9, text: 'hello' },
+        { updateId: 4, messageId: null, senderId: 7, chatId: 9, sentAt: null, text: 'hello' },
+        { updateId: 5, messageId: null, senderId: 7, chatId: 9, sentAt: null, text: 'hello' },
       ],
       unsupported: [],
       dropped: 0,
@@ -38,7 +38,7 @@ describe('TelegramPollingAdapter', () => {
     }, 10);
     expect(await adapter.poll(0)).toEqual({
       nextOffset: 14,
-      accepted: [{ updateId: 10, messageId: null, senderId: 7, chatId: 9, text: 'hello' }],
+      accepted: [{ updateId: 10, messageId: null, senderId: 7, chatId: 9, sentAt: null, text: 'hello' }],
       unsupported: [{ updateId: 13, messageId: null, senderId: 7, chatId: 9 }],
       dropped: 3,
     });

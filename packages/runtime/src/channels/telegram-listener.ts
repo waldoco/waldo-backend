@@ -7,12 +7,17 @@ export type TelegramOwnerApi = Readonly<{
   sendMessage(request: Readonly<{ chat_id: number; text: string }>): Promise<unknown>;
 }>;
 
+export type TurnLogEntry = Readonly<{ trace: string; hop: string; ms: number; ok: boolean; error?: string }>;
+export type TurnTimer = <T>(hop: string, work: () => Promise<T>) => Promise<T>;
+
 export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
   api: TelegramOwnerApi;
-  respond(turn: TelegramInboundTurn): Promise<string>;
+  respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
   saveOffset(offset: number): Promise<void>;
+  log?(entry: TurnLogEntry): void;
+  now?(): number;
   progressAfterMs?: number;
   typingEveryMs?: number;
   ackEmoji?: string;
@@ -57,34 +62,53 @@ export class TelegramOwnerListener {
     const owner = this.options.ownerTelegramId;
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
     const { api } = this.options;
+    const now = this.options.now ?? Date.now;
+    const trace = `tg-${turn.updateId}`;
+    const log = (hop: string, ms: number, ok: boolean, error?: string) =>
+      this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error });
+    const time: TurnTimer = async (hop, work) => {
+      const start = now();
+      try {
+        const value = await work();
+        log(hop, now() - start, true);
+        return value;
+      } catch (error) {
+        log(hop, now() - start, false, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    };
+    const started = now();
+    if (turn.sentAt !== null) log('pickup', Math.max(0, started - turn.sentAt), true);
     const chat_id = turn.chatId;
     const ack = this.options.ackEmoji ?? '👀';
     const message_id = turn.messageId;
-    const react = (emoji: string) => message_id === null
+    const react = (hop: string, emoji: string) => message_id === null
       ? Promise.resolve()
-      : api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] }).then(() => undefined, () => undefined);
-    await react(ack);
+      : time(hop, () => api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] })).then(() => undefined, () => undefined);
+    await react('receipt', ack);
     const choice = message_id === null || !this.options.chooseReaction
       ? Promise.resolve(null)
-      : this.options.chooseReaction(turn).catch(() => null);
+      : time('choose_reaction', () => this.options.chooseReaction!(turn)).catch(() => null);
     const typing = () => api.sendChatAction({ chat_id, action: 'typing' }).catch(() => undefined);
-    await typing();
+    await time('typing', typing);
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
     const progressTimer = setTimeout(() => {
-      void api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' }).catch(() => undefined);
+      void time('progress', () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
     }, this.options.progressAfterMs ?? 8_000);
     try {
-      const text = (await this.options.respond(turn)).trim();
+      const text = (await time('respond', () => this.options.respond(turn, time))).trim();
       if (text.length === 0) throw new Error('empty reply');
       clearTimeout(progressTimer);
-      await api.sendMessage({ chat_id, text });
+      await time('send', () => api.sendMessage({ chat_id, text }));
       const chosen = telegramReaction(await choice);
-      await react(chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
+      await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
+      log('turn', now() - started, true);
       return 'answered';
-    } catch {
+    } catch (error) {
       clearTimeout(progressTimer);
       await api.sendMessage({ chat_id, text: this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.' }).catch(() => undefined);
-      await react(this.options.failedEmoji ?? '😢');
+      await react('failed', this.options.failedEmoji ?? '😢');
+      log('turn', now() - started, false, error instanceof Error ? error.message : String(error));
       return 'failed';
     } finally {
       clearInterval(typingTimer);

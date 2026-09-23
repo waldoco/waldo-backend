@@ -9,10 +9,11 @@ export type TelegramInboundTurn = Readonly<{
   messageId: number | null;
   senderId: number;
   chatId: number;
+  sentAt: number | null;
   text: string;
 }>;
 
-export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text'>;
+export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt'>;
 
 export type TelegramPollResult = Readonly<{
   nextOffset: number;
@@ -86,6 +87,7 @@ export class TelegramPollingAdapter {
       messageId: update.message.message_id ?? null,
       senderId: update.message.from.id,
       chatId: update.message.chat.id,
+      sentAt: update.message.date === undefined ? null : update.message.date * 1000,
       text: update.message.text,
     });
   }
