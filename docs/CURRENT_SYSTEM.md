@@ -26,8 +26,8 @@ One path is live: a Telegram message from the owner goes through the Joined Conv
 
 Limits of the live path:
 
-- The listener is a dev process. It stops when the Codespace stops. No webhook is deployed.
-- Conversation state lives in process memory (`ConversationTree` inside `JoinedConversationPath`). A restart loses history. Only the poll offset is saved, to a file.
+- Staging Worker `waldo-runtime-staging` serves `POST /telegram/webhook` (commit `06c7eb5`), handing each verified update to `TelegramOwnerDO`. The local runner uses the same code path for development.
+- Conversation state lives in memory (`ConversationTree` inside `JoinedConversationPath`). A process restart or Durable Object eviction loses history. Only the last update id is saved.
 - No tools are granted to the Telegram chat. The model is told so and says so.
 - Consequential approvals are not accepted over Telegram.
 
