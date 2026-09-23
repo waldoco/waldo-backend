@@ -58,6 +58,9 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Every hop logs trace id, duration, ok/failed and a short detail. The E2E checklist names the hops that prove each step.
 - A live claim in a report points to a trace or a curl, not to a test.
 
+### Database tests
+- A pgTAP check reads a function's writes in a later statement. One statement sees one snapshot, so a check in the same statement sees the old rows.
+
 ## Bug log
 
 | Date | Bug | Class | Test added | Checklist line |
@@ -66,3 +69,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-23 | An approval could be applied after its time had passed, or over an edited event | Time, concurrency | approval expiry and etag tests (96c7683) | Time: past-scheduled outcome; Concurrency: version check |
 | 2026-09-24 | Console sign-in link was spent by Telegram's link preview, so every link showed "used or expired" | Tokens | `console.test.ts` sign-in page test; token redeemed by POST only (8167bbf) | Tokens: one-time tokens spent only by a POST |
 | 2026-09-24 | Console email sign-in sent Supabase's default magic-link email, which has no code to type | Tokens | `scripts/guards/guard-otp-template.mjs`; template in `supabase/templates/magic_link.html` | Tokens: code sign-in proves the code arrives |
+| 2026-09-24 | A pgTAP check for Vault secret deletion read in the same statement as the revoke, so it saw the pre-delete snapshot and failed on correct code | Database tests | `supabase/tests/waldo_connections.sql` checks deletion in its own statement | Database tests: read writes in a later statement |

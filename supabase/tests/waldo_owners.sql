@@ -18,7 +18,7 @@ insert into waldo.link_codes (code_hash, owner_id, provider, expires_at) values
   ('h-steal', '10000000-0000-0000-0000-00000000000a', 'telegram', now() + interval '10 minutes');
 
 select is((select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
-  where n.nspname = 'waldo' and c.relkind = 'r' and c.relrowsecurity and c.relforcerowsecurity), 5::bigint, 'RLS is forced on every waldo table');
+  where n.nspname = 'waldo' and c.relkind = 'r' and c.relrowsecurity and c.relforcerowsecurity), (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'waldo' and c.relkind = 'r'), 'RLS is forced on every waldo table');
 
 select is(waldo.redeem_link_code('h-old', 'telegram', '111'), null, 'an expired code binds nothing');
 select is(waldo.redeem_link_code('h-a', 'telegram', '111'), '10000000-0000-0000-0000-00000000000a'::uuid, 'a fresh code binds the presence');
