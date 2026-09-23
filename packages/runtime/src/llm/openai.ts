@@ -1,7 +1,8 @@
 import OpenAI from 'openai';
 import {
-  OPENAI_GPT_5_NANO_MODEL,
   OPENAI_PROVIDER,
+  PROVIDER_OF,
+  type ModelName,
   type AdapterResult,
   type LLMResponse,
 } from '@waldo/contracts';
@@ -18,14 +19,14 @@ export type OpenAIAdapterOptions = Readonly<{
 
 export type OpenAIResponseMetadata = Readonly<{
   response_id: string;
-  model: typeof OPENAI_GPT_5_NANO_MODEL;
+  model: ModelName;
   input_tokens: number;
   output_tokens: number;
   latency_ms: number;
   reasoning?: string;
 }>;
 
-export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
+export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   private readonly client: OpenAIResponsesClient | undefined;
   private readonly timeoutMs: number;
   private readonly missingKey: boolean;
@@ -43,7 +44,7 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
   }
 
   async complete(input: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
-    if (input.request.model !== OPENAI_GPT_5_NANO_MODEL || input.step.provider !== OPENAI_PROVIDER) {
+    if (PROVIDER_OF[input.request.model] !== OPENAI_PROVIDER || input.step.provider !== OPENAI_PROVIDER) {
       return { ok: false, code: 'invalid_args', error: 'OpenAI adapter received an unsupported route' };
     }
     if (this.missingKey || this.client === undefined) {
@@ -56,7 +57,7 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
     try {
       const response = await this.client.responses.create(
         {
-          model: OPENAI_GPT_5_NANO_MODEL,
+          model: input.request.model,
           instructions: input.request.system,
           input: input.request.messages.map((message) => `${message.role}: ${message.content}`).join('\n'),
           max_output_tokens: input.request.max_tokens,
@@ -69,7 +70,7 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
       }
       const text = responseText(response).trim();
       const parsed = {
-        model: OPENAI_GPT_5_NANO_MODEL,
+        model: input.request.model,
         text,
         input_tokens: response.usage?.input_tokens ?? 0,
         output_tokens: response.usage?.output_tokens ?? 0,
@@ -81,7 +82,7 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
       }
       this.onResponseMetadata?.({
         response_id: response.id,
-        model: OPENAI_GPT_5_NANO_MODEL,
+        model: input.request.model,
         input_tokens: parsed.input_tokens,
         output_tokens: parsed.output_tokens,
         latency_ms: parsed.latency_ms,

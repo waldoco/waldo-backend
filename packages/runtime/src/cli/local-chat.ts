@@ -1,6 +1,6 @@
 import {
   acceptTrustedInvocation,
-  OPENAI_GPT_5_NANO_MODEL,
+  WALDO_CHAT_MODEL,
   OPENAI_PROVIDER,
   routingPolicySchema,
 } from '@waldo/contracts';
@@ -8,14 +8,14 @@ import {
   localTrustedBriefScheduleInput,
   resolveRunLoopAdapters,
 } from '../run-loop/adapters';
-import { OpenAIGpt5NanoAdapter, type OpenAIResponseMetadata } from '../llm/openai';
+import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from '../llm/openai';
 import { RuntimeLLMProvider } from '../llm/provider';
 import type { ContextLayer } from '../context-composer/types';
 
 export const LOCAL_CLI_PROVIDER = 'local-fake';
 export const LOCAL_CLI_MODEL = 'local-fake-v1';
 export const S2_LIVE_PROVIDER = OPENAI_PROVIDER;
-export const S2_LIVE_MODEL = OPENAI_GPT_5_NANO_MODEL;
+export const S2_LIVE_MODEL = WALDO_CHAT_MODEL;
 
 export type LocalChatRequest = Readonly<{
   message: string;
@@ -130,7 +130,7 @@ async function runOpenAIChat(
   }
   let responseMetadata: OpenAIResponseMetadata | undefined;
   const safety = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).safety;
-  const gateway = new OpenAIGpt5NanoAdapter({
+  const gateway = new OpenAIResponsesAdapter({
     apiKey: process.env.OPENAI_API_KEY,
     onResponseMetadata: (metadata) => { responseMetadata = metadata; },
   });
@@ -139,7 +139,7 @@ async function runOpenAIChat(
     trigger: 'user_message' as const,
     primary: {
       provider: OPENAI_PROVIDER,
-      model: OPENAI_GPT_5_NANO_MODEL,
+      model: WALDO_CHAT_MODEL,
       cache: 'none' as const,
       max_tokens: 4096,
     },

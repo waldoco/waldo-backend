@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import {
   acceptTrustedInvocation, ActivityLedgerModule, ApprovalQueueModule,
-  OPENAI_GPT_5_NANO_MODEL, OPENAI_PROVIDER, routingPolicySchema,
+  WALDO_CHAT_MODEL, OPENAI_PROVIDER, routingPolicySchema,
 } from '@waldo/contracts';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../src/run-loop/adapters';
 import { JoinedConversationPath, type JoinedConversationModel } from '../src/conversation/joined-path';
-import { OpenAIGpt5NanoAdapter, type OpenAIResponseMetadata } from '../src/llm/openai';
+import { OpenAIResponsesAdapter, type OpenAIResponseMetadata } from '../src/llm/openai';
 import { RuntimeLLMProvider } from '../src/llm/provider';
 import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
 
@@ -28,12 +28,12 @@ const invocation = accepted.value;
 const ownerId = invocation.verified_authority.principal_ref;
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
 let metadata: OpenAIResponseMetadata | undefined;
-const runtime = new RuntimeLLMProvider({ gateway: new OpenAIGpt5NanoAdapter({ apiKey: process.env.OPENAI_API_KEY, onResponseMetadata: (m) => { metadata = m; } }) });
+const runtime = new RuntimeLLMProvider({ gateway: new OpenAIResponsesAdapter({ apiKey: process.env.OPENAI_API_KEY, onResponseMetadata: (m) => { metadata = m; } }) });
 const model: JoinedConversationModel = {
   async complete(request) {
     const result = await runtime.complete({
       trigger: 'user_message',
-      policy: routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false }),
+      policy: routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false }),
       renderRequest: () => ({ system: request.system, messages: [{ role: 'user' as const, content: request.messages.join('\n') }], max_tokens: 4096, temperature: 0.2 }),
     }, {
       authenticatedUserId: ownerId, trigger: 'user_message',

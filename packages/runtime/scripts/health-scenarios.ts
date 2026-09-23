@@ -1,4 +1,4 @@
-import { OPENAI_GPT_5_NANO_MODEL } from '@waldo/contracts';
+import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import OpenAI from 'openai';
 import { messagingSystemPrompt } from '../src/prompt/messaging-behavior';
 import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
@@ -16,7 +16,7 @@ const scenarios = [
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 for (const text of scenarios) {
   const response = await client.responses.create({
-    model: OPENAI_GPT_5_NANO_MODEL,
+    model: WALDO_CHAT_MODEL,
     instructions: messagingSystemPrompt('You are Waldo, a health-aware personal agent.', []),
     input: text,
   });

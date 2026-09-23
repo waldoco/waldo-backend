@@ -1,9 +1,9 @@
 import {
-  acceptTrustedInvocation, ConversationTree, OPENAI_GPT_5_NANO_MODEL, OPENAI_PROVIDER, routingPolicySchema,
+  acceptTrustedInvocation, ConversationTree, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
 } from '@waldo/contracts';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
 import { JoinedConversationPath } from '../conversation/joined-path';
-import { OpenAIGpt5NanoAdapter } from '../llm/openai';
+import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider } from '../llm/provider';
 import { messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
@@ -28,11 +28,11 @@ export const createTelegramResponder = (
   const ownerId = invocation.verified_authority.principal_ref;
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
   const circuitBreaker = new InMemoryCircuitBreaker();
-  const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
+  const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const ask = async (trace: string, purpose: string, system: string, content: string) => {
     const started = Date.now();
     let reasoning: string | undefined;
-    const gateway = new OpenAIGpt5NanoAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const gateway = new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const result = await new RuntimeLLMProvider({ gateway, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,

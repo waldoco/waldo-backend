@@ -15,6 +15,11 @@ export const modelNameSchema = z.enum([
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
+// The model Waldo chats, remembers and reacts with. Swapping models is this one line when the
+// target is already in the roster with an OpenAI provider; a new model also needs its roster
+// entry above, PROVIDER_OF below and a price in packages/runtime/src/llm/pricing.ts.
+export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_5_NANO_MODEL;
+
 export const providerSchema = z.enum(['workers_ai', 'anthropic', OPENAI_PROVIDER]);
 export type Provider = z.infer<typeof providerSchema>;
 

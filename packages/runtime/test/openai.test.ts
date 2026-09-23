@@ -5,7 +5,7 @@ import {
   type LLMRequest,
 } from '@waldo/contracts';
 import {
-  OpenAIGpt5NanoAdapter,
+  OpenAIResponsesAdapter,
   type OpenAIResponsesClient,
 } from '../src/llm/openai';
 import type { LLMGatewayRequest } from '../src/llm/provider';
@@ -37,10 +37,10 @@ function client(create: unknown): OpenAIResponsesClient {
   return { responses: { create } } as unknown as OpenAIResponsesClient;
 }
 
-describe('OpenAIGpt5NanoAdapter', () => {
+describe('OpenAIResponsesAdapter', () => {
   it('maps Responses API output and usage metadata', async () => {
     let metadata: unknown;
-    const adapter = new OpenAIGpt5NanoAdapter({
+    const adapter = new OpenAIResponsesAdapter({
       apiKey: 'test-key',
       client: client(async () => ({
         id: 'resp_test_1',
@@ -67,7 +67,7 @@ describe('OpenAIGpt5NanoAdapter', () => {
 
   it('sends a bounded reasoning effort and classifies truncated output as oversize', async () => {
     let sent: unknown;
-    const adapter = new OpenAIGpt5NanoAdapter({
+    const adapter = new OpenAIResponsesAdapter({
       apiKey: 'test-key',
       client: client(async (body: unknown) => {
         sent = body;
@@ -81,7 +81,7 @@ describe('OpenAIGpt5NanoAdapter', () => {
   });
 
   it('fails explicitly when the key is missing', async () => {
-    await expect(new OpenAIGpt5NanoAdapter({}).complete(gatewayRequest())).resolves.toEqual({
+    await expect(new OpenAIResponsesAdapter({}).complete(gatewayRequest())).resolves.toEqual({
       ok: false,
       code: 'auth_failed',
       error: 'OPENAI_API_KEY is unavailable',
@@ -89,7 +89,7 @@ describe('OpenAIGpt5NanoAdapter', () => {
   });
 
   it('maps provider errors without exposing their message or key', async () => {
-    const adapter = new OpenAIGpt5NanoAdapter({
+    const adapter = new OpenAIResponsesAdapter({
       apiKey: 'secret-test-key',
       client: client(async () => { throw new Error('secret-test-key provider detail'); }),
     });
@@ -102,7 +102,7 @@ describe('OpenAIGpt5NanoAdapter', () => {
   });
 
   it('aborts a hung request at the adapter timeout', async () => {
-    const adapter = new OpenAIGpt5NanoAdapter({
+    const adapter = new OpenAIResponsesAdapter({
       apiKey: 'test-key',
       timeoutMs: 1,
       client: client(async (_body: unknown, options?: { signal?: AbortSignal }) => new Promise((_, reject) => {
