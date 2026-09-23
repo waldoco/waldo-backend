@@ -6,6 +6,7 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIGpt5NanoAdapter } from '../llm/openai';
 import { RuntimeLLMProvider } from '../llm/provider';
 import { messagingSystemPrompt } from '../prompt/messaging-behavior';
+import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions } from './telegram-listener';
@@ -17,6 +18,8 @@ const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 export const createTelegramResponder = (
   openaiApiKey: string,
   store?: ConversationStore,
+  memory?: CoreFileStore,
+  log: (entry: object) => void = () => undefined,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -41,7 +44,10 @@ export const createTelegramResponder = (
   };
   const tree = new ConversationTree();
   const path = new JoinedConversationPath(adapters.contextComposer!, {
-    complete: (request) => ask(messagingSystemPrompt(request.system, request.tools), request.messages.join('\n')),
+    complete: (request) => ask(
+      [messagingSystemPrompt(request.system, request.tools), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
+      request.messages.join('\n'),
+    ),
   }, tree);
   let parentId: string | null = null;
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
@@ -57,6 +63,12 @@ export const createTelegramResponder = (
       }));
       await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
       parentId = publication.leafId;
+      if (memory) {
+        const files = memory.read();
+        void ask(MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text))
+          .then((raw) => log({ trace: id, hop: 'memory', ok: true, changed: applyMemoryEdits(memory, raw, new Date().toISOString()) }))
+          .catch((error: unknown) => log({ trace: id, hop: 'memory', ok: false, error: String(error) }));
+      }
       return publication.text;
     },
     chooseReaction: (turn) => ask(reactionInstruction(TELEGRAM_REACTIONS), turn.text),

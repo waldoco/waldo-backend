@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import { coreFileStore } from '../memory/core-files';
 import { durableConversationStore } from './conversation-store';
 import { createTelegramCaller, createTelegramOwnerApi } from './telegram-api';
 import { TelegramOwnerListener } from './telegram-listener';
@@ -21,11 +22,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async turn(update: unknown): Promise<void> {
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key, WALDO_OWNER_TELEGRAM_ID: owner } = this.env;
     if (!token || !key || !owner) throw new Error('telegram owner runtime is unconfigured');
+    const log = (entry: object) => console.log(JSON.stringify(entry));
     this.listener ??= new TelegramOwnerListener({
       ownerTelegramId: Number(owner),
       api: createTelegramOwnerApi(createTelegramCaller(token)),
-      ...createTelegramResponder(key, durableConversationStore(this.ctx.storage)),
-      log: (entry) => console.log(JSON.stringify(entry)),
+      ...createTelegramResponder(key, durableConversationStore(this.ctx.storage), coreFileStore(this.ctx.storage.sql), log),
+      log,
       saveOffset: (offset) => this.ctx.storage.put('offset', offset),
     });
     const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
