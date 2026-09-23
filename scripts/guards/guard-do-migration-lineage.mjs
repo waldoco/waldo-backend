@@ -107,7 +107,10 @@ function resolveBaseRef(root, argv) {
     process.exit(1);
   }
   if (head === main) {
-    const parent = resolveGitRef(root, 'HEAD^');
+    // A merge onto main is checked against the parent that carries the DO migration history.
+    const parent = ['HEAD^1', 'HEAD^2']
+      .map((ref) => resolveGitRef(root, ref))
+      .find((ref) => ref && readOptionalAtRef(root, ref, SOURCE_PATH) !== undefined);
     if (!parent) {
       process.stderr.write(`${NAME}: HEAD has no strict historical migration base\n`);
       process.exit(1);
