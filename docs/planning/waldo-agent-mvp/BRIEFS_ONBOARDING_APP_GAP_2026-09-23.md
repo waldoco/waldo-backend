@@ -1,6 +1,6 @@
 # Briefs, onboarding and app gap analysis (2026-09-23)
 
-Analysis only. Nothing here is built yet.
+Analysis first. Built since: routine-planned card times (91cad99) and change-driven update cards (7e958f5), see section 6.
 
 Sources read:
 - Old app Figma (prototype/reference only): nodes 724-16295, 722-15216 (onboarding), 969-2016 and 969-2021 (tier-1), plus the spec notes frame.
@@ -135,3 +135,29 @@ What shipped recently:
 3. Onboarding answers: write to the new runtime (proposed) or to the legacy Supabase profile?
 4. Accept the remove/defer list as is?
 5. Build order: routine profile + dynamic times first (backend only, testable on Telegram now), then the app API?
+
+## 6. Built since, and owner direction (2026-09-23)
+
+### Built
+- **Routine-planned card times (91cad99).** At 03:00, after the memory update, the model plans today's card times from memory and today's calendar. Cards are one-shot per day, recorded in `day_plan` with a reason. Defaults stay as the fallback.
+- **Update cards (7e958f5).** The 10-minute sweep reads calendar changes (updatedMin, next 48h) and new primary-inbox mail. The model decides whether to send a short "Update" card. Code enforces the limits: only between The Brief and The Close, at most 3 per day. Every change is recorded in `update_cards` and folded into the next main card's `<updates>` section.
+
+### Owner direction: health context as an input (future scope, when the app API lands)
+- Health signals from Apple HealthKit (and Health Connect), plus whatever can be derived from them (Form, Recovery, sleep, HRV, resting HR, weight, activity), become inputs to:
+  - the update sweep: a meaningful change in body state is a trigger, the same way a calendar change is;
+  - the nightly card-time plan: for example, a later Brief after a short night, or a lighter check-in on a low-recovery day;
+  - the content of every main card.
+- Requirements this puts on the app API work:
+  - a health ingest endpoint with source, time window and freshness per signal;
+  - derived values computed backend-side under the accepted health ADRs;
+  - a compact "body today" context the planner and cards can read;
+  - absent or stale data stated as absent, never guessed.
+- Clinical acts stay gated, as today.
+
+### Standing philosophy: bounded model judgment
+Every model decision gets three things:
+- **instructions**: what the task is;
+- **criteria**: what good looks like;
+- **boundaries**: what it must never do, and the hard limits enforced in code.
+
+The model reasons within those, the way a good nutritionist, personal manager or health coach would think for the user. It is never a free-form prompt. It also does not get rigid rules for judgment calls. Deterministic checks are reserved for hard safety and product lines: quiet hours, push caps, sent-card fencing, clinical gating and format validation. Current examples are `DAY_PLAN_INSTRUCTION` and `updateCardPrompt`. New planners, including the health-aware ones, follow the same shape.
