@@ -33,6 +33,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     { id: 'card:midday', name: 'Afternoon check-in', defaultTime: '14:00', time: '14:00', reason: 'default time', sent: true, pin: null },
     { id: 'card:close', name: 'The Close', defaultTime: '21:30', time: '22:15', reason: 'pinned by you', sent: false, pin: '22:15' },
   ],
+  proactivity: { quiet_start: '23:00', quiet_end: '07:30', volume: 'normal' },
   ledger: 'Open approvals: none\nDone: reminder "drink water" set (daily 09:00)\nReminders:\n- 2026-09-24T09:00 drink water (daily)',
   files: [
     { id: 2, kind: 'document', file_id: 'f2', name: 'blood-panel-sept.pdf', mime: 'application/pdf', size: 482_000, caption: 'can you read this', at: Date.parse('2026-09-23T12:10:00Z') },

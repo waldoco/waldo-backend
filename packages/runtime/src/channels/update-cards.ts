@@ -14,6 +14,11 @@ export const updateBook = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS update_cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, changes TEXT NOT NULL,
     text TEXT, pushed INTEGER NOT NULL DEFAULT 0, folded INTEGER NOT NULL DEFAULT 0)`);
+  try {
+    sql.exec('ALTER TABLE update_cards ADD COLUMN feedback TEXT');
+  } catch {
+    // column already exists
+  }
   const state = (key: string) => sql.exec<{ value: string }>('SELECT value FROM watch_state WHERE key = ?', key).toArray()[0]?.value ?? null;
   const setState = (key: string, value: string) => sql.exec('INSERT INTO watch_state (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, value);
   return {
@@ -24,8 +29,15 @@ export const updateBook = (sql: Sql) => {
     mark(key: WatchKey, now: number): void {
       setState(key, String(now));
     },
-    record(day: string, at: number, changes: readonly Change[], text: string | null): void {
-      sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?, ?, ?, ?, ?)', at, day, JSON.stringify(changes), text, text === null ? 0 : 1);
+    record(day: string, at: number, changes: readonly Change[], text: string | null): number {
+      return sql.exec<{ id: number }>('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?, ?, ?, ?, ?) RETURNING id', at, day, JSON.stringify(changes), text, text === null ? 0 : 1).one().id;
+    },
+    rate(id: number, feedback: 'useful' | 'not useful'): boolean {
+      return sql.exec('UPDATE update_cards SET feedback = ? WHERE id = ? AND pushed = 1 RETURNING id', feedback, id).toArray().length > 0;
+    },
+    feedback(limit = 8): string {
+      return sql.exec<{ text: string; feedback: string }>('SELECT text, feedback FROM update_cards WHERE feedback IS NOT NULL ORDER BY at DESC LIMIT ?', limit).toArray()
+        .map((row) => `- ${row.feedback}: ${row.text.replace(/\n/g, ' ')}`).join('\n');
     },
     unfolded(timezone: string): string {
       return sql.exec<{ at: number; changes: string; text: string | null }>('SELECT at, changes, text FROM update_cards WHERE folded = 0 ORDER BY at').toArray()

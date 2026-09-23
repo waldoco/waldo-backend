@@ -1,7 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { ScheduleEntry } from '@waldo/contracts';
+import { setProactivityArgsSchema, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { claimStore, profile } from '../memory/claims';
+import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
@@ -15,7 +16,7 @@ import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
-import { changeLines, collectChanges, updateBook } from './update-cards';
+import { changeLines, collectChanges, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
@@ -40,6 +41,8 @@ type OwnerRuntime = Readonly<{
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
   desk: ApprovalDesk;
+  ledger(): string;
+  updates: UpdateBook;
   reminders: ReturnType<typeof reminderBook>;
   scheduler: Scheduler;
   fire(entry: ScheduleEntry): Promise<void>;
@@ -142,7 +145,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   private async turn(update: unknown): Promise<void> {
-    const { listener, owner, call, desk, reminders, ready } = this.setup();
+    const { listener, owner, call, desk, ledger, updates, ready } = this.setup();
     await ready;
     const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
     const raw = update as RawUpdate;
@@ -162,8 +165,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, raw.update_id)).slice(0, 4000) });
         return;
       }
-      if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${raw.update_id}`);
-      else await call('sendMessage', { chat_id: owner, text: desk.ledger(reminders.list()) });
+      const feedback = raw.callback_query?.data?.match(/^fb:(\d+):([un])$/);
+      if (feedback && raw.callback_query) {
+        const query = raw.callback_query;
+        const rated = query.from.id === owner && updates.rate(Number(feedback[1]), feedback[2] === 'u' ? 'useful' : 'not useful');
+        await call('answerCallbackQuery', { callback_query_id: query.id, text: rated ? 'Thanks, noted.' : 'Already handled.' });
+        if (rated && query.message) await call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
+      } else if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${raw.update_id}`);
+      else await call('sendMessage', { chat_id: owner, text: ledger() });
       await this.ctx.storage.put('offset', raw.update_id + 1);
       return;
     }
@@ -240,6 +249,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const copied = backupAndCopySpots(storage.sql, memory, new Date().toISOString());
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);
+    const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
+    const ledger = () => [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity())].join('\n\n');
+    const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     const download = createTelegramFileDownloader(token);
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
@@ -249,7 +261,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)],
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes), ...loopHandlers(loops)],
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -304,7 +316,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (cards.length === 0) return;
       try {
         const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), null);
-        const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards });
+        const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()) });
         const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards));
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: applied.map((plan) => `${plan.card}=${plan.time ?? 'skip'} (${plan.reason})`).join('; ') });
       } catch (error) {
@@ -337,6 +349,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       try {
+        if (quiet()) {
+          log({ trace, hop: 'brief_sweep', ms: 0, ok: true, detail: 'held: quiet hours' });
+          return void (await updateCheck(`update:${entry.occurrence_at}`));
+        }
         const sent = await briefBook.sweep(await google.client(), Date.now(), async (id, event, said) => {
           const at = Date.now();
           const text = (await responder.prompt(id, owner, said, async (hop, work) => work())).trim();
@@ -359,17 +375,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (changes.length === 0) return;
         const day = localIso(now, clock.timezone).slice(0, 10);
         const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
-        const canSend = sentToday.has('card:brief') && !sentToday.has('card:close');
+        const { volume } = loops.proactivity();
+        const canSend = sentToday.has('card:brief') && !sentToday.has('card:close') && volume !== 'low' && !quiet();
         let text: string | null = null;
         if (canSend) {
-          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(changes), ledger: desk.ledger(book.list()) });
+          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(changes), ledger: ledger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal' });
           const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
-          if (reply && reply !== SKIP_UPDATE) {
-            await api.sendMessage({ chat_id: owner, text: reply });
-            text = reply;
-          }
+          if (reply && reply !== SKIP_UPDATE) text = reply;
         }
-        updates.record(day, now, changes, text);
+        const id = updates.record(day, now, changes, text);
+        if (text) await call('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } });
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: true, detail: `${changes.length} changes; ${text ? 'sent' : canSend ? 'skipped' : 'held for next card'}`, text: { input: changeLines(changes), output: text ?? '' } });
       } catch (error) {
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, error: String(error) });
@@ -381,11 +396,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       const now = Date.now();
+      if (quiet()) {
+        plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
+        return log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} held: quiet hours` });
+      }
       const client = await google.client();
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectUrl: client ? null : await google.connectUrl(),
-        ledger: desk.ledger(book.list()), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
+        ledger: ledger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
       });
       try {
         const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
@@ -399,7 +418,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log,
+    this.runtime = { owner, listener, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log,
       view: async (session, notice) => {
         const tokens = await storage.get<GoogleTokens>('google:tokens');
         const now = Date.now();
@@ -416,13 +435,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
           }),
-          ledger: desk.ledger(book.list()), files: files.list(), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
+          ledger: ledger(), proactivity: loops.proactivity(), files: files.list(), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
         };
       },
       act: async ({ action, id, value }) => {
         const now = Date.now();
         const spotId = Number(id);
-        if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
+        if (action === 'proactivity.set') {
+          const [quietStart = '', quietEnd = '', volume = ''] = (value ?? '').split('|');
+          const parsed = setProactivityArgsSchema.safeParse({ quiet_start: quietStart || null, quiet_end: quietEnd || null, volume });
+          if (!parsed.success) return false;
+          loops.setProactivity(parsed.data);
+        } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           const claim = memory.claims().find((row) => row.id === spotId);
           if (!claim) return false;
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');

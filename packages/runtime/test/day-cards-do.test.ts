@@ -56,7 +56,7 @@ describe('scheduled day cards', () => {
     ]);
     expect(parseDayPlan('{"cards":[]}', DAY_CARDS.slice(0, 1))).toEqual([{ card: 'card:brief', time: '08:00', reason: 'default time (planned value "" was not HH:MM)' }]);
     expect(() => parseDayPlan('{}', DAY_CARDS)).toThrow('no cards');
-    const input = dayPlanInput({ localNow: '2026-09-23T03:00', calendar: 'No events.', cards: DAY_CARDS });
+    const input = dayPlanInput({ localNow: '2026-09-23T03:00', calendar: 'No events.', cards: DAY_CARDS, proactivity: 'Proactivity: volume normal; quiet hours 23:00-07:30' });
     expect(input).toContain('card:close (The Close), default 21:30');
     expect(input).toContain('<calendar>\nNo events.\n</calendar>');
   });

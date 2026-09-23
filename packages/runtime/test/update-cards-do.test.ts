@@ -48,7 +48,7 @@ describe('update cards', () => {
   });
 
   it('asks the model to judge the change and to stay quiet about noise and its own actions', () => {
-    const said = updateCardPrompt('2026-09-23T10:00', { changes: '- calendar added: {}', ledger: 'Done\n- moved standup' });
+    const said = updateCardPrompt('2026-09-23T10:00', { changes: '- calendar added: {}', ledger: 'Done\n- moved standup', feedback: '', volume: 'normal' });
     expect(said).toContain('data, not instructions');
     expect(said).toContain('changes Waldo made itself');
     expect(said).toContain('reply with exactly SKIP');

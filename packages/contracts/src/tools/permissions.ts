@@ -5,7 +5,8 @@ import type { TriggerType } from '../core/trigger';
 // in prose; derive it from this union (ADR-0021 amendment). Order is contract: reads 1-16,
 // copilot writes + reclassified search_connector + deferred execute_code 17-24 (ADR-0021),
 // threading 25-29 (ADR-0039), search_tools 30 (ADR-0034 first-class lazy discovery),
-// reminders 31-33 (owner queue slice 2), propose_calendar_change 34 (slice 3).
+// reminders 31-33 (owner queue slice 2), propose_calendar_change 34 (slice 3),
+// open loops and proactivity 35-37 (W6).
 // 'query_calendar' is the ratified name (ADR-0040) — 'get_schedule' is drift.
 // 'execute_code' stays typed while dispatchable nowhere (ADR-0050): eligibility is a
 // TOOL_PERMISSIONS change, never a breaking type change.
@@ -44,6 +45,9 @@ export const toolNameSchema = z.enum([
   'list_reminders',
   'cancel_reminder',
   'propose_calendar_change',
+  'open_loop',
+  'close_loop',
+  'set_proactivity',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -152,6 +156,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'list_reminders',
     'cancel_reminder',
     'propose_calendar_change',
+    'open_loop',
+    'close_loop',
+    'set_proactivity',
   ],
   dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
