@@ -173,3 +173,4 @@ export * from './runtime/browser-policy';
 export * from './runtime/heartbeat';
 export * from './runtime/approval';
 export * from './runtime/activity';
+export * from './runtime/trusted-coordination';
