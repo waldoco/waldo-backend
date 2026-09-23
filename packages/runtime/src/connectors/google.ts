@@ -71,6 +71,8 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 }
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number }>;
+export type CalendarChange = CalendarItem & Readonly<{ status: string; created: string }>;
+export type MailItem = Readonly<{ id: string; from: string; subject: string; snippet: string; at: string }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
 
 export type GoogleClient = Readonly<{
@@ -80,6 +82,8 @@ export type GoogleClient = Readonly<{
   createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string): Promise<CalendarItem>;
   cancelEvent(id: string): Promise<void>;
+  changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
+  newMail(since: number, limit: number): Promise<readonly MailItem[]>;
 }>;
 
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch): GoogleClient {
@@ -115,6 +119,25 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
         .map(toItem);
     },
+    async changedEvents(since, from, to) {
+      const url = new URL(EVENTS);
+      url.search = new URLSearchParams({ updatedMin: new Date(since).toISOString(), timeMin: new Date(from).toISOString(), timeMax: new Date(to).toISOString(), singleEvents: 'true', showDeleted: 'true', maxResults: '50' }).toString();
+      const json = await call(url.toString()) as { items?: GoogleEvent[] };
+      return (json.items ?? [])
+        .filter((event) => event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
+        .map((event) => ({ ...toItem({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' }));
+    },
+    async newMail(since, limit) {
+      const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
+      const list = new URL(GMAIL);
+      list.search = new URLSearchParams({ q: `in:inbox category:primary after:${Math.floor(since / 1000)}`, maxResults: String(limit) }).toString();
+      const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
+      return Promise.all(messages.map(async ({ id }) => {
+        const message = await call(`${GMAIL}/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`) as { snippet?: string; internalDate?: string; payload?: { headers?: { name: string; value: string }[] } };
+        const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
+        return { id, from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
+      }));
+    },
     async draft(input) {
       const clean = (value: string) => value.replace(/[\r\n]+/g, ' ');
       const headers = [
@@ -144,7 +167,7 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
 });
 
 type GoogleEvent = {
-  id: string; status?: string; summary?: string; location?: string; description?: string;
+  id: string; status?: string; summary?: string; location?: string; description?: string; created?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   attendees?: { self?: boolean; responseStatus?: string }[];
 };

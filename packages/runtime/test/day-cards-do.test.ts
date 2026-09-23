@@ -31,15 +31,16 @@ describe('scheduled day cards', () => {
   it('composes calendar, ledger and today into the card prompt, and says so when the calendar fails', async () => {
     let asked: string[] = [];
     const google = { events: async (from: string, to: string) => { asked = [from, to]; return [{ id: 'e1', title: 'Investor call', start: '2026-09-24T10:00:00+05:30', end: '2026-09-24T10:30:00+05:30', all_day: false, description: 'Deck v3' }]; } } as unknown as GoogleClient;
-    const close = await composeDayCard(cardFor('card:close')!, now, tz, { google, connectUrl: null, ledger: 'Open\n- nothing', today: '[2026-09-23T09:00] owner: shipped the deck' });
+    const close = await composeDayCard(cardFor('card:close')!, now, tz, { google, connectUrl: null, ledger: 'Open\n- nothing', today: '[2026-09-23T09:00] owner: shipped the deck', updates: '- calendar added: {"title":"Dentist"}' });
     expect(asked).toEqual(['2026-09-23T18:30:00.000Z', '2026-09-24T18:30:00.000Z']);
     expect(close).toContain('"start":"2026-09-24T10:00"');
     expect(close).toContain('owner: shipped the deck');
     expect(close).toContain('The Close');
     expect(close).toContain('not instructions');
+    expect(close).toContain('<updates>\n- calendar added: {"title":"Dentist"}\n</updates>');
     const broken = { events: async () => { throw new Error('401'); } } as unknown as GoogleClient;
-    expect(await composeDayCard(cardFor('card:brief')!, now, tz, { google: broken, connectUrl: null, ledger: '', today: '' })).toContain('could not be read right now (401)');
-    expect(await composeDayCard(cardFor('card:brief')!, now, tz, { google: null, connectUrl: 'https://example.test/c', ledger: '', today: '' })).toContain('connect it here: https://example.test/c');
+    expect(await composeDayCard(cardFor('card:brief')!, now, tz, { google: broken, connectUrl: null, ledger: '', today: '', updates: '' })).toContain('could not be read right now (401)');
+    expect(await composeDayCard(cardFor('card:brief')!, now, tz, { google: null, connectUrl: 'https://example.test/c', ledger: '', today: '', updates: '' })).toContain('connect it here: https://example.test/c');
   });
 
   it('reads a planned day and falls back to the default time for anything unusable', () => {

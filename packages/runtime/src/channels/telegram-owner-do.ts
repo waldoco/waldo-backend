@@ -10,6 +10,8 @@ import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, t
 import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, armDayCards, cardFor, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { dayPlanInput } from '../prompt/day-cards';
+import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
+import { changeLines, collectChanges, updateBook, UPDATE_CARDS_PER_DAY } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
@@ -149,6 +151,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const episodes = episodeIndex(storage.sql);
     const kv = durableConversationStore(storage);
     const plans = dayPlanBook(storage.sql);
+    const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
       .then(([, , , seeded]) => { if (seeded) void this.serial(() => planToday('day-plan:boot')); });
     const responder = createTelegramResponder(
@@ -230,6 +233,33 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       } catch (error) {
         log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: false, error: String(error) });
       }
+      await updateCheck(`update:${entry.occurrence_at}`);
+    };
+    const updateCheck = async (trace: string) => {
+      const client = await google.client();
+      if (client === null) return;
+      const started = Date.now();
+      try {
+        const now = Date.now();
+        const changes = await collectChanges(updates, client, now);
+        if (changes.length === 0) return;
+        const day = localIso(now, clock.timezone).slice(0, 10);
+        const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
+        const canSend = sentToday.has('card:brief') && !sentToday.has('card:close') && updates.pushedOn(day) < UPDATE_CARDS_PER_DAY;
+        let text: string | null = null;
+        if (canSend) {
+          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(changes), ledger: desk.ledger(book.list()) });
+          const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
+          if (reply && reply !== SKIP_UPDATE) {
+            await api.sendMessage({ chat_id: owner, text: reply });
+            text = reply;
+          }
+        }
+        updates.record(day, now, changes, text);
+        log({ trace, hop: 'update_card', ms: Date.now() - started, ok: true, detail: `${changes.length} changes; ${text ? 'sent' : canSend ? 'skipped' : 'held for next card'}`, text: { input: changeLines(changes), output: text ?? '' } });
+      } catch (error) {
+        log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, error: String(error) });
+      }
     };
     const cards = async (entry: ScheduleEntry) => {
       const card = cardFor(entry.id);
@@ -241,13 +271,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectUrl: client ? null : await google.connectUrl(),
-        ledger: desk.ledger(book.list()), today: transcript(episodes.since(midnight, 30_000), clock.timezone),
+        ledger: desk.ledger(book.list()), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
       });
       try {
         const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
         const skipped = !text || isSkip(text);
         if (!skipped) await api.sendMessage({ chat_id: owner, text });
         plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
+        updates.fold(now);
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: true, detail: skipped ? `${card.id} skipped` : card.id, text: { input: said, output: text } });
       } catch (error) {
         log({ trace, hop: 'day_card', ms: Date.now() - started, ok: false, error: String(error) });

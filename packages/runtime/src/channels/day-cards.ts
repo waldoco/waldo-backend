@@ -114,10 +114,10 @@ export const readCalendar = async (
 
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
-  sources: Readonly<{ google: GoogleClient | null; connectUrl: string | null; ledger: string; today: string }>,
+  sources: Readonly<{ google: GoogleClient | null; connectUrl: string | null; ledger: string; today: string; updates: string }>,
 ): Promise<string> => {
   const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectUrl);
-  return dayCardPrompt(card, localIso(now, timezone), { calendar, ledger: sources.ledger, today: sources.today });
+  return dayCardPrompt(card, localIso(now, timezone), { calendar, ledger: sources.ledger, today: sources.today, updates: sources.updates });
 };
 
 export const isSkip = (text: string): boolean => text.trim() === SKIP_CARD;
