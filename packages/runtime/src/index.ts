@@ -9,6 +9,7 @@ import {
   responsibilityHttpProblemV01,
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
+import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
 import {
@@ -35,6 +36,7 @@ export * from './responsibility/ingress-signature';
 export * from './responsibility/supabase-authority';
 export * from './responsibility/worker-adapter';
 export * from './tools/dispatcher';
+export { TelegramOwnerDO } from './channels/telegram-owner-do';
 export { TracerDO } from './tracer/tracer-do';
 import type { RunLoopDO } from './run-loop/do';
 import type { TracerDO } from './tracer/tracer-do';
@@ -58,6 +60,11 @@ declare global {
       SUPABASE_PUBLISHABLE_KEY?: string;
       RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
+      TELEGRAM_OWNER_DO?: DurableObjectNamespace;
+      TELEGRAM_BOT_TOKEN?: string;
+      TELEGRAM_WEBHOOK_SECRET?: string;
+      WALDO_OWNER_TELEGRAM_ID?: string;
+      OPENAI_API_KEY?: string;
       WALDO_ENV?: string;
     }
   }
@@ -100,7 +107,10 @@ export class RuntimeProbeDO extends DurableObject<Env> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    if (new URL(request.url).pathname === TELEGRAM_WEBHOOK_PATH) {
+      return handleTelegramWebhook(request, env, (work) => ctx?.waitUntil(work));
+    }
     if (env.RESPONSIBILITY_PUBLIC_API_ENABLED !== 'true') {
       return new Response('not found', {
         status: 404,

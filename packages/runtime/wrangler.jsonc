@@ -6,7 +6,8 @@
     "bindings": [
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
       { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
-      { "name": "TRACER_DO", "class_name": "TracerDO" }
+      { "name": "TRACER_DO", "class_name": "TracerDO" },
+      { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
     ]
   },
   "ratelimits": [
@@ -19,6 +20,7 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
     { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
-    { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] }
+    { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
+    { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] }
   ]
 }
