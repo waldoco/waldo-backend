@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import type { ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { coreFileStore } from '../memory/core-files';
+import { spotStore } from '../memory/spots';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
@@ -156,7 +157,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       .then(([, , , seeded]) => { if (seeded) void this.serial(() => planToday('day-plan:boot')); });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), coreFileStore(this.ctx.storage.sql), log,
-      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)],
+      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)], spotStore(storage.sql),
     );
     const listener = new TelegramOwnerListener({
       ownerTelegramId: owner, api, ...responder, log,
@@ -215,6 +216,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error) });
         }
       }
+      const promoting = Date.now();
+      await responder.promote(`${trace}:constellation`)
+        .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail }))
+        .catch((error: unknown) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: false, error: String(error) }));
       await armDayCards(scheduler, plans, clock.timezone, Date.now());
       await planToday(`${trace}:plan`);
     };
