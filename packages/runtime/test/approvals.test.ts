@@ -1,8 +1,8 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { approvalDesk, UNDO_WINDOW_MS } from '../src/channels/approvals';
-import type { GoogleClient } from '../src/connectors/google';
+import { approvalDesk, PROPOSAL_TTL_MS, UNDO_WINDOW_MS } from '../src/channels/approvals';
+import { GoogleError, type GoogleClient } from '../src/connectors/google';
 
 const iso = (s: string) => s as never;
 
@@ -61,6 +61,58 @@ describe('approval desk', () => {
       expect(ledger).toContain('- skipped: Cancel "Sync"');
       expect(ledger).toContain('- done: Drafted "Hi" to a@example.com');
       expect(open).toMatch(/^p/);
+    });
+  });
+
+  it('never applies an expired proposal or one whose event changed since the card', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-stale'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const texts: string[] = [];
+      const google: string[] = [];
+      let now = 1_000_000;
+      let n = 0;
+      let etag = 'v1';
+      let conflict = false;
+      const client = {
+        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, etag }),
+        moveEvent: async (id: string, start: string, _end: string, match?: string) => {
+          if (conflict) throw new GoogleError(412, 'google 412: precondition failed');
+          google.push(`move ${id} ${start} ${match}`);
+          return { id, title: 'Gym', start, end: start, all_day: false };
+        },
+        cancelEvent: async (id: string, match?: string) => { google.push(`cancel ${id} ${match}`); },
+      } as unknown as GoogleClient;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (_method, body) => { texts.push(String((body as { text?: string }).text ?? '')); return {}; },
+        owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const tap = (id: string) => desk.callback({ id: 'q', from: { id: 42 }, data: `a:${id}` }, 't');
+      const move = { action: 'move' as const, event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'clash' };
+
+      const old = await desk.propose(move);
+      now += PROPOSAL_TTL_MS + 1;
+      await tap(old);
+      expect(google).toEqual([]);
+      expect(texts.at(-1)).toContain('That proposal expired');
+
+      const edited = await desk.propose(move);
+      etag = 'v2';
+      await tap(edited);
+      expect(google).toEqual([]);
+      expect(texts.at(-1)).toContain('The event changed in your calendar');
+
+      const raced = await desk.propose(move);
+      conflict = true;
+      await tap(raced);
+      expect(google).toEqual([]);
+      expect(texts.at(-1)).toContain('The event changed in your calendar');
+
+      conflict = false;
+      const fresh = await desk.propose(move);
+      await tap(fresh);
+      expect(google).toEqual(['move e1 2026-09-23T19:00:00+05:30 v2']);
+      expect(desk.ledger([])).toContain('- stale: Move "Gym"');
+      expect(desk.ledger([])).toContain('- expired: Move "Gym"');
     });
   });
 });

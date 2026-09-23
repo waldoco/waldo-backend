@@ -138,4 +138,18 @@ describe('TelegramOwnerListener', () => {
     const { api } = recorder();
     expect(() => new TelegramOwnerListener({ ownerTelegramId: 0, api, respond: async () => '', saveOffset: async () => undefined })).toThrow('owner id');
   });
+
+  it('stops a turn that runs past the wall-clock limit and never sends its late reply', async () => {
+    vi.useFakeTimers();
+    const { calls, api } = recorder();
+    let finish!: (text: string) => void;
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: () => new Promise((resolve) => { finish = resolve; }), saveOffset: async () => undefined, progressAfterMs: 10_000, turnTimeoutMs: 1_000 });
+    const pending = listener.handle({ updateId: 9, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'huge' });
+    await vi.advanceTimersByTimeAsync(1_001);
+    await expect(pending).resolves.toBe('failed');
+    finish('late');
+    await vi.advanceTimersByTimeAsync(10);
+    const sends = calls.filter(([kind]) => kind === 'send').map(([, r]) => (r as { text: string }).text);
+    expect(sends).toEqual(['That took too long, so I stopped working on it. Try again, or split it into smaller asks.']);
+  });
 });

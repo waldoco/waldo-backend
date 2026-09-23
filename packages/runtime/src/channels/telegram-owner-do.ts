@@ -54,7 +54,10 @@ type OwnerRuntime = Readonly<{
   traces: TraceBook;
   timezone: string;
   ready: Promise<void>;
+  log(entry: TurnLogEntry): void;
 }>;
+
+const LATE_FIRE_MS = 5 * 60_000;
 
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private runtime?: OwnerRuntime;
@@ -121,9 +124,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   override async alarm(): Promise<void> {
     await this.serial(async () => {
-      const { scheduler, fire, nightly, briefs, cards, ready } = this.setup();
+      const { scheduler, fire, nightly, briefs, cards, ready, log } = this.setup();
       await ready;
-      await scheduler.dispatchDue({ reminder: fire, dreaming: nightly, pre_activity_spot: briefs, brief: cards });
+      const started = Date.now();
+      const fired = await scheduler.dispatchDue({ reminder: fire, dreaming: nightly, pre_activity_spot: briefs, brief: cards });
+      for (const entry of fired) {
+        const late = started - entry.due_at;
+        if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
+      }
     });
   }
 
@@ -374,7 +382,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces,
+    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log,
       view: async (session, notice) => {
         const tokens = await storage.get<GoogleTokens>('google:tokens');
         const now = Date.now();

@@ -2,6 +2,13 @@ import type { ModelUsage } from '../llm/pricing';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
 
+
+export const TURN_TIMEOUT_MS = 150_000;
+
+class TurnTimeout extends Error {
+  constructor(ms: number) { super(`turn timed out after ${ms} ms`); }
+}
+
 export type TelegramOwnerApi = Readonly<{
   setMessageReaction(request: Readonly<{ chat_id: number; message_id: number; reaction: readonly Readonly<{ type: 'emoji'; emoji: string }>[] }>): Promise<unknown>;
   sendChatAction(request: Readonly<{ chat_id: number; action: 'typing' }>): Promise<unknown>;
@@ -16,6 +23,7 @@ export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
+  turnTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
   saveOffset(offset: number): Promise<void>;
   log?(entry: TurnLogEntry): void;
@@ -98,7 +106,10 @@ export class TelegramOwnerListener {
       void time('progress', () => api.sendMessage({ chat_id, text: this.options.progressText ?? 'On it - still working on this, reply coming shortly.' })).catch(() => undefined);
     }, this.options.progressAfterMs ?? 8_000);
     try {
-      const text = (await time('respond', () => this.options.respond(turn, time))).trim();
+      const limit = this.options.turnTimeoutMs ?? TURN_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new TurnTimeout(limit)), limit); });
+      const text = (await time('respond', () => Promise.race([this.options.respond(turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
       if (text.length === 0) throw new Error('empty reply');
       clearTimeout(progressTimer);
       await time('send', () => api.sendMessage({ chat_id, text }));
@@ -108,7 +119,10 @@ export class TelegramOwnerListener {
       return 'answered';
     } catch (error) {
       clearTimeout(progressTimer);
-      await api.sendMessage({ chat_id, text: this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.' }).catch(() => undefined);
+      const failure = error instanceof TurnTimeout
+        ? 'That took too long, so I stopped working on it. Try again, or split it into smaller asks.'
+        : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
+      await api.sendMessage({ chat_id, text: failure }).catch(() => undefined);
       await react('failed', this.options.failedEmoji ?? '😢');
       log('turn', now() - started, false, error instanceof Error ? error.message : String(error));
       return 'failed';

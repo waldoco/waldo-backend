@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
-import { runToolLoop } from '../src/conversation/tool-loop';
+import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 
@@ -68,5 +68,13 @@ describe('runToolLoop', () => {
       step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: 'x', name: 'launch_rocket', arguments: '{}' }] } : { text: 'ok' }),
     });
     expect(JSON.parse(outputs[0]!)).toEqual({ ok: false, error: 'Unknown tool launch_rocket.' });
+  });
+
+  it('caps an oversized tool result and says how much was cut', () => {
+    const big = 'x'.repeat(TOOL_OUTPUT_LIMIT + 500);
+    const capped = capToolOutput(big);
+    expect(capped.startsWith('x'.repeat(TOOL_OUTPUT_LIMIT))).toBe(true);
+    expect(capped).toContain('[cut: 500 more characters not shown; narrow the request]');
+    expect(capToolOutput('small')).toBe('small');
   });
 });

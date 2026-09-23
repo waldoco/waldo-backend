@@ -21,6 +21,10 @@ import type { LLMAttachment } from '@waldo/contracts';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const MAX_TOOL_ROUNDS = 25;
+const CLINICAL_FALLBACK = {
+  text: "I can't advise on that one. A doctor or pharmacist can. If this is an emergency or you feel unsafe, call your local emergency number now.",
+  input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, latency_ms: 0,
+};
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -71,6 +75,7 @@ export const createTelegramResponder = (
     if (!result.ok && result.halted_by === 'medical_gate' && !system.endsWith(CLINICAL_REDIRECT)) {
       return complete(trace, `${purpose}_redirect`, `${system}\n\n${CLINICAL_REDIRECT}`, content, format, attachments, tools, turns);
     }
+    if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model: WALDO_CHAT_MODEL };
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return result.response;
   };
@@ -98,6 +103,7 @@ export const createTelegramResponder = (
     },
   }, tree);
   let parentId: string | null = null;
+  let settling: Promise<unknown> = Promise.resolve();
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, chatId: number, said: string, time: TurnTimer) => {
     traceId = id;
@@ -114,42 +120,49 @@ export const createTelegramResponder = (
   return {
     async respond(turn, time) {
       await restored;
+      await settling;
       const id = `tg-${turn.updateId}`;
       const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers)) : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
       const text = await converse(id, turn.chatId, said, time);
+      const writes: Promise<unknown>[] = [];
       if (memory) {
         const files = memory.read();
         const started = Date.now();
-        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, said, text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
+        writes.push(ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, said, text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
           .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyMemoryEdits(memory, raw, new Date().toISOString()).join(',') }))
-          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
+          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) })));
       }
       if (spots) {
         const started = Date.now();
-        void ask(id, 'spots', SPOT_INSTRUCTION, spotInput(spots, said, text), { name: 'spot_ops', schema: SPOT_OPS_SCHEMA })
+        writes.push(ask(id, 'spots', SPOT_INSTRUCTION, spotInput(spots, said, text), { name: 'spot_ops', schema: SPOT_OPS_SCHEMA })
           .then((raw) => log({ trace: id, hop: 'spots', ms: Date.now() - started, ok: true, detail: applySpotOps(spots, raw, new Date().toISOString()) }))
-          .catch((error: unknown) => log({ trace: id, hop: 'spots', ms: Date.now() - started, ok: false, error: String(error) }));
+          .catch((error: unknown) => log({ trace: id, hop: 'spots', ms: Date.now() - started, ok: false, error: String(error) })));
       }
+      settling = Promise.all(writes);
       return text;
     },
     async remind(id, chatId, note, time) {
       await restored;
+      await settling;
       pending = undefined;
       return converse(id, chatId, `[Reminder due now, set earlier by the owner: "${note}"] Send them this reminder now, in your own words.`, time);
     },
     async prompt(id, chatId, said, time) {
       await restored;
+      await settling;
       pending = undefined;
       return converse(id, chatId, said, time);
     },
     async consolidate(trace, day) {
+      await settling;
       if (!memory) return [];
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyMemoryInput(memory.read(), day), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA });
       return applyMemoryEdits(memory, raw, new Date().toISOString());
     },
     async promote(trace) {
+      await settling;
       if (!spots || spots.spots().length === 0) return 'no spots';
       const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, spotsPrompt(spots), { name: 'promotion', schema: PROMOTION_SCHEMA });
       return applyPromotion(spots, raw, new Date().toISOString());

@@ -70,7 +70,11 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, ...(claims.email ? { email: claims.email } : {}) };
 }
 
-export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number }>;
+export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string }>;
+
+export class GoogleError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
 export type CalendarChange = CalendarItem & Readonly<{ status: string; created: string }>;
 export type MailItem = Readonly<{ id: string; from: string; subject: string; snippet: string; at: string }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
@@ -80,8 +84,8 @@ export type GoogleClient = Readonly<{
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   event(id: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
-  moveEvent(id: string, start: string, end: string): Promise<CalendarItem>;
-  cancelEvent(id: string): Promise<void>;
+  moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
+  cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
 }>;
@@ -97,18 +101,19 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   const call = async (url: string, init: RequestInit = {}) => {
     const response = await fetcher(url, { ...init, headers: { ...(init.headers ?? {}), authorization: `Bearer ${await bearer()}` } });
     const json = response.status === 204 ? {} : await response.json() as Record<string, unknown>;
-    if (!response.ok) throw new Error(`google ${response.status}: ${(json.error as { message?: string } | undefined)?.message ?? 'request failed'}`);
+    if (!response.ok) throw new GoogleError(response.status, `google ${response.status}: ${(json.error as { message?: string } | undefined)?.message ?? 'request failed'}`);
     return json;
   };
   const EVENTS = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
-  const send = async (url: string, method: string, body: unknown) =>
-    toItem(await call(url, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
+  const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
+  const send = async (url: string, method: string, body: unknown, etag?: string) =>
+    toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
   return {
     event: async (id) => toItem(await call(`${EVENTS}/${encodeURIComponent(id)}`) as unknown as GoogleEvent),
     createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
-    moveEvent: (id, start, end) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }),
-    async cancelEvent(id) {
-      await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),
+    async cancelEvent(id, etag) {
+      await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
     async events(from, to, limit, includeDeclined) {
       const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
@@ -164,10 +169,11 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   ...(event.location ? { location: event.location } : {}),
   ...(event.description?.trim() ? { description: event.description.trim().slice(0, 2000) } : {}),
   ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
+  ...(event.etag ? { etag: event.etag } : {}),
 });
 
 type GoogleEvent = {
-  id: string; status?: string; summary?: string; location?: string; description?: string; created?: string;
+  id: string; etag?: string; status?: string; summary?: string; location?: string; description?: string; created?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   attendees?: { self?: boolean; responseStatus?: string }[];
 };

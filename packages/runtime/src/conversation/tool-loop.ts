@@ -1,6 +1,12 @@
 import { toolNameSchema, toolParameters, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 
+
+export const TOOL_OUTPUT_LIMIT = 16_000;
+
+export const capToolOutput = (output: string): string =>
+  output.length <= TOOL_OUTPUT_LIMIT ? output : `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n[cut: ${output.length - TOOL_OUTPUT_LIMIT} more characters not shown; narrow the request]`;
+
 export type ToolLoopStep = (
   tools: readonly LLMTool[] | undefined,
   turns: readonly LLMToolTurn[],
@@ -44,7 +50,7 @@ export async function runToolLoop(input: Readonly<{
         ? { ok: false, error: 'Same call already made this turn; use its result.' }
         : await dispatch(call, input);
       seen.add(key);
-      const output = JSON.stringify(result);
+      const output = capToolOutput(JSON.stringify(result));
       turns.push({ call, output });
       input.onTool?.({ call, ok: result.ok, ms: Date.now() - started, output });
       anyOk ||= result.ok;
