@@ -65,6 +65,21 @@ describe('OpenAIResponsesAdapter', () => {
     expect(metadata).toMatchObject({ response_id: 'resp_test_1', model: OPENAI_GPT_5_NANO_MODEL, reasoning: 'Greet briefly.' });
   });
 
+  it('asks for strict structured output when the request carries a schema', async () => {
+    let sent: unknown;
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: unknown) => {
+        sent = body;
+        return { id: 'r', output_text: '{"edits":[]}', output: [], usage: { input_tokens: 1, output_tokens: 1 } } as never;
+      }),
+    });
+    const request = gatewayRequest();
+    const schema = { type: 'object', additionalProperties: false, required: ['edits'], properties: { edits: { type: 'array' } } };
+    await adapter.complete({ ...request, request: { ...request.request, response_format: { name: 'memory_edits', schema } } });
+    expect(sent).toMatchObject({ text: { format: { type: 'json_schema', name: 'memory_edits', schema, strict: true } } });
+  });
+
   it('sends a bounded reasoning effort and classifies truncated output as oversize', async () => {
     let sent: unknown;
     const adapter = new OpenAIResponsesAdapter({

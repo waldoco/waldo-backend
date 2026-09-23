@@ -6,9 +6,9 @@ import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider } from '../llm/provider';
 import { messagingSystemPrompt } from '../prompt/messaging-behavior';
-import { applyMemoryEdits, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
+import { applyMemoryEdits, MEMORY_EDITS_SCHEMA, MEMORY_UPDATE_INSTRUCTION, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
-import { reactionInstruction, TELEGRAM_REACTIONS } from './reactions';
+import { reactionInstruction, reactionSchema, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions, TurnLogEntry } from './telegram-listener';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
@@ -29,14 +29,14 @@ export const createTelegramResponder = (
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
-  const ask = async (trace: string, purpose: string, system: string, content: string) => {
+  const ask = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>) => {
     const started = Date.now();
     let reasoning: string | undefined;
     const gateway = new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const result = await new RuntimeLLMProvider({ gateway, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,
-      renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2 }),
+      renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2, ...(format ? { response_format: format } : {}) }),
     }, {
       authenticatedUserId: ownerId, trigger: 'user_message', canaryTokens: CANARIES,
       sourceTaint: null, toolArgSourceTaint: null,
@@ -78,12 +78,12 @@ export const createTelegramResponder = (
       if (memory) {
         const files = memory.read();
         const started = Date.now();
-        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text))
+        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
           .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyMemoryEdits(memory, raw, new Date().toISOString()).join(',') }))
           .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
       }
       return publication.text;
     },
-    chooseReaction: (turn) => ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), turn.text),
+    chooseReaction: async (turn) => (JSON.parse(await ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), turn.text, { name: 'reaction', schema: reactionSchema(TELEGRAM_REACTIONS) })) as { reaction?: string }).reaction ?? null,
   };
 };

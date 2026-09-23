@@ -49,6 +49,19 @@ export const MEMORY_UPDATE_INSTRUCTION = [
   'Reply with JSON only: {"edits":[{"file":"<file>","content":"<full new file text>","reason":"<short why>"}]}. Use {"edits":[]} when nothing changed.',
 ].join('\n');
 
+export const MEMORY_EDITS_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['edits'],
+  properties: {
+    edits: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false, required: ['file', 'content', 'reason'],
+        properties: { file: { type: 'string', enum: [...CORE_FILES] }, content: { type: 'string' }, reason: { type: 'string' } },
+      },
+    },
+  },
+};
+
 type Edit = Readonly<{ file: CoreFile; content: string; reason: string }>;
 
 const isEdit = (value: unknown): value is Edit => {

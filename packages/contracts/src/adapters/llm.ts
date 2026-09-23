@@ -16,6 +16,9 @@ export const llmRequestSchema = z.strictObject({
   messages: z.array(llmMessageSchema).min(1),
   max_tokens: z.int().min(1).max(8192),
   temperature: z.number().min(0).max(2),
+  // Asks the provider to constrain output to this JSON schema where it can (OpenAI strict
+  // structured outputs). Callers still validate the result; other providers ignore it.
+  response_format: z.strictObject({ name: z.string().min(1).max(64), schema: z.record(z.string(), z.unknown()) }).optional(),
 });
 export type LLMRequest = z.infer<typeof llmRequestSchema>;
 
