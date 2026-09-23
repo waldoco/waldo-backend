@@ -49,7 +49,7 @@ Adopted: small, inspectable cores and version-bound provider transforms. Not ado
 
 ## Frontier reassessment (23 September 2026)
 
-This is a first pass over research published since March 2026, grouped by pillar. Each item says what Waldo takes from it. Voice, on-device models and prompt-injection defense are still to be covered.
+This is a first pass over research published since March 2026, grouped by pillar. Each item says what Waldo takes from it. A second pass the same day added prompt-injection defense, voice and on-device.
 
 ### Memory
 
@@ -78,6 +78,21 @@ This is a first pass over research published since March 2026, grouped by pillar
 ### Health behavior
 
 - SIM-VAIL audits chatbots across multi-turn psychiatric conversations and targets quieter interactional harms, not just overtly unsafe replies ([Nature Medicine, August 2026](https://www.nature.com/articles/s41591-026-04577-2)). Take: `scripts/health-scenarios.ts` only covers single turns. Add multi-turn health and wellness audits.
+
+### Prompt-injection defense and authority
+
+- Security enforced outside the model is where the field has converged. Capabilities, information-flow labels and reference monitors (CaMeL, FIDES, Progent and others) nearly eliminate attacks on AgentDojo. But every one of them has only been tested against fixed attack sets, and adaptive attacks broke twelve earlier in-model defenses at over 90% ([arXiv 2606.26479](https://arxiv.org/abs/2606.26479)). Take: keep Waldo's hard lines deterministic and outside the model. Test them with adaptive attacks, not only a fixed list.
+- ROPE allows a value to reach a state-changing tool only if it traces to the user, a source the user named, or the user's own records. Enforcement is a deterministic origin check on sensitive parameters ([arXiv 2608.27496](https://arxiv.org/abs/2608.27496)). A related paper argues capabilities should be scoped to the current task intent and to where each input came from, not to a session ([arXiv 2609.14631](https://arxiv.org/abs/2609.14631)). Take: this fits Waldo's source-taint and trust classes. Recipients, destinations and amounts must trace to the owner.
+- AttriGuard asks why a tool call was produced. It replays the agent with outside content attenuated and blocks calls that only untrusted content caused ([arXiv 2603.10749](https://arxiv.org/abs/2603.10749)). Take: a candidate check for high-stakes actions, at the cost of extra model calls.
+- Every consequential action should trace to a human principal, stay inside what they delegated, and be open to challenge afterwards ([arXiv 2609.15906](https://arxiv.org/abs/2609.15906)). Take: the approval queue and activity ledger should record all three.
+
+### Voice
+
+- OpenAI's GPT-Live is full-duplex. The voice model listens and speaks at once with no separate turn detector, while reasoning and tool calls run asynchronously ([OpenAI, August 2026](https://openai.com/index/continuous-voice-interaction-with-gpt-live/)). Google's Gemini 3.8 Live models do native speech-to-speech that keeps talking while tasks run ([Google, September 2026](https://blog.google/innovation-and-ai/technology/developers-tools/build-real-time-voice-applications-gemini-audio/)). A self-hosted end-to-end speech model is still not practical: Qwen3-Omni runs at about 702 ms through its cloud API only, so self-hosted voice stays STT, then LLM, then TTS ([arXiv 2603.05413](https://arxiv.org/abs/2603.05413)). Take: when Waldo adds voice, use a hosted speech-to-speech model as the front and hand work to the existing run loop asynchronously. This matches the "never feel stalled" rule.
+
+### On-device
+
+This search found only hobby repositories, no primary research or vendor evidence. Nothing to adopt yet. Raw wearable data stays on the phone as before.
 
 ### Decision for the owner
 
