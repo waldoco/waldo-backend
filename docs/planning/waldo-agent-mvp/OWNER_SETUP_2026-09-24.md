@@ -69,3 +69,11 @@ Both go behind one seam, so switching later is a config change. If cost matters 
 - The vocabulary rulings in VOCABULARY_AND_BRAND_2026-09-24.md.
 - Langfuse text capture: how long it keeps owner text, and whether it stays on for beta users.
 - Whether to mark Gmail and web content as untrusted in the prompt. I recommend yes: it's the first prompt-injection surface.
+
+## W2 wiring, once the new Supabase project exists (I do these, not the owner)
+
+- Apply the migrations. `20260924120000_waldo_owners.sql` creates the `waldo` schema: owners, presences, owner_settings, invites and link_codes, with RLS forced on each.
+- In the dashboard (API settings), add `waldo` to the exposed schemas. Local dev does this through `supabase/config.toml`.
+- The runtime never gets the service-role key (ADR-0052, enforced by guard-do-only-runtime). It calls `waldo.route_presence` and `waldo.redeem_link` with the publishable key. Each call is HMAC-signed with a secret stored in Vault as `waldo_router_hmac`. The Worker holds the same value as the `WALDO_ROUTER_HMAC_SECRET` secret, and it opens nothing else.
+- Seed the existing owner with `do_name` set to his Telegram id. His Durable Object, memory and conversation keep their current name, so nothing has to move.
+- Until the Worker has `SUPABASE_PROJECT_URL`, `SUPABASE_PUBLISHABLE_KEY` and `WALDO_ROUTER_HMAC_SECRET`, routing falls back to the single `WALDO_OWNER_TELEGRAM_ID` owner.

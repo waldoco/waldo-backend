@@ -77,6 +77,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const origin = request.headers.get('x-waldo-origin');
     if (origin) await this.ctx.storage.put('origin', origin);
+    this.bindIdentity(request.headers);
     if (origin && this.env.TELEGRAM_WEBHOOK_SECRET && (await this.ctx.storage.get('webhook_updates')) !== WEBHOOK_UPDATES.join(',')) {
       try {
         await this.setup().call('setWebhook', { url: `${origin}${TELEGRAM_WEBHOOK_PATH}`, secret_token: this.env.TELEGRAM_WEBHOOK_SECRET, allowed_updates: WEBHOOK_UPDATES });
@@ -89,6 +90,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (this.intercept(update)) return new Response('ok');
     await this.serial(() => this.turn(update));
     return new Response('ok');
+  }
+
+  // The webhook names the Telegram subject and timezone it resolved for this owner; they outlive deploy variables.
+  private bindIdentity(headers: Headers): void {
+    const { kv } = this.ctx.storage;
+    const subject = headers.get('x-waldo-telegram-subject');
+    if (subject && kv.get<string>('telegram_subject') !== subject) {
+      kv.put('telegram_subject', subject);
+      this.runtime = undefined;
+    }
+    const timezone = headers.get('x-waldo-timezone');
+    if (timezone && kv.get<string>('timezone') !== timezone) kv.put('timezone', timezone);
   }
 
   private async console(request: Request): Promise<Response> {
@@ -232,7 +245,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   private setup(): OwnerRuntime {
     if (this.runtime) return this.runtime;
-    const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key, WALDO_OWNER_TELEGRAM_ID: ownerId } = this.env;
+    const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
+    const identity = this.ctx.storage.kv;
+    const ownerId = identity.get<string>('telegram_subject') ?? this.env.WALDO_OWNER_TELEGRAM_ID;
     if (!token || !key || !ownerId) throw new Error('telegram owner runtime is unconfigured');
     const owner = Number(ownerId);
     const otlp = langfuseOtlpConfig(this.env);
@@ -250,7 +265,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const deps = productionDeps();
     ensureSchema(this.ctx.storage);
     const scheduler = new Scheduler(this.ctx.storage.sql, this.ctx.storage, deps);
-    const clock = { timezone: this.env.WALDO_OWNER_TIMEZONE ?? 'UTC', now: () => new Date() };
+    const fallbackZone = this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
+    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const call = createTelegramCaller(token);
     const api = createTelegramOwnerApi(call);
