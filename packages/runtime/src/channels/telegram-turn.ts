@@ -78,7 +78,7 @@ export const createTelegramResponder = (
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: (tools, turns) => complete(trace, 'reply',
-          [messagingSystemPrompt(request.system, handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
+          [messagingSystemPrompt(handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
           request.messages.join('\n'),
           undefined,
           pending,
