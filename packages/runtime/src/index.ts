@@ -12,6 +12,7 @@ import { armAlarm } from './scheduler/alarm-slot';
 import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
 import { handleGoogleCallback } from './channels/google-oauth';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
+import { CONSOLE_PATH } from './channels/console';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
 import {
@@ -114,6 +115,9 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     if (new URL(request.url).pathname === TELEGRAM_WEBHOOK_PATH) {
       return handleTelegramWebhook(request, env, (work) => ctx?.waitUntil(work));
+    }
+    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
+      return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(env.WALDO_OWNER_TELEGRAM_ID)).fetch(request);
     }
     if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
       return handleGoogleCallback(request, env);

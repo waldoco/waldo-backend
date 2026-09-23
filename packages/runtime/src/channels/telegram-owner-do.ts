@@ -3,6 +3,7 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { coreFileStore } from '../memory/core-files';
 import { spotStore } from '../memory/spots';
+import { type ConsoleView, consoleAccess, CONSOLE_COOKIE, CONSOLE_PATH, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
@@ -45,6 +46,7 @@ type OwnerRuntime = Readonly<{
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
+  view(): Promise<ConsoleView>;
   traces: TraceBook;
   timezone: string;
   ready: Promise<void>;
@@ -55,6 +57,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private queue: Promise<unknown> = Promise.resolve();
 
   override async fetch(request: Request): Promise<Response> {
+    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
     if (new URL(request.url).pathname === '/google') {
       await this.serial(() => this.connectGoogle(JSON.parse(body) as GoogleTokens));
@@ -72,6 +75,21 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     await this.serial(() => this.turn(JSON.parse(body) as unknown));
     return new Response('ok');
+  }
+
+  private async console(request: Request): Promise<Response> {
+    const access = consoleAccess(this.ctx.storage);
+    const url = new URL(request.url);
+    const link = url.searchParams.get('t');
+    if (link) {
+      const session = await access.redeem(link);
+      if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
+      return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
+    }
+    if (!(await access.valid(sessionCookie(request)))) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401 });
+    const { ready, view } = this.setup();
+    await ready;
+    return new Response(renderConsole(await view()), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
   }
 
   private async connectGoogle(tokens: GoogleTokens): Promise<void> {
@@ -104,6 +122,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const handledDirectly = raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger');
     if (handledDirectly) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
+      if (harness?.kind === 'console') {
+        await this.ctx.storage.put('offset', raw.update_id + 1);
+        const origin = await this.ctx.storage.get<string>('origin');
+        await call('sendMessage', { chat_id: owner, text: origin ? `Console (link works once, for 10 minutes): ${await consoleAccess(this.ctx.storage).mintLink(origin)}` : 'Console origin is not known yet; send any message first.' });
+        return;
+      }
       if (harness) {
         await this.ctx.storage.put('offset', raw.update_id + 1);
         await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, raw.update_id)).slice(0, 4000) });
@@ -121,6 +145,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup();
     if (command.kind === 'trace') return traces.recent(timezone, command.filter);
     if (command.kind === 'e2e') return traces.checklist(timezone);
+    if (command.kind !== 'fire') return '';
     if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
     const trace = `harness-${updateId}`;
     const entry = { id: command.target, occurrence_at: Date.now(), attempts: 0 } as unknown as ScheduleEntry;
@@ -182,12 +207,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const episodes = episodeIndex(storage.sql);
     const kv = durableConversationStore(storage);
     const plans = dayPlanBook(storage.sql);
+    const memory = coreFileStore(storage.sql);
+    const spots = spotStore(storage.sql);
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
       .then(([, , , seeded]) => { if (seeded) void this.serial(() => planToday('day-plan:boot')); });
     const responder = createTelegramResponder(
-      key, indexedConversationStore(kv, episodes, () => Date.now()), coreFileStore(this.ctx.storage.sql), log,
-      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)], spotStore(storage.sql),
+      key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
+      { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)], spots,
     );
     const listener = new TelegramOwnerListener({
       ownerTelegramId: owner, api, ...responder, log,
@@ -320,7 +347,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, timezone: clock.timezone, ready };
+    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces,
+      view: async () => {
+        const tokens = await storage.get<GoogleTokens>('google:tokens');
+        return {
+          release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone,
+          google: { connected: tokens !== undefined, email: tokens?.email ?? null },
+          memory: memory.read(), spots: spots.spots(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => spots.spots(status)),
+          nodes: spots.nodes(), edges: spots.edges(),
+          cards: plans.read(localIso(Date.now(), clock.timezone).slice(0, 10)),
+          ledger: desk.ledger(book.list()), checklist: traces.checklist(clock.timezone), trace: traces.recent(clock.timezone, null, 60),
+        };
+      }, timezone: clock.timezone, ready };
     return this.runtime;
   }
 }

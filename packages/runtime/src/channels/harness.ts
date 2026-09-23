@@ -9,7 +9,8 @@ export type FireTarget = (typeof FIRE_TARGETS)[number];
 export type HarnessCommand =
   | Readonly<{ kind: 'fire'; target: FireTarget | null }>
   | Readonly<{ kind: 'trace'; filter: string | null }>
-  | Readonly<{ kind: 'e2e' }>;
+  | Readonly<{ kind: 'e2e' }>
+  | Readonly<{ kind: 'console' }>;
 
 export const parseHarnessCommand = (text: string | undefined): HarnessCommand | null => {
   const [command, arg] = (text ?? '').trim().split(/\s+/, 2);
@@ -19,6 +20,7 @@ export const parseHarnessCommand = (text: string | undefined): HarnessCommand | 
   }
   if (command === '/trace') return { kind: 'trace', filter: arg ?? null };
   if (command === '/e2e') return { kind: 'e2e' };
+  if (command === '/console') return { kind: 'console' };
   return null;
 };
 
