@@ -11,14 +11,15 @@ export const GOOGLE_FEATURE_SCOPES = {
 } as const;
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
-export const googleHas = (scopes: readonly string[] | undefined, feature: GoogleFeature): boolean =>
-  GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
+// null is a grant from before per-feature scopes, made under the broad consent, so it covers every feature.
+export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
+  scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 const STATE_TTL_MS = 15 * 60_000;
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
-export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] }>;
+export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null }>;
 type Fetch = typeof fetch;
 
 const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -33,8 +34,10 @@ export async function oauthState(secret: string, owner: string, now: number): Pr
   return `${payload}.${await sign(secret, payload)}`;
 }
 
+// The owner is the Durable Object name, which may hold dots, so split from the right.
 export async function verifyOauthState(secret: string, state: string, now: number): Promise<string | null> {
-  const [owner, expires, mac] = state.split('.');
+  const [mac, expires, ...rest] = state.split('.').reverse();
+  const owner = rest.reverse().join('.');
   if (!owner || !expires || !mac || Number(expires) < now) return null;
   return (await sign(secret, `${owner}.${expires}`)) === mac ? owner : null;
 }

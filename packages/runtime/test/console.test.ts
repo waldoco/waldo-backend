@@ -68,6 +68,6 @@ describe('owner console', () => {
     expect(html).toContain('value="spot.forget"');
     expect(html).toContain('Not built yet');
     expect(html.indexOf('The Brief')).toBeLessThan(html.indexOf('Check-in'));
-    expect(renderConsole({ ...view, google: { connected: false, email: null, connectAvailable: false, error: null, mail: false } })).toContain('OAuth app keys are not set');
+    expect(renderConsole({ ...view, google: { accounts: [], connectAvailable: false } })).toContain('OAuth app keys are not set');
   });
 });

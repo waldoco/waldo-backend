@@ -95,7 +95,7 @@ export type ConsoleView = Readonly<{
   sessionUntil: string;
   csrf: string;
   notice: string | null;
-  google: Readonly<{ connected: boolean; email: string | null; connectAvailable: boolean; error: string | null; mail: boolean }>;
+  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; mail: boolean }>[]; connectAvailable: boolean }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
@@ -126,19 +126,20 @@ const connectors = (view: ConsoleView) => {
   const { google, telegram, csrf } = view;
   const telegramAction = form(csrf, 'telegram.link', 'Link a Telegram account', {}, {})
     + (telegram.linked && telegram.unlinkAvailable ? form(csrf, 'telegram.unlink', 'Unlink', {}, { tone: 'danger', confirm: 'Unlink Telegram? Waldo stops messaging it. Sign in here with your email to link again.' }) : '');
-  const disconnect = form(csrf, 'google.disconnect', 'Disconnect', {}, { tone: 'danger', confirm: 'Disconnect Google? Waldo stops reading your calendar and mail.' });
-  const googleAction = google.connected && google.error && google.connectAvailable
-    ? `<a class="btn primary" href="${CONSOLE_GOOGLE_PATH}">Reconnect</a>${disconnect}`
-    : google.connected
-    ? `${!google.mail && google.connectAvailable ? `<a class="btn quiet" href="${CONSOLE_GOOGLE_PATH}?feature=mail">Allow Gmail</a>` : ''}${disconnect}`
-    : google.connectAvailable ? `<a class="btn primary" href="${CONSOLE_GOOGLE_PATH}">Connect Google</a>` : '<span class="note">OAuth app keys are not set on this server yet</span>';
   const row = (name: string, detail: string, state: string, action: string) =>
     `<div class="row conn"><div><div class="name">${esc(name)}</div><div class="sub">${detail}</div></div><div class="state">${state}</div><div class="act">${action}</div></div>`;
   return [
-    row('Google Calendar and Gmail', google.connected && google.error ? `Waldo could not refresh access for <b>${esc(google.email ?? 'your account')}</b> (${esc(google.error)}). Reconnect to fix it.`
-      : google.connected ? `Signed in as <b>${esc(google.email ?? 'unknown account')}</b>. Waldo reads your calendar${google.mail ? ' and mail, and sends mail only after you approve it' : '. Allow Gmail to let Waldo read mail and send what you approve'}.`
-      : 'Lets Waldo read your calendar. Gmail is a separate step. Nothing is sent without your approval.',
-      status(google.connected && !google.error, google.connected ? (google.error ? 'Needs reconnect' : 'Connected') : 'Not connected'), googleAction),
+    ...google.accounts.map((account) => {
+      const disconnect = form(csrf, 'google.disconnect', 'Disconnect', { id: account.id }, { tone: 'danger', confirm: `Disconnect ${account.email}? Waldo stops reading its calendar and mail.` });
+      const action = account.error && google.connectAvailable ? `<a class="btn primary" href="${CONSOLE_GOOGLE_PATH}">Reconnect</a>${disconnect}`
+        : `${!account.mail && google.connectAvailable ? `<a class="btn quiet" href="${CONSOLE_GOOGLE_PATH}?feature=mail">Allow Gmail</a>` : ''}${disconnect}`;
+      const detail = account.error ? `Waldo could not refresh access (${esc(account.error)}). Reconnect and pick <b>${esc(account.email)}</b> to fix it.`
+        : `Waldo reads this calendar${account.mail ? ' and mail, and sends mail only after you approve it' : '. Allow Gmail to let Waldo read mail and send what you approve'}.`;
+      return row(`Google: ${account.email}`, detail, status(!account.error, account.error ? 'Needs reconnect' : 'Connected'), action);
+    }),
+    row(google.accounts.length ? 'Another Google account' : 'Google Calendar and Gmail', google.accounts.length ? 'Connect a second account, such as work and personal. Google asks which one.' : 'Lets Waldo read your calendar. Gmail is a separate step. Nothing is sent without your approval.',
+      google.accounts.length ? '' : status(false, 'Not connected'),
+      google.connectAvailable ? `<a class="btn ${google.accounts.length ? 'quiet' : 'primary'}" href="${CONSOLE_GOOGLE_PATH}">${google.accounts.length ? 'Add account' : 'Connect Google'}</a>` : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
     row('Console session', `Signed in until ${esc(view.sessionUntil)}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out')),
@@ -252,7 +253,7 @@ ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
 <nav><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#activity">Activity</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
-<div class="stats"><div class="stat"><b>${view.google.connected ? 'On' : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
+<div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
 ${section('connections', 'Connections', 'What Waldo can reach, and the switches to change it. Items marked not built yet are on the plan but not wired.', connectors(view))}
 ${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + retired(view))}
 ${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}

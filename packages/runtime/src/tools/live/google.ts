@@ -7,7 +7,7 @@ import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
-  client(): Promise<GoogleClient | null>;
+  client(feature?: GoogleFeature): Promise<GoogleClient | null>;
   connectUrl(feature: GoogleFeature): Promise<string | null>;
 }>;
 
@@ -20,7 +20,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 const DAY_MS = 24 * 60 * 60_000;
 
 async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
-  const client = await google.client();
+  const client = await google.client(feature);
   if (client === null) {
     const url = await google.connectUrl(feature);
     return {

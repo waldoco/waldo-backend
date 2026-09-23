@@ -39,7 +39,9 @@ const WEBHOOK_UPDATES = ['message', 'callback_query'];
 
 type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?: { text?: string; from?: { id: number }; chat?: { id: number } } };
 
-type GoogleConnection = Readonly<{ id: string; email: string | null; scopes: readonly string[] }>;
+// scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
+type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
+const LEGACY_GRANT = null;
 
 type OwnerRuntime = Readonly<{
   owner: number;
@@ -60,7 +62,7 @@ type OwnerRuntime = Readonly<{
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
   act(action: ConsoleAction): Promise<boolean>;
   googleConnectUrl(feature: GoogleFeature): Promise<string | null>;
-  google: Readonly<{ keep(tokens: GoogleTokens): Promise<boolean> }>;
+  google: Readonly<{ keep(tokens: GoogleTokens): Promise<void> }>;
   openFile(id: number): Promise<Response | null>;
   traces: TraceBook;
   timezone: string;
@@ -331,57 +333,72 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const vault = connectionVault(this.env);
     const vaultOwner = () => identity.get<string>('do_name');
-    const noteHealth = (id: string | null, error: string) => {
-      if (error) void storage.put('google:health', { error, at: Date.now() });
-      else void storage.delete('google:health');
+    const stateOwner = () => vaultOwner() ?? String(owner);
+    const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
+    const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
+    const noteHealth = (id: string, error: string) => {
+      this.ctx.waitUntil(health().then((all) => {
+        const { [id]: _, ...rest } = all;
+        return storage.put('google:health', error ? { ...rest, [id]: error } : rest);
+      }));
       const doName = vaultOwner();
-      if (id && vault && doName) this.ctx.waitUntil(vault.health(doName, id, error).catch(() => false));
+      if (!id.startsWith('local:') && vault && doName) this.ctx.waitUntil(vault.health(doName, id, error).catch(() => false));
     };
     const google = {
-      // With Supabase configured the token goes to Vault and the DO keeps only the connection id.
-      async keep(tokens: GoogleTokens): Promise<boolean> {
+      // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
+      async keep(tokens: GoogleTokens): Promise<void> {
+        const email = (tokens.email ?? 'google').toLowerCase();
         const doName = vaultOwner();
-        const id = vault && doName ? await vault.store(doName, tokens.email ?? 'google', tokens.scopes ?? [], tokens.refresh_token).catch(() => null) : null;
-        if (!id) {
-          await storage.put('google:tokens', tokens);
-          return false;
+        const id = vault && doName ? await vault.store(doName, email, tokens.scopes ?? [], tokens.refresh_token).catch(() => null) : null;
+        const account: GoogleAccount = id
+          ? { id, email, scopes: tokens.scopes ?? null }
+          : { id: `local:${email}`, email, scopes: tokens.scopes ?? null, refresh_token: tokens.refresh_token };
+        await storage.put('google:accounts', [...(await accounts()).filter((known) => known.email !== email), account]);
+        noteHealth(account.id, '');
+      },
+      // Tokens saved before multi-account and Vault move into the account list once.
+      async migrate(): Promise<void> {
+        const linked = await storage.get<{ id: string; email: string | null; scopes: readonly string[] }>('google:connection');
+        if (linked) {
+          await storage.put('google:accounts', [...(await accounts()).filter((known) => known.id !== linked.id), { id: linked.id, email: linked.email ?? 'google', scopes: linked.scopes }]);
+          await storage.delete('google:connection');
         }
-        await storage.put('google:connection', { id, email: tokens.email ?? null, scopes: tokens.scopes ?? [] });
-        await storage.delete('google:tokens');
-        await storage.delete('google:health');
-        return true;
-      },
-      async link() {
         const legacy = await storage.get<GoogleTokens>('google:tokens');
-        if (legacy && (await google.keep(legacy))) log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: 'moved to vault' });
-        return storage.get<GoogleConnection>('google:connection');
+        if (!legacy) return;
+        await google.keep({ ...legacy, scopes: legacy.scopes ?? LEGACY_GRANT });
+        await storage.delete(['google:tokens', 'google:connection']);
+        log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
-      async client() {
+      // The first healthy account whose grant covers the feature serves it.
+      async client(feature: GoogleFeature = 'calendar') {
         const app = await googleApp();
         if (!app) return null;
-        const [link, doName] = [await google.link(), vaultOwner()];
-        if (link && vault && doName) {
-          const refresh = await vault.secret(doName, link.id);
-          if (!refresh) return noteHealth(link.id, 'token missing'), null;
-          return googleClient(app, { refresh_token: refresh, ...(link.email ? { email: link.email } : {}) }, fetch, (error) => noteHealth(link.id, error));
-        }
-        const tokens = await storage.get<GoogleTokens>('google:tokens');
-        return tokens ? googleClient(app, tokens, fetch, (error) => noteHealth(null, error)) : null;
+        await google.migrate();
+        const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
+        const fit = all.filter((account) => googleHas(account.scopes, feature));
+        const account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
+        if (!account) return null;
+        const refresh = account.refresh_token ?? (vault && doName ? await vault.secret(doName, account.id) : null);
+        if (!refresh) return noteHealth(account.id, 'token missing'), null;
+        return googleClient(app, { refresh_token: refresh, email: account.email }, fetch, (error) => noteHealth(account.id, error));
       },
       async state() {
-        const link = await google.link();
-        const tokens = link ? null : await storage.get<GoogleTokens>('google:tokens');
-        const health = await storage.get<{ error: string }>('google:health');
-        return { connected: link !== undefined || tokens !== undefined, email: link?.email ?? tokens?.email ?? null, scopes: link?.scopes ?? tokens?.scopes, error: health?.error ?? null };
+        await google.migrate();
+        const failing = await health();
+        return (await accounts()).map((account) => ({ id: account.id, email: account.email, error: failing[account.id] ?? null, mail: googleHas(account.scopes, 'mail') }));
       },
-      async disconnect() {
-        const [link, doName] = [await storage.get<GoogleConnection>('google:connection'), vaultOwner()];
-        if (link && vault && doName) await vault.revoke(doName, link.id);
-        await storage.delete(['google:tokens', 'google:connection', 'google:health']);
+      async disconnect(id: string): Promise<boolean> {
+        const [all, doName] = [await accounts(), vaultOwner()];
+        const account = all.find((known) => known.id === id);
+        if (!account) return false;
+        if (!id.startsWith('local:') && vault && doName) await vault.revoke(doName, id);
+        await storage.put('google:accounts', all.filter((known) => known.id !== id));
+        noteHealth(id, '');
+        return true;
       },
       async connectUrl(feature: GoogleFeature) {
         const app = await googleApp();
-        return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, String(owner), Date.now()), feature) : null;
+        return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, stateOwner(), Date.now()), feature) : null;
       },
     };
     const desk = approvalDesk(storage.sql, {
@@ -574,7 +591,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), csrf: session.csrf, notice,
-          google: { connected: linked.connected, email: linked.email, connectAvailable: (await google.connectUrl('calendar')) !== null, error: linked.error, mail: googleHas(linked.scopes, 'mail') },
+          google: { accounts: linked, connectAvailable: (await google.connectUrl('calendar')) !== null },
           telegram: { linked: identity.get<boolean>('telegram_unlinked') !== true, unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
@@ -613,7 +630,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {
-          await google.disconnect();
+          if (!(await google.disconnect(id))) return false;
         } else {
           const card = cardFor(id);
           if (card === null) return false;

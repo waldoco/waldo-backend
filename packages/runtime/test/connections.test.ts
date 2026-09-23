@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { connectionVault } from '../src/connectors/connections';
-import { GoogleError, googleClient, googleHas, type GoogleClient } from '../src/connectors/google';
+import { GoogleError, googleClient, googleHas, oauthState, verifyOauthState, type GoogleClient } from '../src/connectors/google';
+import { renderConsole } from '../src/channels/console';
+import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 import { googleHandlers } from '../src/tools/live/google';
 import { hex, routerSignature } from '../src/identity/owner-directory';
 
@@ -56,5 +58,29 @@ describe('incremental Google access', () => {
     const draft = googleHandlers(google, { propose: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
     expect(await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never)).toMatchObject({ ok: false, code: 'auth_failed' });
     expect(asked).toEqual(['mail']);
+  });
+});
+
+describe('several Google accounts', () => {
+  it('a grant from before per-feature scopes keeps working for every feature', () => {
+    expect(googleHas(null, 'mail')).toBe(true);
+    expect(googleHas([], 'mail')).toBe(false);
+  });
+
+  it('the OAuth state carries a dotted owner name intact, and a tampered one fails', async () => {
+    const state = await oauthState('s', 'owner.with.dots', 1_000);
+    expect(await verifyOauthState('s', state, 2_000)).toBe('owner.with.dots');
+    expect(await verifyOauthState('s', state.replace('owner.with', 'owner.other'), 2_000)).toBeNull();
+  });
+
+  it('shows one row per account, each with its own disconnect and health', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: true, accounts: [
+      { id: 'c-1', email: 'me@work.test', error: null, mail: true },
+      { id: 'c-2', email: 'me@home.test', error: 'invalid_grant', mail: false },
+    ] } });
+    expect(html).toContain('Google: me@work.test');
+    expect(html).toContain('name="id" value="c-2"');
+    expect(html).toContain('Needs reconnect');
+    expect(html).toContain('Add account');
   });
 });
