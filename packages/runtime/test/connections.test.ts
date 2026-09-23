@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { connectionVault } from '../src/connectors/connections';
+import { googleProxy } from '../src/connectors/connections';
 import { GoogleError, googleClient, googleHas, oauthState, verifyOauthState, type GoogleClient } from '../src/connectors/google';
 import { renderConsole } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
@@ -8,24 +8,39 @@ import { hex, routerSignature } from '../src/identity/owner-directory';
 
 const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
 const at = 1_790_000_000;
-const body = (fetcher: ReturnType<typeof vi.fn>, call = 0) => JSON.parse(String((fetcher.mock.calls[call] as [string, RequestInit])[1].body)) as Record<string, string>;
 
-describe('connection vault', () => {
-  it('is off without Supabase, so the token stays in the Durable Object', () => {
-    expect(connectionVault({})).toBeNull();
+describe('google proxy', () => {
+  const proxyOf = (fetcher: ReturnType<typeof vi.fn>) => googleProxy(env, fetcher as unknown as typeof fetch, () => at * 1000)!;
+  const sent = (fetcher: ReturnType<typeof vi.fn>, call = 0) => fetcher.mock.calls[call] as [string, RequestInit];
+
+  it('is off without Supabase', () => {
+    expect(googleProxy({})).toBeNull();
   });
 
-  it('signs the token hash, so the signed call cannot carry a different token', async () => {
-    const fetcher = vi.fn().mockResolvedValueOnce(new Response('"c-1"'));
-    expect(await connectionVault(env, fetcher as unknown as typeof fetch, () => at * 1000)!.store('do-a', ' Me@Work.test ', ['openid', 'x'], 'rt-1')).toBe('c-1');
-    const hash = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('rt-1')));
-    expect(body(fetcher)).toEqual({ p_do_name: 'do-a', p_provider: 'google', p_account: 'me@work.test', p_scopes: 'openid x', p_secret: 'rt-1', p_at: at, p_sig: await routerSignature('router', at, `connstore.do-a.google.me@work.test.openid x.${hash}`) });
+  it('signs the whole body, so a call cannot be redirected to another owner or connection', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: [] })));
+    await proxyOf(fetcher).client('do-a', 'c-1').events('a', 'b', 5, false);
+    const [url, init] = sent(fetcher);
+    expect(url).toBe('https://db.test/functions/v1/connector-proxy');
+    const raw = String(init.body);
+    expect(JSON.parse(raw)).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'events', args: ['a', 'b', 5, false] });
+    const hash = hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)));
+    expect((init.headers as Record<string, string>)['x-waldo-sig']).toBe(await routerSignature('router', at, `proxy.${hash}`));
   });
 
-  it('reads the token by connection id for this owner only', async () => {
-    const fetcher = vi.fn().mockResolvedValueOnce(new Response('"rt-1"'));
-    expect(await connectionVault(env, fetcher as unknown as typeof fetch, () => at * 1000)!.secret('do-a', 'c-1')).toBe('rt-1');
-    expect(body(fetcher).p_sig).toBe(await routerSignature('router', at, 'connsecret.do-a.c-1'));
+  it('never sends or receives a token on a call; the runtime only holds the connection id', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { draft_id: 'd1' } })));
+    expect(await proxyOf(fetcher).client('do-a', 'c-1').draft({ to: ['x@y.test'], subject: 's', body: 'b' })).toEqual({ draft_id: 'd1' });
+    expect(String(sent(fetcher)[1].body)).not.toMatch(/refresh_token|access_token/);
+  });
+
+  it('maps a refresh failure to health and a scope gap to a 403 GoogleError', async () => {
+    const health = vi.fn();
+    const refused = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { status: 401, message: 'google token failed: invalid_grant' } })));
+    await expect(proxyOf(refused).client('do-a', 'c-1', health).events('a', 'b', 1, false)).rejects.toThrow('invalid_grant');
+    expect(health).toHaveBeenLastCalledWith('google token failed: invalid_grant');
+    const scoped = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { status: 403, message: 'insufficient scopes' } })));
+    await expect(proxyOf(scoped).client('do-a', 'c-1').newMail(0, 1)).rejects.toMatchObject({ status: 403 });
   });
 });
 

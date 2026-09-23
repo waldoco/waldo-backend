@@ -22,7 +22,7 @@ import { changeLines, collectChanges, updateBook, type UpdateBook } from './upda
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, oauthState, type GoogleFeature, type GoogleTokens } from '../connectors/google';
-import { connectionVault } from '../connectors/connections';
+import { googleProxy, type GoogleLink } from '../connectors/connections';
 import { googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
@@ -42,6 +42,7 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 // scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
 const LEGACY_GRANT = null;
+type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null }>;
 
 type OwnerRuntime = Readonly<{
   owner: number;
@@ -62,7 +63,7 @@ type OwnerRuntime = Readonly<{
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
   act(action: ConsoleAction): Promise<boolean>;
   googleConnectUrl(feature: GoogleFeature): Promise<string | null>;
-  google: Readonly<{ keep(tokens: GoogleTokens): Promise<void> }>;
+  google: Readonly<{ keep(grant: GoogleTokens | LinkGrant): Promise<void> }>;
   openFile(id: number): Promise<Response | null>;
   traces: TraceBook;
   timezone: string;
@@ -91,7 +92,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
     if (new URL(request.url).pathname === '/google') {
-      await this.serial(() => this.connectGoogle(JSON.parse(body) as GoogleTokens));
+      await this.serial(() => this.connectGoogle(JSON.parse(body) as GoogleTokens | GoogleLink));
       return new Response('ok');
     }
     const origin = request.headers.get('x-waldo-origin');
@@ -186,7 +187,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
   }
 
-  private async connectGoogle(tokens: GoogleTokens): Promise<void> {
+  private async connectGoogle(tokens: GoogleTokens | GoogleLink): Promise<void> {
     const { owner, api, google } = this.setup();
     await google.keep(tokens);
     const can = [googleHas(tokens.scopes, 'calendar') ? 'read your calendar' : '', googleHas(tokens.scopes, 'mail') ? 'read and send mail you approve' : ''].filter(Boolean).join(' and ');
@@ -331,7 +332,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const origin = await storage.get<string>('origin');
       return clientId && clientSecret && origin ? { clientId, clientSecret, redirectUri: `${origin}${GOOGLE_CALLBACK_PATH}` } : null;
     };
-    const vault = connectionVault(this.env);
+    const vault = googleProxy(this.env);
     const vaultOwner = () => identity.get<string>('do_name');
     const stateOwner = () => vaultOwner() ?? String(owner);
     const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
@@ -342,17 +343,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return storage.put('google:health', error ? { ...rest, [id]: error } : rest);
       }));
       const doName = vaultOwner();
-      if (!id.startsWith('local:') && vault && doName) this.ctx.waitUntil(vault.health(doName, id, error).catch(() => false));
     };
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
-      async keep(tokens: GoogleTokens): Promise<void> {
-        const email = (tokens.email ?? 'google').toLowerCase();
-        const doName = vaultOwner();
-        const id = vault && doName ? await vault.store(doName, email, tokens.scopes ?? [], tokens.refresh_token).catch(() => null) : null;
-        const account: GoogleAccount = id
-          ? { id, email, scopes: tokens.scopes ?? null }
-          : { id: `local:${email}`, email, scopes: tokens.scopes ?? null, refresh_token: tokens.refresh_token };
+      // A proxy link carries only the connection id. A raw token is kept here only when no proxy exists.
+      async keep(grant: GoogleTokens | LinkGrant): Promise<void> {
+        const email = (grant.email ?? 'google').toLowerCase();
+        const account: GoogleAccount = 'id' in grant
+          ? { id: grant.id, email, scopes: grant.scopes }
+          : { id: `local:${email}`, email, scopes: grant.scopes ?? null, refresh_token: grant.refresh_token };
         await storage.put('google:accounts', [...(await accounts()).filter((known) => known.email !== email), account]);
         noteHealth(account.id, '');
       },
@@ -365,7 +364,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         const legacy = await storage.get<GoogleTokens>('google:tokens');
         if (!legacy) return;
-        await google.keep({ ...legacy, scopes: legacy.scopes ?? LEGACY_GRANT });
+        const doName = vaultOwner();
+        const adopted = vault && doName ? await vault.adopt(doName, legacy).catch(() => null) : null;
+        if (vault && !adopted) return;
+        await google.keep(adopted ? { ...adopted, scopes: legacy.scopes ?? LEGACY_GRANT } : { ...legacy, scopes: legacy.scopes ?? LEGACY_GRANT });
         await storage.delete(['google:tokens', 'google:connection']);
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
@@ -378,9 +380,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const fit = all.filter((account) => googleHas(account.scopes, feature));
         const account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
-        const refresh = account.refresh_token ?? (vault && doName ? await vault.secret(doName, account.id) : null);
-        if (!refresh) return noteHealth(account.id, 'token missing'), null;
-        return googleClient(app, { refresh_token: refresh, email: account.email }, fetch, (error) => noteHealth(account.id, error));
+        if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
+        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error)) : null;
       },
       async state() {
         await google.migrate();

@@ -51,6 +51,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Tool output and prompt inputs have size caps.
 
 ### Trust boundaries
+- No bearer or refresh token reaches the model, the Durable Object or the Worker. Tokens are read and used only in the connector proxy, and the runtime's database key cannot execute the token functions.
 - Only the owner's own words are evidence about the owner. Files, mail, calendar and web text are data, fenced in the prompt so they cannot break its structure.
 - Judgment belongs to the model. Deterministic rejects are only for hard security and safety lines.
 
@@ -59,6 +60,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A live claim in a report points to a trace or a curl, not to a test.
 
 ### Database tests
+- pgTAP files set up their own fixtures and clear any row or Vault secret they depend on, so leftovers from a live-local run cannot fail them. Live-local runs delete what they create.
 - A pgTAP check reads a function's writes in a later statement. One statement sees one snapshot, so a check in the same statement sees the old rows.
 
 ## Bug log
@@ -70,3 +72,5 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-24 | Console sign-in link was spent by Telegram's link preview, so every link showed "used or expired" | Tokens | `console.test.ts` sign-in page test; token redeemed by POST only (8167bbf) | Tokens: one-time tokens spent only by a POST |
 | 2026-09-24 | Console email sign-in sent Supabase's default magic-link email, which has no code to type | Tokens | `scripts/guards/guard-otp-template.mjs`; template in `supabase/templates/magic_link.html` | Tokens: code sign-in proves the code arrives |
 | 2026-09-24 | A pgTAP check for Vault secret deletion read in the same statement as the revoke, so it saw the pre-delete snapshot and failed on correct code | Database tests | `supabase/tests/waldo_connections.sql` checks deletion in its own statement | Database tests: read writes in a later statement |
+| 2026-09-24 | W3.2 had the DO read the refresh token back from Vault and refresh it itself, breaking the hard line that no token reaches the DO | Trust boundaries | `connections.test.ts` asserts no token in a proxy call; `waldo_connections.sql` asserts the runtime key cannot execute `proxy_secret` or `proxy_store` (W3.4) | Trust boundaries: tokens only in the connector proxy |
+| 2026-09-24 | pgTAP files failed after a live-local run left an owner, presences and the router Vault secret behind | Database tests | every pgTAP file clears the router secret before creating it; live-local scripts delete their rows | Database tests: own fixtures, clear leftovers |

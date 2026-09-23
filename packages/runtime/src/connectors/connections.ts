@@ -1,27 +1,48 @@
-import { hex, signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { GoogleError, type GoogleClient, type GoogleTokens } from './google';
 
-// Refresh tokens live in Supabase Vault. The Durable Object keeps only the connection id and reads the
-// token back through a signed call when it needs a fresh access token.
-export type ConnectionVault = Readonly<{
-  store(doName: string, account: string, scopes: readonly string[], token: string): Promise<string | null>;
-  secret(doName: string, id: string): Promise<string | null>;
-  health(doName: string, id: string, error: string): Promise<boolean>;
-  revoke(doName: string, id: string): Promise<boolean>;
+// Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
+// The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
+export type GoogleLink = Readonly<{ id: string; email: string; scopes: readonly string[] }>;
+export type GoogleProxy = Readonly<{
+  exchange(doName: string, code: string, redirectUri: string): Promise<GoogleLink | null>;
+  adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
+  client(doName: string, connection: string, health?: (error: string) => void): GoogleClient;
+  revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
+const METHODS = ['events', 'draft', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail'] as const;
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
 
-export const connectionVault = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): ConnectionVault | null => {
+export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): GoogleProxy | null => {
+  const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
-  if (!rpc) return null;
+  if (!base || !key || !secret || !rpc) return null;
+  const post = async (body: Record<string, unknown>) => {
+    const raw = JSON.stringify(body);
+    const at = Math.floor(now() / 1000);
+    const response = await fetcher(`${base}/functions/v1/connector-proxy`, {
+      method: 'POST', body: raw,
+      headers: { apikey: key, 'content-type': 'application/json', 'x-waldo-at': String(at), 'x-waldo-sig': await routerSignature(secret, at, `proxy.${await sha256(raw)}`) },
+    });
+    const json = await response.json().catch(() => ({ error: { status: response.status, message: 'connector proxy failed' } })) as { data?: unknown; id?: string; email?: string; scopes?: string[]; error?: { status: number; message: string } };
+    if (json.error) throw new GoogleError(json.error.status, json.error.message);
+    return json;
+  };
+  const link = (json: { id?: string; email?: string; scopes?: string[] }) => (json.id ? { id: json.id, email: json.email ?? 'google', scopes: json.scopes ?? [] } : null);
   return {
-    async store(doName, account, scopes, token) {
-      const [address, granted] = [account.trim().toLowerCase(), scopes.join(' ')];
-      return (await rpc('connection_store', `connstore.${doName}.google.${address}.${granted}.${await sha256(token)}`,
-        { p_do_name: doName, p_provider: 'google', p_account: address, p_scopes: granted, p_secret: token })) as string | null;
-    },
-    secret: async (doName, id) => (await rpc('connection_secret', `connsecret.${doName}.${id}`, { p_do_name: doName, p_connection: id })) as string | null,
-    health: async (doName, id, error) => (await rpc('connection_health', `connhealth.${doName}.${id}.${error}`, { p_do_name: doName, p_connection: id, p_error: error })) === true,
-    revoke: async (doName, id) => (await rpc('connection_revoke', `connrevoke.${doName}.${id}`, { p_do_name: doName, p_connection: id })) === true,
+    exchange: async (doName, code, redirectUri) => link(await post({ do_name: doName, op: 'exchange', code, redirect_uri: redirectUri })),
+    adopt: async (doName, tokens) => link(await post({ do_name: doName, op: 'adopt', refresh_token: tokens.refresh_token, email: tokens.email ?? 'google', scopes: tokens.scopes ?? [] })),
+    client: (doName, connection, health) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
+      try {
+        const { data } = await post({ do_name: doName, op: 'call', connection, method, args });
+        health?.('');
+        return data;
+      } catch (error) {
+        if (error instanceof GoogleError && error.status === 401) health?.(error.message);
+        throw error;
+      }
+    }])) as unknown as GoogleClient,
+    revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
   };
 };
