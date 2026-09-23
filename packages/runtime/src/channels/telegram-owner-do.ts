@@ -3,7 +3,7 @@ import type { ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { coreFileStore } from '../memory/core-files';
 import { spotStore } from '../memory/spots';
-import { type ConsoleView, consoleAccess, CONSOLE_COOKIE, CONSOLE_PATH, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
@@ -11,8 +11,8 @@ import { productionDeps } from '../seams/deps';
 import { durableConversationStore } from './conversation-store';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
-import { applyDayPlan, armDayCards, cardFor, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
-import { dayPlanInput } from '../prompt/day-cards';
+import { applyDayPlan, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
+import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, updateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
@@ -46,7 +46,9 @@ type OwnerRuntime = Readonly<{
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
-  view(): Promise<ConsoleView>;
+  view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
+  act(action: ConsoleAction): Promise<boolean>;
+  googleConnectUrl(): Promise<string | null>;
   traces: TraceBook;
   timezone: string;
   ready: Promise<void>;
@@ -86,10 +88,26 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
     }
-    if (!(await access.valid(sessionCookie(request)))) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401 });
-    const { ready, view } = this.setup();
+    const session = await access.session(sessionCookie(request));
+    if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401 });
+    const { ready, view, act, googleConnectUrl } = this.setup();
     await ready;
-    return new Response(renderConsole(await view()), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    const back = (notice: string) => new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${notice}` } });
+    if (url.pathname === CONSOLE_GOOGLE_PATH) {
+      const consent = await googleConnectUrl();
+      return consent ? new Response(null, { status: 302, headers: { location: consent } }) : back('invalid');
+    }
+    if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
+      const action = parseConsoleAction(await request.formData(), session.csrf);
+      if (action?.action === 'session.signout') {
+        await access.signOut();
+        return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
+      }
+      const done = action ? await this.serial(() => act(action)) : false;
+      return back(done && action ? action.action : 'invalid');
+    }
+    if (url.pathname !== CONSOLE_PATH) return new Response('not found', { status: 404 });
+    return new Response(renderConsole(await view(session, NOTICES[url.searchParams.get('m') ?? ''] ?? null)), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
   }
 
   private async connectGoogle(tokens: GoogleTokens): Promise<void> {
@@ -348,17 +366,52 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
     this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces,
-      view: async () => {
+      view: async (session, notice) => {
         const tokens = await storage.get<GoogleTokens>('google:tokens');
+        const now = Date.now();
+        const today = localIso(now, clock.timezone).slice(0, 10);
+        const planned = new Map(plans.read(today).map((row) => [row.card, row]));
+        const pins = plans.pins();
         return {
-          release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone,
-          google: { connected: tokens !== undefined, email: tokens?.email ?? null },
+          release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
+          sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), csrf: session.csrf, notice,
+          google: { connected: tokens !== undefined, email: tokens?.email ?? null, connectAvailable: (await google.connectUrl()) !== null },
           memory: memory.read(), spots: spots.spots(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => spots.spots(status)),
           nodes: spots.nodes(), edges: spots.edges(),
-          cards: plans.read(localIso(Date.now(), clock.timezone).slice(0, 10)),
-          ledger: desk.ledger(book.list()), checklist: traces.checklist(clock.timezone), trace: traces.recent(clock.timezone, null, 60),
+          cards: DAY_CARDS.map((card) => {
+            const row = planned.get(card.id);
+            return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
+          }),
+          ledger: desk.ledger(book.list()), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
         };
-      }, timezone: clock.timezone, ready };
+      },
+      act: async ({ action, id, value }) => {
+        const now = Date.now();
+        const spotId = Number(id);
+        if (action === 'spot.dismiss' || action === 'spot.forget') {
+          if (!spots.spots().some((spot) => spot.id === spotId)) return false;
+          if (action === 'spot.dismiss') spots.setSpot(spotId, 'dismissed');
+          else spots.forgetSpot(spotId);
+        } else if (action === 'node.forget') {
+          if (!spots.nodes().some((node) => node.id === spotId)) return false;
+          spots.forgetNode(spotId);
+        } else if (action === 'google.disconnect') {
+          await storage.delete('google:tokens');
+        } else {
+          const card = cardFor(id);
+          if (card === null) return false;
+          if (action === 'card.unpin') plans.pin(card.id, null);
+          else {
+            if (!isClock(value)) return false;
+            if (action === 'card.pin') plans.pin(card.id, value);
+            await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin');
+          }
+        }
+        log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: `${action} ${id}`.trim() });
+        return true;
+      },
+      googleConnectUrl: () => google.connectUrl(),
+      timezone: clock.timezone, ready };
     return this.runtime;
   }
 }

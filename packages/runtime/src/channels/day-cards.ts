@@ -8,7 +8,7 @@ const DAY_MS = 24 * 60 * 60_000;
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
 
-const isClock = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+export const isClock = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 
 export const cardFor = (id: string): DayCard | null => DAY_CARDS.find((card) => card.id === id) ?? null;
 
@@ -16,7 +16,15 @@ export const dayPlanBook = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS day_plan (
     day TEXT NOT NULL, card TEXT NOT NULL, time TEXT, reason TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, card))`);
+  sql.exec('CREATE TABLE IF NOT EXISTS card_pins (card TEXT PRIMARY KEY, time TEXT NOT NULL)');
   return {
+    pins(): Readonly<Record<string, string>> {
+      return Object.fromEntries(sql.exec<{ card: string; time: string }>('SELECT card, time FROM card_pins').toArray().map((row) => [row.card, row.time]));
+    },
+    pin(card: CardId, time: string | null): void {
+      if (time === null) sql.exec('DELETE FROM card_pins WHERE card = ?', card);
+      else sql.exec('INSERT INTO card_pins (card, time) VALUES (?, ?) ON CONFLICT (card) DO UPDATE SET time = excluded.time', card, time);
+    },
     read(day: string): readonly Readonly<{ card: CardId; time: string | null; reason: string; sent: boolean }>[] {
       return sql.exec<{ card: CardId; time: string | null; reason: string; sent: number }>(
         'SELECT card, time, reason, sent FROM day_plan WHERE day = ? ORDER BY card', day,
@@ -62,12 +70,15 @@ export const parseDayPlan = (raw: string, cards: readonly DayCard[]): readonly C
 };
 
 export const applyDayPlan = async (
-  scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, plan: readonly CardPlan[],
+  scheduler: Scheduler, book: DayPlanBook, timezone: string, now: number, plan: readonly CardPlan[], respectPins = true,
 ): Promise<readonly CardPlan[]> => {
+  const pins = respectPins ? book.pins() : {};
   const day = localIso(now, timezone).slice(0, 10);
   const pending = new Set(book.pending(day).map((card) => card.id));
   const applied: CardPlan[] = [];
-  for (const entry of plan) {
+  for (const planned of plan) {
+    const pinned = pins[planned.card];
+    const entry: CardPlan = pinned ? { card: planned.card, time: pinned, reason: 'pinned by you' } : planned;
     if (!pending.has(entry.card)) continue;
     book.save(day, entry);
     const at = entry.time === null ? null : localToEpoch(`${day}T${entry.time}`, timezone);

@@ -38,6 +38,9 @@ export const E2E_STEPS: readonly Readonly<{ step: string; hops: readonly string[
   { step: 'Constellation promotion', hops: ['constellation'] },
 ];
 
+export type E2EStep = Readonly<{ step: string; state: 'ok' | 'failed' | 'unseen'; at: string | null; note: string | null }>;
+export type TraceRow = Readonly<{ time: string; trace: string; hop: string; ok: boolean; ms: number; note: string }>;
+
 export const traceBook = (sql: Sql, keep = 500) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS trace_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, trace TEXT NOT NULL, hop TEXT NOT NULL,
@@ -55,14 +58,23 @@ export const traceBook = (sql: Sql, keep = 500) => {
       if (rows.length === 0) return 'No trace entries yet.';
       return rows.map((row) => `${localIso(row.at, timezone).slice(11, 16)} ${row.ok ? 'ok' : 'FAIL'} ${row.hop} ${row.ms}ms ${row.trace}${row.note ? ` - ${row.note}` : ''}`).join('\n');
     },
-    checklist(timezone: string): string {
+    rows(timezone: string, limit: number): readonly TraceRow[] {
+      return sql.exec<{ at: number; trace: string; hop: string; ok: number; ms: number; note: string | null }>(
+        'SELECT at, trace, hop, ok, ms, note FROM trace_log ORDER BY id DESC LIMIT ?', limit,
+      ).toArray().reverse().map((row) => ({ time: localIso(row.at, timezone).slice(11, 16), trace: row.trace, hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
+    },
+    steps(timezone: string): readonly E2EStep[] {
       return E2E_STEPS.map(({ step, hops }) => {
         const row = sql.exec<{ at: number; ok: number; note: string | null }>(
           `SELECT at, ok, note FROM trace_log WHERE hop IN (${hops.map(() => '?').join(',')}) ORDER BY id DESC LIMIT 1`, ...hops,
         ).toArray()[0];
-        if (!row) return `[ ] ${step}: not seen`;
-        return `[${row.ok ? 'x' : '!'}] ${step}: ${row.ok ? 'ok' : 'failed'} at ${localIso(row.at, timezone).slice(0, 16).replace('T', ' ')}${row.note ? ` - ${row.note}` : ''}`;
-      }).join('\n');
+        if (!row) return { step, state: 'unseen', at: null, note: null };
+        return { step, state: row.ok ? 'ok' : 'failed', at: localIso(row.at, timezone).slice(0, 16).replace('T', ' '), note: row.note || null };
+      });
+    },
+    checklist(timezone: string): string {
+      return this.steps(timezone).map(({ step, state, at, note }) => state === 'unseen' ? `[ ] ${step}: not seen`
+        : `[${state === 'ok' ? 'x' : '!'}] ${step}: ${state} at ${at}${note ? ` - ${note}` : ''}`).join('\n');
     },
   };
 };
