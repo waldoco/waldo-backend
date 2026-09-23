@@ -1,3 +1,4 @@
+import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter } from './telegram-polling';
 
 export type TelegramOwnerApi = Readonly<{
@@ -10,10 +11,13 @@ export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn): Promise<string>;
+  chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
   saveOffset(offset: number): Promise<void>;
   progressAfterMs?: number;
   typingEveryMs?: number;
   ackEmoji?: string;
+  doneEmoji?: string;
+  failedEmoji?: string;
   progressText?: string;
   failureText?: string;
 }>;
@@ -40,9 +44,15 @@ export class TelegramOwnerListener {
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
     const { api } = this.options;
     const chat_id = turn.chatId;
-    if (turn.messageId !== null) {
-      await api.setMessageReaction({ chat_id, message_id: turn.messageId, reaction: [{ type: 'emoji', emoji: this.options.ackEmoji ?? '👀' }] }).catch(() => undefined);
-    }
+    const ack = this.options.ackEmoji ?? '👀';
+    const message_id = turn.messageId;
+    const react = (emoji: string) => message_id === null
+      ? Promise.resolve()
+      : api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] }).then(() => undefined, () => undefined);
+    await react(ack);
+    const choice = message_id === null || !this.options.chooseReaction
+      ? Promise.resolve(null)
+      : this.options.chooseReaction(turn).catch(() => null);
     const typing = () => api.sendChatAction({ chat_id, action: 'typing' }).catch(() => undefined);
     await typing();
     const typingTimer = setInterval(typing, this.options.typingEveryMs ?? 4_000);
@@ -54,10 +64,13 @@ export class TelegramOwnerListener {
       if (text.length === 0) throw new Error('empty reply');
       clearTimeout(progressTimer);
       await api.sendMessage({ chat_id, text });
+      const chosen = telegramReaction(await choice);
+      await react(chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       return 'answered';
     } catch {
       clearTimeout(progressTimer);
       await api.sendMessage({ chat_id, text: this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.' }).catch(() => undefined);
+      await react(this.options.failedEmoji ?? '😢');
       return 'failed';
     } finally {
       clearInterval(typingTimer);

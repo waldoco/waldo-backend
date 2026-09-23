@@ -25,8 +25,9 @@ describe('TelegramOwnerListener', () => {
     const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async (turn) => `echo ${turn.text}`, saveOffset: async () => undefined });
     const adapter = new TelegramPollingAdapter({ getUpdates: async () => [update(5)] });
     await expect(listener.pollOnce(adapter, 0)).resolves.toEqual(['answered']);
-    expect(calls.map(([kind]) => kind)).toEqual(['react', 'typing', 'send']);
+    expect(calls.map(([kind]) => kind)).toEqual(['react', 'typing', 'send', 'react']);
     expect(calls[0]?.[1]).toEqual({ chat_id: OWNER, message_id: 50, reaction: [{ type: 'emoji', emoji: '👀' }] });
+    expect(calls[3]?.[1]).toEqual({ chat_id: OWNER, message_id: 50, reaction: [{ type: 'emoji', emoji: '👌' }] });
     expect(calls[2]?.[1]).toEqual({ chat_id: OWNER, text: 'echo hi' });
   });
 
@@ -56,6 +57,39 @@ describe('TelegramOwnerListener', () => {
     const failing = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, respond: async () => { throw new Error('model down'); }, saveOffset: async () => undefined });
     await expect(failing.handle({ updateId: 2, messageId: null, senderId: OWNER, chatId: OWNER, text: 'x' })).resolves.toBe('failed');
     expect(calls.at(-1)?.[1]).toEqual({ chat_id: OWNER, text: 'Sorry - I hit a problem answering that. Please try again in a moment.' });
+  });
+
+  it('moves the receipt to a final reaction from the Telegram allowlist when the turn resolves', async () => {
+    const reactions = async (choice: string | null | Error, reply: () => Promise<string> = async () => 'ok') => {
+      const { calls, api } = recorder();
+      const listener = new TelegramOwnerListener({
+        ownerTelegramId: OWNER, api, respond: reply, saveOffset: async () => undefined,
+        chooseReaction: async () => { if (choice instanceof Error) throw choice; return choice; },
+      });
+      await listener.handle({ updateId: 1, messageId: 9, senderId: OWNER, chatId: OWNER, text: 'thanks!' });
+      return calls.filter(([kind]) => kind === 'react').map(([, r]) => (r as { reaction: [{ emoji: string }] }).reaction[0].emoji);
+    };
+    await expect(reactions('🙏')).resolves.toEqual(['👀', '🙏']);
+    await expect(reactions('❤️')).resolves.toEqual(['👀', '❤']);
+    await expect(reactions('✅')).resolves.toEqual(['👀', '👌']);
+    await expect(reactions('none')).resolves.toEqual(['👀', '👌']);
+    await expect(reactions('👀')).resolves.toEqual(['👀', '👌']);
+    await expect(reactions(new Error('model down'))).resolves.toEqual(['👀', '👌']);
+    await expect(reactions('🎉', async () => { throw new Error('model down'); })).resolves.toEqual(['👀', '😢']);
+  });
+
+  it('never delays the reply on the reaction choice', async () => {
+    const { calls, api } = recorder();
+    let pick!: (emoji: string) => void;
+    const listener = new TelegramOwnerListener({
+      ownerTelegramId: OWNER, api, respond: async () => 'fast', saveOffset: async () => undefined,
+      chooseReaction: () => new Promise((resolve) => { pick = resolve; }),
+    });
+    const pending = listener.handle({ updateId: 1, messageId: 9, senderId: OWNER, chatId: OWNER, text: 'hey' });
+    await vi.waitFor(() => expect(calls.some(([kind]) => kind === 'send')).toBe(true));
+    pick('🔥');
+    await expect(pending).resolves.toBe('answered');
+    expect(calls.map(([kind]) => kind)).toEqual(['react', 'typing', 'send', 'react']);
   });
 
   it('rejects an invalid owner id', () => {

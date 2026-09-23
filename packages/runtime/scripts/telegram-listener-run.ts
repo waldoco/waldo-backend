@@ -8,6 +8,7 @@ import { OpenAIGpt5NanoAdapter } from '../src/llm/openai';
 import { RuntimeLLMProvider } from '../src/llm/provider';
 import { TelegramPollingAdapter } from '../src/channels/telegram-polling';
 import { TelegramOwnerListener } from '../src/channels/telegram-listener';
+import { reactionInstruction, TELEGRAM_REACTIONS } from '../src/channels/reactions';
 import { messagingSystemPrompt } from '../src/prompt/messaging-behavior';
 
 const token = process.env.TELEGRAM_BOT_TOKEN ?? '';
@@ -30,12 +31,11 @@ const ownerId = invocation.verified_authority.principal_ref;
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
 const runtime = new RuntimeLLMProvider({ gateway: new OpenAIGpt5NanoAdapter({ apiKey: process.env.OPENAI_API_KEY }) });
 const canaries = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
-const model: JoinedConversationModel = {
-  async complete(request) {
+const ask = async (system: string, content: string) => {
     const result = await runtime.complete({
       trigger: 'user_message',
       policy: routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false }),
-      renderRequest: () => ({ system: messagingSystemPrompt(request.system, request.tools), messages: [{ role: 'user' as const, content: request.messages.join('\n') }], max_tokens: 4096, temperature: 0.2 }),
+      renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2 }),
     }, {
       authenticatedUserId: ownerId, trigger: 'user_message', canaryTokens: canaries,
       sourceTaint: null, toolArgSourceTaint: null,
@@ -43,7 +43,9 @@ const model: JoinedConversationModel = {
     });
     if (!result.ok) throw new Error(`live model failed: ${result.code}`);
     return result.response.text;
-  },
+};
+const model: JoinedConversationModel = {
+  complete: (request) => ask(messagingSystemPrompt(request.system, request.tools), request.messages.join('\n')),
 };
 const path = new JoinedConversationPath(adapters.contextComposer!, model);
 let parentId: string | null = null;
@@ -66,11 +68,18 @@ const listener = new TelegramOwnerListener({
     parentId = publication.leafId;
     return publication.text;
   },
+  chooseReaction: (turn) => ask(reactionInstruction(TELEGRAM_REACTIONS), turn.text),
   saveOffset: (offset) => writeFile(offsetFile, String(offset)),
 });
 
 const stored = Number(await readFile(offsetFile, 'utf8').catch(() => process.env.WALDO_TELEGRAM_OFFSET ?? '0'));
-const adapter = new TelegramPollingAdapter({ getUpdates: async (r) => await telegram('getUpdates', { ...r, allowed_updates: ['message'] }) as unknown[] }, stored);
+const adapter = new TelegramPollingAdapter({
+  getUpdates: async (r) => {
+    const updates = await telegram('getUpdates', { ...r, allowed_updates: ['message'] }) as Array<{ update_id: number; message?: object }>;
+    for (const u of updates) console.log(new Date().toISOString(), 'update', u.update_id, Object.keys(u.message ?? u));
+    return updates;
+  },
+}, stored);
 console.log(new Date().toISOString(), 'listener started', { offset: adapter.offset() });
 for (;;) {
   try {
