@@ -45,6 +45,21 @@ describe('runToolLoop', () => {
     expect(JSON.parse(outputs[1]!)).toMatchObject({ ok: false });
   });
 
+  it('withdraws tools after three rounds in a row where every call failed', async () => {
+    const offered: boolean[] = [];
+    let n = 0;
+    const text = await runToolLoop({
+      handlers, ctx, maxSteps: 25,
+      step: async (tools) => {
+        offered.push(tools !== undefined);
+        n += 1;
+        return tools ? { text: '', tool_calls: [{ call_id: `x${n}`, name: 'launch_rocket', arguments: `{"n":${n}}` }] } : { text: 'Could not do that.' };
+      },
+    });
+    expect(text).toBe('Could not do that.');
+    expect(offered).toEqual([true, true, true, false]);
+  });
+
   it('reports an unknown tool to the model instead of throwing', async () => {
     const outputs: string[] = [];
     await runToolLoop({

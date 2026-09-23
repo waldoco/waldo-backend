@@ -17,7 +17,7 @@ import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
-const MAX_TOOL_ROUNDS = 4;
+const MAX_TOOL_ROUNDS = 25;
 
 // Staging responder: the fixture invocation stands in for real per-user admission,
 // which the production tenancy work replaces.
@@ -78,7 +78,7 @@ export const createTelegramResponder = (
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: (tools, turns) => complete(trace, 'reply',
-          [messagingSystemPrompt(request.system, request.tools), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
+          [messagingSystemPrompt(request.system, handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
           request.messages.join('\n'),
           undefined,
           pending,

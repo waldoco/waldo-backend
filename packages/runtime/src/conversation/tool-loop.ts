@@ -15,8 +15,12 @@ export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherCont
     parameters: toolParameters(handler.schema),
   }));
 
-// The model may call tools for up to maxSteps rounds; the final round offers none, so the turn
-// always ends in words. A call repeated with identical arguments is refused rather than re-run.
+// The model calls tools until it answers. maxSteps is a safety budget, not a plan (see
+// docs/planning/TOOL_LOOP_BUDGET.md). The loop also stops offering tools after
+// FAILED_ROUNDS_LIMIT rounds in a row where every call failed. Once tools are withdrawn the
+// model must answer, so a turn always ends in words. Identical repeated calls are refused.
+export const FAILED_ROUNDS_LIMIT = 3;
+
 export async function runToolLoop(input: Readonly<{
   step: ToolLoopStep;
   handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'];
@@ -27,9 +31,12 @@ export async function runToolLoop(input: Readonly<{
   const tools = toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [];
   const seen = new Set<string>();
+  let failedRounds = 0;
   for (let round = 0; ; round += 1) {
-    const response = await input.step(tools.length > 0 && round < input.maxSteps ? tools : undefined, turns);
+    const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT;
+    const response = await input.step(offer ? tools : undefined, turns);
     if (response.tool_calls === undefined) return response.text;
+    let anyOk = false;
     for (const call of response.tool_calls) {
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
@@ -40,7 +47,9 @@ export async function runToolLoop(input: Readonly<{
       const output = JSON.stringify(result);
       turns.push({ call, output });
       input.onTool?.({ call, ok: result.ok, ms: Date.now() - started, output });
+      anyOk ||= result.ok;
     }
+    failedRounds = anyOk ? 0 : failedRounds + 1;
   }
 }
 
