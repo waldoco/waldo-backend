@@ -216,6 +216,7 @@ export type RuntimeLLMFailure = {
     destination: SanitiseDestination;
     reason: SanitiseFailureReason;
   };
+  halted_by?: string;
   effect_receipt?: TrustedProviderEffectReceipt;
 };
 
@@ -1133,6 +1134,7 @@ function failFromHook(
     error: error.clientMessage,
     code: error.code,
     reason: 'hook_halt',
+    halted_by: error.hook,
     fallback_step: fallbackStep,
     attempts,
     routing_logs: routingLogs,

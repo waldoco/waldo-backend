@@ -36,7 +36,7 @@ export const createTelegramResponder = (
       sourceTaint: null, toolArgSourceTaint: null,
       sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
     });
-    if (!result.ok) throw new Error(`live model failed: ${result.code}`);
+    if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return result.response.text;
   };
   const tree = new ConversationTree();
