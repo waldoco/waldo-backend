@@ -2,6 +2,8 @@
 
 Updated 21 September 2026 · user-selected MVP baseline · documentation publication in PR #138 · implementation and runtime proof remain outstanding
 
+This packet is the target. For what is built today, read [What is built](../../CURRENT_SYSTEM.md).
+
 **Build one cloud Waldo that understands the person, chooses what needs doing and who should do it, acts within permission, checks the result, follows through, and updates its understanding.**
 
 Read the [build plan](../WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md) for the decisions, architecture, source evidence, worker slices, acceptance checks and cost model. Give workers the [implementation guide](WORKER_GUIDE.md) for role-specific reading, libraries, harness/context/tool engineering, checks and a copy-ready assignment. This page is an index, not a second specification.

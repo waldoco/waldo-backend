@@ -4,6 +4,7 @@ Repository for Waldo's target owner-side runtime: one user-governed personal age
 
 ## Read first
 
+0. [What is built](docs/CURRENT_SYSTEM.md): live, runtime-module and contract state at a pinned SHA.
 1. [Worker packet](docs/planning/waldo-agent-mvp/README.md): finalized MVP decisions and read order.
 2. [Canonical build plan](docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md): source evidence, stack, memory, health, build slices and acceptance.
 3. [Worker guide](docs/planning/waldo-agent-mvp/WORKER_GUIDE.md), [S0 assignment](docs/planning/waldo-agent-mvp/FIRST_WORKER_ASSIGNMENT.md) and [next session](docs/foundation/NEXT-SESSION-PLAN.md): concrete implementation frontier and required references.
@@ -13,7 +14,7 @@ Health-aware capability is required; each person's health consent remains option
 
 ## Current versus target
 
-A documentation merge does not activate a hosted agent. The fetched September 18 backend baseline is `e91bee017b0c36759cbfda1353fc11c73e3afe0a`. Historical verification at that pin reported contract tests (1,584), runtime tests (1,152), typechecks, and guards passing; these are not rerun claims for this documentation publication. Production conversation, connectors, delivery, multi-presence, relationship coordination, and deployment remain unproved. Re-pin before every implementation claim. [GitHub ledger #116](https://github.com/Pin4sf/waldo-backend/issues/116) and owning issues/PRs hold live state, not copied progress tables.
+[What is built](docs/CURRENT_SYSTEM.md) is the current state at a pinned SHA. One path is live: owner Telegram messages go through the Joined Conversation Path to OpenAI `gpt-5-nano` and back, via a dev listener in a Codespace, not a deployment. The other slices since the September 18 baseline are contracts and runtime modules with tests, not composed into the deployed Worker. [Production architecture](docs/architecture/PRODUCTION_ARCHITECTURE.md) covers per-user isolation, always-on connectors and the activity ledger; [adoption direction](docs/planning/ADOPTION_DIRECTION.md) covers what is taken from peer agents. Re-pin before every implementation claim.
 
 Keep `WaldoCoordinator`, the existing trusted RunLoop, ContextComposer, owning reducers, authority/consent boundaries and intent-before-I/O. Complete production adapters instead of adding another canonical runtime or bypassing fail-closed dependencies. Memory and personality never grant permission; provider completion is not Outcome Acceptance.
 
