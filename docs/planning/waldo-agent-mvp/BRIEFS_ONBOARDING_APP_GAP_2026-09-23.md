@@ -245,3 +245,7 @@ Checked 2026-09-23.
 - Replace Siri's brain, unless Apple enables Extensions and Waldo qualifies.
 
 **Positioning:** Siri AI is the OS assistant. Waldo is the health-aware chief of staff, reachable from inside Siri. That's a distribution gain, not a threat, as long as Waldo's value (body plus calendar plus memory, joined) stays in Waldo.
+
+## 11. Harness gap inventory
+
+See [HARNESS_GAP_INVENTORY_2026-09-24.md](HARNESS_GAP_INVENTORY_2026-09-24.md).
