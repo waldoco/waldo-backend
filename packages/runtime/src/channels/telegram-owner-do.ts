@@ -11,7 +11,7 @@ import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, armDayCards, cardFor, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { dayPlanInput } from '../prompt/day-cards';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
-import { changeLines, collectChanges, updateBook, UPDATE_CARDS_PER_DAY } from './update-cards';
+import { changeLines, collectChanges, updateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
@@ -245,7 +245,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (changes.length === 0) return;
         const day = localIso(now, clock.timezone).slice(0, 10);
         const sentToday = new Set(plans.read(day).filter((row) => row.sent).map((row) => row.card));
-        const canSend = sentToday.has('card:brief') && !sentToday.has('card:close') && updates.pushedOn(day) < UPDATE_CARDS_PER_DAY;
+        const canSend = sentToday.has('card:brief') && !sentToday.has('card:close');
         let text: string | null = null;
         if (canSend) {
           const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(changes), ledger: desk.ledger(book.list()) });

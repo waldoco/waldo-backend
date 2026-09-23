@@ -18,7 +18,7 @@ Sources read:
 ### Proposed design
 1. **Routine profile.** A backend-owned record holding wake time, wind-down time, day shape, peak hours, work start, quiet hours, timezone and preferred channel. It is seeded from onboarding and kept current from chat ("I'm up at 6 now") and observed behavior (first message of the day, first calendar event). It fits in `MEMORY_CORE` as a structured section, or in its own small table if the app needs typed reads.
 2. **Times planned nightly by the model, per day.** The nightly memory run already exists. Add one step: the model gets the routine profile plus tomorrow's calendar and returns the times for tomorrow's cards as structured output. For example: Brief about 30-45 minutes after wake, earlier if the first meeting comes sooner; check-in after the peak window, or none on a light day; Close about 60-90 minutes before wind-down. The runtime arms one-shot occurrences for that day instead of a fixed daily recurrence.
-   - Hard limits stay deterministic: quiet hours, a daily push cap, and never after the owner's wind-down time.
+   - Hard limits stay deterministic: quiet hours and never after the owner's wind-down time. No push cap (owner ruling 2026-09-23).
    - Explicit user settings win. The Figma Notification settings already have Brief time and Close time. A set time pins that card; "auto" lets the model plan it.
    - Fallback when the nightly step fails: use yesterday's times, then the onboarding wake/bedtime anchors.
 3. **Content is a composed read, not a template.** Inputs per card: calendar window, open follow-ups and reminders, goals, memory core, yesterday's Close carryover (morning only), and health signals once real data exists. Each card has one job:
@@ -113,7 +113,7 @@ What shipped recently:
 | Routine-driven brief times (section 1) | Fixed 08:00/21:30 is wrong for anyone off that schedule; the owner asked for it |
 | Waldo interview + "Here's what I got" | Captures habits and feelings that taps miss; the confirm step builds trust (Muse editable memory) |
 | "What Waldo knows" editable memory | Muse Memory files and WHOOP My Memory set this expectation |
-| Proactivity dial | Muse ships reduce/increase/disable; this pairs with the push cap |
+| Proactivity dial | Muse ships reduce/increase/disable; this is the user's control over volume, since there is no push cap |
 | Activity (ledger) + approvals inbox | Muse's activity log and approval cards make background work legible; the runtime already has the data |
 | 1-tap card feedback + 14-day feeling check | Cheap ground truth to tune briefs and health reads |
 | User context notes (sick, travelling, bad week) | WHOOP My Memory; changes how briefs read the day |
@@ -129,7 +129,7 @@ What shipped recently:
 | Caffeine and profession as onboarding screens | Move to chat (progressive profiling); onboarding stays short |
 | Clinical features (doctor chat) | Oura and WHOOP own this; Waldo stays non-clinical |
 
-## 5. Decisions for the owner
+## 5. Decisions for the owner (rulings in section 7)
 1. Brief delivery: push on the chat channel, in-app only, or a short push that links to the in-app card?
 2. Brief times: model-planned per day with user pin/auto override (proposed), or user-set only?
 3. Onboarding answers: write to the new runtime (proposed) or to the legacy Supabase profile?
@@ -140,7 +140,7 @@ What shipped recently:
 
 ### Built
 - **Routine-planned card times (91cad99).** At 03:00, after the memory update, the model plans today's card times from memory and today's calendar. Cards are one-shot per day, recorded in `day_plan` with a reason. Defaults stay as the fallback.
-- **Update cards (7e958f5).** The 10-minute sweep reads calendar changes (updatedMin, next 48h) and new primary-inbox mail. The model decides whether to send a short "Update" card. Code enforces the limits: only between The Brief and The Close, at most 3 per day. Every change is recorded in `update_cards` and folded into the next main card's `<updates>` section.
+- **Update cards (7e958f5).** The 10-minute sweep reads calendar changes (updatedMin, next 48h) and new primary-inbox mail. The model decides whether to send a short "Update" card. Code enforces the limits: only between The Brief and The Close. The 3/day cap shipped in 7e958f5 was removed after the owner ruled there is no push cap. Every change is recorded in `update_cards` and folded into the next main card's `<updates>` section.
 
 ### Owner direction: health context as an input (future scope, when the app API lands)
 - Health signals from Apple HealthKit (and Health Connect), plus whatever can be derived from them (Form, Recovery, sleep, HRV, resting HR, weight, activity), become inputs to:
@@ -160,4 +160,49 @@ Every model decision gets three things:
 - **criteria**: what good looks like;
 - **boundaries**: what it must never do, and the hard limits enforced in code.
 
-The model reasons within those, the way a good nutritionist, personal manager or health coach would think for the user. It is never a free-form prompt. It also does not get rigid rules for judgment calls. Deterministic checks are reserved for hard safety and product lines: quiet hours, push caps, sent-card fencing, clinical gating and format validation. Current examples are `DAY_PLAN_INSTRUCTION` and `updateCardPrompt`. New planners, including the health-aware ones, follow the same shape.
+The model reasons within those, the way a good nutritionist, personal manager or health coach would think for the user. It is never a free-form prompt. It also does not get rigid rules for judgment calls. Deterministic checks are reserved for hard safety and product lines: quiet hours, the Brief-to-Close window for update cards, sent-card fencing, clinical gating and format validation. Current examples are `DAY_PLAN_INSTRUCTION` and `updateCardPrompt`. New planners, including the health-aware ones, follow the same shape.
+
+## 7. Owner rulings (2026-09-23, settled)
+1. **Data home: the new Supabase only.** Onboarding answers and all user data are built from scratch in the new Supabase. Nothing from the legacy Supabase project or its edge functions (`agent`, `calendar`, `health-sync`, `insights`, `oauth-google`) carries over. The app keeps its frontend and some logic, repurposed onto the new backend.
+2. **Brief delivery: both.** In-app is the rich version, linked, with visual elements and a quiz-like feel. The user's preferred channel (Telegram today; WhatsApp or others later) gets the card too. This replaces the app's old "in-app, never a push" note.
+3. **Card times: user-set or auto.** Each card can be pinned to a time or left on auto, where the model plans it from routine and calendar (91cad99 already does auto). The pin setting is owed by the settings API.
+4. **No push cap.** The only hard limits are quiet hours, wind-down and the Brief-to-Close window for update cards.
+
+## 8. Apple Health (iOS 27 / Watch Series 12) and what Waldo can use
+
+Checked 2026-09-23.
+
+### What Apple shipped or announced
+- **Watch Series 12 / Ultra 4 Health Sensing System:** heart rate every 5 seconds all day; HRV as often as every 5 minutes (24x more often). Two HRV views: Recovery HRV (daily stress and recovery) and overall HRV. Overnight vitals now include Recovery HRV against a personal baseline, plus a new daytime vitals view. https://www.apple.com/newsroom/2026/09/apple-advances-health-and-fitness-capabilities-using-apple-intelligence/
+- **Readiness:** a 0-10 daily score from recent activity, vitals and sleep score, with a recommendation (Recover / Pace Yourself / Ready / Go For It). It updates through the day and shows its drivers. It is Apple's direct answer to WHOOP Recovery. (same source)
+- **Redesigned Health app:** Insights tab, For You recommendations, and a Longevity tab with Health Age (VO2 max, resting HR, sleep, HRV, optional labs). It ships later in 2026, US English first; it is in the iOS 27.2 developer beta. https://9to5mac.com/2026/09/16/ios-27-2-introduces-apple-health-app-overhaul-heres-whats-new/
+- **HealthKit in iOS 27:** a new RMSSD HRV quantity type (the only new quantity type; SDNN was the only HRV type since iOS 11). Workout heart-rate and cycling-power zones become a structured HealthKit type. https://www.themomentum.ai/blog/apple-watch-series-12-ios-27-rmssd-healthkit , https://developer.apple.com/videos/play/wwdc2026/207/
+
+### What a third-party app can read via HealthKit
+| Signal | Readable? | Note |
+|---|---|---|
+| Heart rate (now denser on Series 12) | Yes | Apple has not said how much of the 5-second stream is written to HealthKit; measure on device |
+| HRV SDNN | Yes | As before |
+| HRV RMSSD (new type) | Type exists | Apple has not confirmed the Watch writes it; verify on a Series 12 |
+| Resting HR, respiratory rate, wrist temperature, SpO2, sleep stages, workouts, VO2 max, weight | Yes | Existing types |
+| Workout zones (new) | Yes | Structured type in iOS 27 |
+| Readiness score | **No** | Computed by Apple; no HealthKit type found |
+| Health Age, Longevity analyses, Insights | **No** | Computed by Apple |
+| Sleep score (0-100) | Not confirmed | No HealthKit type found. Apple documents its inputs (duration, bedtime consistency, awake interruptions), so Waldo can compute its own from sleep stages |
+| Recovery HRV vs overall HRV split | Unclear | Probably maps to RMSSD vs SDNN, but Apple has published no mapping |
+
+Sources for the "not exposed" rows: Momentum (above) and https://www.fitmesh.fit/en/blog/will-new-apple-health-replace-other-apps . Both are secondary sources that read Apple's docs; confirm on device before relying on them.
+
+### What this changes for Waldo under the hood
+1. **Switch recovery math to RMSSD when present.** RMSSD is the industry-standard recovery HRV and is steadier over short windows. Use RMSSD against the user's own baseline, fall back to SDNN, and never mix the two in one baseline.
+2. **Denser HR and HRV makes daytime state real.** Daytime HRV every few minutes lets the update sweep notice a real stress or recovery shift during the day (a trigger, per section 6) instead of only overnight.
+3. **Rebuild Form on raw inputs, not Apple's scores.** Readiness and Health Age can't be read, so Waldo computes its own Form/Recovery from overnight RMSSD vs baseline, resting HR vs baseline, sleep (duration, consistency, interruptions, stages) and recent load (workout zones, activity).
+   - This is also a chance to fix the known gap: the app's `canonical.ts` weights Recovery where accepted ADR-0081 weights Sleep.
+   - Waldo's value is joining that body read with the calendar and the day's decisions. Apple's Readiness stays inside the Health app and never touches the calendar.
+4. **Don't compete on a number; explain the day.** Apple now gives every Series 12 owner a free readiness score. A second score is weak. What Waldo can do that Apple doesn't is say what the body read means for today's meetings, when to push, and what to move.
+5. **Card timing.** A short or late night (sleep stages) moves the auto Brief later. A low-recovery day gets a lighter check-in. This follows the bounded-judgment rule in section 6.
+6. **Weight.** HealthKit body mass is readable, and nothing new changed there. Keep weight as a trend, framed as context, not a goal (per the signal map's "never diet-app energy").
+7. **Out of reach:** Apple's Readiness, sleep score and Health Age values; Apple's own recommendations; and anything from the new Health app UI. Waldo can mirror the ideas, not read the outputs.
+
+### To verify on a device
+Series 12 / iOS 27, before building the health ingest: whether RMSSD samples are written; the actual HR sample density in HealthKit; and whether any readiness or sleep-score type appears in the SDK.

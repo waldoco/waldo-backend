@@ -2,8 +2,6 @@ import type { CalendarChange, GoogleClient } from '../connectors/google';
 import { localIso } from './reminders';
 
 const DAY_MS = 24 * 60 * 60_000;
-// post-mvp-cleanup: owner setting once the push cap is decided.
-export const UPDATE_CARDS_PER_DAY = 3;
 
 type Sql = Pick<SqlStorage, 'exec'>;
 type WatchKey = 'calendar_since' | 'mail_since';
@@ -28,9 +26,6 @@ export const updateBook = (sql: Sql) => {
     },
     record(day: string, at: number, changes: readonly Change[], text: string | null): void {
       sql.exec('INSERT INTO update_cards (at, day, changes, text, pushed) VALUES (?, ?, ?, ?, ?)', at, day, JSON.stringify(changes), text, text === null ? 0 : 1);
-    },
-    pushedOn(day: string): number {
-      return sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM update_cards WHERE day = ? AND pushed = 1', day).toArray()[0]?.n ?? 0;
     },
     unfolded(timezone: string): string {
       return sql.exec<{ at: number; changes: string; text: string | null }>('SELECT at, changes, text FROM update_cards WHERE folded = 0 ORDER BY at').toArray()

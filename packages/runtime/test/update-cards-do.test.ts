@@ -39,7 +39,6 @@ describe('update cards', () => {
 
       book.record('2026-09-23', t1, changes.slice(0, 1), 'Update\nDesign review added at 15:00.');
       book.record('2026-09-23', t1 + 1, changes.slice(3), null);
-      expect(book.pushedOn('2026-09-23')).toBe(1);
       const unfolded = book.unfolded(tz);
       expect(unfolded).toContain('sent as update: Update Design review added at 15:00.');
       expect(unfolded).toContain('not sent\n- mail new:');
