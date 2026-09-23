@@ -15,4 +15,4 @@ Secrets never appear in these logs. Bot tokens are redacted in error text.
 
 ## 2. Observability service (planned)
 
-[Langfuse](https://langfuse.com/) for traces, model calls, costs and evaluations across turns. It can run as Langfuse Cloud or be [self-hosted with Docker](https://langfuse.com/self-hosting). Choose one before the slice starts; either needs its own keys, stored as Worker secrets and in the local env file, never in the repo. The per-hop trace ids above map onto Langfuse traces and spans.
+[Langfuse](https://langfuse.com/) for traces, model calls, costs and evaluations across turns. The owner chose Langfuse Cloud over [self-hosting](https://langfuse.com/self-hosting). It needs its own project keys, stored as Worker secrets and in the local env file, never in the repo. The per-hop trace ids above map onto Langfuse traces and spans.

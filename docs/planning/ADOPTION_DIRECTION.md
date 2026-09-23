@@ -51,8 +51,8 @@ Day program, in order:
 
 1. Current queue: drop fix, observability, Telegram webhook deploy, dev loop on the owner's Mac.
 2. Repo cleanup: close stale issues, remove stale docs, file tickets for hardcodes and hard limits to fix later.
-3. Memory layer: hybrid full-text, vector, SQLite and files design, then build.
-4. Langfuse observability slice (cloud or self-hosted).
+3. Memory layer: hybrid full-text, vector, SQLite and files design, then build. First persistence hop: hot conversation state in the owner Durable Object's own storage, so eviction loses nothing. Then R2 archives and the Supabase queryable layer.
+4. Langfuse observability slice on Langfuse Cloud.
 5. Multimodal slice and a rigorous end-to-end test pass.
 6. AG-UI projection, onboarding, and surfaces: Waldo mobile app, Discord, then WhatsApp or iMessage where possible.
 7. Web dashboard.
