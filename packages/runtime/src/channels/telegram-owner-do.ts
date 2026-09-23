@@ -5,6 +5,7 @@ import { claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
+import { consoleAuth } from '../identity/console-auth';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -69,6 +70,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private queue: Promise<unknown> = Promise.resolve();
 
   override async fetch(request: Request): Promise<Response> {
+    const doName = request.headers.get('x-waldo-do-name');
+    if (doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
+    if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
     if (new URL(request.url).pathname === '/google') {
@@ -127,6 +131,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === CONSOLE_FILE_PATH) return (await openFile(Number(url.searchParams.get('id')))) ?? back('file.unavailable');
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const action = parseConsoleAction(await request.formData(), session.csrf);
+      if (action?.action === 'telegram.link') return this.telegramLinkPage();
       if (action?.action === 'session.signout') {
         await access.signOut();
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
@@ -136,6 +141,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (url.pathname !== CONSOLE_PATH) return new Response('not found', { status: 404 });
     return new Response(renderConsole(await view(session, NOTICES[url.searchParams.get('m') ?? ''] ?? null)), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+  }
+
+  private async telegramLinkPage(): Promise<Response> {
+    const doName = this.ctx.storage.kv.get<string>('do_name');
+    const code = doName ? await consoleAuth(this.env)?.issueLinkCode(doName) : null;
+    const text = code
+      ? `Send this to the Waldo bot on Telegram within 10 minutes: /link ${code}`
+      : 'Linking Telegram from the console needs account sign-in, which is not set up on this server yet.';
+    return new Response(`<!doctype html><meta name="viewport" content="width=device-width"><p style="font:18px system-ui;margin:40px">${text}</p><p style="font:16px system-ui;margin:40px"><a href="${CONSOLE_PATH}">Back</a></p>`, {
+      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' },
+    });
   }
 
   private async connectGoogle(tokens: GoogleTokens): Promise<void> {

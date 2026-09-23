@@ -21,6 +21,8 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Every state-changing request checks CSRF and the owner identity. Callback data from buttons is checked against the owner before it acts.
 - Secrets never reach the repo, chat, logs or traces.
 
+- Every code-based sign-in proves in a real run that the code actually arrives: the email template must carry `{{ .Token }}`, which Supabase's default does not.
+
 ### Idempotency and retries
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
 - Every button press is safe when pressed twice or late ("Already handled", "expired").
@@ -63,3 +65,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-23 | Post-turn memory and spot writers raced the next turn | Concurrency | settle-before-next-turn test (W0, 96c7683) | Concurrency: writes settle before the next turn |
 | 2026-09-23 | An approval could be applied after its time had passed, or over an edited event | Time, concurrency | approval expiry and etag tests (96c7683) | Time: past-scheduled outcome; Concurrency: version check |
 | 2026-09-24 | Console sign-in link was spent by Telegram's link preview, so every link showed "used or expired" | Tokens | `console.test.ts` sign-in page test; token redeemed by POST only (8167bbf) | Tokens: one-time tokens spent only by a POST |
+| 2026-09-24 | Console email sign-in sent Supabase's default magic-link email, which has no code to type | Tokens | `scripts/guards/guard-otp-template.mjs`; template in `supabase/templates/magic_link.html` | Tokens: code sign-in proves the code arrives |

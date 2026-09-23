@@ -36,6 +36,11 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => ({
     const session = await store.get<ConsoleSession>('console:session');
     return token && session && session.token === token && session.expires >= now() ? session : null;
   },
+  async grant(): Promise<string> {
+    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), expires: now() + SESSION_MS };
+    await store.put('console:session', session);
+    return session.token;
+  },
   async signOut(): Promise<void> {
     await store.delete('console:session');
   },
@@ -51,7 +56,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -122,7 +127,7 @@ const connectors = (view: ConsoleView) => {
   return [
     row('Google Calendar and Gmail', google.connected ? `Signed in as <b>${esc(google.email ?? 'unknown account')}</b>. Waldo reads your calendar and new mail and can save drafts.` : 'Lets Waldo read your calendar, watch new mail and save email drafts. Nothing is sent without your approval.',
       status(google.connected, google.connected ? 'Connected' : 'Not connected'), googleAction),
-    row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(true, 'Connected'), ''),
+    row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(true, 'Connected'), form(csrf, 'telegram.link', 'Link a Telegram account', {}, {})),
     row('Console session', `Signed in until ${esc(view.sessionUntil)}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out')),
     row('WhatsApp', 'Chat with Waldo on WhatsApp. Needs a Meta WhatsApp Business number and token.', chip('Not built yet', 'muted'), ''),

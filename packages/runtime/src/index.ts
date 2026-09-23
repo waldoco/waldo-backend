@@ -13,6 +13,7 @@ import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegra
 import { handleGoogleCallback } from './channels/google-oauth';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
+import { handleConsole } from './channels/console-signin';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
 import {
@@ -61,6 +62,7 @@ declare global {
       RESPONSIBILITY_INGRESS_HMAC_SECRET?: string;
       SUPABASE_PROJECT_URL?: string;
       SUPABASE_PUBLISHABLE_KEY?: string;
+      WALDO_ROUTER_HMAC_SECRET?: string;
       RUN_LOOP_LOCAL_INGRESS_TOKEN?: string;
       TRACER_DO: DurableObjectNamespace<TracerDO>;
       TELEGRAM_OWNER_DO?: DurableObjectNamespace;
@@ -115,6 +117,10 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     if (new URL(request.url).pathname === TELEGRAM_WEBHOOK_PATH) {
       return handleTelegramWebhook(request, env, (work) => ctx?.waitUntil(work));
+    }
+    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) {
+      const signedIn = await handleConsole(request, env);
+      if (signedIn) return signedIn;
     }
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
       return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(env.WALDO_OWNER_TELEGRAM_ID)).fetch(request);

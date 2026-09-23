@@ -15,7 +15,7 @@ export type OwnerDirectory = Readonly<{
 
 type RouteRow = { do_name: string; subject: string; timezone: string | null };
 
-const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+export const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 export const linkCodeHash = async (code: string): Promise<string> =>
   hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code.trim().toUpperCase())));
@@ -34,11 +34,11 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
   redeem: async () => null,
 });
 
-// The runtime holds no service-role key (ADR-0052): it calls two signed database functions with the publishable key.
-export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): OwnerDirectory => {
+// The runtime holds no service-role key (ADR-0052): it calls signed database functions with the publishable key.
+export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
-  if (!base || !key || !secret) return deployOwner(env);
-  const call = async (fn: string, message: string, args: Record<string, string>): Promise<unknown> => {
+  if (!base || !key || !secret) return null;
+  return async (fn: string, message: string, args: Record<string, string>): Promise<unknown> => {
     const at = Math.floor(now() / 1000);
     const response = await fetcher(`${base}/rest/v1/rpc/${fn}`, {
       method: 'POST',
@@ -48,6 +48,11 @@ export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = f
     if (!response.ok) throw new Error(`owner directory ${response.status}: ${(await response.text()).slice(0, 200)}`);
     return response.json();
   };
+};
+
+export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): OwnerDirectory => {
+  const call = signedRpc(env, fetcher, now);
+  if (!call) return deployOwner(env);
   const byPresence = async (provider: 'telegram', subject: string): Promise<OwnerRoute | null> => {
     const [row] = (await call('route_presence', `route.${provider}.${subject}`, { p_provider: provider, p_subject: subject })) as RouteRow[];
     return row ? { doName: row.do_name, subject: row.subject, timezone: row.timezone } : null;
