@@ -100,7 +100,7 @@ Remote access from the Codespace:
 
 ## 6. Forward map
 
-Memory slice (next, in progress):
+Memory slice (full roadmap with status: [MEMORY_ROADMAP.md](../planning/MEMORY_ROADMAP.md)):
 
 1. Built: hot conversation state goes into the owner Durable Object's own storage, written after each turn and restored on wake, so eviction loses nothing (`src/channels/conversation-store.ts`).
 2. Canonical long-term memory goes into the per-user Durable Object's SQLite. Four core files come first: MEMORY_CORE, MEMORY_GOALS, MEMORY_FOLLOWUPS and intelligence-summary.
