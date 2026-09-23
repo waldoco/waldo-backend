@@ -8,7 +8,7 @@ import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-l
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider } from '../llm/provider';
-import { messagingSystemPrompt } from '../prompt/messaging-behavior';
+import { CLINICAL_REDIRECT, messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { applyMemoryEdits, MEMORY_EDITS_SCHEMA, MEMORY_UPDATE_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyMemoryInput, memoryPrompt, memoryUpdateInput, type CoreFileStore } from '../memory/core-files';
 import { restoreConversation, type ConversationStore } from './conversation-store';
@@ -66,6 +66,9 @@ export const createTelegramResponder = (
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
       text: { input, output: result.response.text || JSON.stringify(result.response.tool_calls), ...(reasoning ? { reasoning } : {}) },
     });
+    if (!result.ok && result.halted_by === 'medical_gate' && !system.endsWith(CLINICAL_REDIRECT)) {
+      return complete(trace, `${purpose}_redirect`, `${system}\n\n${CLINICAL_REDIRECT}`, content, format, attachments, tools, turns);
+    }
     if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return result.response;
   };

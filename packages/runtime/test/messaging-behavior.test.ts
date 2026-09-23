@@ -18,5 +18,6 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Health is core');
     expect(MESSAGING_BEHAVIOR).toContain('You are not a clinician.');
     expect(MESSAGING_BEHAVIOR).toContain('Never give medication, supplement or dose instructions.');
+    expect(MESSAGING_BEHAVIOR).toContain('point them to a physician');
   });
 });
