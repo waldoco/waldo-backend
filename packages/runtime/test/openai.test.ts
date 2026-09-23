@@ -64,6 +64,21 @@ describe('OpenAIGpt5NanoAdapter', () => {
     expect(metadata).toMatchObject({ response_id: 'resp_test_1', model: OPENAI_GPT_5_NANO_MODEL });
   });
 
+  it('sends a bounded reasoning effort and classifies truncated output as oversize', async () => {
+    let sent: unknown;
+    const adapter = new OpenAIGpt5NanoAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: unknown) => {
+        sent = body;
+        return { id: 'resp_test_2', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: '', output: [] } as never;
+      }),
+    });
+    await expect(adapter.complete(gatewayRequest())).resolves.toEqual({
+      ok: false, code: 'oversize', error: 'OpenAI output incomplete: max_output_tokens',
+    });
+    expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low' } });
+  });
+
   it('fails explicitly when the key is missing', async () => {
     await expect(new OpenAIGpt5NanoAdapter({}).complete(gatewayRequest())).resolves.toEqual({
       ok: false,

@@ -59,9 +59,13 @@ export class OpenAIGpt5NanoAdapter implements LLMGatewayAdapter {
           instructions: input.request.system,
           input: input.request.messages.map((message) => `${message.role}: ${message.content}`).join('\n'),
           max_output_tokens: input.request.max_tokens,
+          reasoning: { effort: 'low' },
         },
         { signal: controller.signal },
       );
+      if (response.status === 'incomplete') {
+        return { ok: false, code: 'oversize', error: `OpenAI output incomplete: ${response.incomplete_details?.reason ?? 'unknown'}` };
+      }
       const text = responseText(response).trim();
       const parsed = {
         model: OPENAI_GPT_5_NANO_MODEL,

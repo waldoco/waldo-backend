@@ -141,7 +141,7 @@ async function runOpenAIChat(
       provider: OPENAI_PROVIDER,
       model: OPENAI_GPT_5_NANO_MODEL,
       cache: 'none' as const,
-      max_tokens: 1024,
+      max_tokens: 4096,
     },
     fallback: [],
     floor: 'template' as const,
@@ -152,7 +152,7 @@ async function runOpenAIChat(
     renderRequest: () => ({
       system: 'Respond concisely and directly. Do not reveal private source content or credentials.',
       messages: [{ role: 'user' as const, content: request.message.trim() }],
-      max_tokens: 1024,
+      max_tokens: 4096,
       temperature: 0.2,
     }),
   }, {
