@@ -363,6 +363,17 @@ describe('telegram gate-2 shapes', () => {
     expect(telegramMessageUpdateSchema.safeParse({ ...real, message: { ...real.message, entities: [{ type: 'text_link', offset: 0, length: 6, url: 'https://x.test' }] } }).success).toBe(false);
   });
 
+  it('accepts a photo or document with a caption, and rejects mixed or empty messages', () => {
+    const { text: _text, ...bare } = baseTgMessage.message;
+    const photo = { ...baseTgMessage, message: { ...bare, caption: 'lunch', photo: [{ file_id: 'p', file_unique_id: 'u', width: 1, height: 1 }] } };
+    const document = { ...baseTgMessage, message: { ...bare, document: { file_id: 'd', file_unique_id: 'u', file_name: 'plan.pdf', mime_type: 'application/pdf' } } };
+    expect(telegramMessageUpdateSchema.safeParse(photo).success).toBe(true);
+    expect(telegramMessageUpdateSchema.safeParse(document).success).toBe(true);
+    expect(telegramMessageUpdateSchema.safeParse({ ...photo, message: { ...photo.message, text: 'hi' } }).success).toBe(false);
+    expect(telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: { ...baseTgMessage.message, caption: 'x' } }).success).toBe(false);
+    expect(telegramMessageUpdateSchema.safeParse({ ...baseTgMessage, message: bare }).success).toBe(false);
+  });
+
   it('accepts a reply to an earlier message and reads only the owner text', () => {
     const reply = {
       ...baseTgMessage,

@@ -59,7 +59,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         {
           model: input.request.model,
           instructions: input.request.system,
-          input: input.request.messages.map((message) => `${message.role}: ${message.content}`).join('\n'),
+          input: responsesInput(input.request),
           max_output_tokens: input.request.max_tokens,
           reasoning: { effort: 'low', summary: 'auto' },
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
@@ -96,6 +96,23 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       clearTimeout(timeout);
     }
   }
+}
+
+function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses.ResponseCreateParams['input'] {
+  const text = request.messages.map((message) => `${message.role}: ${message.content}`).join('\n');
+  if (!request.attachments) return text;
+  return [{
+    role: 'user',
+    content: [
+      { type: 'input_text', text },
+      ...request.attachments.map((file): OpenAI.Responses.ResponseInputContent => {
+        const data = `data:${file.mime_type};base64,${file.data_base64}`;
+        return file.kind === 'image'
+          ? { type: 'input_image', image_url: data, detail: 'auto' }
+          : { type: 'input_file', filename: file.filename, file_data: data };
+      }),
+    ],
+  }];
 }
 
 function reasoningSummary(response: OpenAI.Responses.Response): string {

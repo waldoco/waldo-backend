@@ -50,6 +50,7 @@ export class CloudflareAIGatewayAdapter implements LLMGatewayAdapter {
   }
 
   async complete(request: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
+    if (request.request.attachments) return { ok: false, error: 'gateway_attachments_unsupported', code: 'invalid_args' };
     const startedAt = this.now();
     const apiToken = await credentialValue(this.credential);
     if (apiToken === null) {

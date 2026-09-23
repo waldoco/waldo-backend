@@ -205,8 +205,13 @@ const telegramTextEntitySchema = z.strictObject({
 export const telegramUpdateTypeSchema = z.enum(['message', 'callback_query', 'my_chat_member']);
 export type TelegramUpdateType = z.infer<typeof telegramUpdateTypeSchema>;
 
-// Media-only messages carry no text and are unparseable by design — the static
-// "text only for now" reply lives behind the shape gate, never in a run.
+const telegramFileSchema = z.looseObject({
+  file_id: z.string().min(1).max(256),
+  file_size: z.int().positive().optional(),
+});
+
+// A message is text, a photo or a document; photos and documents may carry a caption.
+// Voice, video, stickers and forwards stay unparseable and get the honest static reply.
 export const telegramMessageUpdateSchema = z.strictObject({
   update_id: z.int().positive(),
   message: z.strictObject({
@@ -214,12 +219,19 @@ export const telegramMessageUpdateSchema = z.strictObject({
     date: z.int().positive().optional(),
     from: telegramSenderSchema,
     chat: telegramPrivateChatSchema,
-    text: z.string().min(1).max(4096),
+    text: z.string().min(1).max(4096).optional(),
     entities: z.array(telegramTextEntitySchema).max(100).optional(),
+    caption: z.string().min(1).max(1024).optional(),
+    caption_entities: z.array(telegramTextEntitySchema).max(100).optional(),
+    photo: z.array(telegramFileSchema).min(1).max(10).optional(),
+    document: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
     reply_to_message: z.looseObject({ message_id: z.int().positive() }).optional(),
     quote: z.looseObject({}).optional(),
     link_preview_options: z.looseObject({}).optional(),
-  }),
+  }).refine(
+    (m) => [m.text, m.photo, m.document].filter((part) => part !== undefined).length === 1 && (m.caption === undefined || m.text === undefined),
+    'exactly one of text, photo or document',
+  ),
 });
 export type TelegramMessageUpdate = z.infer<typeof telegramMessageUpdateSchema>;
 

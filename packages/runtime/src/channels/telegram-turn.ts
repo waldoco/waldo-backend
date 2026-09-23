@@ -10,6 +10,8 @@ import { applyMemoryEdits, MEMORY_EDITS_SCHEMA, MEMORY_UPDATE_INSTRUCTION, memor
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema, TELEGRAM_REACTIONS } from './reactions';
 import type { TelegramOwnerListenerOptions, TurnLogEntry } from './telegram-listener';
+import { loadTelegramMedia, type TelegramFileDownloader } from './telegram-media';
+import type { LLMAttachment } from '@waldo/contracts';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 
@@ -20,6 +22,7 @@ export const createTelegramResponder = (
   store?: ConversationStore,
   memory?: CoreFileStore,
   log: (entry: TurnLogEntry) => void = () => undefined,
+  download?: TelegramFileDownloader,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -29,20 +32,20 @@ export const createTelegramResponder = (
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: WALDO_CHAT_MODEL, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
-  const ask = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>) => {
+  const ask = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[]) => {
     const started = Date.now();
     let reasoning: string | undefined;
     const gateway = new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const result = await new RuntimeLLMProvider({ gateway, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,
-      renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2, ...(format ? { response_format: format } : {}) }),
+      renderRequest: () => ({ system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2, ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}) }),
     }, {
       authenticatedUserId: ownerId, trigger: 'user_message', canaryTokens: CANARIES,
       sourceTaint: null, toolArgSourceTaint: null,
       sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
     });
-    const input = JSON.stringify([{ role: 'system', content: system }, { role: 'user', content }]);
+    const input = JSON.stringify([{ role: 'system', content: system }, { role: 'user', content, ...(attachments ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}) }]);
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, error: [result.code, result.halted_by].filter(Boolean).join(':'), text: { input } });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
@@ -54,10 +57,13 @@ export const createTelegramResponder = (
   };
   const tree = new ConversationTree();
   let traceId = '';
+  let pending: readonly LLMAttachment[] | undefined;
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => ask(traceId, 'reply',
       [messagingSystemPrompt(request.system, request.tools), ...(memory ? [memoryPrompt(memory.read())] : [])].join('\n\n'),
       request.messages.join('\n'),
+      undefined,
+      pending,
     ),
   }, tree);
   let parentId: string | null = null;
@@ -67,10 +73,13 @@ export const createTelegramResponder = (
       await restored;
       const id = `tg-${turn.updateId}`;
       traceId = id;
+      const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, download)) : undefined;
+      pending = media?.attachment ? [media.attachment] : undefined;
+      const said = [turn.text, media?.note].filter(Boolean).join('\n');
       const publication = await time('joined_path', () => path.submit({
         authenticatedOwnerId: ownerId, invocation,
         context: { snapshot_ref: fixture.snapshot_ref, snapshot_at: fixture.snapshot_at, canary_tokens: CANARIES, replay_context_ref: null },
-        userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: turn.text, appPayload: turn.text, modelProjection: { mode: 'include' } },
+        userEntry: { id, ownerId, chatId: `telegram-${turn.chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
         assistantEntryId: `${id}-reply`,
       }));
       await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
@@ -78,7 +87,7 @@ export const createTelegramResponder = (
       if (memory) {
         const files = memory.read();
         const started = Date.now();
-        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, turn.text, publication.text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
+        void ask(id, 'memory', MEMORY_UPDATE_INSTRUCTION, memoryUpdateInput(files, said, publication.text), { name: 'memory_edits', schema: MEMORY_EDITS_SCHEMA })
           .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyMemoryEdits(memory, raw, new Date().toISOString()).join(',') }))
           .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error) }));
       }

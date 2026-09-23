@@ -3,6 +3,7 @@ import { coreFileStore } from '../memory/core-files';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { durableConversationStore } from './conversation-store';
 import { createTelegramCaller, createTelegramOwnerApi } from './telegram-api';
+import { createTelegramFileDownloader } from './telegram-media';
 import { TelegramOwnerListener, type TurnLogEntry } from './telegram-listener';
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
@@ -36,7 +37,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     this.listener ??= new TelegramOwnerListener({
       ownerTelegramId: Number(owner),
       api: createTelegramOwnerApi(createTelegramCaller(token)),
-      ...createTelegramResponder(key, durableConversationStore(this.ctx.storage), coreFileStore(this.ctx.storage.sql), log),
+      ...createTelegramResponder(key, durableConversationStore(this.ctx.storage), coreFileStore(this.ctx.storage.sql), log, createTelegramFileDownloader(token)),
       log,
       saveOffset: (offset) => this.ctx.storage.put('offset', offset),
     });

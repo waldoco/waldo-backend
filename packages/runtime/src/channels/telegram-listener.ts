@@ -53,7 +53,7 @@ export class TelegramOwnerListener {
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
     const { api } = this.options;
     const chat_id = turn.chatId;
-    await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can only read plain text messages here for now - forwards, media and some formatting do not come through yet.' }).catch(() => undefined);
+    await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can read text, photos and documents here. Voice notes, videos, stickers, forwards and some formatting do not come through yet.' }).catch(() => undefined);
     if (turn.messageId !== null) {
       await api.setMessageReaction({ chat_id, message_id: turn.messageId, reaction: [{ type: 'emoji', emoji: '🤷' }] }).catch(() => undefined);
     }

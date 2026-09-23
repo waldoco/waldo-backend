@@ -4,6 +4,14 @@ export type TelegramPollingClient = Readonly<{
   getUpdates(request: Readonly<{ offset: number; timeout: number }>): Promise<readonly unknown[]>;
 }>;
 
+export type TelegramMedia = Readonly<{
+  kind: 'photo' | 'document';
+  fileId: string;
+  fileName: string | null;
+  mimeType: string | null;
+  fileSize: number | null;
+}>;
+
 export type TelegramInboundTurn = Readonly<{
   updateId: number;
   messageId: number | null;
@@ -11,9 +19,10 @@ export type TelegramInboundTurn = Readonly<{
   chatId: number;
   sentAt: number | null;
   text: string;
+  media?: TelegramMedia;
 }>;
 
-export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt'>;
+export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt' | 'media'>;
 
 export type TelegramPollResult = Readonly<{
   nextOffset: number;
@@ -82,13 +91,21 @@ export class TelegramPollingAdapter {
   }
 
   private toTurn(update: TelegramMessageUpdate): TelegramInboundTurn {
+    const { message } = update;
+    const photo = message.photo?.at(-1);
+    const media: TelegramMedia | undefined = photo
+      ? { kind: 'photo', fileId: photo.file_id, fileName: null, mimeType: 'image/jpeg', fileSize: photo.file_size ?? null }
+      : message.document
+        ? { kind: 'document', fileId: message.document.file_id, fileName: message.document.file_name ?? null, mimeType: message.document.mime_type ?? null, fileSize: message.document.file_size ?? null }
+        : undefined;
     return Object.freeze({
       updateId: update.update_id,
-      messageId: update.message.message_id ?? null,
-      senderId: update.message.from.id,
-      chatId: update.message.chat.id,
-      sentAt: update.message.date === undefined ? null : update.message.date * 1000,
-      text: update.message.text,
+      messageId: message.message_id ?? null,
+      senderId: message.from.id,
+      chatId: message.chat.id,
+      sentAt: message.date === undefined ? null : message.date * 1000,
+      text: message.text ?? message.caption ?? '',
+      ...(media ? { media: Object.freeze(media) } : {}),
     });
   }
 }

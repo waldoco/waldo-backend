@@ -8,6 +8,14 @@ export const llmMessageSchema = z.strictObject({
 });
 export type LLMMessage = z.infer<typeof llmMessageSchema>;
 
+export const llmAttachmentSchema = z.strictObject({
+  kind: z.enum(['image', 'file']),
+  mime_type: z.string().min(1).max(128),
+  filename: z.string().min(1).max(256),
+  data_base64: z.string().min(1),
+});
+export type LLMAttachment = z.infer<typeof llmAttachmentSchema>;
+
 // No credential field exists here by design: provider keys live in the gateway BYOK store,
 // never in the contract or Worker env (ADR-0069 §5.2).
 export const llmRequestSchema = z.strictObject({
@@ -19,6 +27,9 @@ export const llmRequestSchema = z.strictObject({
   // Asks the provider to constrain output to this JSON schema where it can (OpenAI strict
   // structured outputs). Callers still validate the result; other providers ignore it.
   response_format: z.strictObject({ name: z.string().min(1).max(64), schema: z.record(z.string(), z.unknown()) }).optional(),
+  // Owner-sent images and files for the final user message. Kept outside messages so text
+  // sanitisation never rewrites binary data; providers without file input reject the request.
+  attachments: z.array(llmAttachmentSchema).min(1).max(4).optional(),
 });
 export type LLMRequest = z.infer<typeof llmRequestSchema>;
 

@@ -80,6 +80,37 @@ describe('OpenAIResponsesAdapter', () => {
     expect(sent).toMatchObject({ text: { format: { type: 'json_schema', name: 'memory_edits', schema, strict: true } } });
   });
 
+  it('sends owner attachments as image and file inputs on one user message', async () => {
+    let sent: { input?: unknown } = {};
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: { input?: unknown }) => {
+        sent = body;
+        return { id: 'r', output_text: 'Nice lunch.', output: [], usage: { input_tokens: 1, output_tokens: 1 } } as never;
+      }),
+    });
+    const base = gatewayRequest();
+    const result = await adapter.complete({
+      ...base,
+      request: {
+        ...base.request,
+        attachments: [
+          { kind: 'image', mime_type: 'image/jpeg', filename: 'photo.jpg', data_base64: 'AAAA' },
+          { kind: 'file', mime_type: 'application/pdf', filename: 'plan.pdf', data_base64: 'BBBB' },
+        ],
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(sent.input).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'input_text', text: 'user: Say hello.' },
+        { type: 'input_image', image_url: 'data:image/jpeg;base64,AAAA', detail: 'auto' },
+        { type: 'input_file', filename: 'plan.pdf', file_data: 'data:application/pdf;base64,BBBB' },
+      ],
+    }]);
+  });
+
   it('sends a bounded reasoning effort and classifies truncated output as oversize', async () => {
     let sent: unknown;
     const adapter = new OpenAIResponsesAdapter({
