@@ -7,6 +7,7 @@ import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { durableConversationStore } from './conversation-store';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
+import { armBriefSweep, eventBriefs } from './event-briefs';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, GOOGLE_CALLBACK_PATH, oauthState, type GoogleTokens } from '../connectors/google';
@@ -35,6 +36,7 @@ type OwnerRuntime = Readonly<{
   scheduler: Scheduler;
   fire(entry: ScheduleEntry): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
+  briefs(entry: ScheduleEntry): Promise<void>;
   ready: Promise<void>;
 }>;
 
@@ -70,9 +72,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   override async alarm(): Promise<void> {
     await this.serial(async () => {
-      const { scheduler, fire, nightly, ready } = this.setup();
+      const { scheduler, fire, nightly, briefs, ready } = this.setup();
       await ready;
-      await scheduler.dispatchDue({ reminder: fire, dreaming: nightly });
+      await scheduler.dispatchDue({ reminder: fire, dreaming: nightly, pre_activity_spot: briefs });
     });
   }
 
@@ -143,7 +145,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
     const episodes = episodeIndex(storage.sql);
     const kv = durableConversationStore(storage);
-    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now())]).then(() => undefined);
+    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now())]).then(() => undefined);
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), coreFileStore(this.ctx.storage.sql), log,
       { download: createTelegramFileDownloader(token), transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), searchEpisodesHandler(episodes)],
@@ -191,7 +193,23 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, ready };
+    const briefBook = eventBriefs(storage.sql, clock.timezone);
+    const briefs = async (entry: ScheduleEntry) => {
+      const trace = `${entry.id}:${entry.occurrence_at}`;
+      const started = Date.now();
+      try {
+        const sent = await briefBook.sweep(await google.client(), Date.now(), async (id, event, said) => {
+          const at = Date.now();
+          const text = (await responder.prompt(id, owner, said, async (hop, work) => work())).trim();
+          if (text) await api.sendMessage({ chat_id: owner, text });
+          log({ trace: id, hop: 'event_brief', ms: Date.now() - at, ok: true, detail: event.id, text: { input: said, output: text } });
+        });
+        if (sent) log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: true, detail: `${sent} sent` });
+      } catch (error) {
+        log({ trace, hop: 'brief_sweep', ms: Date.now() - started, ok: false, error: String(error) });
+      }
+    };
+    this.runtime = { owner, listener, api, call, desk, reminders: book, scheduler, fire, nightly, briefs, ready };
     return this.runtime;
   }
 }

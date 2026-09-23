@@ -14,7 +14,7 @@ const entry = (id: string, text: string, parentId: string | null = null) => ({
 
 describe('episode history', () => {
   it('names speakers from entry ids and quotes model queries safely', () => {
-    expect([speakerOf('tg-5'), speakerOf('tg-5-reply'), speakerOf('reminder:ab:1:0'), speakerOf('reminder:ab:1:0-reply')]).toEqual(['owner', 'waldo', 'reminder', 'waldo']);
+    expect([speakerOf('tg-5'), speakerOf('tg-5-reply'), speakerOf('reminder:ab:1:0'), speakerOf('reminder:ab:1:0-reply')]).toEqual(['owner', 'waldo', 'system', 'waldo']);
     expect(ftsQuery('Knee "pain" OR NEAR(run*)')).toBe('"knee" OR "pain" OR "or" OR "near" OR "run"');
     expect(ftsQuery(' ?! ')).toBeNull();
   });

@@ -10,7 +10,7 @@ const fakeFetch = (calls: { url: string; init?: RequestInit }[]) => (async (inpu
   calls.push({ url, init });
   if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
   if (url.includes('/calendar/v3/')) return Response.json({ items: [
-    { id: 'e1', summary: 'Gym', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' } },
+    { id: 'e1', summary: 'Gym', description: '  Leg day  ', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' } },
     { id: 'e2', status: 'cancelled', start: { date: '2026-09-23' }, end: { date: '2026-09-24' } },
     { id: 'e3', summary: 'Declined sync', attendees: [{ self: true, responseStatus: 'declined' }, {}], start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T20:30:00+05:30' } },
   ] });
@@ -39,7 +39,7 @@ describe('google client', () => {
   it('reads events without cancelled or declined ones', async () => {
     const calls: { url: string }[] = [];
     const events = await googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls)).events('2026-09-23T00:00:00Z', '2026-09-24T00:00:00Z', 20, false);
-    expect(events).toEqual([{ id: 'e1', title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false }]);
+    expect(events).toEqual([{ id: 'e1', title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, description: 'Leg day' }]);
     expect(calls[1]!.url).toContain('singleEvents=true');
   });
 

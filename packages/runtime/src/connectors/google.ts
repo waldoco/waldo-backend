@@ -70,7 +70,7 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
   return { refresh_token: result.refresh_token, ...(claims.email ? { email: claims.email } : {}) };
 }
 
-export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; attendees?: number }>;
+export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
 
 export type GoogleClient = Readonly<{
@@ -139,11 +139,12 @@ const toItem = (event: GoogleEvent): CalendarItem => ({
   start: event.start.dateTime ?? event.start.date ?? '', end: event.end.dateTime ?? event.end.date ?? '',
   all_day: event.start.dateTime === undefined,
   ...(event.location ? { location: event.location } : {}),
+  ...(event.description?.trim() ? { description: event.description.trim().slice(0, 2000) } : {}),
   ...(event.attendees?.length ? { attendees: event.attendees.length } : {}),
 });
 
 type GoogleEvent = {
-  id: string; status?: string; summary?: string; location?: string;
+  id: string; status?: string; summary?: string; location?: string; description?: string;
   start: { dateTime?: string; date?: string }; end: { dateTime?: string; date?: string };
   attendees?: { self?: boolean; responseStatus?: string }[];
 };

@@ -4,7 +4,7 @@ import type { Scheduler } from '../scheduler/multiplexer';
 
 // Full-text history of the owner's chat (SQLite FTS5 in the owner's Durable Object). Every
 // saved turn is indexed; search_episodes ranks by BM25 and the nightly pass reads a day back.
-export type Speaker = 'owner' | 'waldo' | 'reminder';
+export type Speaker = 'owner' | 'waldo' | 'system';
 export type Episode = Readonly<{ entry_id: string; speaker: Speaker; at: number; text: string }>;
 export type EpisodeHit = Readonly<{ speaker: Speaker; at: string | null; snippet: string }>;
 
@@ -15,7 +15,7 @@ export type EpisodeIndex = Readonly<{
   since(at: number, maxChars: number): readonly Episode[];
 }>;
 
-export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply') ? 'waldo' : entryId.startsWith('tg-') ? 'owner' : 'reminder');
+export const speakerOf = (entryId: string): Speaker => (entryId.endsWith('-reply') ? 'waldo' : entryId.startsWith('tg-') ? 'owner' : 'system');
 
 // Model text becomes plain quoted terms, so FTS5 operators and quotes in a question can't
 // break the query; OR keeps recall and BM25 does the ranking.

@@ -30,7 +30,7 @@ export const createTelegramResponder = (
   readers: MediaReaders = {},
   clock: OwnerClock = { timezone: 'UTC', now: () => new Date() },
   tools: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [],
-): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<readonly string[]> } => {
+): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<readonly string[]> } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
   if (!accepted.ok) throw new Error('fixture admission failed');
@@ -126,6 +126,11 @@ export const createTelegramResponder = (
       await restored;
       pending = undefined;
       return converse(id, chatId, `[Reminder due now, set earlier by the owner: "${note}"] Send them this reminder now, in your own words.`, time);
+    },
+    async prompt(id, chatId, said, time) {
+      await restored;
+      pending = undefined;
+      return converse(id, chatId, said, time);
     },
     async consolidate(trace, day) {
       if (!memory) return [];
