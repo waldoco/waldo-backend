@@ -20,6 +20,7 @@ import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
+import { webSearchHandler } from '../tools/live/web-search';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { googleClient, googleConsentUrl, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, oauthState, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { googleProxy, type GoogleLink } from '../connectors/connections';
@@ -446,7 +447,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
