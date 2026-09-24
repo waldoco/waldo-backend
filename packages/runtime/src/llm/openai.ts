@@ -80,6 +80,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
         input_tokens: response.usage?.input_tokens ?? 0,
         output_tokens: response.usage?.output_tokens ?? 0,
         cache_read_input_tokens: response.usage?.input_tokens_details?.cached_tokens ?? 0,
+        output_items: response.output.map((item) => item as unknown as Record<string, unknown>),
         latency_ms: Date.now() - startedAt,
       };
       if (text.length === 0 && toolCalls.length === 0) {
@@ -118,10 +119,15 @@ function responsesInput(request: LLMGatewayRequest['request']): OpenAI.Responses
         }),
       ],
     },
-    ...(request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => [
-      { type: 'function_call', call_id: turn.call.call_id, name: turn.call.name, arguments: turn.call.arguments },
-      { type: 'function_call_output', call_id: turn.call.call_id, output: turn.output },
-    ]),
+    ...(request.tool_turns ?? []).flatMap((turn): OpenAI.Responses.ResponseInputItem[] => {
+      const prior = (turn.prior_items ?? []) as unknown as OpenAI.Responses.ResponseInputItem[];
+      const included = prior.some((item) => (item as { type?: string }).type === 'function_call' && (item as { call_id?: string }).call_id === turn.call.call_id);
+      return [
+        ...prior,
+        ...(included ? [] : [{ type: 'function_call' as const, call_id: turn.call.call_id, name: turn.call.name, arguments: turn.call.arguments }]),
+        { type: 'function_call_output' as const, call_id: turn.call.call_id, output: turn.output },
+      ];
+    }),
   ];
 }
 

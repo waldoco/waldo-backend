@@ -36,6 +36,9 @@ export type LLMToolCall = z.infer<typeof llmToolCallSchema>;
 export const llmToolTurnSchema = z.strictObject({
   call: llmToolCallSchema,
   output: z.string().max(32_768),
+  // Raw provider output items (encrypted reasoning, function calls) from the round that
+  // produced this call; replayed verbatim so the model continues its own reasoning.
+  prior_items: z.array(z.record(z.string(), z.unknown())).optional(),
 });
 export type LLMToolTurn = z.infer<typeof llmToolTurnSchema>;
 
@@ -76,6 +79,7 @@ export const llmResponseSchema = z
     output_tokens: z.int().nonnegative(),
     cache_read_input_tokens: z.int().nonnegative(),
     latency_ms: z.int().nonnegative(),
+    output_items: z.array(z.record(z.string(), z.unknown())).optional(),
   })
   .refine((r) => r.text.length > 0 || r.tool_calls !== undefined, {
     error: 'a response carries text or tool calls',

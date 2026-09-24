@@ -78,3 +78,24 @@ describe('runToolLoop', () => {
     expect(capToolOutput('small')).toBe('small');
   });
 });
+
+describe('reasoning passback', () => {
+  it('threads response output items into the next round first turn', async () => {
+    const seenTurns: Array<readonly unknown[]> = [];
+    const text = await runToolLoop({
+      handlers: [],
+      ctx: {} as never,
+      maxSteps: 3,
+      step: async (_tools, turns) => {
+        seenTurns.push(turns);
+        if (turns.length === 0) {
+          return { text: '', tool_calls: [{ call_id: 'c1', name: 'get_context', arguments: '{}' }], output_items: [{ type: 'reasoning', id: 'rs_1' }, { type: 'function_call', call_id: 'c1' }] };
+        }
+        return { text: 'done' };
+      },
+    });
+    expect(text).toBe('done');
+    const first = seenTurns[1]![0] as { prior_items?: unknown[] };
+    expect(first.prior_items).toHaveLength(2);
+  });
+});

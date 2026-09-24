@@ -10,7 +10,7 @@ export const capToolOutput = (output: string): string =>
 export type ToolLoopStep = (
   tools: readonly LLMTool[] | undefined,
   turns: readonly LLMToolTurn[],
-) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[] }>>;
+) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
 export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string }>;
 
@@ -43,6 +43,7 @@ export async function runToolLoop(input: Readonly<{
     const response = await input.step(offer ? tools : undefined, turns);
     if (response.tool_calls === undefined) return response.text;
     let anyOk = false;
+    let firstCall = true;
     for (const call of response.tool_calls) {
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
@@ -51,7 +52,8 @@ export async function runToolLoop(input: Readonly<{
         : await dispatch(call, input);
       seen.add(key);
       const output = capToolOutput(JSON.stringify(result));
-      turns.push({ call, output });
+      turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
+      firstCall = false;
       input.onTool?.({ call, ok: result.ok, ms: Date.now() - started, output });
       anyOk ||= result.ok;
     }

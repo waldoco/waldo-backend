@@ -60,6 +60,7 @@ describe('OpenAIResponsesAdapter', () => {
         output_tokens: 3,
         cache_read_input_tokens: 0,
         latency_ms: expect.any(Number),
+        output_items: [{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'Greet briefly.' }] }],
       },
     });
     expect(metadata).toMatchObject({ response_id: 'resp_test_1', model: OPENAI_GPT_5_NANO_MODEL, reasoning: 'Greet briefly.' });
@@ -210,5 +211,36 @@ describe('OpenAIResponsesAdapter prompt caching', () => {
     const plain = await adapter.complete(gatewayRequest());
     expect(plain.ok).toBe(true);
     expect('prompt_cache_key' in (bodies[1] ?? {})).toBe(false);
+  });
+});
+
+describe('OpenAIResponsesAdapter reasoning passback', () => {
+  it('replays prior output items verbatim and does not duplicate the function call', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return { id: 'r1', output_text: 'done', output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+      }),
+    });
+    const withPrior = gatewayRequest();
+    withPrior.request.tool_turns = [{
+      call: { call_id: 'c1', name: 'get_context', arguments: '{}' },
+      output: '{"ok":true}',
+      prior_items: [{ type: 'reasoning', id: 'rs_1', summary: [] }, { type: 'function_call', call_id: 'c1', name: 'get_context', arguments: '{}' }],
+    }];
+    const result = await adapter.complete(withPrior);
+    expect(result.ok).toBe(true);
+    const items = (bodies[0]!.input as Array<Record<string, unknown>>).slice(1);
+    expect(items[0]).toMatchObject({ type: 'reasoning', id: 'rs_1' });
+    expect(items.filter((item) => item.type === 'function_call' && item.call_id === 'c1')).toHaveLength(1);
+    expect(items[items.length - 1]).toMatchObject({ type: 'function_call_output', call_id: 'c1' });
+
+    const plain = gatewayRequest();
+    plain.request.tool_turns = [{ call: { call_id: 'c2', name: 'get_context', arguments: '{}' }, output: '{"ok":true}' }];
+    await adapter.complete(plain);
+    const plainItems = (bodies[1]!.input as Array<Record<string, unknown>>).slice(1);
+    expect(plainItems[0]).toMatchObject({ type: 'function_call', call_id: 'c2' });
   });
 });
