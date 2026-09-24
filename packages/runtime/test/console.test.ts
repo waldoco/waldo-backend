@@ -1,3 +1,4 @@
+import { OPENAI_GPT_5_MINI_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { consoleAccess, signInPage, parseConsoleAction, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
@@ -116,6 +117,16 @@ describe('owner console', () => {
     expect(noneLeft).toContain('Nothing waiting on you');
   });
 
+  it('renders real usage numbers with a total, and an honest empty state', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('id="usage"');
+    expect(html).toContain(OPENAI_GPT_5_MINI_MODEL);
+    expect(html).toContain('12 calls, 48.2k in (25% cached), 3.9k out');
+    expect(html).toContain('$0.0231');
+    expect(html).toContain('Total');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, usage: [] })).toContain('No model calls recorded yet');
+  });
+
   it('checklist reflects real connection state, honestly marking what is not done', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('id="checklist"');
@@ -152,7 +163,7 @@ describe('owner console', () => {
   it('renders every section with working controls and escapes stored text', () => {
     const view = { ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, text: '<script>x</script>' }] };
     const html = renderConsole(view);
-    for (const id of ['checklist', 'approvals', 'connections', 'spots', 'constellation', 'day', 'memory', 'activity']) expect(html).toContain(`id="${id}"`);
+    for (const id of ['checklist', 'approvals', 'connections', 'spots', 'constellation', 'day', 'memory', 'usage', 'activity']) expect(html).toContain(`id="${id}"`);
     expect(html).toContain('&#60;script&#62;x&#60;/script&#62;');
     expect(html).not.toContain('<zz>');
     expect(html).toContain('href="/console/google">Connect Google');

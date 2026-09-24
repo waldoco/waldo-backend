@@ -78,6 +78,12 @@ export const traceBook = (sql: Sql, keep = 500) => {
         'SELECT at, trace, hop, ok, ms, note FROM trace_log ORDER BY id DESC LIMIT ?', limit,
       ).toArray().reverse().map((row) => ({ time: localIso(row.at, timezone).slice(11, 16), trace: row.trace, hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
     },
+    usageRows(): readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[] {
+      return sql.exec<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>(
+        `SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(cached_tokens) AS cached, SUM(output_tokens) AS output, SUM(usd) AS usd
+         FROM trace_log WHERE model IS NOT NULL GROUP BY model ORDER BY usd DESC`,
+      ).toArray();
+    },
     usage(): string {
       const rows = sql.exec<{ model: string; calls: number; input: number; cached: number; output: number; usd: number; sys: number | null; req: number | null }>(
         `SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(cached_tokens) AS cached, SUM(output_tokens) AS output, SUM(usd) AS usd,

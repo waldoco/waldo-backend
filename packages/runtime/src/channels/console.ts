@@ -123,6 +123,7 @@ export type ConsoleView = Readonly<{
   sessionUntil: string;
   sessionCount: number;
   approvals: readonly Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>[];
+  usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; mail: boolean }>[]; connectAvailable: boolean }>;
@@ -187,6 +188,14 @@ const approvals = (view: ConsoleView) => {
       : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this change in your calendar?' }) : '';
     return `<div class="row"><div class="main"><div class="line">${esc(item.summary)}</div></div>${chip(item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'open' ? 'plain' : 'teal')}<div class="act">${actions}</div></div>`;
   }).join('');
+};
+
+const usage = (view: ConsoleView) => {
+  if (view.usage.length === 0) return empty('No model calls recorded yet. Usage appears here after Waldo thinks.');
+  const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.round(n)));
+  const rows = view.usage.map((row) => `<div class="row"><div class="main"><div class="line">${esc(row.model)}</div><div class="sub">${row.calls} calls, ${k(row.input)} in (${row.input > 0 ? Math.round((100 * row.cached) / row.input) : 0}% cached), ${k(row.output)} out</div></div><div class="state">$${row.usd.toFixed(4)}</div><div class="act"></div></div>`).join('');
+  const total = view.usage.reduce((sum, row) => sum + row.usd, 0);
+  return rows + `<div class="row"><div class="main"><div class="line">Total</div></div><div class="state">$${total.toFixed(4)}</div><div class="act"></div></div>`;
 };
 
 const checklist = (view: ConsoleView) => {
@@ -303,7 +312,7 @@ export const renderConsole = (view: ConsoleView, banner = ''): string => {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav><a href="#approvals">Waiting</a><a href="#checklist">Setup</a><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#activity">Activity</a></nav>
+<nav><a href="#approvals">Waiting</a><a href="#checklist">Setup</a><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#usage">Usage</a><a href="#activity">Activity</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 <div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
 ${section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view))}
@@ -314,6 +323,7 @@ ${section('constellation', 'Constellation', 'Lasting patterns built each night f
 ${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view))}
 ${section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view))}
 ${section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view))}
+${section('usage', 'Usage and cost', 'Real per-model totals from Waldo\'s own trace log, most expensive first.', usage(view))}
 ${section('activity', 'Activity', 'What ran, when, and whether it worked.', activity(view))}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>
 </div></body></html>`;
