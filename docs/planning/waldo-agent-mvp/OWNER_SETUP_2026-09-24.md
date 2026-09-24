@@ -36,8 +36,9 @@ In Google Cloud Console:
    - `https://www.googleapis.com/auth/calendar.events`
    - `https://www.googleapis.com/auth/gmail.readonly`
    - `https://www.googleapis.com/auth/gmail.send`
+   - `https://www.googleapis.com/auth/gmail.compose`
    - optional: `https://www.googleapis.com/auth/tasks`
-   The drive, docs, sheets, slides, contacts, gmail.modify and gmail.compose scopes the code asks for today will be removed in W3.
+   Per-feature scopes landed in W3 (calendar first, mail a separate allow): the code now requests only the scopes above, per feature, when that feature is turned on. gmail.compose stays until Waldo keeps its own drafts (W6 follow-up, post-mvp-cleanup). The old broad set (drive, docs, sheets, slides, contacts, gmail.modify) is gone from the code.
 4. Create a Credentials, OAuth client ID of type Web application, with this authorized redirect URI:
    `https://waldo-runtime-staging.piyushfulper3210.workers.dev/oauth/google/callback`
 5. Send the client ID and client secret. They become the `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` secrets.
