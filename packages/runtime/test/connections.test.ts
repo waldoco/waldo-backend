@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { googleProxy } from '../src/connectors/connections';
-import { GoogleError, googleClient, googleHas, oauthState, verifyOauthState, type GoogleClient } from '../src/connectors/google';
+import { consentState, GoogleError, googleClient, googleHas, readConsentState, type GoogleClient } from '../src/connectors/google';
 import { renderConsole } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 import { googleHandlers } from '../src/tools/live/google';
@@ -66,12 +66,14 @@ describe('google health', () => {
 });
 
 describe('incremental Google access', () => {
-  it('a mail tool on a calendar-only grant returns the Gmail consent link, not a retry', async () => {
+  it('a mail tool on a calendar-only grant sends the consent button for mail, not a retry and not a URL', async () => {
     const client = { draft: async () => { throw new GoogleError(403, 'google 403: insufficient scopes'); } } as unknown as GoogleClient;
     const asked: string[] = [];
-    const google = { client: async () => client, connectUrl: async (feature: string) => (asked.push(feature), `https://accounts.google.com/x?f=${feature}`) };
-    const draft = googleHandlers(google, { propose: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
-    expect(await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never)).toMatchObject({ ok: false, code: 'auth_failed' });
+    const google = { client: async () => client, connectUrl: async (feature: string) => (asked.push(feature), `https://accounts.google.com/x?f=${feature}&state=s`) };
+    const draft = googleHandlers(google, { propose: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }, async () => true).find((tool) => tool.name === 'draft_email')!;
+    const result = await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never);
+    expect(result).toMatchObject({ ok: false, code: 'auth_failed', error: expect.stringContaining('connect button was sent') });
+    expect(JSON.stringify(result)).not.toMatch(/https?:|state=/);
     expect(asked).toEqual(['mail']);
   });
 });
@@ -83,9 +85,9 @@ describe('several Google accounts', () => {
   });
 
   it('the OAuth state carries a dotted owner name intact, and a tampered one fails', async () => {
-    const state = await oauthState('s', 'owner.with.dots', 1_000);
-    expect(await verifyOauthState('s', state, 2_000)).toBe('owner.with.dots');
-    expect(await verifyOauthState('s', state.replace('owner.with', 'owner.other'), 2_000)).toBeNull();
+    const state = await consentState('s', 'owner.with.dots', 'n1');
+    expect(await readConsentState('s', state)).toEqual({ owner: 'owner.with.dots', nonce: 'n1' });
+    expect(await readConsentState('s', state.replace('owner.with', 'owner.other'))).toBeNull();
   });
 
   it('shows one row per account, each with its own disconnect and health', () => {

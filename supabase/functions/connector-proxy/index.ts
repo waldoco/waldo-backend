@@ -32,18 +32,31 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call'; code?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call'; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+
+// One structured line per call: operation, method, outcome and duration. Never the code, verifier,
+// token, account or arguments.
+const logged = async (started: number, op: string, method: string | undefined, response: Response) => {
+  const outcome = await response.clone().json().then((json: { error?: { status: number; message: string } }) => json.error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
+  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: outcome.message } : {}) }));
+  return response;
+};
 
 Deno.serve(async (request) => {
-  if (request.method !== 'POST' || !router || !clientId || !clientSecret || !service) return fail(404, 'connector proxy is not configured');
+  const started = Date.now();
+  if (request.method !== 'POST' || !router || !clientId || !clientSecret || !service) return logged(started, 'unconfigured', undefined, fail(404, 'connector proxy is not configured'));
   const raw = await request.text();
   const at = Number(request.headers.get('x-waldo-at'));
-  if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return fail(401, 'unsigned proxy call');
+  if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return logged(started, 'unsigned', undefined, fail(401, 'unsigned proxy call'));
   const body = JSON.parse(raw) as Body;
+  return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body));
+});
+
+const handle = async (body: Body): Promise<Response> => {
   const app = { clientId, clientSecret, redirectUri: body.redirect_uri ?? '' };
   try {
     if (body.op === 'exchange' && body.code) {
-      const tokens = await exchangeGoogleCode(app, body.code);
+      const tokens = await exchangeGoogleCode(app, body.code, fetch, body.code_verifier);
       return store(body.do_name, tokens.email ?? 'google', tokens.scopes ?? [], tokens.refresh_token);
     }
     // One-time move of a token saved in the Durable Object before this proxy existed.
@@ -64,4 +77,4 @@ Deno.serve(async (request) => {
   } catch (error) {
     return fail(502, error instanceof Error ? error.message : String(error));
   }
-});
+};

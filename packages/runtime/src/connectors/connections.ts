@@ -5,7 +5,7 @@ import { GoogleError, type GoogleClient, type GoogleTokens } from './google';
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
 export type GoogleLink = Readonly<{ id: string; email: string; scopes: readonly string[] }>;
 export type GoogleProxy = Readonly<{
-  exchange(doName: string, code: string, redirectUri: string): Promise<GoogleLink | null>;
+  exchange(doName: string, code: string, redirectUri: string, codeVerifier?: string): Promise<GoogleLink | null>;
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
   client(doName: string, connection: string, health?: (error: string) => void): GoogleClient;
   revoke(doName: string, connection: string): Promise<boolean>;
@@ -31,7 +31,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   };
   const link = (json: { id?: string; email?: string; scopes?: string[] }) => (json.id ? { id: json.id, email: json.email ?? 'google', scopes: json.scopes ?? [] } : null);
   return {
-    exchange: async (doName, code, redirectUri) => link(await post({ do_name: doName, op: 'exchange', code, redirect_uri: redirectUri })),
+    exchange: async (doName, code, redirectUri, codeVerifier) => link(await post({ do_name: doName, op: 'exchange', code, redirect_uri: redirectUri, ...(codeVerifier ? { code_verifier: codeVerifier } : {}) })),
     adopt: async (doName, tokens) => link(await post({ do_name: doName, op: 'adopt', refresh_token: tokens.refresh_token, email: tokens.email ?? 'google', scopes: tokens.scopes ?? [] })),
     client: (doName, connection, health) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
       try {

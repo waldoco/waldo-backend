@@ -19,33 +19,43 @@ export type EffectDesk = Readonly<{
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const DAY_MS = 24 * 60 * 60_000;
 
-async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
+export type DeliverConnectLink = (url: string) => Promise<boolean>;
+
+// The consent URL goes out through deliver as a button; the model only learns whether it was sent.
+const offerLink = async (google: GoogleAccess, feature: GoogleFeature, deliver: DeliverConnectLink | undefined, lead: string): Promise<string | null> => {
+  const url = await google.connectUrl(feature);
+  if (!url) return null;
+  return deliver && await deliver(url)
+    ? `${lead} A connect button was sent in this chat. Tell the owner to tap it - do not quote or retype any link yourself.`
+    : `${lead} The connect link could not be sent in this chat. Ask the owner to request it again from their Telegram chat with Waldo.`;
+};
+
+async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, deliver: DeliverConnectLink | undefined, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
   const client = await google.client(feature);
   if (client === null) {
-    const url = await google.connectUrl(feature);
     return {
       ok: false, code: 'auth_failed',
-      error: url ? `Google is not connected yet. Give the owner this link to connect their Google account: ${url}` : 'Google is not set up on this Waldo yet, so calendar and email are unavailable.',
+      error: await offerLink(google, feature, deliver, 'Google is not connected yet.') ?? 'Google is not set up on this Waldo yet, so calendar and email are unavailable.',
     };
   }
   try {
     return { ok: true, data: await work(client), source_taint: 'external' };
   } catch (error) {
     // A 403 means this feature's scope was never granted; consent adds it to the same account.
-    const more = error instanceof GoogleError && error.status === 403 ? await google.connectUrl(feature) : null;
-    if (more) return { ok: false, code: 'auth_failed', error: `Google has not granted access for this yet. Give the owner this link to allow it: ${more}` };
+    const more = error instanceof GoogleError && error.status === 403 ? await offerLink(google, feature, deliver, 'Google has not granted access for this yet.') : null;
+    if (more) return { ok: false, code: 'auth_failed', error: more };
     return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
   }
 }
 
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock) => [
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, deliver?: DeliverConnectLink) => [
   {
     name: 'query_calendar',
     description: "Read the owner's Google Calendar events in a time range (defaults to now through the next 24 hours).",
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
-    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
+    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs) => withGoogle(google, 'calendar', deliver, async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
@@ -68,7 +78,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
-    handle: (args: DraftEmailArgs) => withGoogle(google, 'mail', async (client) => {
+    handle: (args: DraftEmailArgs) => withGoogle(google, 'mail', deliver, async (client) => {
       const draft = await client.draft({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
@@ -80,7 +90,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
 ];
 
 // The signed consent URL never enters model-visible text: deliver sends it as a Telegram URL button.
-export const connectServiceHandler = (google: GoogleAccess, deliver?: (url: string) => Promise<boolean>): ToolHandler<ConnectServiceArgs, Readonly<{ service: string; connected: boolean; message: string }>, ToolDispatcherContext> => ({
+export const connectServiceHandler = (google: GoogleAccess, deliver?: DeliverConnectLink): ToolHandler<ConnectServiceArgs, Readonly<{ service: string; connected: boolean; message: string }>, ToolDispatcherContext> => ({
   name: 'connect_service',
   description: 'Connect a service (Google today), or confirm it is already connected. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The link arrives as a button in chat; never quote or transcribe it.',
   schema: connectServiceArgsSchema,

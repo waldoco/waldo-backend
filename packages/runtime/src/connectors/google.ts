@@ -16,39 +16,41 @@ export const googleHas = (scopes: readonly string[] | null | undefined, feature:
   scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
-const STATE_TTL_MS = 15 * 60_000;
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
 export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null }>;
 type Fetch = typeof fetch;
 
-const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+export const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 async function sign(secret: string, payload: string): Promise<string> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(`google-oauth-state:${secret}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return b64url(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload))));
 }
 
-export async function oauthState(secret: string, owner: string, now: number): Promise<string> {
-  const payload = `${owner}.${now + STATE_TTL_MS}`;
-  return `${payload}.${await sign(secret, payload)}`;
+// The state names the owner's Durable Object (to route the callback) and a one-time nonce whose
+// record, expiry and PKCE verifier live in that Durable Object. The MAC lets the Worker drop forged
+// callbacks before waking anything.
+export async function consentState(secret: string, owner: string, nonce: string): Promise<string> {
+  return `${owner}.${nonce}.${await sign(secret, `${owner}.${nonce}`)}`;
 }
 
 // The owner is the Durable Object name, which may hold dots, so split from the right.
-export async function verifyOauthState(secret: string, state: string, now: number): Promise<string | null> {
-  const [mac, expires, ...rest] = state.split('.').reverse();
+export async function readConsentState(secret: string, state: string): Promise<Readonly<{ owner: string; nonce: string }> | null> {
+  const [mac, nonce, ...rest] = state.split('.').reverse();
   const owner = rest.reverse().join('.');
-  if (!owner || !expires || !mac || Number(expires) < now) return null;
-  return (await sign(secret, `${owner}.${expires}`)) === mac ? owner : null;
+  if (!owner || !nonce || !mac) return null;
+  return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
 export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks];
 
-export function googleConsentUrl(app: GoogleApp, state: string): string {
+export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.search = new URLSearchParams({
     client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: GOOGLE_CONSENT_SCOPES.join(' '),
     access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'true', state,
+    code_challenge: codeChallenge, code_challenge_method: 'S256',
   }).toString();
   return url.toString();
 }
@@ -63,8 +65,8 @@ async function token(app: GoogleApp, body: Record<string, string>, fetcher: Fetc
   return json as { access_token: string; refresh_token?: string; id_token?: string; scope?: string };
 }
 
-export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: Fetch = fetch): Promise<GoogleTokens> {
-  const result = await token(app, { code, grant_type: 'authorization_code', redirect_uri: app.redirectUri }, fetcher);
+export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: Fetch = fetch, codeVerifier?: string): Promise<GoogleTokens> {
+  const result = await token(app, { code, grant_type: 'authorization_code', redirect_uri: app.redirectUri, ...(codeVerifier ? { code_verifier: codeVerifier } : {}) }, fetcher);
   if (!result.refresh_token) throw new Error('google returned no refresh token');
   const claims = result.id_token ? JSON.parse(atob(result.id_token.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/'))) as { email?: string } : {};
   return { refresh_token: result.refresh_token, scopes: (result.scope ?? '').split(' ').filter(Boolean), ...(claims.email ? { email: claims.email } : {}) };

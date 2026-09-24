@@ -112,9 +112,9 @@ const eventLine = (event: CalendarItem, timezone: string) =>
   JSON.stringify({ ...event, start: event.all_day ? event.start : localIso(Date.parse(event.start), timezone), end: event.all_day ? event.end : localIso(Date.parse(event.end), timezone) });
 
 export const readCalendar = async (
-  window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectUrl: string | null,
+  window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectable: boolean,
 ): Promise<string> => {
-  if (!google) return connectUrl ? `Google is not connected. The owner can connect it here: ${connectUrl}` : 'Google Calendar is not set up.';
+  if (!google) return connectable ? 'Google is not connected, so there are no events to show. The owner can ask you to connect it; do not write a link.' : 'Google Calendar is not set up.';
   try {
     const events = await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), 25, false);
     return events.length ? events.map((event) => eventLine(event, timezone)).join('\n') : 'No events.';
@@ -125,9 +125,9 @@ export const readCalendar = async (
 
 export const composeDayCard = async (
   card: DayCard, now: number, timezone: string,
-  sources: Readonly<{ google: GoogleClient | null; connectUrl: string | null; ledger: string; today: string; updates: string }>,
+  sources: Readonly<{ google: GoogleClient | null; connectable: boolean; ledger: string; today: string; updates: string }>,
 ): Promise<string> => {
-  const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectUrl);
+  const calendar = await readCalendar(cardWindow(card, now, timezone), timezone, sources.google, sources.connectable);
   return dayCardPrompt(card, localIso(now, timezone), { calendar, ledger: sources.ledger, today: sources.today, updates: sources.updates });
 };
 

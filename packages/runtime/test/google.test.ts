@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { googleClient, googleConsentUrl, oauthState, verifyOauthState } from '../src/connectors/google';
+import { consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState } from '../src/connectors/google';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -19,16 +19,20 @@ const fakeFetch = (calls: { url: string; init?: RequestInit }[]) => (async (inpu
 }) as typeof fetch;
 
 describe('google oauth state', () => {
-  it('binds the owner and expires', async () => {
-    const state = await oauthState('s', '42', 1_000);
-    expect(await verifyOauthState('s', state, 2_000)).toBe('42');
-    expect(await verifyOauthState('other', state, 2_000)).toBeNull();
-    expect(await verifyOauthState('s', state.replace('42.', '43.'), 2_000)).toBeNull();
-    expect(await verifyOauthState('s', state, 1_000 + 16 * 60_000)).toBeNull();
+  it('binds the owner and a one-time nonce; a foreign secret or an edited owner, nonce or MAC fails', async () => {
+    const state = await consentState('s', '42', 'nonce1');
+    expect(await readConsentState('s', state)).toEqual({ owner: '42', nonce: 'nonce1' });
+    expect(await readConsentState('other', state)).toBeNull();
+    expect(await readConsentState('s', state.replace('42.', '43.'))).toBeNull();
+    expect(await readConsentState('s', state.replace('nonce1', 'nonce2'))).toBeNull();
+    expect(await readConsentState('s', state.slice(0, -8))).toBeNull();
+    expect(await readConsentState('s', '')).toBeNull();
   });
 
   it('asks once for the combined set - calendar, mail and tasks - offline, adding to what was granted', () => {
-    const url = new URL(googleConsentUrl(app, 'st'));
+    const url = new URL(googleConsentUrl(app, 'st', 'challenge'));
+    expect(url.searchParams.get('code_challenge')).toBe('challenge');
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
     expect(url.searchParams.get('access_type')).toBe('offline');
     expect(url.searchParams.get('include_granted_scopes')).toBe('true');
     expect(url.searchParams.get('prompt')).toBe('consent select_account');
@@ -47,6 +51,19 @@ describe('google oauth state', () => {
 });
 
 describe('google client', () => {
+  it('exchanges the code with its PKCE verifier and the exact redirect URI', async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const tokenFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return Response.json({ access_token: 'at', refresh_token: 'rt', scope: 'openid email' });
+    }) as typeof fetch;
+    expect(await exchangeGoogleCode(app, 'code1', tokenFetch, 'verifier1')).toMatchObject({ refresh_token: 'rt', scopes: ['openid', 'email'] });
+    const body = new URLSearchParams(String(calls[0]!.init!.body));
+    expect(body.get('code_verifier')).toBe('verifier1');
+    expect(body.get('redirect_uri')).toBe(app.redirectUri);
+    expect(body.get('grant_type')).toBe('authorization_code');
+  });
+
   it('reads events without cancelled or declined ones', async () => {
     const calls: { url: string }[] = [];
     const events = await googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls)).events('2026-09-23T00:00:00Z', '2026-09-24T00:00:00Z', 20, false);
@@ -67,10 +84,24 @@ describe('google client', () => {
 
 describe('google tools', () => {
   const proposals = { propose: async () => 'proposal:1', record: () => undefined };
-  it('return a connect link when Google is not connected', async () => {
-    const google: GoogleAccess = { client: async () => null, connectUrl: async () => 'https://accounts.google.com/x' };
-    const [query] = googleHandlers(google, proposals, clock);
-    expect(await query!.handle({ include_declined: false, limit: 20 } as never)).toMatchObject({ ok: false, code: 'auth_failed', error: expect.stringContaining('https://accounts.google.com/x') });
+  it('send the connect link as a button when Google is not connected, and never hand the model the URL', async () => {
+    const sent: string[] = [];
+    const google: GoogleAccess = { client: async () => null, connectUrl: async () => 'https://accounts.google.com/x?state=s1' };
+    const [query] = googleHandlers(google, proposals, clock, async (url) => (sent.push(url), true));
+    const result = await query!.handle({ include_declined: false, limit: 20 } as never);
+    expect(result).toMatchObject({ ok: false, code: 'auth_failed', error: expect.stringContaining('connect button was sent') });
+    expect(JSON.stringify(result)).not.toMatch(/https?:|state=|accounts\.google/);
+    expect(sent).toEqual(['https://accounts.google.com/x?state=s1']);
+  });
+
+  it('without a working button channel the URL still never reaches the model', async () => {
+    const google: GoogleAccess = { client: async () => null, connectUrl: async () => 'https://accounts.google.com/x?state=s1' };
+    for (const deliver of [undefined, async () => false]) {
+      const [query] = googleHandlers(google, proposals, clock, deliver);
+      const result = await query!.handle({ include_declined: false, limit: 20 } as never);
+      expect(result).toMatchObject({ ok: false, code: 'auth_failed', error: expect.stringContaining('could not be sent') });
+      expect(JSON.stringify(result)).not.toMatch(/https?:|state=/);
+    }
   });
 
   it('propose a calendar change without applying it', async () => {

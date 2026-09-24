@@ -22,8 +22,10 @@ import { changeLines, collectChanges, updateBook, type UpdateBook } from './upda
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { webSearchHandler } from '../tools/live/web-search';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
-import { googleClient, googleConsentUrl, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, oauthState, type GoogleFeature, type GoogleTokens } from '../connectors/google';
-import { googleProxy, type GoogleLink } from '../connectors/connections';
+import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
+import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
+import { googleProxy } from '../connectors/connections';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
@@ -64,7 +66,7 @@ type OwnerRuntime = Readonly<{
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
   act(action: ConsoleAction): Promise<boolean>;
   googleConnectUrl(feature: GoogleFeature): Promise<string | null>;
-  google: Readonly<{ keep(grant: GoogleTokens | LinkGrant): Promise<void> }>;
+  google: Readonly<{ finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>> }>;
   openFile(id: number): Promise<Response | null>;
   traces: TraceBook;
   timezone: string;
@@ -92,9 +94,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
-    if (new URL(request.url).pathname === '/google') {
-      await this.serial(() => this.connectGoogle(JSON.parse(body) as GoogleTokens | GoogleLink));
-      return new Response('ok');
+    if (new URL(request.url).pathname === GOOGLE_FINISH_PATH) {
+      const reply = await this.serial(() => this.finishGoogle(JSON.parse(body) as ConsentCallback));
+      return Response.json(reply);
     }
     const origin = request.headers.get('x-waldo-origin');
     if (origin) await this.ctx.storage.put('origin', origin);
@@ -189,11 +191,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     });
   }
 
-  private async connectGoogle(tokens: GoogleTokens | GoogleLink): Promise<void> {
-    const { owner, api, google } = this.setup();
-    await google.keep(tokens);
-    const can = [googleHas(tokens.scopes, 'calendar') ? 'read your calendar' : '', googleHas(tokens.scopes, 'mail') ? 'read and send mail you approve' : ''].filter(Boolean).join(' and ');
-    await api.sendMessage({ chat_id: owner, text: `Google is connected${tokens.email ? ` (${tokens.email})` : ''}.${can ? ` I can ${can} now.` : ''}` });
+  // Settles one consent attempt. The owner hears about a new link once, in Telegram, whatever the browser shows.
+  private async finishGoogle(input: ConsentCallback): Promise<ConsentReply> {
+    const { owner, api, google, log } = this.setup();
+    const { outcome, bot, fresh } = await google.finish(input);
+    if (fresh && outcome.kind === 'linked') {
+      const can = [googleHas(outcome.scopes, 'calendar') ? 'read your calendar' : '', googleHas(outcome.scopes, 'mail') ? 'read and send mail you approve' : ''].filter(Boolean).join(' and ');
+      await api.sendMessage({ chat_id: owner, text: `Google is connected${outcome.email ? ` (${outcome.email})` : ''}.${can ? ` I can ${can} now.` : ''}` })
+        .catch((error: unknown) => log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, error: String(error) }));
+    }
+    return { outcome, bot };
   }
 
   override async alarm(): Promise<void> {
@@ -349,11 +356,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const call = gatedCaller(createTelegramCaller(token), () => identity.get<boolean>('telegram_unlinked') === true);
     const api = createTelegramOwnerApi(call);
-    const deliverConnectLink = async (url: string): Promise<boolean> => call('sendMessage', {
-      chat_id: owner,
-      text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
-      reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url }]] },
-    }).then(() => true).catch(() => false);
+    // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
+    const deliverConnectLink = async (url: string): Promise<boolean> => {
+      const trace = `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
+      return call('sendMessage', {
+        chat_id: owner,
+        text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
+        reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url }]] },
+      }).then(() => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: true }), true))
+        .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error) }), false));
+    };
     const storage = this.ctx.storage;
     const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: stateSecret } = this.env;
     const googleApp = async () => {
@@ -371,6 +383,26 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return storage.put('google:health', error ? { ...rest, [id]: error } : rest);
       }));
       const doName = vaultOwner();
+    };
+    const consentDeps = {
+      store: {
+        read: async () => (await storage.get<Record<string, ConsentFlow>>('google:consents')) ?? {},
+        write: (flows: Record<string, ConsentFlow>) => storage.put('google:consents', flows),
+      },
+      now: () => Date.now(),
+    };
+    // The result page links back to the bot; its username is read once from Telegram and kept.
+    const botUsername = async (): Promise<string | null> => {
+      const known = await storage.get<string>('bot_username');
+      if (known) return known;
+      try {
+        const me = await call('getMe', {}) as { username?: string } | undefined;
+        if (me?.username) await storage.put('bot_username', me.username);
+        return me?.username ?? null;
+      } catch (error) {
+        log({ trace: 'oauth', hop: 'bot_username', ms: 0, ok: false, error: String(error) });
+        return null;
+      }
     };
     const google = {
       // With Supabase configured each account's token goes to Vault and the DO keeps only its connection id.
@@ -425,9 +457,36 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         noteHealth(id, '');
         return true;
       },
-      async connectUrl(feature: GoogleFeature) {
+      configured: () => Boolean(clientId && clientSecret && stateSecret),
+      // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
+      async begin(): Promise<Readonly<{ url: string; nonce: string }> | null> {
         const app = await googleApp();
-        return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, stateOwner(), Date.now())) : null;
+        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner()) : null;
+      },
+      async connectUrl(_feature: GoogleFeature) {
+        return (await google.begin())?.url ?? null;
+      },
+      async finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>> {
+        const started = Date.now();
+        const trace = `oauth:${input.nonce.slice(0, 8)}`;
+        const doName = vaultOwner();
+        const { outcome, fresh } = await finishConsent(consentDeps, input, async (code, verifier, redirectUri) => {
+          const exchangeStarted = Date.now();
+          try {
+            const grant = vault && doName
+              ? await vault.exchange(doName, code, redirectUri, verifier)
+              : clientId && clientSecret ? await exchangeGoogleCode({ clientId, clientSecret, redirectUri }, code, fetch, verifier) : null;
+            if (grant) await google.keep(grant);
+            log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: grant !== null, detail: vault ? 'proxy' : 'local', ...(grant ? {} : { error: 'no account returned' }) });
+            return grant;
+          } catch (error) {
+            log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: false, detail: vault ? 'proxy' : 'local', error: error instanceof Error ? error.message : String(error) });
+            throw error;
+          }
+        });
+        log({ trace, hop: 'oauth_callback', ms: Date.now() - started, ok: outcome.kind === 'linked', detail: `${outcome.kind}${fresh ? '' : ' (replayed)'}`, ...(outcome.kind === 'failed' ? { error: outcome.reason } : {}) });
+        if (fresh && outcome.kind === 'linked') log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
+        return { outcome, fresh, bot: await botUsername() };
       },
     };
     const desk = approvalDesk(storage.sql, {
@@ -453,7 +512,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google, deliverConnectLink), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock, deliverConnectLink), connectServiceHandler(google, deliverConnectLink), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -507,7 +566,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const cards = plans.pending(localIso(now, clock.timezone).slice(0, 10));
       if (cards.length === 0) return;
       try {
-        const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), null);
+        const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
         const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()) });
         const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards));
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: applied.map((plan) => `${plan.card}=${plan.time ?? 'skip'} (${plan.reason})`).join('; ') });
@@ -595,7 +654,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const client = await google.client();
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
       const said = await composeDayCard(card, now, clock.timezone, {
-        google: client, connectUrl: client ? null : await google.connectUrl('calendar'),
+        google: client, connectable: !client && google.configured(),
         ledger: ledger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
       });
       try {
@@ -620,7 +679,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, csrf: session.csrf, notice,
-          google: { accounts: linked, connectAvailable: (await google.connectUrl('calendar')) !== null },
+          google: { accounts: linked, connectAvailable: google.configured() },
           telegram: { linked: identity.get<boolean>('telegram_unlinked') !== true, unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
