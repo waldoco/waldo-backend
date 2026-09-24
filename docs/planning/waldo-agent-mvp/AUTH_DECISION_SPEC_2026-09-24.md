@@ -52,3 +52,16 @@ Preferences, scope, scoped + granular data deletion, account deletion, trusted p
 2. Presence-based multi-user telegram routing ON for invited users (invite create/revoke already built) - exit: a second telegram account links via code, gets its own DO, stranger without code still gated.
 3. Email OTP polish + session list + sign-out-everywhere - exit: two browsers signed in, one click kills both.
 4. Phone OTP - BLOCKED on SMS provider decision + DLT; not D1 unless he rules otherwise.
+
+## Addendum 7:34 PM - connect-intent tiers (owner direction, his iMessage)
+
+His vision: connecting a service should be seamless at every distance from the ask. Three tiers, ascending:
+
+**Tier 1 - reactive (IN FLIGHT, the connect_service slice):** the owner asks to connect / link / set up a service, or asks why Waldo can't see their calendar/email -> connect_service answers deterministically with the real link or "already connected". Scales across future services by construction: each connector registers name + state-check + connectUrl with the connector registry, and the tool's service enum extends per connector.
+
+**Tier 2 - graceful (EXISTS for Google; make it the universal connector CONTRACT):** any service tool called while unconnected returns the real connect link in its auth_failed error (the google.ts withGoogle pattern). Today this is per-connector convention; the connector-authoring standard makes it a written contract with a contract test, so every future connector gets it for free and no tool can ever answer an unconnected call with a shrug.
+
+**Tier 3 - proactive (ROADMAP, after B1):** Waldo notices a request would go materially better with an unconnected service and volunteers the suggestion with a one-tap deep link - inline in chat, or into the dashboard - and after consent completes, the original task resumes with its context intact (Codex-app-style). Rides: the connect_service connection-state machinery, the B1 minted dashboard link for the one-tap surface, and the run-loop's existing suspend/resume for continue-where-we-were. Manners are part of the spec: gated by proactivity settings, suggest-once-per-service cooling window unless the owner asks, never interrupts a flow to sell a connection.
+
+Not in the current slice: tiers 2-as-contract and 3 are follow-on slices; the connect_service spec stays bounded.
+
