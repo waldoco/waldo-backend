@@ -9,7 +9,7 @@ import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
-import { InMemoryCircuitBreaker, RuntimeLLMProvider } from '../llm/provider';
+import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { CLINICAL_REDIRECT, messagingSystemPrompt } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
 import { applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
@@ -46,6 +46,9 @@ export const createTelegramResponder = (
   // tool reports auth_required; it mints the short link and sends the button. Optional so tests
   // and non-owner surfaces can run tools without a chat to offer in.
   offerConnect?: (intent: ConnectIntent) => Promise<boolean>,
+  // L1 scenario harness: a scripted gateway replaces the OpenAI adapter so scenarios drive the
+  // real pipeline without a live model. Production callers omit it.
+  gateway?: LLMGatewayAdapter,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -68,8 +71,8 @@ export const createTelegramResponder = (
   const complete = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
     const started = Date.now();
     let reasoning: string | undefined;
-    const gateway = new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
-    const result = await new RuntimeLLMProvider({ gateway, circuitBreaker }).complete({
+    const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const result = await new RuntimeLLMProvider({ gateway: adapter, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,
       renderRequest: () => ({

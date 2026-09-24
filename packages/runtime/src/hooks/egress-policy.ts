@@ -22,6 +22,10 @@ export const EGRESS_TARGET_PATHS: Readonly<
   Partial<Record<ToolName, readonly DeclaredEgressPath[]>>
 > = Object.freeze({
   execute_code: [{ kind: 'host', path: ['allow_hosts', '*'] }],
+  // Browser tools fetch owner-named URLs; declaring the path puts them under the non-global
+  // address blocks below (the conformance test pins the declaration to the arg schema).
+  browse_page: [{ kind: 'url', path: ['url'] }],
+  browse_act: [{ kind: 'url', path: ['url'] }],
 });
 
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);

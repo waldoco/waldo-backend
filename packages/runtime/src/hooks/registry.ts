@@ -50,6 +50,15 @@ import {
   searchEpisodesArgsSchema,
   searchToolsArgsSchema,
   sendMessageArgsSchema,
+  browseActArgsSchema,
+  browsePageArgsSchema,
+  cancelReminderArgsSchema,
+  closeLoopArgsSchema,
+  listRemindersArgsSchema,
+  openLoopArgsSchema,
+  proposeCalendarChangeArgsSchema,
+  setProactivityArgsSchema,
+  setReminderArgsSchema,
   sessionStateSchema,
   sessionToolAllowed,
   sourceTaintSchema,
@@ -144,6 +153,17 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   archive_thread: archiveThreadArgsSchema,
   update_thread_topics: updateThreadTopicsArgsSchema,
   search_tools: searchToolsArgsSchema,
+  // Chat tools shipped without these entries died at tool_arg_zod_validate ("tool args schema
+  // unavailable") on every dispatch - silent live breakage the L1 scenario harness caught.
+  set_reminder: setReminderArgsSchema,
+  list_reminders: listRemindersArgsSchema,
+  cancel_reminder: cancelReminderArgsSchema,
+  propose_calendar_change: proposeCalendarChangeArgsSchema,
+  open_loop: openLoopArgsSchema,
+  close_loop: closeLoopArgsSchema,
+  set_proactivity: setProactivityArgsSchema,
+  browse_page: browsePageArgsSchema,
+  browse_act: browseActArgsSchema,
 });
 
 export const jwtValidateHook: HookHandler<HookRuntimeContext> = {
