@@ -10,7 +10,7 @@ Secrets already set on staging:
 - `TELEGRAM_WEBHOOK_SECRET`
 - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`
 
-The codespace env also holds `CLOUDFLARE_API_TOKEN`, `SUPABASE_ACCESS_TOKEN` and `SUPABASE_SERVICE_ROLE_KEY`. Those point at the legacy project, which the owner has ruled won't be used.
+The codespace env also holds `CLOUDFLARE_API_TOKEN`, `SUPABASE_ACCESS_TOKEN` and `SUPABASE_SERVICE_ROLE_KEY`. Those point at the project created on 2026-09-21 for waldo staging, which was never wired in (W2 built against local Docker Supabase). Reusing that project is fine if it is still clean - the fresh-project ask was our recommendation for a known-empty slate, not a technical wall (owner asked why, 13:50). Either way, rotate the service-role key: it has sat in a codespace env.
 
 Never paste secret values in chat. Put them in the codespace secrets for waldoco/waldo-backend (GitHub, Settings, Codespaces secrets), or send them through a vault link. I set them on the Worker with `wrangler secret put`.
 

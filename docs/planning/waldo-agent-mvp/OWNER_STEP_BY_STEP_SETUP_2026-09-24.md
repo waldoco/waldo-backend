@@ -10,7 +10,9 @@ Nothing below needs Kubernetes, AWS, or any extra cloud service (your 12:39 ruli
 
 ## 1. Supabase - one new project (do this first)
 
-One project total. The app and the agent share one backend; the old codespaces-era project is retired and its migrations get folded into this one.
+One project total. The app and the agent share one backend.
+
+**Reuse or fresh - your call.** You already created a project for waldo staging on Sept 21 and sent its keys; the build was never wired to it (it ran against a local Docker Supabase meanwhile), so that project is very likely sitting empty. If so, reuse it: skip to step 3, and in step 4 reset the database password (Project Settings -> Database -> Reset database password) since the original isn't retrievable, and rotate the service-role key (Project Settings -> API -> rotate) since it has sat in a codespace environment. If the Sept 21 project got used for something else or you're not sure of its state, a fresh project is two minutes and zero ambiguity - start at step 1.
 
 1. dashboard.supabase.com -> New project. Name: `waldo`. Region: Mumbai (South Asia) - closest to you.
 2. Set the database password it asks for. Save it as `SUPABASE_DB_PASSWORD`.
