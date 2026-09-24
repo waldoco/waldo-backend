@@ -1,6 +1,6 @@
 # Waldo Agent MVP - consolidated program state, 2026-09-24
 
-Compiled from the build reports on the beta-mvp line. Repo: waldoco/waldo-backend, branch beta-mvp, HEAD 76adaef. Staging: https://waldo-runtime-staging.piyushfulper3210.workers.dev. Build host: the owner's Mac, worktree ~/Developer/Pin4sf/waldo-backend-mvp.
+Compiled from the build reports on the beta-mvp line. Repo: waldoco/waldo-backend, branch beta-mvp, HEAD 6389108. Staging: https://waldo-runtime-staging.piyushfulper3210.workers.dev. Build host: the owner's Mac, worktree ~/Developer/Pin4sf/waldo-backend-mvp.
 
 ## Product intent (from the owner's brief)
 
@@ -33,6 +33,9 @@ Compiled from the build reports on the beta-mvp line. Repo: waldoco/waldo-backen
 | f0cbb4a | W7 | Evals v0: 42 multi-turn cases on the real responder, model judge + tool-log rules | live LLM runs: nano 22/42, $0.0265, p50 11.6s / p90 22.0s | 9bcc2f1e |
 | 80ecbc2 | W7.1 | Fetch-path email-injection eval case (update-card prompt carrying hostile mail) | live LLM run: PASS, 8.8s, $0.0009 | not deployed (eval-only) |
 | 76adaef | fix | gates.sh exits non-zero on any failed step; guard-gates-exit proves it; bug log + checklist line | guard fails the pre-fix script, passes the fix | not deployed (tooling) |
+| a4da3e3 | docs | WhatsApp routes research, WhatsApp channel design, token-efficiency groundwork, program state | doc | - |
+| 01b7a0e | TE1 | Usage telemetry: tokens+cost on trace_log, /usage rollup, request shape per hop; infra decomposition research | tests + gates | f74f7731 |
+| 6389108 | TE1 | Token baseline harness: per-hop request composition (instructions ~1218 flat, history linear unwindowed) | tests + gates | - |
 
 Eval results detail: docs/evals/W7_EVALS_V0_RESULTS.md. Voice 5/6, tools 2/7, memory 6/7, day planning 3/5, clinical 4/7, fetch 1/4, injection 1/6. Judge is nano itself and noisy; scores +/- a case or two. Injection tool log was clean: zero draft/calendar calls across injection cases, the wire-money link never relayed.
 

@@ -45,3 +45,28 @@ Waldo has no browser or computer-use tools today (tools are Google calendar/mail
 - Kernel: https://kernel.sh/docs/info/pricing and https://www.kernel.sh/ai-library/kernel-vs-browserbase-2026
 - Browserbase: https://browserbase.com/pricing/ and https://docs.browserbase.com/account/billing/plans
 - Aside: https://aside.com/ and https://docs.aside.com/help/get-started
+
+## Owner decisions (24 September 2026)
+
+- Browser: Cloudflare Browser Run confirmed for initial development when browser capabilities land. Kernel and Browserbase stay on the shelf unless a fleet need appears.
+- Git author on the build Mac stays as-is.
+
+## Consumer compute: Kennel as the consumer hands/computer tier
+
+The dev build loop (codespace + the owner's Mac) is dev tooling. It cannot be the consumer answer: no consumer ships their agent a Mac. The owner's proposal is Kennel (waldoco/Waldo-Kennel), and the K0 source map (docs/planning/waldo-agent-mvp/KENNEL_K0_SOURCE_MAP.md) supports it.
+
+How Kennel slots into brain/hands/files:
+
+- Brain stays put: Workers + per-owner DO, event-sourced, no change.
+- Files stay put: Supabase Postgres + Vault outside the compute.
+- Kennel is the consumer computer: a daemon on the user's own machine that takes outcomes through intake with planning approval, binds an approved worker on launch, runs Codex sessions with persistent conversation identity and resume, and returns receipt-bound artifacts and diffs. Command admission is separate from ingress, persisted claims dedupe, and material commands are rejected without approval.
+
+Token hard line: preserved by construction. connector-proxy remains the only code that touches Waldo-side tokens. Kennel executes with the consumer's own local CLIs and provider accounts; Waldo tokens never reach the device. The one gap the K0 audit found is the cloud-to-daemon relay: K0's answer is a narrow device-initiated authenticated bridge (no inbound ports on the consumer machine), durable task/outcome mapping, replay-safe progress transport. That design is the right shape; it is specified, not yet proven.
+
+Alternatives, honestly:
+
+- Cloud computer per consumer (Vercel Sandbox + Drives, or Cloudflare containers): real product, but cost scales per consumer, the consumer's data leaves their device, and we would still need the governed-executor story Kennel already has. Fine for dev, weak for consumer privacy and unit cost.
+- Browser-only via Browser Run: covers web tasks, not local files, apps, or dev work. Complementary to Kennel, not a replacement.
+- Kennel: near-zero marginal infra per consumer, data stays on the device, and the governance seams already exist in source. Costs: distribution, updates, and support burden for a desktop daemon, and the K0 proof has not run yet.
+
+Recommendation: yes, Kennel is the consumer tier. Sequence it honestly: run the K0 proof scenario first (one owner-approved bounded task, one Codex session, a small real change, prescribed check, artifact/diff/test evidence returned), then the Claude adapter separately. Do not promise consumer compute before that proof lands.
