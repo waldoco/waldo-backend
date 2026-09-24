@@ -10,7 +10,7 @@ insert into waldo.owners (do_name, email) values ('do-a', 'a@test.invalid');
 select is(has_function_privilege('anon', 'waldo.connect_session_issue(text, text, text, text, bigint, text)', 'execute'), true, 'the runtime key can issue (signature still required)');
 select is(has_function_privilege('service_role', 'waldo.connect_session_issue(text, text, text, text, bigint, text)', 'execute'), false, 'service role is not granted the ticket RPCs');
 
-select throws_ok($$ select waldo.connect_session_issue('do-a', 'google', 'telegram', 'hash1', pg_temp.at(), 'badsig') $$, '42501', 'an unsigned issue is rejected');
+select throws_ok($$ select waldo.connect_session_issue('do-a', 'google', 'telegram', 'hash1', pg_temp.at(), 'badsig') $$, '42501', 'unsigned router call', 'an unsigned issue is rejected');
 create temp table s as select waldo.connect_session_issue('do-a', 'google', 'telegram', 'hash1', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.telegram.hash1')) as id;
 select isnt((select id from s), null, 'a signed issue stores the session');
 select is((select count(*)::int from waldo.connect_sessions where ticket_hash = 'hash1' and status = 'issued'), 1, 'only the hash is stored, status issued');
