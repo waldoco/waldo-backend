@@ -65,7 +65,13 @@ Built: deterministic narrow-scope redaction of secret-bearing URLs (Google OAuth
 - [~] LIVE (P2 2026-09-25 00:25): clean 13-hop turn on the new deploy; egress_scrub absent = nothing matched (scrub logs only on rewrites; flag set either way). Final confirmation via DO-storage read or an egress_redacted fire during P3.
 
 
-### P3 live run (2026-09-25 ~00:28 IST) - PARTIAL, RCA open
+### P3 RCA CLOSED (2026-09-25 ~01:30 IST) - verdict + PACKET R2
+Lane's dashboard RCA (Supabase, Waldo account): togds has zero waldo.connections rows (lane's own postgres-role query) and its connector-proxy received ZERO calls in the window covering the 00:28 exchange (edge logs; the lane's own probe does appear, so absence is meaningful). Woof 1 has no waldo schema and no connector-proxy. Conclusion: the worker's SUPABASE_PROJECT_URL secret points at a stale third project; the routing fallback (WALDO_OWNER_TELEGRAM_ID) kept turns green and masked it. Second bug: connector-proxy deployed with gateway JWT check on, which would 401 the worker's HMAC-only calls even on the right project (runbook line lacked --no-verify-jwt; fixed). Fix + live re-run: PACKET_R2_2026-09-25.md.
+- [ ] PACKET R2 steps 1-5 run on the Mac (rewire, HMAC sync, no-verify-jwt redeploy, ship.sh, pgTAP)
+- [ ] P3 re-run after R2: connect google -> /c/ link -> consent -> calendar answer with real data
+- [ ] R2 step 7 evidence: waldo.connections shows one google row, status connected
+
+### P3 live run (2026-09-25 ~00:28 IST) - superseded by the RCA section above
 Consent passed live (oauth_exchange ok, oauth_callback linked, google_linked 7 scopes; owner saw the connected page) but the data path failed: query_calendar x2 and get_communication errored at 00:37 and no waldo.connections row was found on project togdshayyxycitzckpqv (BYPASSRLS query). Root cause under investigation (RCA 2026-09-25): top hypothesis is a Supabase project mismatch between the worker/connector-proxy and the inspected project; the data-path failure cause is recorded on the connection row itself (last_error/last_used_at) once the right project is found. Steps 2, 5, 14c stay unticked.
 - [ ] PACKET R1: locate the live project + read the connection row's last_error/last_used_at
 - [ ] Data path green live: calendar + mail answers with real data after consent

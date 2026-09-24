@@ -28,9 +28,12 @@ HEAD: d75266b (beta-mvp). Staging worker runs 1cce32b (deployed 23:49, version a
 
 ## In flight right now
 
-- **Google data-path RCA** (consent links but calendar/mail fail; no connections row on the
-  inspected project): report delivered, PACKET R1 (read-only diagnostic) awaits the owner. Top
-  hypothesis: Supabase project mismatch; the row's own last_error column will name the failure.
+- **Google data-path RCA - VERDICT DELIVERED** (lane's dashboard RCA, ~01:30 IST): the worker's
+  SUPABASE_PROJECT_URL secret points at a stale third project - togds shows zero connector-proxy
+  calls in the exchange window and zero connection rows; Woof 1 has no waldo schema. Turns stayed
+  green via the single-owner routing fallback, masking the break. Second bug: connector-proxy
+  deployed with the gateway JWT check on (runbook lacked --no-verify-jwt). Fix + live re-run:
+  PACKET_R2_2026-09-25.md, awaits the owner.
 - S4 (ConnectIntent contract + responder offerConnect): parked mid-build, unblocked, no decisions needed.
 
 ## Remaining from the original MVP plan (BUILD_ORDER)
@@ -47,10 +50,15 @@ HEAD: d75266b (beta-mvp). Staging worker runs 1cce32b (deployed 23:49, version a
 - Debugging DevX program (Rung 0 instrumentation, Rung 1 browser dashboards, deploys stay Mac-only).
 - Packet hygiene law + bug-log discipline (after the P3 packet bug).
 - Token-efficiency groundwork, WALDO_ENVIRONMENT/RELEASE tagging (root-caused tonight: vars unset).
+- **Waldo Vault** (owner call 01:16, confirmed 01:28 - build it, near-term, ahead of dashboard v2.1):
+  per-owner encrypted credential store, fill-only browser access (values never reach the model),
+  dashboard management, revocation = delete, takeover-mode fallback for sites that block automated
+  login. Evaluate Notte's vault as the base/service vs building on Supabase. Spec: lane research
+  queued after the RCA close.
 
 ## Blocked on the owner (one glance)
 
-1. Run PACKET R1 (2 min, read-only) - settles the RCA.
+1. Run PACKET R2 (~10 min: rewire secrets, redeploy connector-proxy, ship.sh, optional pgTAP, live connect re-run) - fixes the RCA, verifies google connect end-to-end.
 2. Fill 3 vault links (Langfuse / Supabase / Cloudflare dashboard logins) - unlocks lane self-serve debugging.
 3. Resend API key - unblocks console email sign-in (items 3-5).
 4. Run PACKET C1 (June leftovers cleanup, already approved 23:02).

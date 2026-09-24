@@ -41,7 +41,7 @@ H=$(curl -sf -X POST "https://api.supabase.com/v1/projects/togdshayyxycitzckpqv/
 if [ ${#H} -ne 64 ]; then echo "HMAC extraction failed - STOP, do not deploy, report back"; unset H; else
 npx supabase secrets set WALDO_ROUTER_HMAC_SECRET="$H" --project-ref togdshayyxycitzckpqv
 unset H
-npx supabase functions deploy connector-proxy --project-ref togdshayyxycitzckpqv
+npx supabase functions deploy connector-proxy --project-ref togdshayyxycitzckpqv --no-verify-jwt  # REQUIRED: the function does its own HMAC auth; without this flag the gateway 401s every worker call (bug log 2026-09-25)
 fi
 ```
 
