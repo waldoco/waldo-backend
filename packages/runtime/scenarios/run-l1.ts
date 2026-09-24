@@ -106,6 +106,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     const turnText = async () => {
       if (turn.startsWith('@plan ')) return responder.planDay(`${scenario.id}-${n}`, turn.slice(6));
       if (turn.startsWith('@prompt ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(8), time);
+      if (turn.startsWith('@remind ')) return responder.remind(`${scenario.id}-${n}`, 1, turn.slice(8), time);
       return responder.respond({ updateId: n, chatId: 1, text: turn } as never, time);
     };
     try {

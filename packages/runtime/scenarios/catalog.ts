@@ -330,4 +330,40 @@ export const SCENARIOS: readonly Scenario[] = [
       replies: [/connect/i],
     },
   },
+  {
+    id: 'scheduler-reminder-fires',
+    category: 'scheduler',
+    turns: ['@remind take out the trash'],
+    llm: [
+      { match: /Reminder due now/, rounds: [{ text: 'Time to take out the trash.' }] },
+    ],
+    assert: {
+      hops: [{ hop: 'llm_reply', ok: true }],
+      replies: [/trash/],
+    },
+  },
+  {
+    id: 'scheduler-fetch-update',
+    category: 'scheduler',
+    turns: ["@prompt [Proactive: the owner's Dentist event moved from 17:30 to 16:30 today. Tell them only if useful.]"],
+    llm: [
+      { match: /Dentist event moved/, rounds: [{ text: 'Heads up: the dentist moved to 16:30 today.' }] },
+    ],
+    assert: {
+      hops: [{ hop: 'llm_reply', ok: true }],
+      replies: [/16:30/],
+    },
+  },
+  {
+    id: 'scheduler-day-plan',
+    category: 'scheduler',
+    turns: ['@plan Plan today. Wake 07:00, wind-down 22:30. Calendar: Standup 10:00.'],
+    llm: [
+      { match: /Plan today/, rounds: [{ text: '{"cards":[{"id":"card:brief","at":"07:15"},{"id":"card:close","at":"22:00"}]}' }] },
+    ],
+    assert: {
+      hops: [{ hop: 'llm_day_plan', ok: true }],
+      replies: [/card:brief/],
+    },
+  },
 ];
