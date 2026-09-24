@@ -66,6 +66,16 @@ describe('toolResultSchema', () => {
     }
   });
 
+  it('accepts a failure carrying a typed connect intent (CONNECT_FLOW_DESIGN 4.4)', () => {
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' } }).success).toBe(true);
+  });
+
+  it('rejects a connect intent with an unknown service or reason', () => {
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'spotify', reason: 'not_connected' } }).success).toBe(false);
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'google', reason: 'expired' } }).success).toBe(false);
+    expect(resultSchema.safeParse({ ...baseErr, connect: { status: 'auth_required', service: 'google', reason: 'not_connected', url: 'https://evil.test' } }).success).toBe(false);
+  });
+
   it('rejects a failure without a code', () => {
     expect(resultSchema.safeParse({ ok: false, error: 'provider unreachable' }).success).toBe(false);
   });
@@ -93,8 +103,13 @@ describe('toolResultSchema', () => {
     expect(resultSchema.safeParse({ ...baseErr, retriable: true }).success).toBe(false);
   });
 
-  it('rejects a taint stamp on the content-free failure branch', () => {
-    expect(resultSchema.safeParse({ ...baseErr, source_taint: null }).success).toBe(false);
+  it('accepts an optional taint stamp on the content-free failure branch (ADR-0049: external-origin auth failures must carry it)', () => {
+    expect(resultSchema.safeParse({ ...baseErr, source_taint: 'external' }).success).toBe(true);
+    expect(resultSchema.safeParse({ ...baseErr }).success).toBe(true);
+  });
+
+  it('rejects an invalid taint value on the failure branch', () => {
+    expect(resultSchema.safeParse({ ...baseErr, source_taint: 'bogus' }).success).toBe(false);
   });
 
   it('rejects a malformed card', () => {

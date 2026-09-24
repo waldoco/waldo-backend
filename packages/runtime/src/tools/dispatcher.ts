@@ -6,11 +6,13 @@ import {
   errorCodeSchema,
   handlerAllowlistMatchesAcl,
   sessionToolAllowed,
+  connectIntentSchema,
   sourceTaintSchema,
   trustedToolEffectReceiptUnavailableSchema,
   toolNameSchema,
   triggerTypeSchema,
   waldoCardSchema,
+  type ConnectIntent,
   type ErrorCode,
   type HookPayload,
   type HookEvent,
@@ -69,6 +71,8 @@ export type DispatchToolResult = (
       code: ErrorCode;
       reason: ToolDispatchErrorReason;
       source_taint?: 'external';
+      // S4 (CONNECT_FLOW_DESIGN 4.4): typed auth intent for the responder's offerConnect seam.
+      connect?: ConnectIntent;
     }) & {
   // Present only after a trusted handler resolved an adapter result. This remains ephemeral until
   // RunLoopDO atomically writes its bounded checkpoint/receipt; a thrown adapter call leaves the
@@ -359,6 +363,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       finalResult.code,
       'tool_result_error',
       finalResult.source_taint,
+      finalResult.connect,
     ), settledTrustedEffect);
   }
 
@@ -811,10 +816,12 @@ function failDispatch(
   code: ErrorCode,
   reason: ToolDispatchErrorReason,
   sourceTaint?: SourceTaint,
+  connect?: ConnectIntent,
 ): DispatchToolResult {
+  const extra = connect === undefined ? {} : { connect };
   return sourceTaint === 'external'
-    ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external' }
-    : { ok: false, call_id: callId, tool, error, code, reason };
+    ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external', ...extra }
+    : { ok: false, call_id: callId, tool, error, code, reason, ...extra };
 }
 
 function withTrustedEffect(
@@ -859,7 +866,7 @@ function reasonFromHook(hook: string): ToolDispatchErrorReason {
 
 type ParsedToolResult =
   | { ok: true; data: unknown; source_taint: SourceTaint; card?: WaldoCard }
-  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external' };
+  | { ok: false; error: string; code: ErrorCode; source_taint?: 'external'; connect?: ConnectIntent };
 
 function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | null {
   if (!isRecord(value) || typeof value.ok !== 'boolean') {
@@ -891,7 +898,7 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (
     !hasOnlyKeys(
       value,
-      expectsExternal ? ['ok', 'error', 'code', 'source_taint'] : ['ok', 'error', 'code'],
+      expectsExternal ? ['ok', 'error', 'code', 'source_taint', 'connect'] : ['ok', 'error', 'code', 'connect'],
     )
   ) {
     return null;
@@ -900,6 +907,10 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
   if (typeof value.error !== 'string' || value.error.length === 0 || !code.success) {
     return null;
   }
+  // S4: a typed connect intent rides the failure; anything that is not a valid intent is dropped
+  // rather than failing the whole result - the fixed model-facing text already stands alone.
+  const connect = value.connect === undefined ? undefined : connectIntentSchema.safeParse(value.connect);
+  if (connect !== undefined && !connect.success) return null;
 
   if (expectsExternal) {
     if (value.source_taint !== 'external') return null;
@@ -908,9 +919,10 @@ function parseToolResult(value: unknown, tool: ToolName): ParsedToolResult | nul
       error: value.error,
       code: code.data,
       source_taint: 'external',
+      ...(connect?.success ? { connect: connect.data } : {}),
     };
   }
-  return { ok: false, error: value.error, code: code.data };
+  return { ok: false, error: value.error, code: code.data, ...(connect?.success ? { connect: connect.data } : {}) };
 }
 
 function hasOnlyKeys(value: Readonly<Record<string, unknown>>, allowed: readonly string[]): boolean {

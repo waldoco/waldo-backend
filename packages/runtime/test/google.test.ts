@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState } from '../src/connectors/google';
-import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
+import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
 const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-09-23T08:00:00Z') };
@@ -84,24 +84,28 @@ describe('google client', () => {
 
 describe('google tools', () => {
   const proposals = { propose: async () => 'proposal:1', record: () => undefined };
-  it('send the connect link as a button when Google is not connected, and never hand the model the URL', async () => {
-    const sent: string[] = [];
-    const google: GoogleAccess = { client: async () => null, connectUrl: async () => 'https://accounts.google.com/x?state=s1' };
-    const [query] = googleHandlers(google, proposals, clock, async (url) => (sent.push(url), true));
+  it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
+    const google: GoogleAccess = { client: async () => null };
+    const [query] = googleHandlers(google, proposals, clock);
     const result = await query!.handle({ include_declined: false, limit: 20 } as never);
-    expect(result).toMatchObject({ ok: false, code: 'auth_failed', error: expect.stringContaining('connect button was sent') });
+    expect(result).toMatchObject({
+      ok: false, code: 'auth_failed',
+      error: expect.stringContaining('connect button'),
+      connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' },
+    });
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=|accounts\.google/);
-    expect(sent).toEqual(['https://accounts.google.com/x?state=s1']);
   });
 
-  it('without a working button channel the URL still never reaches the model', async () => {
-    const google: GoogleAccess = { client: async () => null, connectUrl: async () => 'https://accounts.google.com/x?state=s1' };
-    for (const deliver of [undefined, async () => false]) {
-      const [query] = googleHandlers(google, proposals, clock, deliver);
-      const result = await query!.handle({ include_declined: false, limit: 20 } as never);
-      expect(result).toMatchObject({ ok: false, code: 'auth_failed', error: expect.stringContaining('could not be sent') });
-      expect(JSON.stringify(result)).not.toMatch(/https?:|state=/);
-    }
+  it('connect_service reports the typed intent too; already-connected stays ok', async () => {
+    const down = connectServiceHandler({ client: async () => null });
+    const off = await down.handle({ service: 'google' } as never, {} as never);
+    expect(off).toMatchObject({
+      ok: false, code: 'auth_failed',
+      connect: { status: 'auth_required', service: 'google', reason: 'not_connected' },
+    });
+    expect(JSON.stringify(off)).not.toMatch(/https?:|state=/);
+    const up = connectServiceHandler({ client: async () => ({}) as never });
+    expect(await up.handle({ service: 'google' } as never, {} as never)).toMatchObject({ ok: true, data: { connected: true } });
   });
 
   it('get_communication reads the inbox for the last 24h by default, tainted external', async () => {
@@ -116,7 +120,6 @@ describe('google tools', () => {
         },
         draft: async () => ({}),
       } as never),
-      connectUrl: async () => null,
     };
     const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
     const result = await comms.handle({} as never);
@@ -129,7 +132,7 @@ describe('google tools', () => {
   });
 
   it('get_communication honours an explicit date_range and never fabricates mail when unconnected', async () => {
-    const google: GoogleAccess = { client: async () => null, connectUrl: async () => null };
+    const google: GoogleAccess = { client: async () => null };
     const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
     const result = await comms.handle({ date_range: { from: '2026-09-20T00:00:00.000Z', to: '2026-09-24T00:00:00.000Z' } } as never);
     expect(result).toMatchObject({ ok: false, code: 'auth_failed' });
@@ -137,7 +140,7 @@ describe('google tools', () => {
   });
 
   it('propose a calendar change without applying it', async () => {
-    const google: GoogleAccess = { client: async () => null, connectUrl: async () => null };
+    const google: GoogleAccess = { client: async () => null };
     const propose = googleHandlers(google, proposals, clock).find((h) => h.name === 'propose_calendar_change')!;
     expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
   });

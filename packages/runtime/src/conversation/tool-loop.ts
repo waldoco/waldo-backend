@@ -1,4 +1,4 @@
-import { toolNameSchema, toolParameters, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
+import { toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import type { ToolOutputStore } from './tool-output-store';
 
@@ -41,10 +41,14 @@ export async function runToolLoop(input: Readonly<{
   maxSteps: number;
   offload?: ToolOutputStore;
   onTool?: (event: ToolLoopEvent) => void;
+  // S4 (CONNECT_FLOW_DESIGN 4.4): a tool's typed auth intent is acted on by the responder via
+  // the channel's offerConnect seam. Fired at most once per (service, reason) per turn.
+  onConnect?: (intent: ConnectIntent) => Promise<boolean>;
 }>): Promise<string> {
   const tools = toolDefinitions(input.handlers);
   const turns: LLMToolTurn[] = [];
   const seen = new Set<string>();
+  const offered = new Set<string>();
   let failedRounds = 0;
   for (let round = 0; ; round += 1) {
     const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT;
@@ -58,6 +62,14 @@ export async function runToolLoop(input: Readonly<{
       const result = seen.has(key)
         ? { ok: false, error: 'Same call already made this turn; use its result.' }
         : await dispatch(call, input);
+      if (!result.ok && result.connect) {
+        const offerKey = `${result.connect.service}:${result.connect.reason}`;
+        if (!offered.has(offerKey)) {
+          offered.add(offerKey);
+          const intent = result.connect;
+          try { await input.onConnect?.(intent); } catch { /* an offer failure must not break the turn */ }
+        }
+      }
       seen.add(key);
       const output = capToolOutput(JSON.stringify(result), input.offload);
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
@@ -72,7 +84,7 @@ export async function runToolLoop(input: Readonly<{
 async function dispatch(
   call: LLMToolCall,
   input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
-): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string }>> {
+): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; connect?: ConnectIntent }>> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
   let args: unknown;
@@ -82,5 +94,5 @@ async function dispatch(
     return { ok: false, error: 'Arguments were not valid JSON.' };
   }
   const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
-  return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error };
+  return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error, ...(result.connect ? { connect: result.connect } : {}) };
 }

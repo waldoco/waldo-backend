@@ -28,13 +28,15 @@ HEAD: d75266b (beta-mvp). Staging worker runs 1cce32b (deployed 23:49, version a
 
 ## In flight right now
 
+- **Reply-turn outage FIXED in sandbox, awaiting morning deploy** (02:45 IST): every reply turn on deploy 57c098ce died pre-flight on a structural scribe deny (sanitiseRequest fail-closed on false-positive shapes); fix 05b24d8 degrades structural denies and strips zod's ~standard from tool definitions. Gates green; live proof = morning deploy + 'connect my google'.
+
 - **Google data-path RCA - VERDICT DELIVERED** (lane's dashboard RCA, ~01:30 IST): the worker's
   SUPABASE_PROJECT_URL secret points at a stale third project - togds shows zero connector-proxy
   calls in the exchange window and zero connection rows; Woof 1 has no waldo schema. Turns stayed
   green via the single-owner routing fallback, masking the break. Second bug: connector-proxy
   deployed with the gateway JWT check on (runbook lacked --no-verify-jwt). Fix + live re-run:
   PACKET_R2_2026-09-25.md, awaits the owner.
-- S4 (ConnectIntent contract + responder offerConnect): parked mid-build, unblocked, no decisions needed.
+- S4 (ConnectIntent contract + responder offerConnect): COMMITTED and pushed (this push). Live verification folds into the morning deploy + 'connect my google' re-run.
 
 ## Remaining from the original MVP plan (BUILD_ORDER)
 
@@ -46,7 +48,7 @@ HEAD: d75266b (beta-mvp). Staging worker runs 1cce32b (deployed 23:49, version a
 
 ## Discovered along the way (additions since the plan)
 
-- Connect-flow redesign S1-S6 (born from the 22:35 live failure): S1-S3 committed, S4 parked, S5-S6 pending.
+- Connect-flow redesign S1-S6 (born from the 22:35 live failure): S1-S4 committed, S5-S6 pending.
 - Debugging DevX program (Rung 0 instrumentation, Rung 1 browser dashboards, deploys stay Mac-only).
 - Packet hygiene law + bug-log discipline (after the P3 packet bug).
 - Token-efficiency groundwork, WALDO_ENVIRONMENT/RELEASE tagging (root-caused tonight: vars unset).

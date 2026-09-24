@@ -1,6 +1,6 @@
 import {
   acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
-  type LLMTool, type LLMToolTurn, type ModelName,
+  type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import { runToolLoop } from '../conversation/tool-loop';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -42,6 +42,10 @@ export const createTelegramResponder = (
   model: ModelName = WALDO_CHAT_MODEL,
   offload = false,
   toolLedger?: ReturnType<typeof toolOutputLedger>,
+  // S4 (CONNECT_FLOW_DESIGN 4.4): the channel's connect affordance. The responder calls it when a
+  // tool reports auth_required; it mints the short link and sends the button. Optional so tests
+  // and non-owner surfaces can run tools without a chat to offer in.
+  offerConnect?: (intent: ConnectIntent) => Promise<boolean>,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -87,7 +91,7 @@ export const createTelegramResponder = (
       return complete(trace, `${purpose}_redirect`, `${system}\n\n${CLINICAL_REDIRECT}`, content, format, attachments, tools, turns);
     }
     if (!result.ok && result.halted_by === 'medical_gate') return { ...CLINICAL_FALLBACK, model };
-    if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
+    if (!result.ok) throw new Error(`live model failed: ${result.code} (${[result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(': ') || result.reason})`);
     return result.response;
   };
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
@@ -119,6 +123,7 @@ export const createTelegramResponder = (
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, text: { input: event.call.arguments, output: event.output } });
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: event.output });
         },
+        ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
     },
   }, tree);

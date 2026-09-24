@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { setProactivityArgsSchema, type ScheduleEntry } from '@waldo/contracts';
+import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
@@ -398,6 +398,21 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error) }), false));
     };
     const storage = this.ctx.storage;
+    // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
+    // At most one button per owner/service/reason per 60 s; a repeat just points at the last one.
+    const offerConnect = async (intent: ConnectIntent): Promise<boolean> => {
+      const key = `${intent.service}:${intent.reason}`;
+      const sent = (await storage.get<Record<string, number>>('connect:offers')) ?? {};
+      if (Date.now() - (sent[key] ?? 0) < 60_000) {
+        log({ trace: 'connect:offer', hop: 'connect_offer', ms: 0, ok: true, detail: `${key} already sent` });
+        return true;
+      }
+      const url = await google.connectUrl(intent.feature ?? 'calendar');
+      const ok = url !== null && (await deliverConnectLink(url));
+      log({ trace: 'connect:offer', hop: 'connect_offer', ms: 0, ok, ...(ok ? { detail: key } : { error: url === null ? 'no link minted' : 'send failed' }) });
+      if (ok) await storage.put('connect:offers', { ...sent, [key]: Date.now() });
+      return ok;
+    };
     const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: stateSecret } = this.env;
     const googleApp = async () => {
       const origin = await storage.get<string>('origin');
@@ -573,7 +588,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock, deliverConnectLink), connectServiceHandler(google, deliverConnectLink), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1', toolOutputLedger(storage),
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1', toolOutputLedger(storage), offerConnect,
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);

@@ -66,15 +66,16 @@ describe('google health', () => {
 });
 
 describe('incremental Google access', () => {
-  it('a mail tool on a calendar-only grant sends the consent button for mail, not a retry and not a URL', async () => {
+  it('a mail tool on a calendar-only grant reports a scope_missing intent for mail, not a retry and not a URL', async () => {
     const client = { draft: async () => { throw new GoogleError(403, 'google 403: insufficient scopes'); } } as unknown as GoogleClient;
-    const asked: string[] = [];
-    const google = { client: async () => client, connectUrl: async (feature: string) => (asked.push(feature), `https://accounts.google.com/x?f=${feature}&state=s`) };
-    const draft = googleHandlers(google, { propose: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }, async () => true).find((tool) => tool.name === 'draft_email')!;
+    const google = { client: async () => client };
+    const draft = googleHandlers(google, { propose: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
     const result = await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never);
-    expect(result).toMatchObject({ ok: false, code: 'auth_failed', error: expect.stringContaining('connect button was sent') });
+    expect(result).toMatchObject({
+      ok: false, code: 'auth_failed',
+      connect: { status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'mail' },
+    });
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=/);
-    expect(asked).toEqual(['mail']);
   });
 });
 

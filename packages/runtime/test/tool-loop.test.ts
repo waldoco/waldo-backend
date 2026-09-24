@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
 import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
+import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
 
@@ -53,7 +54,7 @@ describe('runToolLoop', () => {
       step: async (tools) => {
         offered.push(tools !== undefined);
         n += 1;
-        return tools ? { text: '', tool_calls: [{ call_id: `x${n}`, name: 'launch_rocket', arguments: `{"n":${n}}` }] } : { text: 'Could not do that.' };
+        return tools ? { text: '', tool_calls: [{ call_id: `x${n}`, name: 'launch_rocket', arguments: `{"limit":${n}}` }] } : { text: 'Could not do that.' };
       },
     });
     expect(text).toBe('Could not do that.');
@@ -97,5 +98,50 @@ describe('reasoning passback', () => {
     expect(text).toBe('done');
     const first = seenTurns[1]![0] as { prior_items?: unknown[] };
     expect(first.prior_items).toHaveLength(2);
+  });
+});
+
+// S4 (CONNECT_FLOW_DESIGN 4.4): a tool's typed auth intent reaches the channel's offerConnect
+// seam exactly once per (service, reason) per turn, even across repeated failing calls.
+describe('runToolLoop connect intents', () => {
+  // The REAL tier-2 handler with no Google connection - the intent comes from production code.
+  const failing = googleHandlers(
+    { client: async () => null },
+    { propose: async () => 'p', record: () => undefined },
+    { timezone: 'UTC', now: () => new Date() },
+  ).find((h) => h.name === 'query_calendar')!;
+
+  it('fires onConnect once per (service, reason) per turn, on the first failure only', async () => {
+    const offered: string[] = [];
+    let n = 0;
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 6,
+      onConnect: async (intent) => { offered.push(`${intent.service}:${intent.reason}:${intent.feature}`); return true; },
+      step: async (tools) => {
+        n += 1;
+        return tools ? { text: '', tool_calls: [{ call_id: `c${n}`, name: 'query_calendar', arguments: `{"limit":${n}}` }] } : { text: 'done' };
+      },
+    });
+    expect(offered).toEqual(['google:not_connected:calendar']);
+  });
+
+  it('a throwing offerConnect never breaks the turn', async () => {
+    const text = await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 2,
+      onConnect: async () => { throw new Error('telegram down'); },
+      step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: 'c1', name: 'query_calendar', arguments: '{}' }] } : { text: 'still answered' }),
+    });
+    expect(text).toBe('still answered');
+  });
+
+  it('the intent rides the model-visible tool output as data, never as a link', async () => {
+    const outputs: string[] = [];
+    await runToolLoop({
+      handlers: [failing as never], ctx, maxSteps: 1,
+      onTool: (event) => outputs.push(event.output),
+      step: async (tools) => (tools ? { text: '', tool_calls: [{ call_id: 'c1', name: 'query_calendar', arguments: '{}' }] } : { text: 'done' }),
+    });
+    expect(JSON.parse(outputs[0]!)).toMatchObject({ ok: false, connect: { status: 'auth_required', service: 'google' } });
+    expect(outputs[0]).not.toMatch(/https?:|state=/);
   });
 });
