@@ -35,10 +35,16 @@ REPORT BACK (paste everything between the markers):
 - Screenshots go as files when a packet asks for one.
 - Secrets rule: never paste values of secrets. If a command prints a secret, redact it and say REDACTED.
 
+## Packet-writing rules (lane law, added 2026-09-25 after the P3 packet bug)
+
+- CLI subcommands and flags in a packet must be verified against the installed tool's own help output or current official docs before the packet ships. Never write a CLI invocation from memory. (P3 used `supabase db execute --sql`, which does not exist.)
+- SQL in a packet must name tables and columns verbatim from the repo's migration files. Open the migration, copy the identifiers. (P3 queried `do_name, email` on waldo.connections; the real columns are owner_id/provider/account/scopes/status.)
+- Project refs in packets come from the repo docs, and the packet says which doc line they came from.
+
 ## Standard capture commands
 
 - Worker logs: `npx wrangler tail waldo-runtime-staging --format pretty` (run during a repro, capture 2 minutes)
-- Supabase row check: `supabase db execute --project-ref togdshayyxycitzckpqv --sql "<query the packet gives>"`
+- Supabase row check: `supabase db query --project-ref <ref> "<query the packet gives>"` (flags --db-url/--linked/--local/--project-ref and `--output-format json` verified against CLI 2.117.0 on 2026-09-25; `db execute` does not exist)
 - Deploy: `./ship.sh` (this is the ONLY deploy path)
 
 ## Test order (what blocks what)
@@ -46,7 +52,7 @@ REPORT BACK (paste everything between the markers):
 1. P1 DEPLOY: `./ship.sh` -> confirm worker version changes. Blocks everything below.
 2. P2 SMOKE: telegram message to staging bot gets a reply; trace shows hops.
 3. P3 S1 VERIFY: two live checks from VERIFICATION_CHECKLIST (egress_redacted hop; scrub migration hop, corrupted URL gone from history).
-4. P4 GOOGLE CONNECT: button -> consent page -> callback page -> waldo.connections row -> "what's on my calendar" answers with real data. Needs the owner to tap through.
+4. P4 GOOGLE CONNECT: button -> consent page -> callback page -> waldo.connections row (real columns: provider, account, scopes, status, last_error - there is no do_name or email column) -> "what's on my calendar" answers with real data. Needs the owner to tap through.
 5. P5 GMAIL FETCH: "any new email?" returns real mail (checklist 14c).
 6. P6 BROWSER LIVE: browse_page against a real URL (checklist 14/14b). Needs Browserbase free-plan secrets set.
 7. P7 CONSOLE SIGN-IN: needs Resend key first (owner sets RESEND_API_KEY + sender). Then: /console sign-in sends a code email, code signs in.

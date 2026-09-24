@@ -64,6 +64,12 @@ Built: deterministic narrow-scope redaction of secret-bearing URLs (Google OAuth
 - [ ] LIVE: after next deploy, send a model-authored message mentioning an old-style Google URL and confirm it arrives as [link removed] and the trace shows egress_redacted
 - [~] LIVE (P2 2026-09-25 00:25): clean 13-hop turn on the new deploy; egress_scrub absent = nothing matched (scrub logs only on rewrites; flag set either way). Final confirmation via DO-storage read or an egress_redacted fire during P3.
 
+
+### P3 live run (2026-09-25 ~00:28 IST) - PARTIAL, RCA open
+Consent passed live (oauth_exchange ok, oauth_callback linked, google_linked 7 scopes; owner saw the connected page) but the data path failed: query_calendar x2 and get_communication errored at 00:37 and no waldo.connections row was found on project togdshayyxycitzckpqv (BYPASSRLS query). Root cause under investigation (RCA 2026-09-25): top hypothesis is a Supabase project mismatch between the worker/connector-proxy and the inspected project; the data-path failure cause is recorded on the connection row itself (last_error/last_used_at) once the right project is found. Steps 2, 5, 14c stay unticked.
+- [ ] PACKET R1: locate the live project + read the connection row's last_error/last_used_at
+- [ ] Data path green live: calendar + mail answers with real data after consent
+
 ### BUILD_ORDER 12 - connector contract + tool outputs in context composer
 12a: tier-2 auth_failed-with-link is the written connector contract (AUTH_DECISION_SPEC addendum) pinned by connector-contract.test.ts. 12b: tool outputs now flow into the context composer - conversation/tool-output-ledger.ts (per-owner ring of the last 6 outputs, 500-char summaries), telegram-turn records each tool event and flushes with the conversation save, the local composer stages them as tool_result sources (provenance + per-fragment taint, 6-fragment cap, scribe rewrite allowed), prompt renders a <recent-tool-results> section. Pinned ctx_ hash updated.
 - [ ] LIVE: after next deploy, run two turns where the first calls a tool; confirm the second turn's composed prompt shows the first tool's output (trace/prompt inspection)
