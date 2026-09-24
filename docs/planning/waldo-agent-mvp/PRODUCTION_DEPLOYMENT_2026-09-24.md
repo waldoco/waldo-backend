@@ -20,6 +20,20 @@ What it costs us today:
 
 Call: stay on the current shape. Revisit triggers: a real workload Workers can't run, multi-region demand, or a compliance requirement. Secrets stay in wrangler secrets + Supabase function secrets + Vault regardless of where compute moves.
 
+## Default-deny egress, Kubernetes, Argo CD and vCluster (owner question, 2026-09-24 ~15:30)
+
+The paradigm the owner wants: every outbound call from Waldo passes one controlled point with an explicit allowlist - default-deny egress, the sidecar/middlebox model.
+
+**It does not need Kubernetes.** On the current shape the enforcement point is code, not a sidecar:
+
+- **Code-level (works now, recommended)**: one egress module in the runtime - every outbound fetch (model API, Telegram, Google via connector-proxy, search, voice) goes through it, and it allows only an explicit host list. A repo guard (same family as the model-literal and service-role guards) fails the build on any raw fetch outside the module. This is default-deny with the allowlist in version control, reviewable like everything else. Cost: one module + one guard. No new infra.
+- **Network-level**: Cloudflare One/Gateway does egress policy for enrolled devices and origins - it covers the owner's Mac, Kennel daemons, and any future container hosts. For Workers themselves there is no per-worker egress firewall product; on the edge, the code module above IS the enforcement point, which is fine because Worker code is fully ours and review-gated.
+- **Kennels's relation**: Kennel's confinement model is the same paradigm on the consumer's machine - default-deny at the boundary, command admission before effects, device-initiated bridge with no inbound ports. Egress policy for a Kennel node belongs to its daemon policy + optionally Gateway; the Waldo cloud side keeps its own module. One paradigm, two enforcement points, each native to its environment.
+
+**Where Kubernetes + Argo CD would earn it**: K8s NetworkPolicy and mesh egress gateways (sidecar/middlebox in the literal sense) are the natural enforcement when there are many long-lived container services to police, and Argo CD pays off when many services need declarative rollout across clusters. Waldo today is a Worker fleet + per-owner DOs + one Edge Function set - there is no fleet of long-lived containers to orchestrate, so the machinery would be securing a workload shape we don't have.
+
+**vCluster (owner's addition)**: virtual clusters give per-tenant or per-stage control-plane isolation on a shared host cluster, and cheap dev/stage parity. That answers "many isolated Kubernetes control planes without cluster sprawl" - valuable only once a host cluster exists. It is a multiplier on the K8s decision, not a reason for it. Same revisit triggers as above: a workload Workers can't run, multi-region demand, or a compliance bar. If that day comes, the migration path is vCluster-per-environment on one host cluster, with egress policy as NetworkPolicy from day one - the code-level module stays regardless, because defense in depth on token-bearing egress is cheap.
+
 ## Topology
 
 - Cloudflare Workers: stateless entry. One worker codebase, deployed per environment.
