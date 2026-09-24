@@ -16,6 +16,7 @@ describe('owner harness', () => {
     expect(parseHarnessCommand('/trace tg-12')).toEqual({ kind: 'trace', filter: 'tg-12' });
     expect(parseHarnessCommand('/e2e')).toEqual({ kind: 'e2e' });
     expect(parseHarnessCommand('/usage')).toEqual({ kind: 'usage' });
+    expect(parseHarnessCommand('/langfuse')).toEqual({ kind: 'langfuse' });
     expect(parseHarnessCommand('fire the brief please')).toBeNull();
     expect(parseHarnessCommand(undefined)).toBeNull();
   });

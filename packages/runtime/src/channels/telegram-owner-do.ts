@@ -279,6 +279,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (command.kind === 'trace') return traces.recent(timezone, command.filter);
     if (command.kind === 'e2e') return traces.checklist(timezone);
     if (command.kind === 'usage') return traces.usage();
+    if (command.kind === 'langfuse') return this.checkLangfuse();
     if (command.kind !== 'fire') return '';
     if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
     const trace = `harness-${updateId}`;
@@ -292,6 +293,21 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return `Fired ${command.target}; it failed: ${String(error)}\n\n${traces.recent(timezone, null, 10)}`;
     }
     return `Fired ${command.target}.\n\n${traces.recent(timezone, null, 10)}`;
+  }
+
+  private async checkLangfuse(): Promise<string> {
+    const otlp = langfuseOtlpConfig(this.env);
+    if (!otlp) return 'Langfuse is not configured: one of LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY or LANGFUSE_BASE_URL is missing.';
+    const exportTurn = otlpTurnExporter(otlp, {
+      environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
+      channel: 'telegram', userId: 'langfuse-check', sessionId: 'langfuse-check', captureText: false,
+    });
+    try {
+      await exportTurn({ trace: `langfuse-check-${Date.now()}`, hop: 'turn', ms: 1, ok: true, detail: 'owner self-test' });
+      return 'Langfuse self-test export accepted. A telegram.turn trace from user langfuse-check should appear within a minute.';
+    } catch (error) {
+      return `Langfuse self-test failed: ${String(error)}`;
+    }
   }
 
   private setup(): OwnerRuntime {
@@ -311,7 +327,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const log = (entry: TurnLogEntry) => {
       traces.record(entry, Date.now());
       console.log(JSON.stringify({ ...entry, text: undefined }));
-      if (exportTurn) this.ctx.waitUntil(exportTurn(entry).catch((error: unknown) => console.log(JSON.stringify({ trace: entry.trace, hop: 'otlp_export', ok: false, error: String(error) }))));
+      if (exportTurn) this.ctx.waitUntil(exportTurn(entry).catch((error: unknown) => {
+        const note = String(error);
+        console.log(JSON.stringify({ trace: entry.trace, hop: 'otlp_export', ok: false, error: note }));
+        traces.record({ trace: entry.trace, hop: 'otlp_export', ms: 0, ok: false, error: note }, Date.now());
+      }));
     };
     const deps = productionDeps();
     ensureSchema(this.ctx.storage);

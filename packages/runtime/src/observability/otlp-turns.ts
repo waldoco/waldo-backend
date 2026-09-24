@@ -112,6 +112,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))])]);
     if (entry.hop !== 'turn') {
       pending.set(entry.trace, [...(pending.get(entry.trace) ?? []), item]);
+      if (pending.size > 50) pending.delete(pending.keys().next().value!);
       return Promise.resolve();
     }
     const ids = { traceId: hex(16), rootId: hex(8) };

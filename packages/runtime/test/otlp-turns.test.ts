@@ -104,6 +104,16 @@ describe('otlpTurnExporter', () => {
     expect(attrs(on.spans(0)[0]!)).toMatchObject({ 'langfuse.observation.input': text.input, 'langfuse.observation.output': JSON.stringify({ reasoning: 'greet back', text: 'hello' }) });
   });
 
+  it('evicts the oldest buffered trace when too many never close', async () => {
+    const { calls, send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    for (let i = 0; i < 51; i++) await log({ trace: `tg-${i}`, hop: 'memory', ms: 3, ok: true });
+    await log({ trace: 'tg-0', hop: 'turn', ms: 10, ok: true });
+    expect(spans(calls.length - 1)).toHaveLength(1);
+    await log({ trace: 'tg-50', hop: 'turn', ms: 10, ok: true });
+    expect(spans(calls.length - 1)).toHaveLength(2);
+  });
+
   it('attaches hops that finish after the turn to the same trace and marks failures', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);

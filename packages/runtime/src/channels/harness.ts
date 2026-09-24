@@ -12,7 +12,8 @@ export type HarnessCommand =
   | Readonly<{ kind: 'trace'; filter: string | null }>
   | Readonly<{ kind: 'e2e' }>
   | Readonly<{ kind: 'console' }>
-  | Readonly<{ kind: 'usage' }>;
+  | Readonly<{ kind: 'usage' }>
+  | Readonly<{ kind: 'langfuse' }>;
 
 export const parseHarnessCommand = (text: string | undefined): HarnessCommand | null => {
   const [command, arg] = (text ?? '').trim().split(/\s+/, 2);
@@ -24,6 +25,7 @@ export const parseHarnessCommand = (text: string | undefined): HarnessCommand | 
   if (command === '/e2e') return { kind: 'e2e' };
   if (command === '/console') return { kind: 'console' };
   if (command === '/usage') return { kind: 'usage' };
+  if (command === '/langfuse') return { kind: 'langfuse' };
   return null;
 };
 

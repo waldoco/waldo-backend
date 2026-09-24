@@ -50,6 +50,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Model output is parsed defensively. Invalid output is rejected and logged, and it never partly applies.
 - Tool output and prompt inputs have size caps.
 - Gate scripts propagate failure: any failed step makes the run exit non-zero. A green-looking log line is not a pass.
+- Buffers waiting on a closing event (span buffers, pending maps) have a bound and evict oldest-first.
 
 ### Trust boundaries
 - No bearer or refresh token reaches the model, the Durable Object or the Worker. Tokens are read and used only in the connector proxy, and the runtime's database key cannot execute the token functions.
@@ -59,6 +60,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Observability
 - Every hop logs trace id, duration, ok/failed and a short detail. The E2E checklist names the hops that prove each step.
 - A live claim in a report points to a trace or a curl, not to a test.
+- An exporter's own failures land where the owner can see them (the trace book), not only in a worker console.
 
 ### Database tests
 - pgTAP files set up their own fixtures and clear any row or Vault secret they depend on, so leftovers from a live-local run cannot fail them. Live-local runs delete what they create.
@@ -76,3 +78,5 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-24 | W3.2 had the DO read the refresh token back from Vault and refresh it itself, breaking the hard line that no token reaches the DO | Trust boundaries | `connections.test.ts` asserts no token in a proxy call; `waldo_connections.sql` asserts the runtime key cannot execute `proxy_secret` or `proxy_store` (W3.4) | Trust boundaries: tokens only in the connector proxy |
 | 2026-09-24 | pgTAP files failed after a live-local run left an owner, presences and the router Vault secret behind | Database tests | every pgTAP file clears the router secret before creating it; live-local scripts delete their rows | Database tests: own fixtures, clear leftovers |
 | 2026-09-24 | gates.sh printed "GUARDS fail" but exited 0, and its test steps could not fail the run either, so f0cbb4a was pushed with failing guards | Failure paths | scripts/gates.sh exits non-zero on any failed step; scripts/guards/guard-gates-exit.mjs (proven against the pre-fix script) | Failure paths: gate scripts propagate failure |
+| 2026-09-24 | Spans from turn-less jobs (fired cards, scheduled work) sat in the OTLP exporter's pending buffer forever - unbounded growth, never exported | Resource bounds | pending-eviction test in `otlp-turns.test.ts` | Failure paths: buffers waiting on a closing event are bounded |
+| 2026-09-24 | OTLP export failures went only to the worker console, so a broken Langfuse path looked healthy from every owner-visible surface | Observability | `/langfuse` self-test command; export failures recorded in trace_log | Observability: exporter failures land in the trace book |
