@@ -278,6 +278,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { traces, timezone, cards, briefs, nightly, updateCheck } = this.setup();
     if (command.kind === 'trace') return traces.recent(timezone, command.filter);
     if (command.kind === 'e2e') return traces.checklist(timezone);
+    if (command.kind === 'usage') return traces.usage();
     if (command.kind !== 'fire') return '';
     if (command.target === null) return `Usage: /fire <${FIRE_TARGETS.join(' | ')}>`;
     const trace = `harness-${updateId}`;
