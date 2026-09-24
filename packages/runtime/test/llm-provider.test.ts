@@ -1699,3 +1699,111 @@ describe('RuntimeLLMProvider', () => {
     });
   });
 });
+
+describe('sanitiseRequest structural degradation', () => {
+  // Regression guard for the live outage where one un-decodable sequence in conversation
+  // history killed every reply turn pre-flight. Structural scribe denies (invalid_payload,
+  // oversize) degrade to a reduced, re-sanitised request; hard security denies fail closed.
+  const softBad = 'broken %C3 sequence';
+
+  it('degrades history to the current message when earlier turns trip a structural scribe deny', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [
+            { role: 'user' as const, content: `old ${softBad}` },
+            { role: 'assistant' as const, content: 'earlier reply' },
+            { role: 'user' as const, content: 'current question' },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.messages).toEqual([{ role: 'user', content: 'current question' }]);
+  });
+
+  it('fails closed when the current message itself trips a structural scribe deny', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: softBad }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.halted_by).toBe('scribe_sanitise');
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('fails closed on hard scribe denies even when only history carries the canary', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [
+            { role: 'user' as const, content: 'remember 1111111111111111 please' },
+            { role: 'user' as const, content: 'current question' },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.scribe?.reason).toBe('canary_leak');
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('drops the system prompt when it trips a structural scribe deny', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          system: `sys ${softBad}`,
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.system).toBeUndefined();
+  });
+
+  it('drops tool turns that trip a structural scribe deny', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [{ call: { call_id: 'c1', name: 'web_search', arguments: '{}' }, output: `out ${softBad}` }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(gateway.requests[0]!.request.tool_turns).toBeUndefined();
+  });
+});

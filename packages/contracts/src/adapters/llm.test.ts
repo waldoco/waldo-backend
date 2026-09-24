@@ -9,12 +9,14 @@
 // key smuggled into the contract, a throwing adapter stalling the fallback ladder, and a
 // fallback hop replaying the previous hop's rendered prompt.
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import type { AdapterResult } from '../core/error';
 import type { ModelName } from '../model/roster';
 import { modelNameSchema, ROSTER } from '../model/roster';
 import type { LLMProvider, LLMRequest, LLMResponse } from './llm';
 import {
   GATEWAY_CONSTANT_HEADERS,
+  toolParameters,
   gatewayConstantHeadersSchema,
   llmMessageSchema,
   llmRequestSchema,
@@ -260,5 +262,18 @@ describe('LLMProvider seam — fake providers', () => {
     const provider = new ScriptedProvider(() => ({ ok: true, data: baseResponse }));
     const labels = await provider.classify('a constellation ask', ['constellation', 'pattern']);
     expect(labels).toEqual(['constellation']);
+  });
+});
+
+describe('toolParameters', () => {
+  it('returns pure JSON: no ~standard marker, no non-JSON values anywhere in the tree', () => {
+    const params = toolParameters(
+      z.object({ q: z.string().min(1).max(200), n: z.number().int().optional() }),
+    );
+    expect(params).not.toHaveProperty('~standard');
+    // JSON round-trip equality catches functions, undefined, symbols, and class instances
+    // nested anywhere - the values that broke request sanitisation and would ride the wire.
+    expect(JSON.parse(JSON.stringify(params))).toEqual(params);
+    expect(params.type).toBe('object');
   });
 });

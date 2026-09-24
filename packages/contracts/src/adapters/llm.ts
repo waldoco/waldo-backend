@@ -23,8 +23,18 @@ export const llmToolSchema = z.strictObject({
 });
 export type LLMTool = z.infer<typeof llmToolSchema>;
 
-export const toolParameters = (schema: z.ZodType): Record<string, unknown> =>
-  z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+export const toolParameters = (schema: z.ZodType): Record<string, unknown> => {
+  const json = z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+  // zod v4 stamps its output with a non-configurable '~standard' marker so the result can
+  // double as a schema; that marker carries function values, which are not JSON. Tool
+  // definitions ride the wire to providers and pass through request sanitisation, both of
+  // which require pure JSON.
+  const clean: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(json)) {
+    if (key !== '~standard') clean[key] = value;
+  }
+  return clean;
+};
 
 export const llmToolCallSchema = z.strictObject({
   call_id: z.string().min(1).max(128),

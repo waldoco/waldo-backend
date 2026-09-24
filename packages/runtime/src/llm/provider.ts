@@ -1296,6 +1296,13 @@ function spendCapExceeded(spend: RouteSpendState | undefined): boolean {
   );
 }
 
+const SCRIBE_HARD_REASONS: ReadonlySet<string> = new Set([
+  'canary_leak',
+  'secret_leak',
+  'health_value_leak',
+  'untrusted_instruction',
+]);
+
 async function sanitiseRequest(
   request: LLMRequest,
   ctx: HookRuntimeContext,
@@ -1359,10 +1366,19 @@ async function sanitiseRequest(
     }
   };
 
-  const system =
+  // Hard scribe denies (canary/secret/health/injection) fail closed. Structural denies
+  // (invalid_payload, oversize) degrade instead: the turn continues on a reduced, fully
+  // re-sanitised request rather than dying on a shape false positive the model never sees.
+  const softScribe = (error: HookHaltError): boolean =>
+    error.hook === 'scribe_sanitise' &&
+    error.reason.startsWith('scribe:') &&
+    !SCRIBE_HARD_REASONS.has(error.reason.slice('scribe:'.length));
+
+  let system =
     request.system === undefined
       ? undefined
       : await sanitiseValue(request.system, 'system_prompt');
+  if (system !== undefined && !system.ok && softScribe(system.error)) system = undefined;
   if (system !== undefined && !system.ok) {
     return { ...system, scribeDestination: 'system_prompt' };
   }
@@ -1372,7 +1388,12 @@ async function sanitiseRequest(
       error: new HookHaltError('llm_provider', 'sanitised system prompt invalid', 'transient'),
     };
   }
-  const messages = await sanitiseValue(request.messages, 'internal_context');
+  let messages = await sanitiseValue(request.messages, 'internal_context');
+  if (!messages.ok && softScribe(messages.error) && request.messages.length > 1) {
+    // Degrade to the current message only; earlier history is the usual false-positive carrier.
+    const reduced = await sanitiseValue([request.messages[request.messages.length - 1]], 'internal_context');
+    if (reduced.ok) messages = reduced;
+  }
   if (!messages.ok) return { ...messages, scribeDestination: 'internal_context' };
   if (!Array.isArray(messages.payload)) {
     return {
@@ -1380,13 +1401,14 @@ async function sanitiseRequest(
       error: new HookHaltError('llm_provider', 'sanitised messages invalid', 'transient'),
     };
   }
-  const toolTurns = request.tool_turns === undefined ? undefined : await sanitiseValue(request.tool_turns, 'internal_context');
+  let toolTurns = request.tool_turns === undefined ? undefined : await sanitiseValue(request.tool_turns, 'internal_context');
+  if (toolTurns !== undefined && !toolTurns.ok && softScribe(toolTurns.error)) toolTurns = undefined;
   if (toolTurns !== undefined && !toolTurns.ok) return { ...toolTurns, scribeDestination: 'internal_context' };
   const parsed = llmRequestSchema.safeParse({
     ...request,
     system: system?.payload,
     messages: messages.payload,
-    ...(toolTurns ? { tool_turns: toolTurns.payload } : {}),
+    tool_turns: toolTurns?.payload,
   });
   return parsed.success
     ? { ok: true, request: parsed.data }
