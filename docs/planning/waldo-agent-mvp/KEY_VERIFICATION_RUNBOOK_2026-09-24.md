@@ -1,6 +1,6 @@
 # Key verification runbook - 2026-09-24
 
-Companion to KEY_COLLECTION_GUIDE_2026-09-24.md. Keys live in ~/.waldo-mvp/env on the Mac. Nothing reads that file except Mac-side scripts (ship.sh, gates.sh, owner_wire_supabase.sh); the worker and the Supabase edge function only see secrets set ON them. So every key must be pushed to the right place before it can work.
+Companion to KEY_COLLECTION_GUIDE_2026-09-24.md. Keys live in TWO places on the Mac (CORRECTED 7:07 PM after the first verification pass found this): the collected third-party keys in ~/.waldo-mvp/env, and the three WIRING secrets (SUPABASE_PROJECT_URL, SUPABASE_PUBLISHABLE_KEY, WALDO_ROUTER_HMAC_SECRET) in the repo-root .env at ~/Developer/Pin4sf/waldo-backend-mvp/.env - owner_wire_supabase.sh reads them from there (line 7), not from ~/.waldo-mvp/env. Nothing reads that file except Mac-side scripts (ship.sh, gates.sh, owner_wire_supabase.sh); the worker and the Supabase edge function only see secrets set ON them. So every key must be pushed to the right place before it can work.
 
 ## Step 0 - does ship.sh sync secrets automatically?
 
@@ -24,6 +24,19 @@ npx supabase secrets set GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" GOOGLE_CLIENT_SECR
 ```
 
 Live proof: ask the bot for the Google connect link (or hit the /console connect redirect) - the Google consent screen must load with NO `invalid_client` error. Complete the consent once; success = the calendar grant exists and a later calendar question answers from real data. If the consent screen errors, the client ID/secret or redirect URI is wrong - recheck the redirect URI is exactly `https://waldo-runtime-staging.piyushfulper3210.workers.dev/oauth/google/callback`.
+
+## 1b. connector-proxy must be DEPLOYED before Google consent can complete (ADDED 7:07 PM - first pass found the gap)
+
+The consent SCREEN loads with only the worker secrets, but completing consent fails: the code exchange runs in the connector-proxy edge function, and the function is not live until deployed. It also needs the router HMAC secret in its OWN env (connector-proxy/index.ts line 6 reads WALDO_ROUTER_HMAC_SECRET from the edge function env; SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are reserved names Supabase provides automatically).
+
+```bash
+cd ~/Developer/Pin4sf/waldo-backend-mvp
+set -a; . ./.env; set +a   # repo-root .env, NOT ~/.waldo-mvp/env - wiring secrets live here
+npx supabase functions deploy connector-proxy --project-ref togdshayyxycitzckpqv
+npx supabase secrets set WALDO_ROUTER_HMAC_SECRET="$WALDO_ROUTER_HMAC_SECRET" --project-ref togdshayyxycitzckpqv
+```
+
+Then re-run the section-1 consent proof end to end: consent screen -> complete consent -> calendar grant exists -> a calendar question answers from real data. mint-agent-jwt stays undeployed on purpose - nothing consumes it yet; do not deploy unused attack surface.
 
 ## 2. BRAVE_SEARCH_API_KEY (key verifiable TODAY, in-product after the search-tool slice)
 
