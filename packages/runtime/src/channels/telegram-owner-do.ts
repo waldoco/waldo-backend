@@ -420,7 +420,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       async connectUrl(feature: GoogleFeature) {
         const app = await googleApp();
-        return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, stateOwner(), Date.now()), feature) : null;
+        return app && stateSecret ? googleConsentUrl(app, await oauthState(stateSecret, stateOwner(), Date.now())) : null;
       },
     };
     const desk = approvalDesk(storage.sql, {

@@ -27,15 +27,21 @@ describe('google oauth state', () => {
     expect(await verifyOauthState('s', state, 1_000 + 16 * 60_000)).toBeNull();
   });
 
-  it('asks only for the feature being turned on, offline, adding to what was granted', () => {
+  it('asks once for the combined set - calendar, mail and tasks - offline, adding to what was granted', () => {
     const url = new URL(googleConsentUrl(app, 'st'));
     expect(url.searchParams.get('access_type')).toBe('offline');
     expect(url.searchParams.get('include_granted_scopes')).toBe('true');
     expect(url.searchParams.get('prompt')).toBe('consent select_account');
-    expect(url.searchParams.get('scope')!.split(' ')).toEqual(['openid', 'email', 'https://www.googleapis.com/auth/calendar.events']);
-    const mail = new URL(googleConsentUrl(app, 'st', 'mail')).searchParams.get('scope')!;
-    expect(mail).toContain('gmail.readonly');
-    expect(mail).not.toMatch(/drive|documents|spreadsheets|presentations|contacts|gmail\.modify/);
+    const scopes = url.searchParams.get('scope')!.split(' ');
+    expect(scopes).toEqual([
+      'openid', 'email',
+      'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/gmail.readonly',
+      'https://www.googleapis.com/auth/gmail.send',
+      'https://www.googleapis.com/auth/gmail.compose',
+      'https://www.googleapis.com/auth/tasks',
+    ]);
+    expect(scopes.join(' ')).not.toMatch(/drive|documents|spreadsheets|presentations|contacts|gmail\.modify/);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
   });
 });

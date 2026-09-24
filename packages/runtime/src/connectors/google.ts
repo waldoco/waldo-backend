@@ -1,6 +1,6 @@
 // Google connector for the owner's own accounts: OAuth offline grants, Calendar reads and Gmail.
-// Scopes are requested per feature, when that feature is turned on (brief 2026-09-24, W3). Consent adds to
-// what the account already granted. Scope is not permission: each tool still gates its own effects.
+// Consent asks once for the combined set (owner ruling 2026-09-24 13:31, reversing W3's per-feature asks):
+// calendar + mail + tasks in a single dialog. Scope is not permission: each tool still gates its own effects.
 // Unverified app, so only listed test users can connect (post-mvp-cleanup: Google verification).
 // gmail.compose stays until Waldo keeps its own drafts (W6 follow-up loop); then it goes (post-mvp-cleanup).
 const AUTH = 'https://www.googleapis.com/auth/';
@@ -42,10 +42,12 @@ export async function verifyOauthState(secret: string, state: string, now: numbe
   return (await sign(secret, `${owner}.${expires}`)) === mac ? owner : null;
 }
 
-export function googleConsentUrl(app: GoogleApp, state: string, feature: GoogleFeature = 'calendar'): string {
+export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks];
+
+export function googleConsentUrl(app: GoogleApp, state: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.search = new URLSearchParams({
-    client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: ['openid', 'email', ...GOOGLE_FEATURE_SCOPES[feature]].join(' '),
+    client_id: app.clientId, redirect_uri: app.redirectUri, response_type: 'code', scope: GOOGLE_CONSENT_SCOPES.join(' '),
     access_type: 'offline', prompt: 'consent select_account', include_granted_scopes: 'true', state,
   }).toString();
   return url.toString();
