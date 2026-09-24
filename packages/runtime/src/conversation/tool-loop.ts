@@ -1,11 +1,18 @@
 import { toolNameSchema, toolParameters, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
+import type { ToolOutputStore } from './tool-output-store';
 
 
 export const TOOL_OUTPUT_LIMIT = 16_000;
 
-export const capToolOutput = (output: string): string =>
-  output.length <= TOOL_OUTPUT_LIMIT ? output : `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n[cut: ${output.length - TOOL_OUTPUT_LIMIT} more characters not shown; narrow the request]`;
+export const TOOL_OUTPUT_HEAD = 4_000;
+
+export const capToolOutput = (output: string, offload?: ToolOutputStore): string => {
+  if (output.length <= TOOL_OUTPUT_LIMIT) return output;
+  if (offload === undefined) return `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n[cut: ${output.length - TOOL_OUTPUT_LIMIT} more characters not shown; narrow the request]`;
+  const id = offload.put(output);
+  return `${output.slice(0, TOOL_OUTPUT_HEAD)}\n[full output stored as ${id}: ${output.length} characters total; call read_tool_output with this id, offset and length to read more]`;
+};
 
 export type ToolLoopStep = (
   tools: readonly LLMTool[] | undefined,
@@ -32,6 +39,7 @@ export async function runToolLoop(input: Readonly<{
   handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'];
   ctx: ToolDispatcherContext;
   maxSteps: number;
+  offload?: ToolOutputStore;
   onTool?: (event: ToolLoopEvent) => void;
 }>): Promise<string> {
   const tools = toolDefinitions(input.handlers);
@@ -51,7 +59,7 @@ export async function runToolLoop(input: Readonly<{
         ? { ok: false, error: 'Same call already made this turn; use its result.' }
         : await dispatch(call, input);
       seen.add(key);
-      const output = capToolOutput(JSON.stringify(result));
+      const output = capToolOutput(JSON.stringify(result), input.offload);
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
       input.onTool?.({ call, ok: result.ok, ms: Date.now() - started, output });
@@ -63,7 +71,7 @@ export async function runToolLoop(input: Readonly<{
 
 async function dispatch(
   call: LLMToolCall,
-  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext }>,
+  input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
 ): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string }>> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
@@ -73,6 +81,6 @@ async function dispatch(
   } catch {
     return { ok: false, error: 'Arguments were not valid JSON.' };
   }
-  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers });
+  const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
   return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error };
 }

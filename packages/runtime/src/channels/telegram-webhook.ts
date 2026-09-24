@@ -17,6 +17,7 @@ export type TelegramWebhookEnv = Readonly<{
   SMALLEST_AI_API_KEY?: string;
   ELEVENLABS_API_KEY?: string;
   WALDO_STT_PROVIDER?: string;
+  WALDO_TOOL_OFFLOAD?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
 }> & OwnerDirectoryEnv;

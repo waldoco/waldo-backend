@@ -3,6 +3,8 @@ import {
   type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import { runToolLoop } from '../conversation/tool-loop';
+import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
+import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
 import { localTrustedBriefScheduleInput, resolveRunLoopAdapters } from '../run-loop/adapters';
 import { JoinedConversationPath } from '../conversation/joined-path';
@@ -37,6 +39,7 @@ export const createTelegramResponder = (
   clock: OwnerClock = { timezone: 'UTC', now: () => new Date() },
   tools: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [],
   model: ModelName = WALDO_CHAT_MODEL,
+  offload = false,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -52,7 +55,8 @@ export const createTelegramResponder = (
     sourceTaint: null, toolArgSourceTaint: null,
     sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
   };
-  const handlers = [getContextHandler(clock), ...tools];
+  const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
+  const handlers = [getContextHandler(clock), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   const complete = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
     const started = Date.now();
     let reasoning: string | undefined;
@@ -92,6 +96,7 @@ export const createTelegramResponder = (
       const trace = traceId;
       return runToolLoop({
         handlers,
+        ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {

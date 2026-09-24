@@ -118,6 +118,14 @@ export const readDocumentArgsSchema = z.strictObject({
 });
 export type ReadDocumentArgs = z.infer<typeof readDocumentArgsSchema>;
 
+// Stored large tool outputs (TE3): read ranges on demand instead of inline truncation.
+export const readToolOutputArgsSchema = z.strictObject({
+  id: z.string().min(1).max(64),
+  offset: z.int().min(0).optional(),
+  length: z.int().min(1).max(16_000).optional(),
+});
+export type ReadToolOutputArgs = z.infer<typeof readToolOutputArgsSchema>;
+
 // MCP is a gated bridge, not a bypass around the typed registry: server must clear the
 // dispatch-time server allowlist (ADR-0049), whose shape is deliberately unpinned here.
 export const callMcpToolArgsSchema = z.strictObject({

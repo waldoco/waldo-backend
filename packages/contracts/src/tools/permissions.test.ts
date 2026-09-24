@@ -72,6 +72,7 @@ describe('toolName', () => {
       'open_loop',
       'close_loop',
       'set_proactivity',
+      'read_tool_output',
     ]);
   });
 
@@ -194,6 +195,7 @@ describe('TOOL_PERMISSIONS', () => {
         'open_loop',
         'close_loop',
         'set_proactivity',
+        'read_tool_output',
       ],
       dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
       pre_activity_spot: [
@@ -208,11 +210,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 36 of 37', () => {
+  it('grants no trigger the full surface — user_message tops out at 37 of 38', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(36);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(37);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {

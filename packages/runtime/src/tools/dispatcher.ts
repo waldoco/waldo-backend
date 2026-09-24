@@ -110,6 +110,7 @@ export type DispatchToolOptions<Ctx extends ToolDispatcherContext> = {
   handlers: readonly RuntimeToolHandler<Ctx>[];
   extraHooks?: HookRegistry<Ctx>;
   maxResultJsonChars?: number;
+  offload?: import('../conversation/tool-output-store').ToolOutputStore;
   trustedEffect?: Readonly<{
     prepare(input: Readonly<{ tool: ToolName; args: unknown }>): Promise<TrustedToolEffect>;
   }>;
@@ -373,6 +374,17 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   }
 
   if (resultSize > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
+    if (options.offload !== undefined) {
+      const full = JSON.stringify(finalResult.data);
+      const id = options.offload.put(full);
+      return withTrustedEffect({
+        ok: true,
+        call_id: call.id,
+        tool: tool.data,
+        data: { stored_output: id, total_chars: full.length, head: full.slice(0, 4_000), read_with: 'read_tool_output' },
+        source_taint: finalResult.source_taint,
+      }, settledTrustedEffect);
+    }
     return withTrustedEffect(failDispatch(
       call.id,
       tool.data,
@@ -416,6 +428,7 @@ export async function reconcileTrustedToolEffect<Ctx extends ToolDispatcherConte
     handlers: readonly RuntimeToolHandler<Ctx>[];
     extraHooks?: HookRegistry<Ctx>;
     maxResultJsonChars?: number;
+  offload?: import('../conversation/tool-output-store').ToolOutputStore;
   }>,
 ): Promise<DispatchToolResult> {
   const tool = toolNameSchema.safeParse(input.tool);
