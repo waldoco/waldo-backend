@@ -102,6 +102,20 @@ describe('owner console', () => {
     expect(await access.session(d)).toBeNull();
   });
 
+  it('renders pending approvals with acting buttons and an honest empty state', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('id="approvals"');
+    expect(html).toContain('Waiting on you');
+    expect(html).toContain('Move &#34;Gym&#34;');
+    expect(html).toContain('value="approval.approve"');
+    expect(html).toContain('value="approval.skip"');
+    expect(html).toContain(`value="p1"`);
+    const withUndo = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p9', summary: 'Moved Gym', state: 'done' as const, undoable: true }] });
+    expect(withUndo).toContain('value="approval.undo"');
+    const noneLeft = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [] });
+    expect(noneLeft).toContain('Nothing waiting on you');
+  });
+
   it('checklist reflects real connection state, honestly marking what is not done', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('id="checklist"');
@@ -138,7 +152,7 @@ describe('owner console', () => {
   it('renders every section with working controls and escapes stored text', () => {
     const view = { ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, text: '<script>x</script>' }] };
     const html = renderConsole(view);
-    for (const id of ['checklist', 'connections', 'spots', 'constellation', 'day', 'memory', 'activity']) expect(html).toContain(`id="${id}"`);
+    for (const id of ['checklist', 'approvals', 'connections', 'spots', 'constellation', 'day', 'memory', 'activity']) expect(html).toContain(`id="${id}"`);
     expect(html).toContain('&#60;script&#62;x&#60;/script&#62;');
     expect(html).not.toContain('<zz>');
     expect(html).toContain('href="/console/google">Connect Google');

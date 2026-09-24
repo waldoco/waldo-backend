@@ -141,7 +141,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401 });
-    const { ready, view, act, googleConnectUrl, openFile } = this.setup();
+    const { ready, view, act, googleConnectUrl, openFile, desk } = this.setup();
     await ready;
     const back = (notice: string) => new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${notice}` } });
     if (url.pathname === CONSOLE_GOOGLE_PATH) {
@@ -168,6 +168,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (done) this.ctx.storage.kv.put('telegram_unlinked', true);
         return back(done ? 'telegram.unlink' : 'invalid');
       }
+      if (action && ['approval.approve', 'approval.skip', 'approval.undo'].includes(action.action)) {
+        const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u' } as const;
+        const out = await desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval');
+        return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(out.message.slice(0, 200))}` } });
+      }
       if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
         if (action.action === 'session.signout.all') await access.signOutAll();
         else await access.signOut(session.token);
@@ -177,7 +182,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return back(done && action ? action.action : 'invalid');
     }
     if (url.pathname !== CONSOLE_PATH) return new Response('not found', { status: 404 });
-    return new Response(renderConsole(await view(session, NOTICES[url.searchParams.get('m') ?? ''] ?? null)), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    const mKey = url.searchParams.get('m') ?? '';
+    const dynamicNotice = NOTICES[mKey] ?? (mKey.length > 0 && mKey.length <= 200 ? mKey : null);
+    return new Response(renderConsole(await view(session, dynamicNotice)), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
   }
 
   private async telegramLinkPage(): Promise<Response> {
@@ -678,7 +685,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const pins = plans.pins();
         return {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
-          sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, csrf: session.csrf, notice,
+          sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, approvals: desk.pending(Date.now()), csrf: session.csrf, notice,
           google: { accounts: linked, connectAvailable: google.configured() },
           telegram: { linked: identity.get<boolean>('telegram_unlinked') !== true, unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),

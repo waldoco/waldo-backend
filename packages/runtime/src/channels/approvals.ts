@@ -13,10 +13,14 @@ export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
 type Stored = ProposeCalendarChangeArgs & { seen_etag?: string };
 
+export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
+export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
+  decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
+  pending(now: number): readonly ApprovalItem[];
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
 
@@ -71,7 +75,53 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     else await client.moveEvent(undo.id, undo.start, undo.end);
   };
 
+  const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision> => {
+    const started = deps.now();
+    const entry = row(id);
+    const expected = action === 'u' ? 'done' : 'open';
+    if (!entry || entry.status !== expected) return { toast: 'Already handled.', message: 'Already handled.' };
+    const proposal = JSON.parse(entry.payload_json) as Stored;
+    try {
+      let out: ApprovalDecision;
+      if (action !== 'u' && action !== 's' && expired(entry, proposal)) {
+        setStatus(id, 'expired');
+        out = { toast: 'This proposal expired', message: `That proposal expired, so I left your calendar as it is: ${describe(proposal)}. Ask me again if you still want it.` };
+      } else if (action === 's') {
+        setStatus(id, 'skipped');
+        out = { toast: 'Not now', message: 'Left it. Nothing changed.' };
+      } else if (action === 'e') {
+        setStatus(id, 'changing');
+        out = { toast: 'Tell me what to change', message: `What should I change? (${describe(proposal)})` };
+      } else {
+        const client = await deps.google();
+        if (client === null) {
+          out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
+        } else if (action === 'a') {
+          const undo = await apply(client, proposal);
+          if (undo === 'stale') {
+            setStatus(id, 'stale');
+            out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
+          } else {
+            setStatus(id, 'done', undo);
+            out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
+          }
+        } else if (entry.undo_json && entry.decided_at !== null && deps.now() - entry.decided_at <= UNDO_WINDOW_MS) {
+          await revert(client, JSON.parse(entry.undo_json) as Undo);
+          setStatus(id, 'undone');
+          out = { toast: 'Undone', message: `Undone: ${describe(proposal)}.` };
+        } else {
+          out = { toast: 'Too late to undo', message: 'The 10-minute undo window has passed, so I left it as it is.' };
+        }
+      }
+      deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: true, detail: id });
+      return out;
+    } catch (error) {
+      deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: false, error: String(error) });
+      return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  };
   return {
+    decide,
     async propose(p) {
       const id = `p${deps.newId()}`;
       const summary = `${describe(p)}. ${p.reason}`;
@@ -85,61 +135,22 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     record(kind, summary, payload) {
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, ?, 'done', ?, ?, NULL, ?, ?)", `l${deps.newId()}`, kind, summary, JSON.stringify(payload), deps.now(), deps.now());
     },
+    pending(now) {
+      const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
+      const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
+      return [
+        ...open.map((r) => ({ id: r.id, summary: r.summary, state: 'open' as const, undoable: false })),
+        ...undoable.map((r) => ({ id: r.id, summary: r.summary, state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS })),
+      ];
+    },
     async callback(query, trace) {
-      const started = deps.now();
-      const [action, id] = (query.data ?? '').split(':');
+      const [action = '', id] = (query.data ?? '').split(':');
       const answer = (text: string) => deps.call('answerCallbackQuery', { callback_query_id: query.id, text }).catch(() => undefined);
-      if (query.from.id !== deps.owner || !id) return void (await answer('Not available.'));
-      const entry = row(id);
-      const expected = action === 'u' ? 'done' : 'open';
-      if (!entry || entry.status !== expected) return void (await answer('Already handled.'));
+      if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u'].includes(action)) return void (await answer('Not available.'));
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      const proposal = JSON.parse(entry.payload_json) as Stored;
-      try {
-        if (action !== 'u' && action !== 's' && expired(entry, proposal)) {
-          setStatus(id, 'expired');
-          await answer('This proposal expired');
-          await say(`That proposal expired, so I left your calendar as it is: ${describe(proposal)}. Ask me again if you still want it.`);
-        } else if (action === 's') {
-          setStatus(id, 'skipped');
-          await answer('Not now');
-          await say('Left it. Nothing changed.');
-        } else if (action === 'e') {
-          setStatus(id, 'changing');
-          await answer('Tell me what to change');
-          await say(`What should I change? (${describe(proposal)})`);
-        } else if (action === 'a' || action === 'u') {
-          const client = await deps.google();
-          if (client === null) {
-            await answer('Google is not connected');
-            await say('I could not do that because Google is not connected.');
-          } else if (action === 'a') {
-            const undo = await apply(client, proposal);
-            if (undo === 'stale') {
-              setStatus(id, 'stale');
-              await answer('The event changed');
-              await say(`The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.`);
-            } else {
-              setStatus(id, 'done', undo);
-              await answer('Done');
-              await say(`Done: ${describe(proposal)}.${undo ? '' : " This one can't be undone from here."}`, undo ? [['Undo', `u:${id}`]] : undefined);
-            }
-          } else if (entry.undo_json && entry.decided_at !== null && deps.now() - entry.decided_at <= UNDO_WINDOW_MS) {
-            await revert(client, JSON.parse(entry.undo_json) as Undo);
-            setStatus(id, 'undone');
-            await answer('Undone');
-            await say(`Undone: ${describe(proposal)}.`);
-          } else {
-            await answer('Too late to undo');
-            await say('The 10-minute undo window has passed, so I left it as it is.');
-          }
-        }
-        deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: true, detail: id });
-      } catch (error) {
-        deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: false, error: String(error) });
-        await answer('That failed');
-        await say(`That didn't work: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      const out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace);
+      await answer(out.toast);
+      await say(out.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();

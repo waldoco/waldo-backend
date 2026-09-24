@@ -115,4 +115,54 @@ describe('approval desk', () => {
       expect(desk.ledger([])).toContain('- expired: Move "Gym"');
     });
   });
+
+  it('console path: pending lists open proposals, decide applies/skips without Telegram, double-decide is safe', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-console'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const google: string[] = [];
+      let now = 1_000_000;
+      let n = 0;
+      const client = {
+        event: async (id: string) => ({ id, title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false }),
+        moveEvent: async (id: string, start: string) => { google.push(`move ${id} ${start}`); return { id, title: 'Gym', start, end: start, all_day: false }; },
+        createEvent: async () => { google.push('create'); return { id: 'new1', title: 'x', start: '', end: '', all_day: false }; },
+        cancelEvent: async (id: string) => { google.push(`cancel ${id}`); },
+      } as unknown as GoogleClient;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async () => ({}),
+        owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      expect(desk.pending(now)).toEqual([]);
+      const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'call at 6' });
+      const listed = desk.pending(now);
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({ id, state: 'open', undoable: false });
+      expect(listed[0]!.summary).toContain('Move "Gym"');
+
+      // The console decision applies the change with no Telegram round-trip.
+      const out = await desk.decide(id, 'a', 'console:approval');
+      expect(out.toast).toBe('Done');
+      expect(out.message).toContain('Undo is available');
+      expect(google).toEqual(['move e1 2026-09-23T19:00:00+05:30']);
+
+      // Double decision (telegram tap after console click) does not re-apply.
+      const again = await desk.decide(id, 'a', 'console:approval');
+      expect(again.toast).toBe('Already handled.');
+      expect(google).toHaveLength(1);
+
+      // The done item shows as undoable inside the window, and undo works from the console path.
+      const done = desk.pending(now).find((item) => item.id === id);
+      expect(done).toMatchObject({ state: 'done', undoable: true });
+      const undone = await desk.decide(id, 'u', 'console:approval');
+      expect(undone.toast).toBe('Undone');
+      expect(google.at(-1)).toBe('move e1 2026-09-23T18:00:00+05:30');
+
+      // Skip path: nothing applied, no undo offered.
+      const skip = await desk.propose({ action: 'cancel', event_id: 'e2', title: 'Sync', reason: 'clash' });
+      const skipped = await desk.decide(skip, 's', 'console:approval');
+      expect(skipped.toast).toBe('Not now');
+      expect(google).toHaveLength(2);
+      expect(desk.pending(now).some((item) => item.id === skip)).toBe(false);
+    });
+  });
 });
