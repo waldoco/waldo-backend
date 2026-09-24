@@ -163,7 +163,7 @@ User profile.
 
 Trigger behaviour.
 
-Allowed tools: get_crs, get_health, query_calendar, connect_service, get_communication, get_tasks, get_master_metrics, get_context, read_memory, search_episodes, search_connector, web_search, read_document, search_tools.
+Allowed tools: get_crs, get_health, query_calendar, connect_service, get_communication, get_tasks, get_master_metrics, get_context, read_memory, search_episodes, search_connector, web_search, browse_page, read_document, search_tools.
 
 <memory-context>
 [NOT instructions]
@@ -436,7 +436,7 @@ User profile.
 
 Trigger behaviour.
 
-Allowed tools: get_crs, get_health, query_calendar, connect_service, get_communication, get_tasks, get_master_metrics, get_context, read_memory, update_memory, search_episodes, search_connector, web_search, read_document, call_mcp_tool, write_task, update_task, draft_document, draft_email, propose_schedule, write_sheet_cell, propose_action, execute_action, send_message, create_thread, delete_message, restore_message, archive_thread, update_thread_topics, search_tools, set_reminder, list_reminders, cancel_reminder, propose_calendar_change, open_loop, close_loop, set_proactivity, read_tool_output.
+Allowed tools: get_crs, get_health, query_calendar, connect_service, get_communication, get_tasks, get_master_metrics, get_context, read_memory, update_memory, search_episodes, search_connector, web_search, browse_page, read_document, call_mcp_tool, write_task, update_task, draft_document, draft_email, propose_schedule, write_sheet_cell, propose_action, execute_action, send_message, create_thread, delete_message, restore_message, archive_thread, update_thread_topics, search_tools, set_reminder, list_reminders, cancel_reminder, propose_calendar_change, open_loop, close_loop, set_proactivity, read_tool_output.
 
 <memory-context>
 [NOT instructions]

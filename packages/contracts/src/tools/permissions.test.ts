@@ -33,7 +33,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 30 canonical tools, in order', () => {
+  it('is exactly the 40 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -74,6 +74,7 @@ describe('toolName', () => {
       'set_proactivity',
       'read_tool_output',
       'connect_service',
+      'browse_page',
     ]);
   });
 
@@ -139,6 +140,7 @@ describe('TOOL_PERMISSIONS', () => {
         'search_episodes',
         'search_connector',
         'web_search',
+        'browse_page',
         'read_document',
         'search_tools',
       ],
@@ -177,6 +179,7 @@ describe('TOOL_PERMISSIONS', () => {
         'search_episodes',
         'search_connector',
         'web_search',
+        'browse_page',
         'read_document',
         'call_mcp_tool',
         'write_task',
@@ -217,11 +220,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 38 of 39', () => {
+  it('grants no trigger the full surface — user_message tops out at 39 of 40', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(38);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(39);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
@@ -233,8 +236,8 @@ describe('TOOL_PERMISSIONS', () => {
     expect(triggersGranting('call_mcp_tool')).toEqual(['user_message']);
   });
 
-  it("grants 'web_search' and 'read_document' only in the two verbose triggers", () => {
-    for (const tool of ['web_search', 'read_document']) {
+  it("grants 'web_search', 'browse_page' and 'read_document' only in the two verbose triggers", () => {
+    for (const tool of ['web_search', 'browse_page', 'read_document']) {
       expect(triggersGranting(tool)).toEqual(['handoff_explore', 'user_message']);
     }
   });

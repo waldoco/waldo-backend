@@ -117,6 +117,14 @@ export const webSearchArgsSchema = z.strictObject({
 });
 export type WebSearchArgs = z.infer<typeof webSearchArgsSchema>;
 
+// B-tool-1: read-only browser. One shot: open the page in a real browser, extract, done.
+// No act/observe here - bounded actions are a later slice with the approval gate.
+export const browsePageArgsSchema = z.strictObject({
+  url: z.url().max(2000),
+  instruction: z.string().min(1).max(1000),
+});
+export type BrowsePageArgs = z.infer<typeof browsePageArgsSchema>;
+
 // provider imports the single doc-provider owner (adapters/doc) — the R2 scratch space is
 // 'r2_scratch' in every schema; a bare 'scratch' literal is drift.
 export const readDocumentArgsSchema = z.strictObject({

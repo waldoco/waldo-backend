@@ -16,6 +16,7 @@ import {
   readMemoryArgsSchema,
   searchEpisodesArgsSchema,
   taskStatusFilterSchema,
+  browsePageArgsSchema,
   webSearchArgsSchema,
   webSearchResultSchema,
 } from './reads';
@@ -178,6 +179,17 @@ describe('executeActionArgs', () => {
 
   it('rejects a model-supplied user_id (identity comes from trusted context)', () => {
     expect(executeActionArgsSchema.safeParse({ ...base, user_id: 'user-1' }).success).toBe(false);
+  });
+});
+
+describe('browsePageArgs', () => {
+  it('accepts a url + instruction and rejects extras, empty instruction and non-urls', () => {
+    expect(browsePageArgsSchema.parse({ url: 'https://example.com', instruction: 'what is on this page' })).toEqual({
+      url: 'https://example.com', instruction: 'what is on this page',
+    });
+    expect(browsePageArgsSchema.safeParse({ url: 'not a url', instruction: 'x' }).success).toBe(false);
+    expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: '' }).success).toBe(false);
+    expect(browsePageArgsSchema.safeParse({ url: 'https://example.com', instruction: 'x', act: 'click' }).success).toBe(false);
   });
 });
 
