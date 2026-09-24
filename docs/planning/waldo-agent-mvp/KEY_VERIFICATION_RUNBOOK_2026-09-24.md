@@ -29,11 +29,20 @@ Live proof: ask the bot for the Google connect link (or hit the /console connect
 
 The consent SCREEN loads with only the worker secrets, but completing consent fails: the code exchange runs in the connector-proxy edge function, and the function is not live until deployed. It also needs the router HMAC secret in its OWN env (connector-proxy/index.ts line 6 reads WALDO_ROUTER_HMAC_SECRET from the edge function env; SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are reserved names Supabase provides automatically).
 
+CORRECTED 7:17 PM (Claude caught it before running anything): WALDO_ROUTER_HMAC_SECRET is NOT in any .env. owner_wire_supabase.sh generates it in memory, stores it ONLY in Supabase Vault (name waldo_router_hmac) and on the worker, and unsets it. Vault is the only readable copy. Pull it from Vault the same way the wiring script does (management-API query with SUPABASE_ACCESS_TOKEN from the repo-root .env), never print it, never write it to any file, set the edge-function secret FIRST, then deploy - the proxy must never go live with an empty router key:
+
 ```bash
 cd ~/Developer/Pin4sf/waldo-backend-mvp
-set -a; . ./.env; set +a   # repo-root .env, NOT ~/.waldo-mvp/env - wiring secrets live here
+set -a; . ./.env; set +a   # repo-root .env - SUPABASE_ACCESS_TOKEN lives here
+H=$(curl -sf -X POST "https://api.supabase.com/v1/projects/togdshayyxycitzckpqv/database/query" \
+  -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H 'content-type: application/json' \
+  -d '{"query":"select decrypted_secret from vault.decrypted_secrets where name = '"'"'waldo_router_hmac'"'"'"}' \
+  | sed -n 's/.*"decrypted_secret": *"\([0-9a-f]\{64\}\)".*/\1/p')
+if [ ${#H} -ne 64 ]; then echo "HMAC extraction failed - STOP, do not deploy, report back"; unset H; else
+npx supabase secrets set WALDO_ROUTER_HMAC_SECRET="$H" --project-ref togdshayyxycitzckpqv
+unset H
 npx supabase functions deploy connector-proxy --project-ref togdshayyxycitzckpqv
-npx supabase secrets set WALDO_ROUTER_HMAC_SECRET="$WALDO_ROUTER_HMAC_SECRET" --project-ref togdshayyxycitzckpqv
+fi
 ```
 
 Then re-run the section-1 consent proof end to end: consent screen -> complete consent -> calendar grant exists -> a calendar question answers from real data. mint-agent-jwt stays undeployed on purpose - nothing consumes it yet; do not deploy unused attack surface.
