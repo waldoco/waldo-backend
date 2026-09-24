@@ -28,6 +28,8 @@ import { localIso, localToEpoch, reminderBook, reminderHandlers } from './remind
 import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
+import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
+import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
@@ -69,7 +71,10 @@ type OwnerRuntime = Readonly<{
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
   act(action: ConsoleAction): Promise<boolean>;
   googleConnectUrl(feature: GoogleFeature): Promise<string | null>;
-  google: Readonly<{ finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>> }>;
+  google: Readonly<{
+    finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
+    beginSession(ticketHash: string): Promise<Readonly<{ url: string; nonce: string }> | null>;
+  }>;
   openFile(id: number): Promise<Response | null>;
   traces: TraceBook;
   timezone: string;
@@ -100,6 +105,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname === GOOGLE_FINISH_PATH) {
       const reply = await this.serial(() => this.finishGoogle(JSON.parse(body) as ConsentCallback));
       return Response.json(reply);
+    }
+    if (new URL(request.url).pathname === BEGIN_SESSION_PATH) {
+      const { ticket_hash } = JSON.parse(body) as { ticket_hash: string };
+      const begin = await this.serial(() => this.setup().google.beginSession(ticket_hash));
+      console.log(JSON.stringify({ trace: `connect:${ticket_hash.slice(0, 8)}`, hop: 'connect_begin', ok: begin !== null }));
+      return Response.json({ url: begin?.url ?? null });
     }
     const origin = request.headers.get('x-waldo-origin');
     if (origin) await this.ctx.storage.put('origin', origin);
@@ -378,7 +389,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const api = createTelegramOwnerApi(call);
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
     const deliverConnectLink = async (url: string): Promise<boolean> => {
-      const trace = `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
+      const trace = url.includes('/c/') ? 'connect:deliver' : `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
       return call('sendMessage', {
         chat_id: owner,
         text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
@@ -404,6 +415,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }));
       const doName = vaultOwner();
     };
+    const env = this.env;
     const consentDeps = {
       store: {
         read: async () => (await storage.get<Record<string, ConsentFlow>>('google:consents')) ?? {},
@@ -483,8 +495,26 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const app = await googleApp();
         return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner()) : null;
       },
+      // Chat links are short and first-party: /c/<ticket>. The consent URL is minted at click time
+      // (beginSession) and never passes through model-visible text.
       async connectUrl(_feature: GoogleFeature) {
-        return (await google.begin())?.url ?? null;
+        if (!google.configured()) return null;
+        const origin = await storage.get<string>('origin');
+        const callRpc = signedRpc(env);
+        const doName = vaultOwner() ?? String(owner);
+        if (!origin || !callRpc) return null;
+        const ticket = newTicket();
+        const hash = await ticketHash(ticket);
+        const sessionId = await callRpc('connect_session_issue', `connsess.issue.${doName}.google.telegram.${hash}`, {
+          p_do_name: doName, p_provider: 'google', p_channel: 'telegram', p_ticket_hash: hash,
+        });
+        if (!sessionId) return null;
+        log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
+        return `${origin}/c/${ticket}`;
+      },
+      async beginSession(ticketHash: string) {
+        const app = await googleApp();
+        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), ticketHash) : null;
       },
       async finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>> {
         const started = Date.now();
@@ -505,7 +535,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           }
         });
         log({ trace, hop: 'oauth_callback', ms: Date.now() - started, ok: outcome.kind === 'linked', detail: `${outcome.kind}${fresh ? '' : ' (replayed)'}`, ...(outcome.kind === 'failed' ? { error: outcome.reason } : {}) });
-        if (fresh && outcome.kind === 'linked') log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
+        if (fresh && outcome.kind === 'linked') {
+          log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
+          const session = (await consentDeps.store.read())[input.nonce]?.session;
+          const callRpc = signedRpc(env);
+          if (session && callRpc) {
+            const done = await callRpc('connect_session_complete', `connsess.complete.${session}`, { p_ticket_hash: session }).catch(() => null);
+            log({ trace: `connect:${session.slice(0, 8)}`, hop: 'connect_completed', ms: 0, ok: done === true });
+          }
+        }
         return { outcome, fresh, bot: await botUsername() };
       },
     };

@@ -11,6 +11,7 @@ import {
 import { armAlarm } from './scheduler/alarm-slot';
 import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
 import { handleGoogleCallback } from './channels/google-oauth';
+import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { handleConsole } from './channels/console-signin';
@@ -124,6 +125,9 @@ export default {
     }
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
       return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(env.WALDO_OWNER_TELEGRAM_ID)).fetch(request);
+    }
+    if (new URL(request.url).pathname.startsWith(CONNECT_LINK_PREFIX)) {
+      return handleConnectTicket(request, env);
     }
     if (new URL(request.url).pathname === GOOGLE_CALLBACK_PATH) {
       return handleGoogleCallback(request, env);

@@ -71,3 +71,7 @@ Built: deterministic narrow-scope redaction of secret-bearing URLs (Google OAuth
 ### S2 - connect_sessions migration + signed RPCs
 Table + 3 router-signed RPCs (issue/resolve/complete), hash-only storage, 30-min TTL, single completion, revoke-on-reissue, RLS forced, service-role denied. pgTAP file written (12 assertions) but NOT yet executed (needs the local supabase stack on the Mac). Canonical migration list updated.
 - [ ] MAC: apply migration on staging (supabase db push) and run pgTAP file waldo_connect_sessions.sql
+
+### S3 - /c/<ticket> connect links
+channels/connect-link.ts: worker route resolves ticket -> signed connect_session_resolve -> DO beginSession mints consent at click time -> 302 (no-store, no-referrer). DO connectUrl now issues tickets (chat carries only /c/<ticket>); consent attempts minted from a session carry the ticket hash and complete the session on linked. Egress guard pattern list already covers /c/<22-char> links. Tests: 7 route tests (malformed/unknown/expired/completed/ok-302/DO-failure + hash determinism), 1 consent session-field test.
+- [ ] LIVE: P3+ on next deploy - the connect button carries a /c/ link; tail shows connect_issued -> connect_link ok -> connect_begin -> oauth hops -> connect_completed

@@ -25,6 +25,14 @@ const begin = async (deps: Parameters<typeof startConsent>[0], owner = '54584463
 };
 
 describe('google consent attempt', () => {
+  it('records the connect-session ticket hash on the attempt when started from a /c/ link (S3)', async () => {
+    const { deps, memory } = setup();
+    const { nonce } = await startConsent(deps, app, SECRET, '5458446350', 'hashabc');
+    expect(memory.flows()[nonce]!.session).toBe('hashabc');
+    const { nonce: plain } = await startConsent(deps, app, SECRET, '5458446350');
+    expect(memory.flows()[plain]!.session).toBeUndefined();
+  });
+
   it('starts with a signed one-time state and an S256 challenge whose verifier stays server-side', async () => {
     const { deps, memory } = setup();
     const { url, nonce } = await begin(deps);
