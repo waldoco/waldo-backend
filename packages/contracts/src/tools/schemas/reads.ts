@@ -125,6 +125,16 @@ export const browsePageArgsSchema = z.strictObject({
 });
 export type BrowsePageArgs = z.infer<typeof browsePageArgsSchema>;
 
+// B-tool-2: bounded in-page actions. observe-before-act seam, capped steps, deterministic
+// stop before anything irreversible-looking (submit/pay/send/book...) - those need the
+// approval gate, which is B-tool-3, not model judgment.
+export const browseActArgsSchema = z.strictObject({
+  url: z.url().max(2000),
+  task: z.string().min(1).max(1000),
+  max_actions: z.int().min(1).max(5).default(3),
+});
+export type BrowseActArgs = z.infer<typeof browseActArgsSchema>;
+
 // provider imports the single doc-provider owner (adapters/doc) — the R2 scratch space is
 // 'r2_scratch' in every schema; a bare 'scratch' literal is drift.
 export const readDocumentArgsSchema = z.strictObject({

@@ -21,6 +21,7 @@ Owner Telegram id: 5458446350. Supabase project: togdshayyxycitzckpqv.
 | 7c9403d | L6 account deletion | yes | unknown | no |
 | dec8f2e | browser tool spec (doc only) | yes | n/a | n/a |
 | 5c35c98 | B-tool-1 browse_page (read-only) | yes | unknown | no |
+| (this commit) | B-tool-2 browse_act (bounded actions) | yes | unknown | no |
 
 One ship.sh run covers every pending lane commit. After ANY deploy, record the deployed version id here and flip the column.
 
@@ -42,6 +43,7 @@ One ship.sh run covers every pending lane commit. After ANY deploy, record the d
 13. ACCOUNT DELETION: in /console danger zone, confirm Delete account. Expect: telegram signs out ("This account has been deleted"), waldo.owner row gone, all connections and vault secrets gone (waldo.connections empty for the owner, vault secrets for the owner's connection ids deleted), DO storage wiped. Deleted-means-deleted probe: a new telegram message from the same owner starts FRESH onboarding (no prior state). Evidence: console notice + post-delete chat behavior + empty connections.
 
 14. BROWSE PAGE: ask the bot to read a live public page that defeats snippets (e.g. "browse https://example.com and tell me the heading"). Expect: answer from the real rendered page. Then a failure case: browse a dead URL - expect an honest transient error, not a fabricated answer. Requires BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID in staging secrets (Mac-side wrangler secret put). Evidence: verbatim answers + trace hop.
+14b. BROWSE ACT: ask the bot to do a small multi-step read on a public page (e.g. "browse the Hacker News front page, open the comments on the top story, and summarise them"). Expect: actions taken listed, page summary, and on any submit/pay/send-shaped step an honest "stopped before <action>" instead of doing it. Evidence: verbatim reply + Activity/ledger rows per browser_action.
 15. MULTI-USER ROUTING (BUILD_ORDER item 5 - already built, needs live proof): from a SECOND telegram account, message the bot with no link code - expect silence (no owner DO woken). Then /start <code> with a fresh code from the invited user's console - expect "Linked." and routing to that user's own DO. Evidence: both transcripts.
 
 ## Slices assessed as covered by existing surfaces (no new code needed)

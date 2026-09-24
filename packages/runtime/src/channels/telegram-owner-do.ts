@@ -20,7 +20,7 @@ import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
-import { browsePageHandler } from '../tools/live/browser';
+import { browseActHandler, browsePageHandler } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
@@ -527,7 +527,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock, deliverConnectLink), connectServiceHandler(google, deliverConnectLink), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock, deliverConnectLink), connectServiceHandler(google, deliverConnectLink), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
