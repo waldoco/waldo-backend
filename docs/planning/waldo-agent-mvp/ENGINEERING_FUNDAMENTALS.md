@@ -49,6 +49,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A turn that fails still records what happened in the trace.
 - Model output is parsed defensively. Invalid output is rejected and logged, and it never partly applies.
 - Tool output and prompt inputs have size caps.
+- Gate scripts propagate failure: any failed step makes the run exit non-zero. A green-looking log line is not a pass.
 
 ### Trust boundaries
 - No bearer or refresh token reaches the model, the Durable Object or the Worker. Tokens are read and used only in the connector proxy, and the runtime's database key cannot execute the token functions.
@@ -74,3 +75,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-24 | A pgTAP check for Vault secret deletion read in the same statement as the revoke, so it saw the pre-delete snapshot and failed on correct code | Database tests | `supabase/tests/waldo_connections.sql` checks deletion in its own statement | Database tests: read writes in a later statement |
 | 2026-09-24 | W3.2 had the DO read the refresh token back from Vault and refresh it itself, breaking the hard line that no token reaches the DO | Trust boundaries | `connections.test.ts` asserts no token in a proxy call; `waldo_connections.sql` asserts the runtime key cannot execute `proxy_secret` or `proxy_store` (W3.4) | Trust boundaries: tokens only in the connector proxy |
 | 2026-09-24 | pgTAP files failed after a live-local run left an owner, presences and the router Vault secret behind | Database tests | every pgTAP file clears the router secret before creating it; live-local scripts delete their rows | Database tests: own fixtures, clear leftovers |
+| 2026-09-24 | gates.sh printed "GUARDS fail" but exited 0, and its test steps could not fail the run either, so f0cbb4a was pushed with failing guards | Failure paths | scripts/gates.sh exits non-zero on any failed step; scripts/guards/guard-gates-exit.mjs (proven against the pre-fix script) | Failure paths: gate scripts propagate failure |
