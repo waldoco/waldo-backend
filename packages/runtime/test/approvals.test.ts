@@ -7,6 +7,59 @@ import { GoogleError, type GoogleClient } from '../src/connectors/google';
 const iso = (s: string) => s as never;
 
 describe('approval desk', () => {
+  it('browser_submit: proposes with Do it / Not now, executes ONLY on approve, never undoes, expires in 30 minutes', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      let now = 1_000_000;
+      let n = 0;
+      const executed: string[] = [];
+      const payload = {
+        url: 'https://shop.example/checkout',
+        action: { selector: '#pay', description: 'Place the order', method: 'click' },
+        binding: { total: 'Rs 499', items: '1x bottle' },
+        steps: ['Add to cart'],
+      };
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+        browserSubmit: async (p) => { executed.push(p.action.description); return 'Done: Place the order.'; },
+      });
+      const id = await desk.proposeBrowserSubmit(payload);
+      expect(sent[0]!.body.text).toBe('Approve this browser action? Place the order on https://shop.example/checkout (total: Rs 499, items: 1x bottle)');
+      const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
+      expect(keyboard).toContain(`a:${id}`);
+      expect(keyboard).toContain(`s:${id}`);
+      expect(keyboard).not.toContain(`e:${id}`);
+      expect(executed).toEqual([]);
+
+      // double-decide safe
+      await desk.callback({ id: 'q1', from: { id: 42 }, data: `a:${id}` }, 't');
+      await desk.callback({ id: 'q2', from: { id: 42 }, data: `a:${id}` }, 't');
+      expect(executed).toEqual(['Place the order']);
+
+      // never undoable
+      const undone = await desk.decide(id, 'u', 't');
+      expect(undone.toast).toBe("Can't be undone");
+
+      // 30-minute TTL, not the 12-hour calendar one
+      const id2 = await desk.proposeBrowserSubmit({ ...payload, action: { ...payload.action, description: 'Pay now' } });
+      now += 31 * 60_000;
+      const late = await desk.decide(id2, 'a', 't');
+      expect(late.toast).toBe('This proposal expired');
+      expect(executed).toHaveLength(1);
+
+      // no executor configured -> honest refusal, nothing executes
+      const desk2 = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const id3 = await desk2.proposeBrowserSubmit({ ...payload, action: { ...payload.action, description: 'Confirm booking' } });
+      const noExec = await desk2.decide(id3, 'a', 't');
+      expect(noExec.toast).toBe('Browsing is not set up');
+    });
+  });
+
   it('sends a card, applies only on Approve, undoes within the window, and keeps a ledger', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-desk'));
     await runInDurableObject(stub, async (_instance, state) => {

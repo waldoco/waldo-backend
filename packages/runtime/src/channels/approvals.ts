@@ -13,10 +13,22 @@ export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
 type Stored = ProposeCalendarChangeArgs & { seen_etag?: string };
 
+// B-tool-3: the exact thing the owner approved. The executor replays it in a fresh browser
+// session and re-reads the binding from the page before acting - a changed price/item/destination
+// aborts, approval does not carry across a changed page.
+export type BrowserSubmitProposal = Readonly<{
+  url: string;
+  action: Readonly<{ selector: string; description: string; method?: string; arguments?: string[] }>;
+  binding: Readonly<Record<string, string>>;
+  steps: readonly string[];
+}>;
+const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
+
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
+  proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
@@ -35,6 +47,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   now(): number;
   timezone: string;
   log(entry: TurnLogEntry): void;
+  browserSubmit?: (proposal: BrowserSubmitProposal) => Promise<string>;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -52,8 +65,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const say = (text: string, buttons?: [string, string][]) =>
     deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) });
 
+  const describeBrowser = (p: BrowserSubmitProposal) => {
+    const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
+    return `${p.action.description} on ${p.url}${binding ? ` (${binding})` : ''}`;
+  };
+  const describeAny = (entry: LedgerRow) =>
+    entry.kind === 'browser_submit' ? describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal) : describe(JSON.parse(entry.payload_json) as Stored);
   const expired = (entry: LedgerRow, p: Stored) =>
-    deps.now() - entry.created_at > PROPOSAL_TTL_MS || (p.start !== undefined && Date.parse(p.start) <= deps.now());
+    deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
   const apply = async (client: GoogleClient, p: Stored): Promise<Undo | null | 'stale'> => {
     if (p.action === 'create') return { op: 'cancel', id: (await client.createEvent({ title: p.title!, start: p.start!, end: p.end! })).id };
     const before = await client.event(p.event_id!);
@@ -85,13 +104,26 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       let out: ApprovalDecision;
       if (action !== 'u' && action !== 's' && expired(entry, proposal)) {
         setStatus(id, 'expired');
-        out = { toast: 'This proposal expired', message: `That proposal expired, so I left your calendar as it is: ${describe(proposal)}. Ask me again if you still want it.` };
+        out = { toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` };
       } else if (action === 's') {
         setStatus(id, 'skipped');
         out = { toast: 'Not now', message: 'Left it. Nothing changed.' };
       } else if (action === 'e') {
         setStatus(id, 'changing');
-        out = { toast: 'Tell me what to change', message: `What should I change? (${describe(proposal)})` };
+        out = { toast: 'Tell me what to change', message: `What should I change? (${describeAny(entry)})` };
+      } else if (entry.kind === 'browser_submit') {
+        const bp = JSON.parse(entry.payload_json) as BrowserSubmitProposal;
+        if (action === 'a') {
+          if (!deps.browserSubmit) {
+            out = { toast: 'Browsing is not set up', message: 'I could not do that because browsing is not set up on this Waldo yet.' };
+          } else {
+            const outcome = await deps.browserSubmit(bp);
+            setStatus(id, 'done');
+            out = { toast: 'Done', message: outcome };
+          }
+        } else {
+          out = { toast: "Can't be undone", message: 'A browser submit cannot be undone from here. Nothing was reversed.' };
+        }
       } else {
         const client = await deps.google();
         if (client === null) {
@@ -122,6 +154,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
   return {
     decide,
+    async proposeBrowserSubmit(payload) {
+      const id = `p${deps.newId()}`;
+      const summary = describeBrowser(payload);
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'browser_submit', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      await say(`Approve this browser action? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
+      return id;
+    },
     async propose(p) {
       const id = `p${deps.newId()}`;
       const summary = `${describe(p)}. ${p.reason}`;

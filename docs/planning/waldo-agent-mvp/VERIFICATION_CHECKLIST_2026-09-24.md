@@ -22,7 +22,8 @@ Owner Telegram id: 5458446350. Supabase project: togdshayyxycitzckpqv.
 | dec8f2e | browser tool spec (doc only) | yes | n/a | n/a |
 | 5c35c98 | B-tool-1 browse_page (read-only) | yes | unknown | no |
 | 66ab045 | B-tool-2 browse_act (bounded actions) | yes | unknown | no |
-| (this commit) | get_communication live Gmail handler (BUILD_ORDER 10) | yes | unknown | no |
+| 29a7da3 | get_communication live Gmail handler (BUILD_ORDER 10) | yes | unknown | no |
+| (this commit) | B-tool-3 approval-bound browser submit | yes | unknown | no |
 
 One ship.sh run covers every pending lane commit. After ANY deploy, record the deployed version id here and flip the column.
 
@@ -46,6 +47,7 @@ One ship.sh run covers every pending lane commit. After ANY deploy, record the d
 14. BROWSE PAGE: ask the bot to read a live public page that defeats snippets (e.g. "browse https://example.com and tell me the heading"). Expect: answer from the real rendered page. Then a failure case: browse a dead URL - expect an honest transient error, not a fabricated answer. Requires BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID in staging secrets (Mac-side wrangler secret put). Evidence: verbatim answers + trace hop.
 14b. BROWSE ACT: ask the bot to do a small multi-step read on a public page (e.g. "browse the Hacker News front page, open the comments on the top story, and summarise them"). Expect: actions taken listed, page summary, and on any submit/pay/send-shaped step an honest "stopped before <action>" instead of doing it. Evidence: verbatim reply + Activity/ledger rows per browser_action.
 14c. GMAIL READ: after Google consent (step 2), ask "any new email?". Expect: real inbox messages with from/subject/snippet/time. Before consent: honest auth_failed with a connect BUTTON, never a pasted URL. Evidence: verbatim answers.
+14d. APPROVAL-BOUND SUBMIT: on a harmless irreversible-ish flow (e.g. a demo shop checkout), let browse_act reach the final step. Expect: a Telegram card "Approve this browser action? <action> on <url> (<binding>)" with Do it / Not now, NOTHING acted before approval. On Do it: the executor re-reads the page and completes only if the binding still matches. Tamper test: change the cart between proposal and approval - expect "I did NOT do it - the page changed". Evidence: card screenshot + both outcomes + ledger rows.
 15. MULTI-USER ROUTING (BUILD_ORDER item 5 - already built, needs live proof): from a SECOND telegram account, message the bot with no link code - expect silence (no owner DO woken). Then /start <code> with a fresh code from the invited user's console - expect "Linked." and routing to that user's own DO. Evidence: both transcripts.
 
 ## Slices assessed as covered by existing surfaces (no new code needed)
