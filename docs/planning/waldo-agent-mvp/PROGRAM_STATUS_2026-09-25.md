@@ -34,17 +34,26 @@ path - see outage row). Supabase: Waldo-MVP (togds) is the wired project; Woof 1
 |---|---|---|
 | 05b24d8 | Reply-outage fix: structural scribe denies degrade, ~standard stripped from tool defs | typecheck; contracts 1657/1657; runtime 1433/1433 |
 | 0dc0b63 | S4 ConnectIntent contract + responder offerConnect seam | same gate run |
+| 582a091 | pgTAP drift fix: connect_sessions test pins the shared guard wording | test-only |
+| 5989a42 | SCENARIO_HARNESS_SPEC: four layers, declarative format, hop-stream assertions | docs |
+| 8b0c03b | H1 L1 harness + FIX: 7 chat tools were silently dead (missing TOOL_ARG_SCHEMAS entries, hook halted every call while the model claimed success); draft_email gate halt pinned pending approval-wiring decision | shards 296+275+465+397, contracts 1657, scenarios 9/9 |
+| cd008d0 | H2 degradation/canary/serialization scenarios | scenarios 12/12 |
+| 5357a4d | H3 per-tool breadth: 9/9 chat tools covered, connect-offer seam | scenarios 20/20 |
+| 08bb1e3 | HARNESS_COMPARISON + parity inventory numbers | docs |
+| 9ea2ddb | VAULT_SPEC: build-over-Notte, fill-only custody, key-to-sandbox rung-2 (owner decision) | docs |
+| 94d4eda | D1 console sessions backend: stateful cookies, session list, sign-out-everywhere | shards green; pgTAP written, needs Mac run |
+| af3d56f | Scheduler-fire scenarios (reminder/fetch/day-plan) | scenarios 23/23 |
 
 ## NOT-STARTED
 
-- Headless scenario harness (owner's top build priority after the outage - spec first, then build; synthetic-webhook telegram testing path folds in).
-- B1 minted dashboard link, session list/sign-out, multi-user routing (UNBLOCKED: Resend key live).
-- Dashboard P0-P2 (shell, memory explorer, trust mutations, usage) - lo-fi visual bar.
+- Harness L3 staging webhook path (Mac packet; TELEGRAM_WEBHOOK_SECRET on the worker) and H5 L2/L1 catalog unification.
+- B1 minted dashboard link flow polish + multi-user routing (D1 session backend DONE tonight; Resend key live).
+- Dashboard D2-D7 front-end (shell, memory explorer, trust mutations, usage) - lo-fi visual bar, Mac-side.
 - Gmail live handler for get_communication (google 'mail' infra exists).
 - S5-S6 connect-flow remainder per CONNECT_FLOW_DESIGN.
-- Waldo Vault spec (Notte-vs-build research; include key-to-sandbox channel as rung-2 unlock).
+- draft_email approval-wiring decision (chat drafts halted by the autonomy gate; demote or wire hasApproval).
+- Vault slice per VAULT_SPEC (V1 schema+CRUD+audit; rung-2 key-to-sandbox is an owner decision).
 - Kennel bridge + machine context layer (blocked on Ashish's review).
-- HARNESS_COMPARISON doc + tool/connection parity inventory numbers.
 
 ## The 2026-09-25 02:06 outage (R2 step 6) - RCA closed
 
@@ -58,9 +67,9 @@ worst case the error now names the exact scribe destination+reason.
 
 ## Remaining to the final Waldo agent (owner's morning list)
 
-1. Morning deploy packet + live re-verify (reply turns, connect flow end-to-end, pgTAP verdict).
-2. Scenario harness build (spec done tonight, then implementation).
-3. B1 + session list + multi-user routing; dashboard P0-P2 behind them.
+1. Morning deploy packet + live re-verify (reply turns, connect flow end-to-end, pgTAP diag capture for the two schema_contract drift assertions).
+2. Scenario harness: L1+H2+H3 BUILT tonight (23 scenarios); L3 webhook + H5 unification remain.
+3. B1 + multi-user routing; dashboard D2-D7 behind them (D1 backend shipped).
 4. Gmail live handler; S5-S6; parity-gap tools from the comparison work.
 5. WALDO_ENVIRONMENT/RELEASE tagging fix (one wrangler vars packet line).
 6. Vault spec -> vault slice (owner-confirmed near-term, ahead of dashboard v2.1).
