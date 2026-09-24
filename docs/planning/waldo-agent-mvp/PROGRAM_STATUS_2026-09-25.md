@@ -1,75 +1,73 @@
-# Program status - 2026-09-25 ~01:10 IST
+# Program status - 2026-09-25 ~03:00 IST (reconciliation pass, owner's pre-sleep ask)
 
-Owner ask: the whole program on one page - built vs remaining vs blocked-on-him, against the
-original MVP plan plus every addition since. Evidence honesty: "live" = proven on staging with a
-packet result; "committed" = gates green on beta-mvp, not yet deployed/proven live.
+Grading honesty: LIVE-VERIFIED = proven on staging with a packet/trace result on the current
+code line. DEPLOYED-UNVERIFIED = on the staging worker/DB but no live proof. COMMITTED = gates
+green on beta-mvp, not deployed. CODE-ONLY = written, not committed. NOT-STARTED = no code.
 
-HEAD: d75266b (beta-mvp). Staging worker runs 1cce32b (deployed 23:49, version acee4cc8).
+Repo HEAD: 0dc0b63 (beta-mvp). Staging worker: version 57c098ce = commit 68dd014 (broken reply
+path - see outage row). Supabase: Waldo-MVP (togds) is the wired project; Woof 1 is stale.
 
-## Verified LIVE on staging
+## LIVE-VERIFIED
 
-| What | Evidence |
+| What | Evidence | Caveat |
+|---|---|---|
+| Telegram turn loop (reply, reaction, memory) | P2 PASS 00:25, 13 hops green, on deploy acee4cc8 | REGRESSED on 57c098ce (every reply died pre-flight scribe); fix 05b24d8 awaits morning deploy |
+| Google OAuth consent mechanics (button -> Google consent -> linked, 7 scopes) | P3 partial 00:28 | was proven against the STALE project wiring; R2 rewired to togds (steps 0-4 PASS) but the end-to-end re-run (step 6) was blocked by the reply outage - re-verify morning |
+| Egress guard + history scrub (S1) | P1 deploy | live redaction box still open |
+| Token custody (W2/W3: no token reaches model/DO/worker; proxy-only) | PROGRAM_STATE_2026-09-24 probes | - |
+| Langfuse observability (US project, traces flowing) | tonight's RCA ran on live turn traces | environment tag unset (WALDO_ENVIRONMENT) - P3 root cause, unfixed |
+| Connector-proxy reachability with own HMAC auth | R2 step 3 probe: unsigned POST gets the function's own 401 'unsigned proxy call', not the gateway's | - |
+
+## DEPLOYED-UNVERIFIED (on staging, no live proof)
+
+| What | State |
 |---|---|
-| Telegram bot turn loop (reply, reaction, memory) | P2 PASS 00:25, 13 hops green |
-| Google OAuth consent itself (button -> consent -> linked, 7 scopes) | P3 partial 00:28 |
-| Egress guard + history scrub deployed (S1) | P1 deploy; live redaction box open |
-| Evals v0 on the real responder (42 cases) | W7 runs, results doc |
-| Console auth, token custody (W2/W3 lines) | per PROGRAM_STATE_2026-09-24 |
+| S2 connect_sessions migration + signed RPCs (712e6e2) | migration applied to togds (R2 step 1 PASS); local pgTAP 115 tests, 3 assertion failures pending judgment (2 look like grant-list drift, 1 wording) |
+| S3 /c/ticket connect links (06aeee5) | in 57c098ce; live re-run blocked by the outage, then by sleep |
+| 12b tool outputs into context composer (a9438d3) | deployed, never exercised live |
+| web_search + browse_page/browse_act handlers | keys live on the worker (Brave, Browserbase reconciled tonight); never exercised live |
+| RESEND_API_KEY on worker | secret live tonight; console email sign-in code not started |
 
-## Committed, NOT yet live (deploy + proof pending)
+## COMMITTED, NOT DEPLOYED
 
-| SHA | Slice | Needs |
+| SHA | Slice | Gates |
 |---|---|---|
-| a9438d3 | 12b tool outputs into context composer | redeploy |
-| 712e6e2 | S2 connect_sessions migration + signed RPCs | db push + pgTAP (PACKET 4) |
-| 06aeee5 | S3 /c/ticket connect links | S2 applied + redeploy + P3 re-run |
-| f218740 | packet hygiene fixes (P3 packet bug) | - |
-| d75266b | DEBUGGING_DEVX spec | owner review |
+| 05b24d8 | Reply-outage fix: structural scribe denies degrade, ~standard stripped from tool defs | typecheck; contracts 1657/1657; runtime 1433/1433 |
+| 0dc0b63 | S4 ConnectIntent contract + responder offerConnect seam | same gate run |
 
-## In flight right now
+## NOT-STARTED
 
-- **Reply-turn outage FIXED in sandbox, awaiting morning deploy** (02:45 IST): every reply turn on deploy 57c098ce died pre-flight on a structural scribe deny (sanitiseRequest fail-closed on false-positive shapes); fix 05b24d8 degrades structural denies and strips zod's ~standard from tool definitions. Gates green; live proof = morning deploy + 'connect my google'.
+- Headless scenario harness (owner's top build priority after the outage - spec first, then build; synthetic-webhook telegram testing path folds in).
+- B1 minted dashboard link, session list/sign-out, multi-user routing (UNBLOCKED: Resend key live).
+- Dashboard P0-P2 (shell, memory explorer, trust mutations, usage) - lo-fi visual bar.
+- Gmail live handler for get_communication (google 'mail' infra exists).
+- S5-S6 connect-flow remainder per CONNECT_FLOW_DESIGN.
+- Waldo Vault spec (Notte-vs-build research; include key-to-sandbox channel as rung-2 unlock).
+- Kennel bridge + machine context layer (blocked on Ashish's review).
+- HARNESS_COMPARISON doc + tool/connection parity inventory numbers.
 
-- **Google data-path RCA - VERDICT DELIVERED** (lane's dashboard RCA, ~01:30 IST): the worker's
-  SUPABASE_PROJECT_URL secret points at a stale third project - togds shows zero connector-proxy
-  calls in the exchange window and zero connection rows; Woof 1 has no waldo schema. Turns stayed
-  green via the single-owner routing fallback, masking the break. Second bug: connector-proxy
-  deployed with the gateway JWT check on (runbook lacked --no-verify-jwt). Fix + live re-run:
-  PACKET_R2_2026-09-25.md, awaits the owner.
-- S4 (ConnectIntent contract + responder offerConnect): COMMITTED and pushed (this push). Live verification folds into the morning deploy + 'connect my google' re-run.
+## The 2026-09-25 02:06 outage (R2 step 6) - RCA closed
 
-## Remaining from the original MVP plan (BUILD_ORDER)
+Every reply turn on 57c098ce died pre-flight: sanitiseRequest hard-failed the whole turn on any
+structural scribe deny (invalid_payload), so one un-sanitisable string in history/memory/system
+killed every turn; reactions kept working (no history). Fix 05b24d8: structural denies degrade
+to a reduced re-sanitised request; hard security denies still fail closed. Second real bug found
+en route: zod v4 toJSONSchema stamps tool definitions with a non-JSON ~standard marker - stripped
+before the wire. Morning: pull, deploy, Telegram 'connect my google' - expect the connect card;
+worst case the error now names the exact scribe destination+reason.
 
-| Item | What | Blocked on |
-|---|---|---|
-| 3-5 | B1 minted console link, session list, multi-user routing | console email sign-in (needs Resend key) |
-| 6-9 | Dashboard P0-P2 (shell, memory explorer, trust mutations, usage) | item 3 + owner picked lo-fi visuals; build pending |
-| 13 | Kennel bridge + machine context layer (minimi parity S1-S8) | Ashish's review |
+## Remaining to the final Waldo agent (owner's morning list)
 
-## Discovered along the way (additions since the plan)
-
-- Connect-flow redesign S1-S6 (born from the 22:35 live failure): S1-S4 committed, S5-S6 pending.
-- Debugging DevX program (Rung 0 instrumentation, Rung 1 browser dashboards, deploys stay Mac-only).
-- Packet hygiene law + bug-log discipline (after the P3 packet bug).
-- Token-efficiency groundwork, WALDO_ENVIRONMENT/RELEASE tagging (root-caused tonight: vars unset).
-- **Waldo Vault** (owner call 01:16, confirmed 01:28 - build it, near-term, ahead of dashboard v2.1):
-  per-owner encrypted credential store, fill-only browser access (values never reach the model),
-  dashboard management, revocation = delete, takeover-mode fallback for sites that block automated
-  login. Evaluate Notte's vault as the base/service vs building on Supabase. Spec: lane research
-  queued after the RCA close.
+1. Morning deploy packet + live re-verify (reply turns, connect flow end-to-end, pgTAP verdict).
+2. Scenario harness build (spec done tonight, then implementation).
+3. B1 + session list + multi-user routing; dashboard P0-P2 behind them.
+4. Gmail live handler; S5-S6; parity-gap tools from the comparison work.
+5. WALDO_ENVIRONMENT/RELEASE tagging fix (one wrangler vars packet line).
+6. Vault spec -> vault slice (owner-confirmed near-term, ahead of dashboard v2.1).
+7. Kennel bridge when Ashish's review lands.
 
 ## Blocked on the owner (one glance)
 
-1. Run PACKET R2 (~10 min: rewire secrets, redeploy connector-proxy, ship.sh, optional pgTAP, live connect re-run) - fixes the RCA, verifies google connect end-to-end.
-2. Fill 3 vault links (Langfuse / Supabase / Cloudflare dashboard logins) - unlocks lane self-serve debugging.
-3. Resend API key - unblocks console email sign-in (items 3-5).
-4. Run PACKET C1 (June leftovers cleanup, already approved 23:02).
-5. Browserbase free-plan signup - unblocks P6 browser live proof.
-6. Standing rulings: six eval findings, gpt-5-mini enablement, Langfuse retention, DO token fallback, WhatsApp route.
-
-## Standing bars (unchanged)
-
-Production-grade backend under lo-fi UI (owner's call 21:16); per-slice benchmarking vs top
-open-source tools reported; every library usage verified against current official docs; every bug
-gets adversarial test + checklist line + bug-log row in the same commit; nothing counts as done on
-tests-only claims - the living checklist carries live-vs-committed status per slice.
+1. MORNING: pull beta-mvp, deploy, re-run the live connect proof (~10 min packet).
+2. Standing rulings: six eval findings, gpt-5-mini enablement, Langfuse retention, DO token fallback, WhatsApp route.
+3. PACKET C1 (June leftovers cleanup, approved 23:02, unrun).
