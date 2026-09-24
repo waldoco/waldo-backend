@@ -234,6 +234,7 @@ function dependencies(
           safety_rules: { text: 'Respect privacy and require approved actions.', source: source('sqlite-safety') },
           health: null,
           workspace: [],
+          tool_outputs: [],
         };
       },
     },

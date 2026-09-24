@@ -15,6 +15,7 @@ import {
   type ContextComposerDependencies,
   type ContextSource,
 } from '../context-composer';
+import type { ContextFragment } from '../context-composer/types';
 import type { HookRuntimeContext } from '../hooks/registry';
 import {
   CloudflareAIGatewayAdapter,
@@ -111,6 +112,7 @@ export type RunLoopTestOverrides = {
 
 type ResolveRunLoopAdaptersOptions = {
   deps?: Deps;
+  toolOutputs?: () => Promise<readonly ContextFragment[]>;
 };
 
 export function resolveRunLoopAdapters(
@@ -137,7 +139,7 @@ export function resolveRunLoopAdapters(
       deliveryTextFallback: RUN_LOOP_DELIVERY_TEXT,
       providerMode: 'fake',
       safety: localPermissiveSafety(),
-      contextComposer: createLocalTrustedBriefContextComposer(),
+      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs),
       replayArtifacts: localTrustedBriefReplayArtifacts(),
     };
   }
@@ -271,7 +273,9 @@ export function localTrustedBriefScheduleInput(): Readonly<{
   };
 }
 
-function createLocalTrustedBriefContextComposer(): ContextComposer {
+function createLocalTrustedBriefContextComposer(
+  toolOutputs: () => Promise<readonly ContextFragment[]> = async () => [],
+): ContextComposer {
   const dependencies: ContextComposerDependencies = {
     staged_inputs: {
       async resolve(request) {
@@ -329,6 +333,7 @@ function createLocalTrustedBriefContextComposer(): ContextComposer {
           ),
           health: null,
           workspace: [],
+          tool_outputs: await toolOutputs(),
         };
       },
     },

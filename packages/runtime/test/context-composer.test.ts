@@ -245,6 +245,7 @@ function dependencies(): ContextComposerDependencies {
             }),
           },
           workspace: [],
+          tool_outputs: [],
         };
       },
     },
@@ -1518,7 +1519,7 @@ describe('ContextComposer', () => {
     if (!first.ok || !second.ok) return;
     expect(second.prompt).toBe(first.prompt);
     expect(second.checkpoint).toEqual(first.checkpoint);
-    expect(first.checkpoint.context_ref).toBe('ctx_bc298c0cdbeba490740da8e53d288a4e');
+    expect(first.checkpoint.context_ref).toBe('ctx_fb33e4d0e8dd20bece8157ebcd6d0aa7');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );
@@ -1748,5 +1749,69 @@ describe('ContextComposer', () => {
       },
     }).compose(trustedEnvelope(), RUNTIME_INPUTS);
     expect(fenceCloser).toEqual({ ok: false, failure: { code: 'sanitisation_failed' } });
+  });
+});
+
+describe('tool_outputs material (BUILD_ORDER 12b)', () => {
+  const toolFragment = (text: string, taint: 'external' | null = 'external') => ({
+    text,
+    source: source('tool-output-test', { source_kind: 'tool_result', scope: 'invocation', source_taint: taint }),
+  });
+
+  it('renders recent tool outputs into the composed prompt with provenance', async () => {
+    const base = dependencies();
+    const composer = createContextComposer({
+      ...base,
+      materials: {
+        async load(request) {
+          const material = await base.materials.load(request);
+          return { ...material, tool_outputs: [toolFragment('query_calendar succeeded: {"events":[]}')] };
+        },
+      },
+    });
+    const result = await composer.compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
+    if (!result.ok) return;
+    expect(result.prompt).toContain('<recent-tool-results>');
+    expect(result.prompt).toContain('query_calendar succeeded: {"events":[]}');
+    expect(result.checkpoint.sources.some((entry) => entry.source_kind === 'tool_result')).toBe(true);
+  });
+
+  it('rejects a tool output claiming a non-tool_result source kind', async () => {
+    const base = dependencies();
+    const composer = createContextComposer({
+      ...base,
+      materials: {
+        async load(request) {
+          const material = await base.materials.load(request);
+          return { ...material, tool_outputs: [{ ...toolFragment('sneaky'), source: source('fake', { source_kind: 'workspace_snapshot', scope: 'principal', source_taint: 'external' }) }] };
+        },
+      },
+    });
+    const result = await composer.compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects more than 6 tool output fragments', async () => {
+    const base = dependencies();
+    const composer = createContextComposer({
+      ...base,
+      materials: {
+        async load(request) {
+          const material = await base.materials.load(request);
+          return { ...material, tool_outputs: Array.from({ length: 7 }, (_, i) => toolFragment(`output ${i}`)) };
+        },
+      },
+    });
+    const result = await composer.compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(result.ok).toBe(false);
+  });
+
+  it('renders the empty state when there are no tool outputs', async () => {
+    const composer = createContextComposer(dependencies());
+    const result = await composer.compose(trustedEnvelope(), RUNTIME_INPUTS);
+    expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
+    if (!result.ok) return;
+    expect(result.prompt).toContain('No recent tool results.');
   });
 });

@@ -20,6 +20,7 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
+import { toolOutputLedger } from '../conversation/tool-output-ledger';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const MAX_TOOL_ROUNDS = 25;
@@ -40,6 +41,7 @@ export const createTelegramResponder = (
   tools: DispatchToolOptions<ToolDispatcherContext>['handlers'] = [],
   model: ModelName = WALDO_CHAT_MODEL,
   offload = false,
+  toolLedger?: ReturnType<typeof toolOutputLedger>,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -47,7 +49,9 @@ export const createTelegramResponder = (
   const invocation = accepted.value;
   const ownerId = invocation.verified_authority.principal_ref;
   const cacheKey = `waldo:${ownerId}`;
-  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
+  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { toolOutputs: async () => toolLedger?.recent() ?? [] });
+  // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
+  const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
   const safety = {
@@ -111,7 +115,10 @@ export const createTelegramResponder = (
           turns,
           );
         },
-        onTool: (event) => log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, text: { input: event.call.arguments, output: event.output } }),
+        onTool: (event) => {
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, text: { input: event.call.arguments, output: event.output } });
+          pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: event.output });
+        },
       });
     },
   }, tree);
@@ -128,6 +135,7 @@ export const createTelegramResponder = (
       assistantEntryId: `${id}-reply`,
     })).finally(() => control.end());
     await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
+    for (const entry of pendingToolOutputs.splice(0)) await toolLedger?.record(entry);
     parentId = publication.leafId;
     return publication.text;
   };

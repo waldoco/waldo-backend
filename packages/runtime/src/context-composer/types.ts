@@ -90,6 +90,8 @@ export type RuntimeContextMaterials = Readonly<{
   safety_rules: ContextFragment;
   health: ContextHealthMaterial | null;
   workspace: readonly ContextFragment[];
+  // Recent tool outputs, staged as tool_result sources. Each fragment carries its own taint.
+  tool_outputs: readonly ContextFragment[];
 }>;
 
 export type StagedInputResolver = Readonly<{
