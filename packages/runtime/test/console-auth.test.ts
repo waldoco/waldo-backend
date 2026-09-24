@@ -8,6 +8,21 @@ const now = () => 1_790_000_000_000;
 const withCookie = (value: string) => new Request('https://w.test/console', { headers: { cookie: `a=b; ${OWNER_COOKIE}=${value}` } });
 
 describe('consoleAuth', () => {
+  it('deleteOwner signs the deletion RPC for exactly this owner DO', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json(true));
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
+    expect(await auth.deleteOwner('do-owner-1')).toBe(true);
+    const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://db.test/rest/v1/rpc/delete_owner');
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      p_do_name: 'do-owner-1',
+      p_sig: await routerSignature('router', 1_790_000_000, 'delown.do-owner-1'),
+    });
+    const denied = vi.fn().mockResolvedValueOnce(json(false));
+    expect(await consoleAuth(env, denied as unknown as typeof fetch, now)!.deleteOwner('do-owner-1')).toBe(false);
+  });
+
+
   it('is off without Supabase, so the Telegram link sign-in stays', () => {
     expect(consoleAuth({})).toBeNull();
     expect(consoleAuth({ ...env, WALDO_ROUTER_HMAC_SECRET: undefined })).toBeNull();

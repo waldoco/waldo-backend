@@ -13,6 +13,7 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   issueLinkCode: vi.fn(async () => null),
   saveSettings: vi.fn(async () => true),
   unlinkTelegram: vi.fn(async () => true),
+  deleteOwner: vi.fn(async () => true),
   adminOverview: vi.fn(async () => null),
   invite: vi.fn(async () => false),
   revokeInvite: vi.fn(async () => false),

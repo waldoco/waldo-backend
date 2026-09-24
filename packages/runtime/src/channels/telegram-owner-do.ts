@@ -173,6 +173,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const out = await desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval');
         return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(out.message.slice(0, 200))}` } });
       }
+      if (action?.action === 'account.delete') {
+        const done = admin && doName ? await admin.deleteOwner(doName) : false;
+        if (!done) return back('invalid');
+        const response = new Response('Account deleted. Everything Waldo held for you is gone.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
+        await this.ctx.storage.deleteAll();
+        return response;
+      }
       if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
         if (action.action === 'session.signout.all') await access.signOutAll();
         else await access.signOut(session.token);

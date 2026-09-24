@@ -84,7 +84,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'account.delete'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -325,6 +325,7 @@ ${section('memory', 'Memory', 'What Waldo keeps about you. It updates after chat
 ${section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view))}
 ${section('usage', 'Usage and cost', 'Real per-model totals from Waldo\'s own trace log, most expensive first.', usage(view))}
 ${section('activity', 'Activity', 'What ran, when, and whether it worked.', activity(view))}
+${section('danger', 'Account', 'Deleting your account erases your memory, connections, settings and files. This cannot be undone.', `<div class="row conn"><div><div class="name">Delete your Waldo account</div><div class="sub">Everything Waldo knows and every connection goes. You can sign up again later, but nothing is recovered.</div></div><div class="state"></div><div class="act">${form(view.csrf, 'account.delete', 'Delete account', {}, { tone: 'danger', confirm: 'Delete your Waldo account? Memory, connections and settings are erased and cannot be recovered.' })}</div></div>`)}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>
 </div></body></html>`;
 };

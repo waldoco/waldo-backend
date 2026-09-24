@@ -18,6 +18,7 @@ Owner Telegram id: 5458446350. Supabase project: togdshayyxycitzckpqv.
 | 240214a | Claude: consent rework (PKCE, single-use state, result pages, trace hops) | yes | Claude said it deploys directly - UNCONFIRMED | no |
 | b10544c | L3 handoff approvals in-dash | yes | unknown | no |
 | 47ccbbf | L7 usage surface | yes | unknown | no |
+| (this commit) | L6 account deletion | yes | unknown | no |
 
 One ship.sh run covers every pending lane commit. After ANY deploy, record the deployed version id here and flip the column.
 
@@ -36,6 +37,8 @@ One ship.sh run covers every pending lane commit. After ANY deploy, record the d
 11. VOICE NOTES: already live-verified 7:30 PM (two voice notes transcribed + answered). No action.
 12. TRACE HOPS: after the consent flow, check logs for oauth_callback / proxy_exchange / google_linked hops with metadata only (no codes, tokens, or full URLs). Evidence: log excerpt.
 
+13. ACCOUNT DELETION: in /console danger zone, confirm Delete account. Expect: telegram signs out ("This account has been deleted"), waldo.owner row gone, all connections and vault secrets gone (waldo.connections empty for the owner, vault secrets for the owner's connection ids deleted), DO storage wiped. Deleted-means-deleted probe: a new telegram message from the same owner starts FRESH onboarding (no prior state). Evidence: console notice + post-delete chat behavior + empty connections.
+
 ## Slices assessed as covered by existing surfaces (no new code needed)
 
 - L4 patrol log: the console Activity section already renders the real trace log (what Waldo did, per hop, with failures) and the approval ledger; spots/constellation sections show what it noticed with provenance. L3 added approvals as their own acting surface. Live verification of L4 = steps 8-9 above confirming real rows appear.
@@ -43,6 +46,5 @@ One ship.sh run covers every pending lane commit. After ANY deploy, record the d
 
 ## Still building (not in this checklist until shipped)
 
-- L6 trust: account deletion (delete_owner RPC + DO wipe + deleted-means-deleted probe) - IN PROGRESS.
 - Browser tool slice spec (Browserbase) - spec before build, per owner.
 - Multi-user telegram routing (BUILD_ORDER item 5).
