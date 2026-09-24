@@ -2,6 +2,10 @@
 
 How the deployed agent runs for many owners, and where every key lives. Companion to OWNER_SETUP_2026-09-24.md (one-time credential collection); this doc is the steady-state operator view.
 
+## Hard constraint (owner ruling, 2026-09-24)
+
+No Kubernetes, no AWS Secrets Manager, no heavy cloud control planes for deployment or secrets. The shape below already complies: Workers + Durable Objects for compute, wrangler secrets and Supabase function secrets for platform keys, Supabase Vault for user tokens. Nothing in this runbook may introduce a heavier control plane without a new owner ruling.
+
 ## Topology
 
 - Cloudflare Workers: stateless entry. One worker codebase, deployed per environment.
