@@ -1235,6 +1235,62 @@ describe('RuntimeLLMProvider', () => {
     });
   });
 
+  describe('raw provider output_items stay out of PostLLMCall egress sanitise', () => {
+    const completeWith = (data: LLMResponse) =>
+      new RuntimeLLMProvider({ gateway: new ScriptedGateway(() => ({ ok: true, data })) }).complete(
+        {
+          trigger: 'brief',
+          renderRequest({ step, context }) {
+            return {
+              system: `${context}:${step.model}`,
+              messages: [{ role: 'user', content: 'brief' }],
+              max_tokens: 512,
+              temperature: 0.3,
+            };
+          },
+          renderTemplate: () => 'template fallback',
+        },
+        runtimeCtx(),
+      );
+    const withItems = (text: string, summaryText: string): LLMResponse => ({
+      ...response(ROSTER.primary, text),
+      output_items: [
+        { id: 'rs_1', type: 'reasoning', encrypted_content: 'e'.repeat(6_000), summary: [{ type: 'summary_text', text: summaryText }] },
+        { id: 'msg_1', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [], logprobs: [] }] },
+      ],
+    });
+
+    it('passes a response whose output_items exceed the 4KB send_message cap and returns them verbatim', async () => {
+      const data = withItems('Hey!', 'r'.repeat(5_000));
+      expect(JSON.stringify(data.output_items).length).toBeGreaterThan(4_096);
+
+      const result = await completeWith(data);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.response.text).toBe('Hey!');
+      expect(result.response.output_items).toEqual(data.output_items);
+    });
+
+    it('still halts forbidden on a canary token in the response text', async () => {
+      await expect(completeWith(withItems(`leaked ${canaryTokens[0]}`, 'plan'))).resolves.toMatchObject({
+        ok: false,
+        code: 'forbidden',
+        reason: 'hook_halt',
+      });
+    });
+
+    it('does not halt on a canary-like string only inside output_items', async () => {
+      const data = withItems('Hey!', `thinking about ${canaryTokens[0]}`);
+
+      const result = await completeWith(data);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.response.output_items).toEqual(data.output_items);
+    });
+  });
+
   it('runs custom PreLLM hooks before terminal sanitisation and never sends injected health data', async () => {
     const injectHealth: HookHandler<HookRuntimeContext> = {
       name: 'inject_health',

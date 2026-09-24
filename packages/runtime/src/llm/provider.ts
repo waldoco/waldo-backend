@@ -822,11 +822,13 @@ export class RuntimeLLMProvider {
     options: Readonly<{ preserveUnexpectedCause?: boolean }> = {},
   ): Promise<PostLlmHookResult> {
     try {
+      // output_items are raw provider passthrough for replay, never user-facing; keep them out of egress sanitisation.
+      const { output_items: rawOutputItems, ...hookResponse } = response;
       const customPayload = await runHooks(
         'PostLLMCall',
         {
           event: 'PostLLMCall',
-          response,
+          response: hookResponse,
           tokens_in: response.input_tokens,
           tokens_out: response.output_tokens,
         },
@@ -846,7 +848,10 @@ export class RuntimeLLMProvider {
           error: new HookHaltError('llm_provider', 'post-llm payload invalid', 'transient'),
         };
       }
-      return { ok: true, response: parsed.data };
+      return {
+        ok: true,
+        response: rawOutputItems === undefined ? parsed.data : { ...parsed.data, output_items: rawOutputItems },
+      };
     } catch (error) {
       if (options.preserveUnexpectedCause === true && !(error instanceof HookHaltError)) {
         throw error;

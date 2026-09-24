@@ -57,6 +57,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - No bearer or refresh token reaches the model, the Durable Object or the Worker. Tokens are read and used only in the connector proxy, and the runtime's database key cannot execute the token functions.
 - Only the owner's own words are evidence about the owner. Files, mail, calendar and web text are data, fenced in the prompt so they cannot break its structure.
 - Judgment belongs to the model. Deterministic rejects are only for hard security and safety lines.
+- Raw provider passthrough fields (such as `output_items`) never enter egress-destination sanitise candidates. They are screened when replayed as input, under the internal cap.
 
 ### Observability
 - Every hop logs trace id, duration, ok/failed and a short detail. The E2E checklist names the hops that prove each step.
@@ -82,3 +83,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-24 | Spans from turn-less jobs (fired cards, scheduled work) sat in the OTLP exporter's pending buffer forever - unbounded growth, never exported | Resource bounds | pending-eviction test in `otlp-turns.test.ts` | Failure paths: buffers waiting on a closing event are bounded |
 | 2026-09-24 | OTLP export failures went only to the worker console, so a broken Langfuse path looked healthy from every owner-visible surface | Observability | `/langfuse` self-test command; export failures recorded in trace_log | Observability: exporter failures land in the trace book |
 | 2026-09-24 | owner_wire_supabase.sh stage 3 generated a fresh router HMAC every run, stored it in Vault only when absent, but always pushed it to the worker - a re-run desynced worker vs Vault and broke every signed router call | Idempotency | scripts/guards/guard-owner-wire-hmac.mjs (proven against the pre-fix script) | Idempotency: read stored secrets back, generate only when absent |
+| 2026-09-24 | db55804 put raw provider `output_items` into `LLMResponse`; the PostLLMCall scribe screened them under the `send_message` 4096 cap, so every live call failed "oversize" | Trust boundaries | `llm-provider.test.ts` output_items cases: over-4KB items pass verbatim, a canary in the text still halts, a canary-like string only in items does not; fix strips/restores `output_items` around PostLLMCall | Trust boundaries: raw provider passthrough fields never enter egress-destination sanitise candidates |
