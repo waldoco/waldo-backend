@@ -192,4 +192,142 @@ export const SCENARIOS: readonly Scenario[] = [
       ],
     },
   },
+  {
+    id: 'tools-list-reminders',
+    category: 'tools',
+    turns: ['remind me to call mom at 7pm', 'what reminders do I have?'],
+    llm: [
+      { match: /call mom/, rounds: [
+        { toolCalls: [{ name: 'set_reminder', arguments: { note: 'call mom', at: '2026-09-24T19:00', repeat: 'none' } }] },
+        { text: 'Done.' },
+      ] },
+      { match: /what reminders/, rounds: [
+        { toolCalls: [{ name: 'list_reminders' }] },
+        { text: 'One: call mom at 19:00.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['set_reminder', 'list_reminders'],
+      hops: [{ hop: 'tool_list_reminders', ok: true, trace: /tg-2$/ }],
+      state: [{ kind: 'reminder_count', equals: 1 }],
+    },
+  },
+  {
+    id: 'tools-cancel-reminder',
+    category: 'tools',
+    turns: ['remind me to call mom at 7pm', 'actually cancel that reminder'],
+    llm: [
+      { match: /call mom/, rounds: [
+        { toolCalls: [{ name: 'set_reminder', arguments: { note: 'call mom', at: '2026-09-24T19:00', repeat: 'none' } }] },
+        { text: 'Done.' },
+      ] },
+      { match: /cancel that/, rounds: [
+        { toolCalls: [{ name: 'cancel_reminder', arguments: { id: 'reminder:1' } }] },
+        { text: 'Cancelled.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['cancel_reminder'],
+      hops: [{ hop: 'tool_cancel_reminder', ok: true, trace: /tg-2$/ }],
+      state: [{ kind: 'reminder_count', equals: 0 }],
+    },
+  },
+  {
+    id: 'tools-open-loop',
+    category: 'tools',
+    turns: ['can you find out later which gym near me has a sauna and tell me tomorrow'],
+    llm: [
+      { match: /gym/, rounds: [
+        { toolCalls: [{ name: 'open_loop', arguments: { title: 'Find nearby gyms with a sauna and report back', due: '2026-09-25' } }] },
+        { text: 'On it - I will check and tell you tomorrow.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['open_loop'],
+      hops: [{ hop: 'tool_open_loop', ok: true }],
+      replies: [/tomorrow/],
+    },
+  },
+  {
+    id: 'tools-close-loop',
+    category: 'tools',
+    turns: ['can you find out later which gym near me has a sauna and tell me tomorrow', 'forget the gym thing, drop it'],
+    llm: [
+      { match: /gym near me/, rounds: [
+        { toolCalls: [{ name: 'open_loop', arguments: { title: 'Find nearby gyms with a sauna and report back', due: '2026-09-25' } }] },
+        { text: 'On it.' },
+      ] },
+      { match: /drop it/, rounds: [
+        { toolCalls: [{ name: 'close_loop', arguments: { id: 'loop-1', outcome: 'dropped' } }] },
+        { text: 'Dropped.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['open_loop', 'close_loop'],
+      hops: [{ hop: 'tool_close_loop', ok: true, trace: /tg-2$/ }],
+    },
+  },
+  {
+    id: 'tools-set-proactivity',
+    category: 'tools',
+    turns: ['go quiet after 11pm please'],
+    llm: [
+      { match: /go quiet/, rounds: [
+        { toolCalls: [{ name: 'set_proactivity', arguments: { quiet_start: '23:00', quiet_end: null, volume: 'normal' } }] },
+        { text: 'Quiet from 11pm.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['set_proactivity'],
+      hops: [{ hop: 'tool_set_proactivity', ok: true }],
+    },
+  },
+  {
+    id: 'tools-get-context',
+    category: 'tools',
+    turns: ['what time is it?'],
+    llm: [
+      { match: /what time/, rounds: [
+        { toolCalls: [{ name: 'get_context' }] },
+        { text: 'It is 9am on Thursday the 24th.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['get_context'],
+      hops: [{ hop: 'tool_get_context', ok: true }],
+    },
+  },
+  {
+    id: 'tools-search-episodes',
+    category: 'tools',
+    turns: ['what did I say about the pitch last week?'],
+    llm: [
+      { match: /pitch last week/, rounds: [
+        { toolCalls: [{ name: 'search_episodes', arguments: { query: 'pitch' } }] },
+        { text: 'Nothing on the pitch yet.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['search_episodes'],
+      hops: [{ hop: 'tool_search_episodes', ok: true }],
+    },
+  },
+  {
+    id: 'connect-offer-on-not-connected',
+    category: 'tools',
+    fixtures: { googleNotConnected: true },
+    turns: ['whats on my calendar today?'],
+    llm: [
+      { match: /calendar today/, rounds: [
+        { toolCalls: [{ name: 'query_calendar' }] },
+        { text: 'I need you to connect Google first - sent you the link.' },
+      ] },
+    ],
+    assert: {
+      mustCall: ['query_calendar'],
+      hops: [{ hop: 'tool_query_calendar', ok: false }],
+      connect: [{ service: 'google', reason: 'not_connected' }],
+      replies: [/connect/i],
+    },
+  },
 ];

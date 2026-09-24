@@ -39,6 +39,9 @@ export type Scenario = Readonly<{
     events?: readonly FixtureEvent[];
     mail?: readonly FixtureMail[];
     web?: readonly FixtureWeb[];
+    // The google client resolves to null: every google tool returns the not_connected auth
+    // failure and the connect offer seam fires.
+    googleNotConnected?: boolean;
   }>;
   assert?: Readonly<{
     mustCall?: readonly string[];
@@ -47,5 +50,7 @@ export type Scenario = Readonly<{
     state?: readonly StateAssert[];
     // One entry per turn; an entry may be a single matcher or several, all must match that turn's reply.
     replies?: readonly (string | RegExp | readonly (string | RegExp)[])[];
+    // Connect intents the responder surfaced through the offer seam (S4).
+    connect?: readonly Readonly<{ service: string; reason?: string }>[];
   }>;
 }>;

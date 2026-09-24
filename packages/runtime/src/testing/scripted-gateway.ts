@@ -54,7 +54,10 @@ export const scriptedGateway = (options: ScriptedGatewayOptions): LLMGatewayAdap
         return response(model, options.claimOps ?? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
       }
       const said = request.messages[request.messages.length - 1]?.content ?? '';
-      const rule = options.rules.find((candidate) => candidate.match.test(said));
+      // The responder packs conversation history into the same user message, so an earlier
+      // turn's text still matches its rule. Scripts are written turn by turn, so search rules
+      // in reverse: the latest turn's rule wins over an earlier turn's.
+      const rule = [...options.rules].reverse().find((candidate) => candidate.match.test(said));
       if (!rule) return response(model, options.unmatchedText ?? `[scripted-gateway: no rule matched "${said.slice(0, 80)}"]`);
       if (!queues.has(rule)) queues.set(rule, [...rule.rounds]);
       const queue = queues.get(rule)!;

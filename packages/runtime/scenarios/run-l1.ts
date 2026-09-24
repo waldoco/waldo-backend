@@ -1,12 +1,14 @@
 // L1 scenario runner: drives the real telegram responder with the scripted gateway over
 // in-memory sqlite, captures the full hop stream, and checks the scenario's assertions exactly.
 import { DatabaseSync } from 'node:sqlite';
-import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ConnectIntent, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
 import { googleHandlers } from '../src/tools/live/google';
 import { claimStore } from '../src/memory/claims';
+import { episodeIndex } from '../src/channels/episodes';
+import { searchEpisodesHandler } from '../src/tools/live/search-episodes';
 import type { GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import type { OwnerClock } from '../src/tools/live/get-context';
@@ -38,13 +40,15 @@ export type ScenarioRun = Readonly<{
   entries: readonly TurnLogEntry[];
   tools: readonly string[];
   reminders: readonly StubReminder[];
+  connectOffers: readonly ConnectIntent[];
 }>;
 
 export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   if (!scenario.llm) throw new Error(`${scenario.id}: no llm script - rubric-only scenarios run in L2`);
   const sql = sqlite();
   const memory = claimStore(sql);
-  const loops = loopBook(sql, { newId: () => crypto.randomUUID().slice(0, 8), now: () => CLOCK.now().getTime() });
+  let loopSeq = 0;
+  const loops = loopBook(sql, { newId: () => `loop-${++loopSeq}`, now: () => CLOCK.now().getTime() });
   const entries: TurnLogEntry[] = [];
   const log = (entry: TurnLogEntry) => entries.push(entry);
 
@@ -67,8 +71,9 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   } as unknown as ReminderBook;
 
   const events = scenario.fixtures?.events ?? DEFAULT_EVENTS;
+  const connectOffers: ConnectIntent[] = [];
   const google = {
-    client: async () => ({
+    client: scenario.fixtures?.googleNotConnected ? async () => null : async () => ({
       events: async () => events,
       event: async (id: string) => events.find((event) => event.id === id)!,
       newMail: async () => scenario.fixtures?.mail ?? [],
@@ -77,7 +82,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
       createEvent: async () => events[0]!,
       moveEvent: async () => events[0]!,
       cancelEvent: async () => undefined,
-    }) as unknown as GoogleClient,
+    }) as unknown as GoogleClient | null,
     connectUrl: async () => null,
   };
   const web = {
@@ -88,8 +93,8 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: scenario.fixtures?.web ?? [] }, source_taint: 'external' as const }),
   };
-  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), web];
-  const responder = createTelegramResponder('scenario-key', undefined, memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, undefined, scriptedGateway({ rules: scenario.llm }));
+  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodeIndex(sql)), web];
+  const responder = createTelegramResponder('scenario-key', undefined, memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, scriptedGateway({ rules: scenario.llm }));
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 
   const replies: string[] = [];
@@ -112,7 +117,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   // Let the post-turn memory writer settle so its hop lands before assertions run.
   await new Promise((resolve) => setTimeout(resolve, 50));
   const tools = entries.filter((entry) => entry.hop.startsWith('tool_')).map((entry) => entry.hop.slice(5));
-  return { replies, entries, tools, reminders: reminderRows };
+  return { replies, entries, tools, reminders: reminderRows, connectOffers };
 };
 
 export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly string[] => {
@@ -153,6 +158,12 @@ export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly st
       const pass = typeof matcher === 'string' ? reply.includes(matcher) : matcher.test(reply);
       if (!pass) failures.push(`reply ${index + 1} did not match ${matcher}: "${reply.slice(0, 120)}"`);
     }
+  }
+  for (const [index, want] of (assert.connect ?? []).entries()) {
+    const got = run.connectOffers[index];
+    if (!got) { failures.push(`expected connect offer ${index + 1} (${want.service}), got ${run.connectOffers.length} offers`); continue; }
+    if (got.service !== want.service) failures.push(`connect offer ${index + 1} service: expected ${want.service}, got ${got.service}`);
+    if (want.reason !== undefined && got.reason !== want.reason) failures.push(`connect offer ${index + 1} reason: expected ${want.reason}, got ${got.reason}`);
   }
   for (const state of assert.state ?? []) {
     if (state.kind === 'reminder_count' && run.reminders.length !== state.equals) {
