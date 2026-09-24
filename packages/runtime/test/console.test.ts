@@ -36,7 +36,7 @@ describe('owner console', () => {
     expect(session?.csrf).toMatch(/^[0-9a-f]{64}$/);
     expect(session?.csrf).not.toBe(cookie);
     expect(await access.session(null)).toBeNull();
-    await access.signOut();
+    await access.signOut(cookie!);
     expect(await access.session(cookie)).toBeNull();
     const again = await access.redeem(new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!);
     now += 13 * 60 * 60_000;
@@ -44,6 +44,45 @@ describe('owner console', () => {
     const late = new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
     now += 11 * 60_000;
     expect(await access.redeem(late)).toBeNull();
+  });
+
+  it('redeeming on a browser that already holds a live session refreshes it instead of stacking', async () => {
+    let now = 1_000;
+    const access = consoleAccess(memoryStore(), () => now);
+    const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const cookie = (await access.redeem(await mint()))!;
+    now += 60_000;
+    const again = await access.redeem(await mint(), cookie);
+    expect(again).toBe(cookie);
+    const refreshed = await access.session(cookie);
+    expect(refreshed?.expires).toBe(now + 12 * 60 * 60_000);
+    now += 11 * 60 * 60_000;
+    expect(await access.session(cookie)).not.toBeNull();
+  });
+
+  it('keeps sessions per browser: a second browser gets its own, sign-out kills only that one', async () => {
+    const access = consoleAccess(memoryStore(), () => 1_000);
+    const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const browserA = (await access.redeem(await mint()))!;
+    const browserB = (await access.redeem(await mint()))!;
+    expect(browserB).not.toBe(browserA);
+    expect(await access.session(browserA)).not.toBeNull();
+    expect(await access.session(browserB)).not.toBeNull();
+    await access.signOut(browserA);
+    expect(await access.session(browserA)).toBeNull();
+    expect(await access.session(browserB)).not.toBeNull();
+    // An expired session cookie does not refresh: redeeming with it creates a fresh session.
+    let clock = 5_000;
+    const store = memoryStore();
+    const timed = consoleAccess(store, () => clock);
+    const mintTimed = async () => new URL(await timed.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const old = (await timed.redeem(await mintTimed()))!;
+    clock += 13 * 60 * 60_000;
+    expect(await timed.session(old)).toBeNull();
+    const fresh = (await timed.redeem(await mintTimed(), old))!;
+    expect(fresh).not.toBe(old);
+    expect(await timed.session(old)).toBeNull();
+    expect(await timed.session(fresh)).not.toBeNull();
   });
 
   it('reads the session cookie', () => {

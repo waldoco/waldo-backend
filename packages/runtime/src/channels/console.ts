@@ -18,33 +18,55 @@ export type ConsoleSession = Readonly<{ token: string; csrf: string; expires: nu
 const randomToken = () => [...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // One-time link from Telegram -> short session cookie. Only the owner's DM can mint a link.
-export const consoleAccess = (store: Store, now: () => number = Date.now) => ({
-  async mintLink(origin: string): Promise<string> {
-    const token = randomToken();
-    await store.put('console:link', { token, expires: now() + LINK_MS } satisfies Grant);
-    return `${origin}${CONSOLE_PATH}?t=${token}`;
-  },
-  async redeem(token: string): Promise<string | null> {
-    const link = await store.get<Grant>('console:link');
-    if (!link || link.token !== token || link.expires < now()) return null;
-    await store.delete('console:link');
+// Sessions are per browser: redeeming with a live session cookie refreshes that session instead of stacking.
+export const consoleAccess = (store: Store, now: () => number = Date.now) => {
+  const readSessions = async (): Promise<Record<string, ConsoleSession>> => (await store.get<Record<string, ConsoleSession>>('console:sessions')) ?? {};
+  const writeSessions = async (sessions: Record<string, ConsoleSession>): Promise<void> => {
+    const live = Object.fromEntries(Object.entries(sessions).filter(([, session]) => session.expires >= now()));
+    if (Object.keys(live).length > 0) await store.put('console:sessions', live);
+    else await store.delete('console:sessions');
+  };
+  const addSession = async (): Promise<string> => {
     const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), expires: now() + SESSION_MS };
-    await store.put('console:session', session);
+    const sessions = await readSessions();
+    sessions[session.token] = session;
+    await writeSessions(sessions);
     return session.token;
-  },
-  async session(token: string | null): Promise<ConsoleSession | null> {
-    const session = await store.get<ConsoleSession>('console:session');
-    return token && session && session.token === token && session.expires >= now() ? session : null;
-  },
-  async grant(): Promise<string> {
-    const session: ConsoleSession = { token: randomToken(), csrf: randomToken(), expires: now() + SESSION_MS };
-    await store.put('console:session', session);
-    return session.token;
-  },
-  async signOut(): Promise<void> {
-    await store.delete('console:session');
-  },
-});
+  };
+  return {
+    async mintLink(origin: string): Promise<string> {
+      const token = randomToken();
+      await store.put('console:link', { token, expires: now() + LINK_MS } satisfies Grant);
+      return `${origin}${CONSOLE_PATH}?t=${token}`;
+    },
+    async redeem(token: string, current: string | null = null): Promise<string | null> {
+      const link = await store.get<Grant>('console:link');
+      if (!link || link.token !== token || link.expires < now()) return null;
+      await store.delete('console:link');
+      if (current) {
+        const sessions = await readSessions();
+        const existing = sessions[current];
+        if (existing && existing.expires >= now()) {
+          sessions[current] = { ...existing, expires: now() + SESSION_MS };
+          await writeSessions(sessions);
+          return current;
+        }
+      }
+      return addSession();
+    },
+    async session(token: string | null): Promise<ConsoleSession | null> {
+      if (!token) return null;
+      const session = (await readSessions())[token];
+      return session && session.expires >= now() ? session : null;
+    },
+    grant: addSession,
+    async signOut(token: string): Promise<void> {
+      const sessions = await readSessions();
+      delete sessions[token];
+      await writeSessions(sessions);
+    },
+  };
+};
 
 // Link previews (Telegram fetches URLs it sees) must not burn the one-time token, so opening the
 // link only shows a button; the token is spent by the POST that button sends.

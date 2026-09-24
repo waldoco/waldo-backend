@@ -133,7 +133,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (link && request.method === 'GET') return signInPage(link);
     const posted = url.pathname === CONSOLE_PATH && request.method === 'POST' ? String((await request.formData()).get('t') ?? '') : '';
     if (posted) {
-      const session = await access.redeem(posted);
+      const session = await access.redeem(posted, sessionCookie(request));
       if (!session) return new Response('This console link is used or expired. Send /console to Waldo for a new one.', { status: 403 });
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
     }
@@ -167,7 +167,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return back(done ? 'telegram.unlink' : 'invalid');
       }
       if (action?.action === 'session.signout') {
-        await access.signOut();
+        await access.signOut(session.token);
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;
