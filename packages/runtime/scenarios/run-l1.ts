@@ -96,9 +96,18 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   let n = 0;
   for (const turn of scenario.turns) {
     n += 1;
-    if (turn.startsWith('@plan ')) replies.push(await responder.planDay(`${scenario.id}-${n}`, turn.slice(6)));
-    else if (turn.startsWith('@prompt ')) replies.push(await responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(8), time));
-    else replies.push(await responder.respond({ updateId: n, chatId: 1, text: turn } as never, time));
+    // A hard deny or exhausted fallback throws out of the responder; the DO turns that into the
+    // honest failure text. Record the throw so degradation scenarios can assert on it.
+    const turnText = async () => {
+      if (turn.startsWith('@plan ')) return responder.planDay(`${scenario.id}-${n}`, turn.slice(6));
+      if (turn.startsWith('@prompt ')) return responder.prompt(`${scenario.id}-${n}`, 1, turn.slice(8), time);
+      return responder.respond({ updateId: n, chatId: 1, text: turn } as never, time);
+    };
+    try {
+      replies.push(await turnText());
+    } catch (error) {
+      replies.push(`[threw] ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
   // Let the post-turn memory writer settle so its hop lands before assertions run.
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -116,7 +125,7 @@ export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly st
     if (run.tools.includes(name)) failures.push(`expected tool ${name} not to be called`);
   }
   for (const want of assert.hops ?? []) {
-    const matches = run.entries.filter((entry) => entry.hop === want.hop);
+    const matches = run.entries.filter((entry) => entry.hop === want.hop && (want.trace === undefined || want.trace.test(entry.trace)));
     if (matches.length === 0) {
       failures.push(`expected hop ${want.hop}; hops seen: ${[...new Set(run.entries.map((entry) => entry.hop))].join(', ') || 'none'}`);
       continue;
@@ -131,8 +140,8 @@ export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly st
       failures.push(`hop ${want.hop} exceeded ${want.maxMs}ms (got ${Math.max(...matches.map((entry) => entry.ms))}ms)`);
     }
     if (want.after) {
-      const first = run.entries.findIndex((entry) => entry.hop === want.hop);
-      const anchor = run.entries.findIndex((entry) => entry.hop === want.after);
+      const first = run.entries.findIndex((entry) => entry.hop === want.hop && (want.trace === undefined || want.trace.test(entry.trace)));
+      const anchor = run.entries.findIndex((entry) => entry.hop === want.after && (want.afterTrace === undefined || want.afterTrace.test(entry.trace)));
       if (anchor === -1) failures.push(`ordering anchor hop ${want.after} never ran`);
       else if (first !== -1 && first < anchor) failures.push(`hop ${want.hop} ran before ${want.after}`);
     }

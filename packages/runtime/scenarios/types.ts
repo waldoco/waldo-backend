@@ -12,7 +12,9 @@ export type HopAssert = Readonly<{
   ok?: boolean;             // required outcome when given
   note?: RegExp;            // matched against the hop's error/detail text
   maxMs?: number;           // wall-clock bound
+  trace?: RegExp;           // scope the assertion to hops of matching turns (e.g. /-2$/)
   after?: string;           // this hop must land after the named hop
+  afterTrace?: RegExp;      // scope the ordering anchor the same way
 }>;
 
 export type StateAssert =

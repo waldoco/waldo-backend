@@ -1,13 +1,16 @@
 // L1 scenario harness: a scripted LLMGatewayAdapter. The scenario declares the exact tool-call
 // rounds and final texts the "model" produces; everything downstream (dispatcher, tools, memory,
 // scribe, hop logging) is the production code path. No API key, no judge, no flake.
-import type { AdapterResult, LLMResponse, ModelName } from '@waldo/contracts';
+import type { AdapterResult, ErrorCode, LLMResponse, ModelName } from '@waldo/contracts';
 import { WALDO_CHAT_MODEL } from '@waldo/contracts';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../llm/provider';
 
 export type ScriptedRound =
   | Readonly<{ toolCalls: readonly Readonly<{ name: string; arguments?: Record<string, unknown> }>[] }>
-  | Readonly<{ text: string }>;
+  | Readonly<{ text: string }>
+  // A provider/adapter failure for this round: degradation scenarios assert the turn still ends
+  // in honest words and the hop records the failure.
+  | Readonly<{ error: Readonly<{ code: ErrorCode; message: string }> }>;
 
 // A rule matches a user turn by its content; its rounds are consumed in order across the tool
 // loop. The last round of a rule is normally a text round, which ends the loop.
@@ -57,6 +60,7 @@ export const scriptedGateway = (options: ScriptedGatewayOptions): LLMGatewayAdap
       const queue = queues.get(rule)!;
       if (queue.length === 0) return response(model, options.unmatchedText ?? `[scripted-gateway: rule ${rule.match} exhausted]`);
       const step = queue.shift()!;
+      if ('error' in step) return { ok: false, code: step.error.code, error: step.error.message };
       if ('text' in step) return response(model, step.text);
       return response(model, '', step.toolCalls.map((call, index) => ({
         call_id: `script-${round++}-${index}`,

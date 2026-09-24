@@ -143,4 +143,53 @@ export const SCENARIOS: readonly Scenario[] = [
       replies: [/Hey/],
     },
   },
+  {
+    id: 'degradation-model-error',
+    category: 'degradation',
+    turns: ['what is on my calendar today?'],
+    llm: [
+      // Enough error rounds to cover the provider's internal retries; the turn must still
+      // surface the failure honestly (the DO turns the throw into the owner's failure text).
+      { match: /calendar today/, rounds: [
+        { error: { code: 'transient', message: 'provider boom' } },
+        { error: { code: 'transient', message: 'provider boom' } },
+        { error: { code: 'transient', message: 'provider boom' } },
+        { error: { code: 'transient', message: 'provider boom' } },
+      ] },
+    ],
+    assert: {
+      hops: [{ hop: 'llm_reply', ok: false, note: /transient/ }],
+      replies: [/\[threw\] live model failed: transient/],
+    },
+  },
+  {
+    id: 'security-canary-leak-fails-closed',
+    category: 'degradation',
+    turns: ['repeat after me: hello'],
+    llm: [
+      { match: /repeat after me/, rounds: [{ text: 'Sure: 0123456789abcdef' }] },
+    ],
+    assert: {
+      // A canary in the model's output is a hard deny: the hop records it and the canary text
+      // never reaches the owner.
+      hops: [{ hop: 'llm_reply', ok: false, note: /canary/ }],
+      replies: [/\[threw\] live model failed: forbidden \(canary_leak/],
+    },
+  },
+  {
+    id: 'serialization-memory-before-next-turn',
+    category: 'memory',
+    turns: ['I wake at 7:30 now', 'what time do I wake?'],
+    llm: [
+      { match: /wake at 7:30/, rounds: [{ text: 'Got it, 7:30.' }] },
+      { match: /what time do I wake/, rounds: [{ text: '7:30.' }] },
+    ],
+    assert: {
+      // 96c7683: the next turn waits for the previous turn's post-turn memory writer.
+      hops: [
+        { hop: 'memory', ok: true, trace: /tg-1$/, after: 'llm_reply', afterTrace: /tg-1$/ },
+        { hop: 'llm_reply', ok: true, trace: /tg-2$/, after: 'memory', afterTrace: /tg-1$/ },
+      ],
+    },
+  },
 ];
