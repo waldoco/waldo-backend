@@ -67,3 +67,7 @@ Built: deterministic narrow-scope redaction of secret-bearing URLs (Google OAuth
 ### BUILD_ORDER 12 - connector contract + tool outputs in context composer
 12a: tier-2 auth_failed-with-link is the written connector contract (AUTH_DECISION_SPEC addendum) pinned by connector-contract.test.ts. 12b: tool outputs now flow into the context composer - conversation/tool-output-ledger.ts (per-owner ring of the last 6 outputs, 500-char summaries), telegram-turn records each tool event and flushes with the conversation save, the local composer stages them as tool_result sources (provenance + per-fragment taint, 6-fragment cap, scribe rewrite allowed), prompt renders a <recent-tool-results> section. Pinned ctx_ hash updated.
 - [ ] LIVE: after next deploy, run two turns where the first calls a tool; confirm the second turn's composed prompt shows the first tool's output (trace/prompt inspection)
+
+### S2 - connect_sessions migration + signed RPCs
+Table + 3 router-signed RPCs (issue/resolve/complete), hash-only storage, 30-min TTL, single completion, revoke-on-reissue, RLS forced, service-role denied. pgTAP file written (12 assertions) but NOT yet executed (needs the local supabase stack on the Mac). Canonical migration list updated.
+- [ ] MAC: apply migration on staging (supabase db push) and run pgTAP file waldo_connect_sessions.sql
