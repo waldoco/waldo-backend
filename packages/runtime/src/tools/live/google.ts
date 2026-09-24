@@ -1,6 +1,6 @@
 import {
-  connectServiceArgsSchema, draftEmailArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ConnectServiceArgs, type DraftEmailArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type ToolHandler, type ToolName, type ToolResult,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { GoogleError, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -62,6 +62,17 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       return { timezone: clock.timezone, from, to, events: await client.events(from, to, limit, include_declined) };
     }),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
+  {
+    name: 'get_communication',
+    description: "Read the owner's Gmail inbox - recent messages with from, subject, snippet and time. Defaults to the last 24 hours. Use when the owner asks about email or messages.",
+    schema: getCommunicationArgsSchema,
+    trigger_allowlist: allowlist('get_communication'),
+    autonomy_gated: false,
+    handle: ({ date_range }: GetCommunicationArgs) => withGoogle(google, 'mail', deliver, async (client) => {
+      const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
+      return { since: new Date(since).toISOString(), messages: await client.newMail(since, 10) };
+    }),
+  } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
     description: "Propose adding, moving or cancelling an event on the owner's calendar. The owner gets Do it / Modify / Not now buttons; nothing changes until they approve. Include the event title.",

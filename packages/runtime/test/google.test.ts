@@ -104,9 +104,41 @@ describe('google tools', () => {
     }
   });
 
+  it('get_communication reads the inbox for the last 24h by default, tainted external', async () => {
+    const seen: number[] = [];
+    const google: GoogleAccess = {
+      client: async () => ({
+        events: async () => [],
+        newMail: async (since: number, limit: number) => {
+          seen.push(since);
+          expect(limit).toBe(10);
+          return [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-24T10:00:00.000Z' }];
+        },
+        draft: async () => ({}),
+      } as never),
+      connectUrl: async () => null,
+    };
+    const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
+    const result = await comms.handle({} as never);
+    expect(result).toMatchObject({ ok: true, source_taint: 'external' });
+    if (!result.ok) return;
+    const data = result.data as { since: string; messages: unknown[] };
+    expect(data.messages).toHaveLength(1);
+    expect(Date.parse(data.since)).toBe(seen[0]);
+    expect(Date.now() - seen[0]!).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5000);
+  });
+
+  it('get_communication honours an explicit date_range and never fabricates mail when unconnected', async () => {
+    const google: GoogleAccess = { client: async () => null, connectUrl: async () => null };
+    const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
+    const result = await comms.handle({ date_range: { from: '2026-09-20T00:00:00.000Z', to: '2026-09-24T00:00:00.000Z' } } as never);
+    expect(result).toMatchObject({ ok: false, code: 'auth_failed' });
+    expect(JSON.stringify(result)).not.toMatch(/https?:/);
+  });
+
   it('propose a calendar change without applying it', async () => {
     const google: GoogleAccess = { client: async () => null, connectUrl: async () => null };
-    const [, propose] = googleHandlers(google, proposals, clock);
-    expect(await propose!.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
+    const propose = googleHandlers(google, proposals, clock).find((h) => h.name === 'propose_calendar_change')!;
+    expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
   });
 });
