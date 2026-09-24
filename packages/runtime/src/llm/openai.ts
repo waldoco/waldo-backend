@@ -62,6 +62,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
           input: responsesInput(input.request),
           max_output_tokens: input.request.max_tokens,
           reasoning: { effort: 'low', summary: 'auto' },
+          ...(input.request.cache_key ? { prompt_cache_key: input.request.cache_key } : {}),
           ...(input.request.tools ? { tools: input.request.tools.map((tool) => ({ type: 'function' as const, name: tool.name, description: tool.description, parameters: tool.parameters, strict: false })) } : {}),
           ...(input.request.response_format ? { text: { format: { type: 'json_schema' as const, name: input.request.response_format.name, schema: input.request.response_format.schema, strict: true } } } : {}),
         },

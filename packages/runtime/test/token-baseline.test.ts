@@ -28,6 +28,7 @@ describe('token baseline (phase 1 measurement)', () => {
     for (let turn = 0; turn < 6; turn++) {
       await responder.respond({ updateId: turn + 1, chatId: 7, text: `message ${turn + 1}: how is my sleep trend and what should I focus on today?` } as never, (_name, run) => run());
     }
+    for (const body of bodies) expect(typeof body.prompt_cache_key).toBe('string');
     const rows = bodies.map((body) => ({ instructions: tokens(body.instructions), input: tokens(body.input), tools: tokens(body.tools ?? []) }));
     console.log('BASELINE_PER_HOP ' + JSON.stringify(rows));
     expect(rows.length).toBeGreaterThan(0);

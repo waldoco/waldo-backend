@@ -43,6 +43,7 @@ export const createTelegramResponder = (
   if (!accepted.ok) throw new Error('fixture admission failed');
   const invocation = accepted.value;
   const ownerId = invocation.verified_authority.principal_ref;
+  const cacheKey = `waldo:${ownerId}`;
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
@@ -60,6 +61,7 @@ export const createTelegramResponder = (
       trigger: 'user_message',
       policy,
       renderRequest: () => ({
+        cache_key: cacheKey,
         system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2,
         ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
         ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),

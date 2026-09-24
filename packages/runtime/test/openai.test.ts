@@ -192,3 +192,23 @@ describe('OpenAIResponsesAdapter', () => {
     });
   });
 });
+describe('OpenAIResponsesAdapter prompt caching', () => {
+  it('passes prompt_cache_key when the request carries a cache key, omits it otherwise', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: Record<string, unknown>) => {
+        bodies.push(body);
+        return { id: 'r1', output_text: 'hi', output: [], usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
+      }),
+    });
+    const withKey = gatewayRequest();
+    withKey.request.cache_key = 'waldo:owner-1';
+    const keyed = await adapter.complete(withKey);
+    expect(keyed.ok).toBe(true);
+    expect(bodies[0]!.prompt_cache_key).toBe('waldo:owner-1');
+    const plain = await adapter.complete(gatewayRequest());
+    expect(plain.ok).toBe(true);
+    expect('prompt_cache_key' in (bodies[1] ?? {})).toBe(false);
+  });
+});
