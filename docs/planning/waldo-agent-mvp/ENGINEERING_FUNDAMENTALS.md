@@ -27,6 +27,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Every webhook, callback, scheduled fire and migration can run twice without a second effect. Store the offset or the key before or atomically with the effect.
 - Every button press is safe when pressed twice or late ("Already handled", "expired").
 - Retries have a bound and a backoff. A failed step logs and leaves state that the next run can resume.
+- A secret generated fresh each run but stored only when absent desyncs every other consumer on re-run. Read the stored value back and generate only when absent, so all consumers hold one value.
 
 ### Concurrency and ordering
 - Writes that belong to one turn settle before the next turn reads them.
@@ -80,3 +81,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-24 | gates.sh printed "GUARDS fail" but exited 0, and its test steps could not fail the run either, so f0cbb4a was pushed with failing guards | Failure paths | scripts/gates.sh exits non-zero on any failed step; scripts/guards/guard-gates-exit.mjs (proven against the pre-fix script) | Failure paths: gate scripts propagate failure |
 | 2026-09-24 | Spans from turn-less jobs (fired cards, scheduled work) sat in the OTLP exporter's pending buffer forever - unbounded growth, never exported | Resource bounds | pending-eviction test in `otlp-turns.test.ts` | Failure paths: buffers waiting on a closing event are bounded |
 | 2026-09-24 | OTLP export failures went only to the worker console, so a broken Langfuse path looked healthy from every owner-visible surface | Observability | `/langfuse` self-test command; export failures recorded in trace_log | Observability: exporter failures land in the trace book |
+| 2026-09-24 | owner_wire_supabase.sh stage 3 generated a fresh router HMAC every run, stored it in Vault only when absent, but always pushed it to the worker - a re-run desynced worker vs Vault and broke every signed router call | Idempotency | scripts/guards/guard-owner-wire-hmac.mjs (proven against the pre-fix script) | Idempotency: read stored secrets back, generate only when absent |

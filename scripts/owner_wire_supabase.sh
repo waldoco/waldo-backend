@@ -28,9 +28,12 @@ if ! curl -sf -X PATCH "https://api.supabase.com/v1/projects/$REF/postgrest" -H 
   exit 1
 fi
 
-echo "== 3/5 router HMAC: generate, vault, worker"
-HMAC=$(openssl rand -hex 32)
-q "{\"query\": \"select vault.create_secret('$HMAC', 'waldo_router_hmac') where not exists (select 1 from vault.secrets where name = 'waldo_router_hmac')\"}" >/dev/null
+echo "== 3/5 router HMAC: reuse existing or generate, vault, worker"
+HMAC=$(q "{\"query\": \"select decrypted_secret from vault.decrypted_secrets where name = 'waldo_router_hmac'\"}" | sed -n 's/.*"decrypted_secret": *"\([0-9a-f]\{64\}\)".*/\1/p')
+if [ -z "$HMAC" ]; then
+  HMAC=$(openssl rand -hex 32)
+  q "{\"query\": \"select vault.create_secret('$HMAC', 'waldo_router_hmac')\"}" >/dev/null
+fi
 printf '%s' "$HMAC" | npx --yes wrangler secret put WALDO_ROUTER_HMAC_SECRET --name waldo-runtime-staging >/dev/null
 printf '%s' "$SUPABASE_PROJECT_URL" | npx --yes wrangler secret put SUPABASE_PROJECT_URL --name waldo-runtime-staging >/dev/null
 printf '%s' "$SUPABASE_PUBLISHABLE_KEY" | npx --yes wrangler secret put SUPABASE_PUBLISHABLE_KEY --name waldo-runtime-staging >/dev/null
@@ -47,7 +50,7 @@ GOOD=$(curl -s -X POST "$SUPABASE_PROJECT_URL/rest/v1/rpc/route_presence" -H "ap
 echo "  signed route_presence: $GOOD (want a row with do_name $TID)"
 unset HMAC SIG
 BAD=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$SUPABASE_PROJECT_URL/rest/v1/rpc/route_presence" -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'content-profile: waldo' -H 'content-type: application/json' -d "{\"p_provider\":\"telegram\",\"p_subject\":\"$TID\",\"p_at\":$AT,\"p_sig\":\"deadbeef\"}")
-echo "  unsigned call rejected with HTTP $BAD (want 400)"
+echo "  unsigned call rejected with HTTP $BAD (want 401: the migration raises errcode 42501, which PostgREST maps to 401)"
 ROWS=$(q "{\"query\": \"select o.do_name, p.provider, p.subject, s.timezone from waldo.presences p join waldo.owners o on o.id = p.owner_id left join waldo.owner_settings s on s.owner_id = o.id where p.subject = '$TID'\"}")
 echo "  owner row as the runtime will route it: $ROWS"
 echo "Done."
