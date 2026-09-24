@@ -48,6 +48,13 @@ export const queryCalendarArgsSchema = z.strictObject({
 });
 export type QueryCalendarArgs = z.infer<typeof queryCalendarArgsSchema>;
 
+// Connect intent is its own tool, never a side effect of a failed service call: the consent
+// URL must be reachable on demand (owner direction 2026-09-24).
+export const connectServiceArgsSchema = z.strictObject({
+  service: z.enum(['google']),
+});
+export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
+
 export const getCommunicationArgsSchema = z.strictObject({
   date_range: dateRangeSchema.optional(),
 });

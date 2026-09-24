@@ -49,6 +49,7 @@ export const toolNameSchema = z.enum([
   'close_loop',
   'set_proactivity',
   'read_tool_output',
+  'connect_service',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -61,6 +62,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_crs',
     'get_health',
     'query_calendar',
+    'connect_service',
     'get_communication',
     'get_tasks',
     'get_master_metrics',
@@ -77,6 +79,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_crs',
     'get_health',
     'query_calendar',
+    'connect_service',
     'get_communication',
     'get_tasks',
     'get_master_metrics',
@@ -89,6 +92,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_crs',
     'get_health',
     'query_calendar',
+    'connect_service',
     'get_communication',
     'get_tasks',
     'get_master_metrics',
@@ -100,7 +104,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'read_document',
     'search_tools',
   ],
-  handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'get_tasks', 'propose_action'],
+  handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],
   // The mutation cluster: execute_action + writes + send_message, reachable only after
   // explicit user approval through propose_action (ADR-0008).
   handoff_act: [
@@ -117,6 +121,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_crs',
     'get_health',
     'query_calendar',
+    'connect_service',
     'get_tasks',
     'update_task',
     'propose_action',
@@ -127,6 +132,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'get_crs',
     'get_health',
     'query_calendar',
+    'connect_service',
     'get_communication',
     'get_tasks',
     'get_master_metrics',
@@ -167,6 +173,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
   pre_activity_spot: [
     'get_crs',
     'query_calendar',
+    'connect_service',
     'read_memory',
     'propose_schedule',
     'propose_action',
@@ -185,11 +192,14 @@ export const LAZY_DISCOVERY_TRIGGERS: readonly TriggerType[] = ['user_message', 
 // Loaded even in lazy mode (ADR-0034). The ACL stays authoritative deny-first (ADR-0008):
 // handoff_explore grants neither send_message nor propose_action, so the loadable set
 // there is this list ∩ the ACL — loading never widens permission.
+// connect_service joined the always-on set (owner direction 2026-09-24): connect intent must be
+// prompt-visible without discovery - the model cannot search_tools for a tool it does not know exists.
 export const ALWAYS_ON_TOOLS: readonly ToolName[] = [
   'read_memory',
   'send_message',
   'propose_action',
   'search_tools',
+  'connect_service',
 ];
 
 // search_tools returns top-K by query relevance only — "show me everything" is

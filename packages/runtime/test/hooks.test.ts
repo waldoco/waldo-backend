@@ -213,6 +213,7 @@ describe('hook registry', () => {
         'get_crs',
         'get_health',
         'query_calendar',
+        'connect_service',
         'get_communication',
         'get_tasks',
         'get_master_metrics',

@@ -39,6 +39,7 @@ import {
   hookResultSchema,
   proposeActionArgsSchema,
   proposeScheduleArgsSchema,
+  connectServiceArgsSchema,
   queryCalendarArgsSchema,
   readDocumentArgsSchema,
   readToolOutputArgsSchema,
@@ -114,6 +115,7 @@ const halt = (reason: string, code: ErrorCode): HookResult => ({
 export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object.freeze({
   get_crs: getCrsArgsSchema,
   get_health: getHealthArgsSchema,
+  connect_service: connectServiceArgsSchema,
   query_calendar: queryCalendarArgsSchema,
   get_communication: getCommunicationArgsSchema,
   get_tasks: getTasksArgsSchema,

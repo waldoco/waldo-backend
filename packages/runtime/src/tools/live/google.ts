@@ -1,6 +1,6 @@
 import {
-  draftEmailArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type DraftEmailArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type ToolHandler, type ToolName, type ToolResult,
+  connectServiceArgsSchema, draftEmailArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ConnectServiceArgs, type DraftEmailArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { GoogleError, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -78,3 +78,24 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     }),
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
 ];
+
+export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{ service: string; connected: boolean; message: string }>, ToolDispatcherContext> => ({
+  name: 'connect_service',
+  description: 'Get the link to connect a service (Google today), or confirm it is already connected. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector.',
+  schema: connectServiceArgsSchema,
+  trigger_allowlist: allowlist('connect_service'),
+  autonomy_gated: false,
+  async handle({ service }: ConnectServiceArgs) {
+    if (await google.client('calendar')) {
+      return { ok: true, data: { service, connected: true, message: 'Google is already connected.' }, source_taint: null };
+    }
+    const url = await google.connectUrl('calendar');
+    return {
+      ok: true,
+      data: url
+        ? { service, connected: false, message: `Google is not connected yet. Give the owner this link to connect their Google account: ${url}` }
+        : { service, connected: false, message: 'Google is not set up on this Waldo yet, so there is no link to give.' },
+      source_taint: null,
+    };
+  },
+});

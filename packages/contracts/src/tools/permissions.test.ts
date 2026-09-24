@@ -73,6 +73,7 @@ describe('toolName', () => {
       'close_loop',
       'set_proactivity',
       'read_tool_output',
+      'connect_service',
     ]);
   });
 
@@ -99,6 +100,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_crs',
         'get_health',
         'query_calendar',
+        'connect_service',
         'get_communication',
         'get_tasks',
         'get_master_metrics',
@@ -115,6 +117,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_crs',
         'get_health',
         'query_calendar',
+        'connect_service',
         'get_communication',
         'get_tasks',
         'get_master_metrics',
@@ -127,6 +130,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_crs',
         'get_health',
         'query_calendar',
+        'connect_service',
         'get_communication',
         'get_tasks',
         'get_master_metrics',
@@ -138,7 +142,7 @@ describe('TOOL_PERMISSIONS', () => {
         'read_document',
         'search_tools',
       ],
-      handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'get_tasks', 'propose_action'],
+      handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],
       handoff_act: [
         'execute_action',
         'write_task',
@@ -153,6 +157,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_crs',
         'get_health',
         'query_calendar',
+        'connect_service',
         'get_tasks',
         'update_task',
         'propose_action',
@@ -162,6 +167,7 @@ describe('TOOL_PERMISSIONS', () => {
         'get_crs',
         'get_health',
         'query_calendar',
+        'connect_service',
         'get_communication',
         'get_tasks',
         'get_master_metrics',
@@ -201,6 +207,7 @@ describe('TOOL_PERMISSIONS', () => {
       pre_activity_spot: [
         'get_crs',
         'query_calendar',
+        'connect_service',
         'read_memory',
         'propose_schedule',
         'propose_action',
@@ -210,11 +217,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 37 of 38', () => {
+  it('grants no trigger the full surface — user_message tops out at 38 of 39', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(37);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(38);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
@@ -275,8 +282,12 @@ describe('search_tools — ADR-0034 Option A, first-class', () => {
     expect(LAZY_DISCOVERY_TRIGGERS).toEqual(['user_message', 'handoff_explore']);
   });
 
-  it('pins the always-on set to exactly the ADR-0034 four, search_tools included', () => {
-    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'send_message', 'propose_action', 'search_tools']);
+  it('pins the always-on set: the ADR-0034 four plus connect_service (connect intent without discovery)', () => {
+    expect(ALWAYS_ON_TOOLS).toEqual(['read_memory', 'send_message', 'propose_action', 'search_tools', 'connect_service']);
+  });
+
+  it('grants connect_service exactly where query_calendar is granted', () => {
+    expect(triggersGranting('connect_service')).toEqual(triggersGranting('query_calendar'));
   });
 
   it('keeps every always-on tool inside the user_message ACL — loading never widens permission', () => {
