@@ -67,3 +67,14 @@ His vision: connecting a service should be seamless at every distance from the a
 
 Not in the current slice: tiers 2-as-contract and 3 are follow-on slices; the connect_service spec stays bounded.
 
+
+## Addendum 11:12 PM - tier-2 is now the written connector contract (BUILD_ORDER 12)
+
+Tier 2 graduated from convention to contract. The rule, binding on every current and future service tool:
+
+1. A service tool called while its service is unconnected MUST return `{ ok: false, code: 'auth_failed', error }` - never a shrug, never fabricated data.
+2. When the channel can deliver buttons, the error MUST say the connect button was sent; the consent URL travels ONLY through the deliver channel as a button. Model-visible text NEVER contains the URL (belt: the S1 egress guard also strips it if a bug ever puts it there).
+3. A provider 403 (scope not granted) maps to the same auth_failed-with-link path - consent adds the scope to the same account.
+4. connect_service (tier 1) and pure proposal tools (propose_calendar_change, which only writes to the approval desk) are exempt by design.
+
+Enforcement: packages/runtime/test/connector-contract.test.ts pins the tier-2 handler name list and asserts 1-3 for every entry. Adding a connector means adding its handlers to that pinned list in the same commit; a handler that skips the contract fails CI.
