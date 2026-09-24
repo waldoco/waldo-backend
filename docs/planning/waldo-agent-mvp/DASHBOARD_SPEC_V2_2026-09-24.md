@@ -42,6 +42,8 @@ Onboarding: 4 sections (Meet, Your life, Connect, All set), one serif question p
 11. **Auth model + account management + connection authorization: spec it properly** — best, scalable, secure, trusted; external service allowed (§4).
 12. **Usage & cost surface IN.**
 13. **Settings page, connected apps, other Waldo-specific surfaces IN.**
+14. **Onboarding accelerator (5:24 PM addendum):** when a user connects Google, Waldo automatically backfills - reads their days, life, and work context, makes sense of it, and seeds memory, knowledge, and understanding from it. During onboarding Waldo also offers a simple prompt the user can paste into an existing agent (Claude, Codex, any personal agent) to export what that agent knows about them, and paste the result back - switching made easy, personalization from minute one.
+15. **Skills maintained internally** for out-of-the-box activities and tasks; the public catalog is deferred (his call, consistent with skills-later on Home).
 14. Gap analysis from v1 agreed. Dashboard surfaces from v1 approved as the base. Keep P1/P2/P3 phasing; build now.
 
 ---
@@ -53,10 +55,11 @@ Runs **on the dashboard at first run**, using the Figma mobile frames as the scr
 1. **Meet** — "Hello, I'm Waldo." Name ("what do I call you?") + email (receipts and recovery only).
 2. **Your life** — day shape; what matters most (pick two); when the day starts ("this decides when I bother you"); when things go sideways. Answers drive which connections get requested — nothing irrelevant is asked.
 3. **The rope** — autonomy grant: just tell me / suggest, I approve / move things, I trust you. Stored as the default permission level, always editable in settings.
-4. **Connect, deferred** — only the connections the interview made necessary, each a one-tap link with a one-line capability and a code fallback. Never an upfront wall.
-5. **Consent** — plain-language data terms, 18+, terms; product updates opt-in.
-6. **The contract** — "Give me a few days. Your first Brief arrives tomorrow morning," on WhatsApp, Telegram, or Discord.
-7. **First dashboard visit onward** — the setup checklist (Folk activation pattern) drives the rest: connect a channel, connect calendar, set quiet hours, approve a first suggestion.
+4. **Connect, deferred** — only the connections the interview made necessary, each a one-tap link with a one-line capability and a code fallback. Never an upfront wall. **Google connect triggers an automatic backfill:** Waldo reads the user's days, life, and work context and seeds memory, knowledge, and understanding from it.
+5. **Bring your history (5:24 PM addendum)** — during onboarding Waldo offers a simple prompt the user can paste into their existing agent (Claude, Codex, any personal agent) to export what it knows about them; the user pastes the result back to Waldo. Onboarding and switching get faster; personalization starts at minute one.
+6. **Consent** — plain-language data terms, 18+, terms; product updates opt-in.
+7. **The contract** — "Give me a few days. Your first Brief arrives tomorrow morning," on WhatsApp, Telegram, or Discord.
+8. **First dashboard visit onward** — the setup checklist (Folk activation pattern) drives the rest: connect a channel, connect calendar, set quiet hours, approve a first suggestion.
 
 **Trust loop from day one (confirmed):** every interview answer persists as a memory item with provenance; the Constellations memory explorer shows "you told Waldo this during onboarding" immediately.
 
