@@ -18,7 +18,9 @@ Owner Telegram id: 5458446350. Supabase project: togdshayyxycitzckpqv.
 | 240214a | Claude: consent rework (PKCE, single-use state, result pages, trace hops) | yes | Claude said it deploys directly - UNCONFIRMED | no |
 | b10544c | L3 handoff approvals in-dash | yes | unknown | no |
 | 47ccbbf | L7 usage surface | yes | unknown | no |
-| (this commit) | L6 account deletion | yes | unknown | no |
+| 7c9403d | L6 account deletion | yes | unknown | no |
+| dec8f2e | browser tool spec (doc only) | yes | n/a | n/a |
+| 5c35c98 | B-tool-1 browse_page (read-only) | yes | unknown | no |
 
 One ship.sh run covers every pending lane commit. After ANY deploy, record the deployed version id here and flip the column.
 
@@ -39,6 +41,9 @@ One ship.sh run covers every pending lane commit. After ANY deploy, record the d
 
 13. ACCOUNT DELETION: in /console danger zone, confirm Delete account. Expect: telegram signs out ("This account has been deleted"), waldo.owner row gone, all connections and vault secrets gone (waldo.connections empty for the owner, vault secrets for the owner's connection ids deleted), DO storage wiped. Deleted-means-deleted probe: a new telegram message from the same owner starts FRESH onboarding (no prior state). Evidence: console notice + post-delete chat behavior + empty connections.
 
+14. BROWSE PAGE: ask the bot to read a live public page that defeats snippets (e.g. "browse https://example.com and tell me the heading"). Expect: answer from the real rendered page. Then a failure case: browse a dead URL - expect an honest transient error, not a fabricated answer. Requires BROWSERBASE_API_KEY + BROWSERBASE_PROJECT_ID in staging secrets (Mac-side wrangler secret put). Evidence: verbatim answers + trace hop.
+15. MULTI-USER ROUTING (BUILD_ORDER item 5 - already built, needs live proof): from a SECOND telegram account, message the bot with no link code - expect silence (no owner DO woken). Then /start <code> with a fresh code from the invited user's console - expect "Linked." and routing to that user's own DO. Evidence: both transcripts.
+
 ## Slices assessed as covered by existing surfaces (no new code needed)
 
 - L4 patrol log: the console Activity section already renders the real trace log (what Waldo did, per hop, with failures) and the approval ledger; spots/constellation sections show what it noticed with provenance. L3 added approvals as their own acting surface. Live verification of L4 = steps 8-9 above confirming real rows appear.
@@ -46,5 +51,4 @@ One ship.sh run covers every pending lane commit. After ANY deploy, record the d
 
 ## Still building (not in this checklist until shipped)
 
-- Browser tool slice spec (Browserbase) - spec before build, per owner.
-- Multi-user telegram routing (BUILD_ORDER item 5).
+- B-tool-2/3: bounded observe/act actions, then approval-bound submit (spec signed off).
