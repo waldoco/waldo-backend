@@ -58,13 +58,27 @@ describe('consoleAuth', () => {
   });
 
   it('the owner cookie resists forgery and owner swapping', async () => {
-    const auth = consoleAuth(env)!;
+    const fetcher = vi.fn(async () => json(true));
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
     const cookie = await auth.ownerCookie('do-a');
-    expect(await auth.readOwnerCookie(withCookie(cookie))).toBe('do-a');
-    expect(await auth.readOwnerCookie(withCookie(cookie.replace('do-a', 'do-b')))).toBeNull();
+    expect(cookie).not.toBeNull();
+    // doName + session id + HMAC, and the session was opened server-side.
+    expect(cookie!.split('.')).toHaveLength(3);
+    expect(String((fetcher.mock.calls[0] as unknown as [string])[0])).toContain('console_session_open');
+    expect(await auth.readOwnerCookie(withCookie(cookie!))).toBe('do-a');
+    expect(await auth.readOwnerCookie(withCookie(cookie!.replace('do-a', 'do-b')))).toBeNull();
     expect(await auth.readOwnerCookie(withCookie('do-b.forged'))).toBeNull();
     expect(await auth.readOwnerCookie(withCookie(''))).toBeNull();
-    expect(await consoleAuth({ ...env, WALDO_ROUTER_HMAC_SECRET: 'other' })!.readOwnerCookie(withCookie(cookie))).toBeNull();
+    expect(await consoleAuth({ ...env, WALDO_ROUTER_HMAC_SECRET: 'other' })!.readOwnerCookie(withCookie(cookie!))).toBeNull();
+  });
+
+  it('a killed session invalidates its cookie and sign-in fails when the session cannot open', async () => {
+    const alive = vi.fn(async () => json(true));
+    const auth = consoleAuth(env, alive as unknown as typeof fetch, now)!;
+    const cookie = (await auth.ownerCookie('do-a'))!;
+    const dead = vi.fn(async (input: RequestInfo) => json(!String(input).includes('console_session_touch')));
+    expect(await consoleAuth(env, dead as unknown as typeof fetch, now)!.readOwnerCookie(withCookie(cookie))).toBeNull();
+    expect(await consoleAuth(env, vi.fn(async () => json(false)) as unknown as typeof fetch, now)!.ownerCookie('do-a')).toBeNull();
   });
 
   it('issues a readable link code and stores only its hash', async () => {

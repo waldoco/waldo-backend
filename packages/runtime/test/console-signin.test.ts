@@ -17,13 +17,30 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   adminOverview: vi.fn(async () => null),
   invite: vi.fn(async () => false),
   revokeInvite: vi.fn(async () => false),
-  ownerCookie: vi.fn(async (doName: string) => `${doName}.sig`),
+  ownerCookie: vi.fn(async (doName: string) => `${doName}.session.sig`),
   readOwnerCookie: vi.fn(async () => null),
+  listSessions: vi.fn(async () => []),
+  revokeSession: vi.fn(async () => true),
+  signOutAll: vi.fn(async () => 2),
   ...overrides,
 });
 const form = (path: string, fields: Record<string, string>) => new Request(`https://w.test${path}`, { method: 'POST', body: new URLSearchParams(fields) });
 
 describe('handleConsole', () => {
+  it('sign-out-everywhere drops server-side sessions and clears both cookies', async () => {
+    const signOutAll = vi.fn(async () => 3);
+    const response = await handleConsole(
+      new Request('https://w.test/console/signout-all', { method: 'POST' }),
+      { TELEGRAM_OWNER_DO: owners().ns },
+      auth({ readOwnerCookie: vi.fn(async () => 'do-a'), signOutAll }),
+    );
+    expect(response?.status).toBe(303);
+    expect(signOutAll).toHaveBeenCalledWith('do-a');
+    const cleared = response?.headers.get('set-cookie') ?? '';
+    expect(cleared).toContain('waldo_owner=');
+    expect(cleared).toContain('Max-Age=0');
+  });
+
   it('stays out of the way when Supabase sign-in is not configured', async () => {
     expect(await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, null)).toBeNull();
   });
@@ -50,7 +67,7 @@ describe('handleConsole', () => {
     expect(fetch.mock.calls[0]?.[0]).toBe('https://telegram-owner/grant-console');
     const cookies = [...response.headers].filter(([name]) => name === 'set-cookie').map(([, value]) => value);
     expect(cookies.some((cookie) => cookie.startsWith('waldo_console=session-token;') && cookie.includes('HttpOnly') && cookie.includes('SameSite=Strict'))).toBe(true);
-    expect(cookies.some((cookie) => cookie.startsWith('waldo_owner=do-a.sig;'))).toBe(true);
+    expect(cookies.some((cookie) => cookie.startsWith('waldo_owner=do-a.session.sig;'))).toBe(true);
   });
 
   it('a wrong code wakes no owner DO', async () => {

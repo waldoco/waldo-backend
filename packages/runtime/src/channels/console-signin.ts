@@ -36,10 +36,23 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if (!doName) return codeForm(email, 'That code did not work, or this address has no access. Try again.');
     const grant = await owners.get(owners.idFromName(doName))
       .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName } });
+    const ownerCookieValue = await auth.ownerCookie(doName);
+    if (ownerCookieValue === null) return codeForm(email, 'Sign-in is having trouble. Try again in a moment.');
     const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
     const headers = new Headers({ location: CONSOLE_PATH });
     headers.append('set-cookie', `${CONSOLE_COOKIE}=${await grant.text()}; ${cookie}`);
-    headers.append('set-cookie', `${OWNER_COOKIE}=${await auth.ownerCookie(doName)}; ${cookie}`);
+    headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookieValue}; ${cookie}`);
+    return new Response(null, { status: 303, headers });
+  }
+  // D1: sign-out-everywhere. Drops every server-side session, so all live cookies - including
+  // this one - die at their next validation, then clears the cookies on this browser too.
+  if (url.pathname === `${CONSOLE_PATH}/signout-all` && request.method === 'POST') {
+    const doName = await auth.readOwnerCookie(request);
+    const headers = new Headers({ location: CONSOLE_SIGNIN_PATH });
+    const clear = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+    headers.append('set-cookie', `${CONSOLE_COOKIE}=; ${clear}`);
+    headers.append('set-cookie', `${OWNER_COOKIE}=; ${clear}`);
+    if (doName) await auth.signOutAll(doName);
     return new Response(null, { status: 303, headers });
   }
   const doName = await auth.readOwnerCookie(request);

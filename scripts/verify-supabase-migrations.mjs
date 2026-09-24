@@ -18,6 +18,7 @@ const expectedMigrations = [
   '20260924180000_waldo_connector_proxy.sql',
   '20260924190000_waldo_delete_owner.sql',
   '20260925000000_waldo_connect_sessions.sql',
+  '20260925010000_waldo_console_sessions.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

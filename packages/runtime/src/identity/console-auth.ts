@@ -9,6 +9,8 @@ export type AdminOverview = Readonly<{
 
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
 
+export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string }>;
+
 export type ConsoleAuth = Readonly<{
   sendCode(email: string): Promise<boolean>;
   verify(email: string, code: string): Promise<string | null>;
@@ -19,12 +21,19 @@ export type ConsoleAuth = Readonly<{
   revokeInvite(doName: string, invite: string): Promise<boolean>;
   unlinkTelegram(doName: string): Promise<boolean>;
   deleteOwner(doName: string): Promise<boolean>;
-  ownerCookie(doName: string): Promise<string>;
+  // D1: cookies carry a session id; minting opens a server-side session, reading validates it,
+  // and sign-out-everywhere drops them all. ownerCookie returns null when the session cannot be
+  // opened (storage down) so sign-in fails loudly instead of issuing an unverifiable cookie.
+  ownerCookie(doName: string): Promise<string | null>;
   readOwnerCookie(request: Request): Promise<string | null>;
+  listSessions(doName: string): Promise<readonly ConsoleSession[]>;
+  revokeSession(doName: string, sessionHash: string): Promise<boolean>;
+  signOutAll(doName: string): Promise<number>;
 }>;
 
 const LINK_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newLinkCode = () => [...crypto.getRandomValues(new Uint8Array(10))].map((byte) => LINK_ALPHABET[byte % LINK_ALPHABET.length]).join('');
+const newSessionId = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // Invite-gated Supabase email OTP. Returns null when Supabase is not configured, so the Telegram link sign-in stays.
 export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): ConsoleAuth | null => {
@@ -34,7 +43,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   const auth = (path: string, body: object) => fetcher(`${base}/auth/v1/${path}`, {
     method: 'POST', headers: { apikey: key, 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
-  const cookieSig = (doName: string) => routerSignature(secret, 0, `cookie.${doName}`);
+  const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
   return {
     // Unknown addresses get no email and the same answer, so the page never reveals who is invited.
     async sendCode(email) {
@@ -70,18 +79,39 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
     async ownerCookie(doName) {
-      return `${encodeURIComponent(doName)}.${await cookieSig(doName)}`;
+      const sessionId = newSessionId();
+      const sessionHash = await linkCodeHash(sessionId);
+      const opened = await rpc('console_session_open', `consolesess.open.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+      if (opened !== true) return null;
+      return `${encodeURIComponent(doName)}.${sessionId}.${await cookieSig(doName, sessionId)}`;
     },
     async readOwnerCookie(request) {
       const raw = (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim()).find((part) => part.startsWith(`${OWNER_COOKIE}=`))?.slice(OWNER_COOKIE.length + 1);
-      const dot = raw?.lastIndexOf('.') ?? -1;
-      if (!raw || dot < 1) return null;
-      const doName = decodeURIComponent(raw.slice(0, dot));
-      const expected = new TextEncoder().encode(await cookieSig(doName));
-      const given = new TextEncoder().encode(raw.slice(dot + 1));
+      const sigDot = raw?.lastIndexOf('.') ?? -1;
+      if (!raw || sigDot < 1) return null;
+      const sessionDot = raw.lastIndexOf('.', sigDot - 1);
+      if (sessionDot < 1) return null;
+      const doName = decodeURIComponent(raw.slice(0, sessionDot));
+      const sessionId = raw.slice(sessionDot + 1, sigDot);
+      const expected = new TextEncoder().encode(await cookieSig(doName, sessionId));
+      const given = new TextEncoder().encode(raw.slice(sigDot + 1));
       let diff = expected.length ^ given.length;
       for (let i = 0; i < expected.length; i += 1) diff |= expected[i]! ^ (given[i] ?? 0);
-      return diff === 0 ? doName : null;
+      if (diff !== 0) return null;
+      const sessionHash = await linkCodeHash(sessionId);
+      const live = await rpc('console_session_touch', `consolesess.touch.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash });
+      return live === true ? doName : null;
+    },
+    async listSessions(doName) {
+      const rows = await rpc('console_session_list', `consolesess.list.${doName}`, { p_do_name: doName });
+      return Array.isArray(rows) ? (rows as ConsoleSession[]) : [];
+    },
+    async revokeSession(doName, sessionHash) {
+      return (await rpc('console_session_revoke', `consolesess.revoke.${doName}.${sessionHash}`, { p_do_name: doName, p_session_hash: sessionHash })) === true;
+    },
+    async signOutAll(doName) {
+      const count = await rpc('console_signout_all', `consolesess.signout.${doName}`, { p_do_name: doName });
+      return typeof count === 'number' ? count : 0;
     },
   };
 };
