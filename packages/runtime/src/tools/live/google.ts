@@ -79,9 +79,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
 ];
 
-export const connectServiceHandler = (google: GoogleAccess): ToolHandler<ConnectServiceArgs, Readonly<{ service: string; connected: boolean; message: string }>, ToolDispatcherContext> => ({
+// The signed consent URL never enters model-visible text: deliver sends it as a Telegram URL button.
+export const connectServiceHandler = (google: GoogleAccess, deliver?: (url: string) => Promise<boolean>): ToolHandler<ConnectServiceArgs, Readonly<{ service: string; connected: boolean; message: string }>, ToolDispatcherContext> => ({
   name: 'connect_service',
-  description: 'Get the link to connect a service (Google today), or confirm it is already connected. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector.',
+  description: 'Connect a service (Google today), or confirm it is already connected. Use whenever the owner asks to connect, link or set up a service, asks why you cannot see their calendar or email, or mentions a connector. The link arrives as a button in chat; never quote or transcribe it.',
   schema: connectServiceArgsSchema,
   trigger_allowlist: allowlist('connect_service'),
   autonomy_gated: false,
@@ -90,12 +91,12 @@ export const connectServiceHandler = (google: GoogleAccess): ToolHandler<Connect
       return { ok: true, data: { service, connected: true, message: 'Google is already connected.' }, source_taint: null };
     }
     const url = await google.connectUrl('calendar');
-    return {
-      ok: true,
-      data: url
-        ? { service, connected: false, message: `Google is not connected yet. Give the owner this link to connect their Google account: ${url}` }
-        : { service, connected: false, message: 'Google is not set up on this Waldo yet, so there is no link to give.' },
-      source_taint: null,
-    };
+    if (!url) {
+      return { ok: true, data: { service, connected: false, message: 'Google is not set up on this Waldo yet, so there is no link to give.' }, source_taint: null };
+    }
+    if (!deliver || !(await deliver(url))) {
+      return { ok: true, data: { service, connected: false, message: 'The connect link could not be sent in this chat. Ask the owner to request it again from their Telegram chat with Waldo.' }, source_taint: null };
+    }
+    return { ok: true, data: { service, connected: false, message: 'The Google connect link was sent as a button in this chat. Tell the owner to tap it - do not quote or retype any link yourself.' }, source_taint: null };
   },
 });

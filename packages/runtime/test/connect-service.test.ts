@@ -12,23 +12,48 @@ const access = (client: GoogleClient | null, url: string | null): GoogleAccess =
 const ctx = {} as never;
 
 describe('connect_service', () => {
-  it('unconnected google returns the real consent URL with give-the-owner-this-link phrasing', async () => {
-    const handler = connectServiceHandler(access(null, 'https://worker.example/oauth/google/start?state=abc'));
+  it('unconnected google delivers the signed URL via the button channel and NEVER puts it in model-visible text', async () => {
+    const sent: string[] = [];
+    const handler = connectServiceHandler(access(null, 'https://worker.example/oauth/google/start?state=abc'), async (url) => { sent.push(url); return true; });
     const result = await handler.handle({ service: 'google' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.connected).toBe(false);
-    expect(result.data.message).toContain('Give the owner this link');
-    expect(result.data.message).toContain('https://worker.example/oauth/google/start?state=abc');
+    // The signed link must travel only through the button channel (live-proven: models rewrite URLs when relaying).
+    expect(sent).toEqual(['https://worker.example/oauth/google/start?state=abc']);
+    expect(result.data.message).not.toContain('https://');
+    expect(result.data.message).not.toContain('state=abc');
+    expect(result.data.message).toContain('button');
   });
 
-  it('connected google reports connected and never invents a URL', async () => {
-    const handler = connectServiceHandler(access({} as GoogleClient, 'https://worker.example/should-not-appear'));
+  it('without a deliver capability the URL still never leaks into model text', async () => {
+    const handler = connectServiceHandler(access(null, 'https://worker.example/oauth/google/start?state=abc'));
+    const result = await handler.handle({ service: 'google' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.message).not.toContain('https://');
+    expect(result.data.message).not.toContain('state=abc');
+    expect(result.data.message).toContain('could not be sent');
+  });
+
+  it('a failed button send degrades honestly without exposing the URL', async () => {
+    const handler = connectServiceHandler(access(null, 'https://worker.example/oauth/google/start?state=abc'), async () => false);
+    const result = await handler.handle({ service: 'google' }, ctx);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.message).toContain('could not be sent');
+    expect(result.data.message).not.toContain('https://');
+  });
+
+  it('connected google reports connected, never invents a URL, never sends a button', async () => {
+    let delivered = 0;
+    const handler = connectServiceHandler(access({} as GoogleClient, 'https://worker.example/should-not-appear'), async () => { delivered += 1; return true; });
     const result = await handler.handle({ service: 'google' }, ctx);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.connected).toBe(true);
     expect(result.data.message).not.toContain('http');
+    expect(delivered).toBe(0);
   });
 
   it('google not configured says so plainly, no fabricated link', async () => {

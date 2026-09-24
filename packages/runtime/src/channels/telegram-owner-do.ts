@@ -349,6 +349,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const call = gatedCaller(createTelegramCaller(token), () => identity.get<boolean>('telegram_unlinked') === true);
     const api = createTelegramOwnerApi(call);
+    const deliverConnectLink = async (url: string): Promise<boolean> => call('sendMessage', {
+      chat_id: owner,
+      text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
+      reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url }]] },
+    }).then(() => true).catch(() => false);
     const storage = this.ctx.storage;
     const { GOOGLE_CLIENT_ID: clientId, GOOGLE_CLIENT_SECRET: clientSecret, TELEGRAM_WEBHOOK_SECRET: stateSecret } = this.env;
     const googleApp = async () => {
@@ -448,7 +453,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google, deliverConnectLink), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1',
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
