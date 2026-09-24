@@ -8,7 +8,7 @@ const owners = () => {
   return { fetch, idFromName, ns: { idFromName, get: () => ({ fetch }) } as unknown as DurableObjectNamespace };
 };
 const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
-  sendCode: vi.fn(async () => undefined),
+  sendCode: vi.fn(async () => true),
   verify: vi.fn(async () => null),
   issueLinkCode: vi.fn(async () => null),
   saveSettings: vi.fn(async () => true),

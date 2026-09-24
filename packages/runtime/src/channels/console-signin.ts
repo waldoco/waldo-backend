@@ -25,7 +25,8 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {
     const email = String((await request.formData()).get('email') ?? '').trim().toLowerCase();
     if (!email.includes('@')) return emailForm('Enter your email address.');
-    await auth.sendCode(email);
+    const sent = await auth.sendCode(email);
+    if (!sent) console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'not_allowed' }));
     return codeForm(email);
   }
   if (url.pathname === CONSOLE_VERIFY_PATH && request.method === 'POST') {

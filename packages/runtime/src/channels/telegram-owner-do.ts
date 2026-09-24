@@ -12,7 +12,8 @@ import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
-import { durableConversationStore } from './conversation-store';
+import { durableConversationStore, scrubConversationHistory } from './conversation-store';
+import { egressGuardedCaller } from './egress-guard';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
@@ -369,7 +370,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
-    const call = gatedCaller(createTelegramCaller(token), () => identity.get<boolean>('telegram_unlinked') === true);
+    const call = egressGuardedCaller(
+      gatedCaller(createTelegramCaller(token), () => identity.get<boolean>('telegram_unlinked') === true),
+      (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
+    );
     const api = createTelegramOwnerApi(call);
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
     const deliverConnectLink = async (url: string): Promise<boolean> => {
@@ -522,7 +526,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const download = createTelegramFileDownloader(token);
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
-      .then(([, , , seeded]) => {
+      .then(async ([, , , seeded]) => {
+        const scrubbed = await scrubConversationHistory(storage);
+        if (scrubbed > 0) log({ trace: 'history:scrub', hop: 'egress_scrub', ms: 0, ok: true, detail: `${scrubbed} entries` });
         void this.serial(() => migrateCoreFiles('memory:migration'));
         if (seeded) void this.serial(() => planToday('day-plan:boot'));
       });

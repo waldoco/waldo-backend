@@ -10,7 +10,7 @@ export type AdminOverview = Readonly<{
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
 
 export type ConsoleAuth = Readonly<{
-  sendCode(email: string): Promise<void>;
+  sendCode(email: string): Promise<boolean>;
   verify(email: string, code: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
@@ -39,9 +39,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     // Unknown addresses get no email and the same answer, so the page never reveals who is invited.
     async sendCode(email) {
       const address = email.trim().toLowerCase();
-      if (!(await rpc('signin_allowed', `signin.${address}`, { p_email: address }))) return;
+      if (!(await rpc('signin_allowed', `signin.${address}`, { p_email: address }))) return false;
       const response = await auth('otp', { email: address, create_user: true });
       if (!response.ok) throw new Error(`otp send ${response.status}`);
+      return true;
     },
     async verify(email, code) {
       const address = email.trim().toLowerCase();

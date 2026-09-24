@@ -58,3 +58,8 @@ One ship.sh run covers every pending lane commit. After ANY deploy, record the d
 ## Still building (not in this checklist until shipped)
 
 - B-tool-2/3: bounded observe/act actions, then approval-bound submit (spec signed off).
+
+### S1 - egress guard + history scrub + console sign-in hop (CONNECT_FLOW_DESIGN slice 1)
+Built: deterministic narrow-scope redaction of secret-bearing URLs (Google OAuth, first-party /c/<ticket>, /oauth/*/callback, state=/code=/code_challenge= URLs) at three seams: (1) every sendMessage/editMessageText leaving the DO (egressGuardedCaller wraps the gated caller, logs hop 'egress_redacted' with count only), (2) every conversation-store save (never persists), (3) one-time history scrub migration gated on storage flag 'scrub:v1' (hop 'egress_scrub'). console-auth sendCode now returns boolean; console-signin logs 'console_signin' hop on silent not-allowed (no email in logs). Tests: 10 egress-guard + scrub + store-write adversarial tests green.
+- [ ] LIVE: after next deploy, send a model-authored message mentioning an old-style Google URL and confirm it arrives as [link removed] and the trace shows egress_redacted
+- [ ] LIVE: confirm the scrub migration fires once on first turn after deploy (trace hop egress_scrub) and stored history no longer contains the corrupted 20:28 consent URL
