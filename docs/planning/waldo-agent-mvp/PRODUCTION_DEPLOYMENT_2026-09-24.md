@@ -2,9 +2,23 @@
 
 How the deployed agent runs for many owners, and where every key lives. Companion to OWNER_SETUP_2026-09-24.md (one-time credential collection); this doc is the steady-state operator view.
 
-## Hard constraint (owner ruling, 2026-09-24)
+## Deployment shape and the Kubernetes/AWS question (2026-09-24, corrected)
 
-No Kubernetes, no AWS Secrets Manager, no heavy cloud control planes for deployment or secrets. The shape below already complies: Workers + Durable Objects for compute, wrangler secrets and Supabase function secrets for platform keys, Supabase Vault for user tokens. Nothing in this runbook may introduce a heavier control plane without a new owner ruling.
+Earlier this doc carried a "no Kubernetes, no AWS" hard constraint. That was a misread of an owner question as a ruling; corrected per the owner (14:32). This is the honest comparison he asked for instead.
+
+Current shape: Cloudflare Workers + per-owner Durable Objects for compute, wrangler secrets for platform keys, Supabase function secrets for the connector proxy, Supabase Vault for user tokens, Supabase Postgres for shared tables.
+
+Where Kubernetes/AWS would genuinely help:
+- Long-running or heavyweight jobs (large audio/video processing, big batch memory work) that don't fit a Worker's CPU/wall-clock envelope.
+- Multi-region active-active with custom networking, if beta outgrows DO placement.
+- Managed secret rotation and audit trails (AWS Secrets Manager) if a compliance bar appears.
+
+What it costs us today:
+- A second control plane to secure, deploy and pay for, on a one-person team.
+- Secret-custody sprawl: the hard line is user tokens only in Supabase Vault; an AWS secret store duplicates custody without strengthening it.
+- Slower iteration on the exact surfaces (channels, memory, evals) where the product risk actually lives.
+
+Call: stay on the current shape. Revisit triggers: a real workload Workers can't run, multi-region demand, or a compliance requirement. Secrets stay in wrangler secrets + Supabase function secrets + Vault regardless of where compute moves.
 
 ## Topology
 
