@@ -31,7 +31,7 @@ Both are true simultaneously; they are the two directions of one bridge:
 
 ## Machine capture (Kennel's new subsystem)
 
-AX-tree-first (structured ~100ms reads from the OS, no vision model), pixels-on-demand via ScreenCaptureKit only when a visual check is needed. TCC consent per capability class (Accessibility and Screen Recording are separate macOS grants; user flips them once in System Settings; no programmatic grant exists; dev-binary rebuilds silently revoke). Explicit opt-in UX, app allow/deny list, sensitive-app exclusion by policy, visible capture indicator in kennel-island. Local-first SQLite buffer with retention caps. Kennel's edge over minimi: it has GROUND TRUTH about repo state (workspacewatch, mission state) - unfinished builds, failing tests, uncommitted worktrees - not just pixels. Pattern proofs: andelf/axcli, Bambushu/screenread.
+AX-tree-first (structured ~100ms reads from the OS, no vision model), pixel capture on demand via ScreenCaptureKit wherever AX reads can't answer - visual checks, canvas/image-heavy apps, anything the AX tree doesn't expose (owner clarification 7:07 PM). TCC consent per capability class (Accessibility and Screen Recording are separate macOS grants; user flips them once in System Settings; no programmatic grant exists; dev-binary rebuilds silently revoke). Explicit opt-in UX, app allow/deny list, sensitive-app exclusion by policy, visible capture indicator in kennel-island. Local-first SQLite buffer with retention caps. Kennel's edge over minimi: it has GROUND TRUTH about repo state (workspacewatch, mission state) - unfinished builds, failing tests, uncommitted worktrees - not just pixels. Pattern proofs: andelf/axcli, Bambushu/screenread.
 
 ## Joint contracts (the shared surface, deliberately small)
 

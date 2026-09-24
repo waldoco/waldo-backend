@@ -6,7 +6,7 @@ Owner ask (WhatsApp 7:06 PM): build the entire memory layer, observation layer, 
 
 | Signal | minimi | Waldo+Kennel | Verdict |
 |---|---|---|---|
-| App/window focus + UI text | AX infrastructure, no screenshots | AX-tree-first, pixels on demand (ScreenCaptureKit only when a visual check is needed) | PARITY, cheaper and more exact (structured ~100ms reads, no vision model) |
+| App/window focus + UI text | AX infrastructure, no screenshots | AX-tree-first with pixel capture always available on demand: ScreenCaptureKit pixel inference whenever AX reads can't answer - visual checks, canvas/image-heavy apps, anything the AX tree doesn't expose (owner clarification 7:07 PM: pixels stay available for other on-Mac needs, not dropped) | PARITY, cheaper and more exact (structured ~100ms reads, no vision model for the default signal) |
 | What you hear/say (mic/audio STT) | Yes (their claim) | DEFERRED - see below | DELIBERATE GAP |
 | Work activity context | Inferred from pixels | Ground truth: workspacewatch filesystem signal, mission state (failing tests, uncommitted worktrees, running tasks) | EXCEEDS - minimi guesses at repo state; Kennel knows it |
 | Agent sessions (Claude/Codex) | Not captured | Kennel IS the harness: tasks, prompts, results, costs | EXCEEDS - unique to us |
@@ -48,7 +48,7 @@ Locked owner decisions applied: capture off-until-enabled per class; Waldo propo
 - Local-first: episodes live in Kennel's SQLite with retention caps; sync ships derived context, never raw streams or recordings.
 - Backend enforcement: capture scopes checked at ingest; forget barriers cover machine claims; scoped deletion and account deletion cover device rows + machine episodes (adversarial deleted-means-deleted probe extends).
 - Custody hard line unchanged: device keypair signing, no bearer tokens outside their stores, connector tokens remain Vault + connector-proxy only.
-- Data minimization as design rule: every captured class must justify its consent cost; AX-text preferred over pixels; pixels on demand only.
+- Data minimization as design rule: every captured class must justify its consent cost; AX-text is the default signal; pixel capture stays available on demand wherever AX can't answer, governed by the same TCC Screen Recording grant, per-class opt-in, and sensitive-app exclusion.
 
 ## 4. What this makes true
 
