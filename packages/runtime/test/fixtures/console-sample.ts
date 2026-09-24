@@ -7,7 +7,7 @@ const step = (name: string, at: string | null, note: string | null = null, state
 
 // Made-up console state for render tests and design previews. Not owner data.
 export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
-  release: 'sample', timezone: 'Asia/Kolkata', now: '2026-09-23 23:40', sessionUntil: '2026-09-24 11:40', csrf: 'c'.repeat(64), notice: 'Spot dismissed. Waldo will stop using it.',
+  release: 'sample', timezone: 'Asia/Kolkata', now: '2026-09-23 23:40', sessionUntil: '2026-09-24 11:40', sessionCount: 1, csrf: 'c'.repeat(64), notice: 'Spot dismissed. Waldo will stop using it.',
   telegram: { linked: true, unlinkAvailable: true },
   google: { accounts: [], connectAvailable: true },
   profile: [

@@ -166,8 +166,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (done) this.ctx.storage.kv.put('telegram_unlinked', true);
         return back(done ? 'telegram.unlink' : 'invalid');
       }
-      if (action?.action === 'session.signout') {
-        await access.signOut(session.token);
+      if (action?.action === 'session.signout' || action?.action === 'session.signout.all') {
+        if (action.action === 'session.signout.all') await access.signOutAll();
+        else await access.signOut(session.token);
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;
@@ -613,7 +614,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const pins = plans.pins();
         return {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
-          sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), csrf: session.csrf, notice,
+          sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, csrf: session.csrf, notice,
           google: { accounts: linked, connectAvailable: (await google.connectUrl('calendar')) !== null },
           telegram: { linked: identity.get<boolean>('telegram_unlinked') !== true, unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),

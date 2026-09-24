@@ -85,6 +85,32 @@ describe('owner console', () => {
     expect(await timed.session(fresh)).not.toBeNull();
   });
 
+  it('lists live sessions and sign-out-everywhere kills them all', async () => {
+    let now = 1_000;
+    const access = consoleAccess(memoryStore(), () => now);
+    const mint = async () => new URL(await access.mintLink('https://waldo.example')).searchParams.get('t')!;
+    const a = (await access.redeem(await mint()))!;
+    const b = (await access.redeem(await mint()))!;
+    expect((await access.list()).map((session) => session.token).sort()).toEqual([a, b].sort());
+    now += 13 * 60 * 60_000;
+    expect(await access.list()).toEqual([]);
+    const c = (await access.redeem(await mint()))!;
+    const d = (await access.redeem(await mint()))!;
+    await access.signOutAll();
+    expect(await access.list()).toEqual([]);
+    expect(await access.session(c)).toBeNull();
+    expect(await access.session(d)).toBeNull();
+  });
+
+  it('shows the browser count and offers sign-out-everywhere only when more than one browser is signed in', () => {
+    const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 });
+    expect(one).toContain('on 1 browser.');
+    expect(one).not.toContain('session.signout.all');
+    const two = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2 });
+    expect(two).toContain('on 2 browsers.');
+    expect(two).toContain('session.signout.all');
+  });
+
   it('reads the session cookie', () => {
     expect(sessionCookie(new Request('https://x/console', { headers: { cookie: 'a=1; waldo_console=abc' } }))).toBe('abc');
     expect(sessionCookie(new Request('https://x/console'))).toBeNull();

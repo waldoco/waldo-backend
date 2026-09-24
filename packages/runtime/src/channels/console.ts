@@ -65,6 +65,12 @@ export const consoleAccess = (store: Store, now: () => number = Date.now) => {
       delete sessions[token];
       await writeSessions(sessions);
     },
+    async list(): Promise<readonly ConsoleSession[]> {
+      return Object.values(await readSessions()).filter((session) => session.expires >= now());
+    },
+    async signOutAll(): Promise<void> {
+      await store.delete('console:sessions');
+    },
   };
 };
 
@@ -78,7 +84,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'session.signout.all', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -115,6 +121,7 @@ export type ConsoleView = Readonly<{
   timezone: string;
   now: string;
   sessionUntil: string;
+  sessionCount: number;
   csrf: string;
   notice: string | null;
   google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; mail: boolean }>[]; connectAvailable: boolean }>;
@@ -163,8 +170,8 @@ const connectors = (view: ConsoleView) => {
       google.accounts.length ? '' : status(false, 'Not connected'),
       google.connectAvailable ? `<a class="btn ${google.accounts.length ? 'quiet' : 'primary'}" href="${CONSOLE_GOOGLE_PATH}">${google.accounts.length ? 'Add account' : 'Connect Google'}</a>` : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
-    row('Console session', `Signed in until ${esc(view.sessionUntil)}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
-      form(csrf, 'session.signout', 'Sign out')),
+    row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
+      form(csrf, 'session.signout', 'Sign out') + (view.sessionCount > 1 ? form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser?' }) : '')),
     row('WhatsApp', 'Chat with Waldo on WhatsApp. Needs a Meta WhatsApp Business number and token.', chip('Not built yet', 'muted'), ''),
     row('Phone number and OTP sign-in', 'Sign in with your phone number and a one-time code instead of a Telegram link.', chip('Not built yet', 'muted'), ''),
     row('Health data', 'Apple Health / Apple Watch first, then Health Connect, Samsung and WHOOP.', chip('Not built yet', 'muted'), ''),
