@@ -9,6 +9,13 @@ const expectedMigrations = [
   '20260709172043_0006_harden_rls_auto_enable_execute.sql',
   '20260710182949_reconcile_contract_spine.sql',
   '20260806180000_add_responsibility_session_authority.sql',
+  '20260924120000_waldo_owners.sql',
+  '20260924130000_waldo_console_auth.sql',
+  '20260924140000_waldo_settings_sync.sql',
+  '20260924150000_waldo_admin.sql',
+  '20260924160000_waldo_unlink.sql',
+  '20260924170000_waldo_connections.sql',
+  '20260924180000_waldo_connector_proxy.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

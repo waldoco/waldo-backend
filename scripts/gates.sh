@@ -9,6 +9,7 @@ FAIL=0
   npx -y pnpm@10.34.4 install --frozen-lockfile >/dev/null 2>&1 && echo "INSTALL ok" || { echo "INSTALL fail"; FAIL=1; }
   npx -y pnpm@10.34.4 -r typecheck >/tmp/tc.log 2>&1 && echo "TYPECHECK ok" || { echo "TYPECHECK fail"; grep "error TS" /tmp/tc.log | head; FAIL=1; }
   node scripts/guards/run-all.mjs >/tmp/guards.log 2>&1 && echo "GUARDS ok" || { echo "GUARDS fail"; grep -iv ": ok" /tmp/guards.log | head; FAIL=1; }
+  node scripts/verify-supabase-migrations.mjs >/dev/null 2>&1 && echo "MIGRATIONS ok" || { echo "MIGRATIONS fail"; FAIL=1; }
   (cd packages/contracts && set -o pipefail && npx vitest run 2>&1 | grep -aE "Test Files|Tests ") || FAIL=1
   (cd packages/runtime && set -o pipefail && npx vitest run 2>&1 | grep -aE "Test Files|Tests | FAIL ") || FAIL=1
   echo "EXIT"

@@ -44,6 +44,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Schema changes on existing Durable Object storage are additive (new table, `ADD COLUMN`) and tolerate the column already existing.
 - Invariants are enforced in the database where possible (primary keys, CHECK, UNIQUE), not only in code.
 - Deletes that the owner asked for are real, and anything kept afterwards (a do-not-relearn note) is disclosed.
+- A commit that adds a Supabase migration updates the canonical list in `verify-supabase-migrations.mjs` in the same commit; gates.sh runs the check locally so drift fails before push.
 
 ### Failure paths
 - Every external call (model, Telegram, Google) has a timeout, and its failure path sends the owner something true or nothing, never a broken half-state.
@@ -84,3 +85,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 | 2026-09-24 | OTLP export failures went only to the worker console, so a broken Langfuse path looked healthy from every owner-visible surface | Observability | `/langfuse` self-test command; export failures recorded in trace_log | Observability: exporter failures land in the trace book |
 | 2026-09-24 | owner_wire_supabase.sh stage 3 generated a fresh router HMAC every run, stored it in Vault only when absent, but always pushed it to the worker - a re-run desynced worker vs Vault and broke every signed router call | Idempotency | scripts/guards/guard-owner-wire-hmac.mjs (proven against the pre-fix script) | Idempotency: read stored secrets back, generate only when absent |
 | 2026-09-24 | db55804 put raw provider `output_items` into `LLMResponse`; the PostLLMCall scribe screened them under the `send_message` 4096 cap, so every live call failed "oversize" | Trust boundaries | `llm-provider.test.ts` output_items cases: over-4KB items pass verbatim, a canary in the text still halts, a canary-like string only in items does not; fix strips/restores `output_items` around PostLLMCall | Trust boundaries: raw provider passthrough fields never enter egress-destination sanitise candidates |
+| 2026-09-24 | The W2/W3 waldo_* migrations landed without updating the canonical list in `verify-supabase-migrations.mjs`, so every CI run failed on "migration list drifted" while local gates stayed green - the check was CI-only | Data and migrations | canonical list updated to the applied 15; gates.sh now runs the migration check locally | Data and migrations: adding a migration updates the canonical list in the same commit |
