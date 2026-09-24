@@ -178,6 +178,18 @@ const connectors = (view: ConsoleView) => {
   ].join('');
 };
 
+const checklist = (view: ConsoleView) => {
+  const item = (done: boolean, label: string, hint: string) =>
+    `<div class="row conn"><div><div class="name">${esc(label)}</div><div class="sub">${hint}</div></div><div class="state">${status(done, done ? 'Done' : 'To do')}</div><div class="act"></div></div>`;
+  const gmail = view.google.accounts.some((account) => account.mail);
+  return [
+    item(view.telegram.linked, 'Link Telegram', 'Send /console to Waldo on Telegram so cards, reminders and sign-in links reach you.'),
+    item(view.google.accounts.length > 0, 'Connect Google', 'Lets Waldo read your calendar. Use the Connections section below.'),
+    item(gmail, 'Allow Gmail', 'A separate Google step so Waldo can read mail and send only what you approve.'),
+    item(view.proactivity.quiet_start !== null, 'Set quiet hours', 'Tell Waldo when not to message you, in Your day below.'),
+  ].join('');
+};
+
 const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: 'Waldo\'s inference' };
 
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
@@ -280,9 +292,10 @@ export const renderConsole = (view: ConsoleView, banner = ''): string => {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#activity">Activity</a></nav>
+<nav><a href="#checklist">Setup</a><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#activity">Activity</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 <div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
+${section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Everything here reflects real state.', checklist(view))}
 ${section('connections', 'Connections', 'What Waldo can reach, and the switches to change it. Items marked not built yet are on the plan but not wired.', connectors(view))}
 ${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + retired(view))}
 ${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}

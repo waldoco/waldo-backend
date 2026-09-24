@@ -102,6 +102,19 @@ describe('owner console', () => {
     expect(await access.session(d)).toBeNull();
   });
 
+  it('checklist reflects real connection state, honestly marking what is not done', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('id="checklist"');
+    // Fixture: telegram linked, no google account, quiet hours set.
+    const row = (label: string) => html.slice(html.indexOf(label), html.indexOf(label) + 400);
+    expect(row('Link Telegram')).toContain('Done');
+    expect(row('Connect Google')).toContain('To do');
+    expect(row('Allow Gmail')).toContain('To do');
+    expect(row('Set quiet hours')).toContain('Done');
+    const done = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, mail: true }], connectAvailable: true } });
+    expect(done.slice(done.indexOf('Connect Google'), done.indexOf('Connect Google') + 400)).toContain('Done');
+  });
+
   it('shows the browser count and offers sign-out-everywhere only when more than one browser is signed in', () => {
     const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 });
     expect(one).toContain('on 1 browser.');
@@ -125,7 +138,7 @@ describe('owner console', () => {
   it('renders every section with working controls and escapes stored text', () => {
     const view = { ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, text: '<script>x</script>' }] };
     const html = renderConsole(view);
-    for (const id of ['connections', 'spots', 'constellation', 'day', 'memory', 'activity']) expect(html).toContain(`id="${id}"`);
+    for (const id of ['checklist', 'connections', 'spots', 'constellation', 'day', 'memory', 'activity']) expect(html).toContain(`id="${id}"`);
     expect(html).toContain('&#60;script&#62;x&#60;/script&#62;');
     expect(html).not.toContain('<zz>');
     expect(html).toContain('href="/console/google">Connect Google');
