@@ -27,6 +27,8 @@ Waldo messages a short-lived, single-use link ("open my dashboard", under any br
 3. The worker redeems via the existing grant-console DO call, atomically spends the token, sets the same two cookies as email sign-in, 303s to /console.
 4. Channel identity binds the mint: only a message from a routed presence (provider+subject verified by the transport) can mint for that person's DO.
 
+Session semantics (owner question 7:38 PM, answered in the spec): the 10-minute lifetime belongs to the LINK (the door key), not the session. Redeeming a link SETS the session cookies (12h). Asking Waldo for the dashboard 5 times in a day mints 5 links - spent/expired ones die - but redemption on a browser that already holds a live session REFRESHES that session instead of stacking a new one. Sessions are per browser/device, never per link: 5 links, 1 session. The console session list shows browsers/devices; sign-out-everywhere (grant version bump) kills all of them at once.
+
 No new auth vendor. Adversarial tests: replay of a spent token, expired token, token for another person, mint requested from an unlinked chat.
 
 ## Decision 3 - connection authorization: keep connector-proxy, defer Nango
