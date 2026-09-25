@@ -103,15 +103,20 @@ describe('Fix targets', () => {
     const [calendar] = googleHandlers(googleWith(populatedEvents, []), desk, clock);
     const events: { ok: boolean; error?: string }[] = [];
     const { runToolLoop } = await import('../src/conversation/tool-loop');
+    let stepped = 0;
     await runToolLoop({
       handlers: [calendar!],
       ctx: ctx('user_message'),
       maxSteps: 1,
       onTool: (event) => events.push({ ok: event.ok, error: event.error }),
-      step: async () => ({
-        text: '',
-        tool_calls: [{ call_id: 'c5', name: 'query_calendar', arguments: JSON.stringify({ date_range: { from: '2026-09-25T00:00:00+05:30', to: '2026-10-10T23:59:59+05:30' } }) }],
-      }),
+      step: async () => {
+        stepped += 1;
+        if (stepped > 1) return { text: 'done' };
+        return {
+          text: '',
+          tool_calls: [{ call_id: 'c5', name: 'query_calendar', arguments: JSON.stringify({ date_range: { from: '2026-09-25T00:00:00+05:30', to: '2026-10-10T23:59:59+05:30' } }) }],
+        };
+      },
     }).catch(() => undefined);
     expect(events).toHaveLength(1);
     expect(events[0]!.ok).toBe(false);

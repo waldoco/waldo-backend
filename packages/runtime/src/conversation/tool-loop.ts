@@ -87,7 +87,7 @@ export async function runToolLoop(input: Readonly<{
 async function dispatch(
   call: LLMToolCall,
   input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
-): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; connect?: ConnectIntent }>> {
+): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; connect?: ConnectIntent }>> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
   let args: unknown;
@@ -97,5 +97,15 @@ async function dispatch(
     return { ok: false, error: 'Arguments were not valid JSON.' };
   }
   const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
-  return result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error, ...(result.connect ? { connect: result.connect } : {}) };
+  if (result.ok) return { ok: true, data: result.data };
+  // Keep the dispatcher's typed code/reason so spans carry the machine-readable failure, not
+  // just the human-facing message.
+  const typed = result as { code?: string; reason?: string };
+  return {
+    ok: false,
+    error: result.error,
+    ...(typed.code ? { code: typed.code } : {}),
+    ...(typed.reason ? { reason: typed.reason } : {}),
+    ...(result.connect ? { connect: result.connect } : {}),
+  };
 }
