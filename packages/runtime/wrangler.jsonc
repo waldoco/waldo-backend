@@ -3,10 +3,6 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-06-16",
   "observability": { "enabled": true },
-  "ai": { "binding": "AI" },
-  "vectorize": [
-    { "binding": "VECTORIZE", "index_name": "waldo-recall" }
-  ],
   "durable_objects": {
     "bindings": [
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
@@ -22,6 +18,15 @@
       "simple": { "limit": 120, "period": 60 }
     }
   ],
+  "env": {
+    "staging": {
+      "name": "waldo-runtime-staging",
+      "ai": { "binding": "AI" },
+      "vectorize": [
+        { "binding": "VECTORIZE", "index_name": "waldo-recall" }
+      ]
+    }
+  },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
     { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
