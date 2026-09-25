@@ -86,3 +86,22 @@ Get these right first:
 4. WHOOP (its own API)
 
 Oura, Ultrahuman and others come later.
+
+## Retrieval stack: built vs planned vs the field (2026-09-25)
+
+The hybrid verdict (FTS + vector + SQLite + files) and where each leg stands:
+
+| Leg | Status today |
+|---|---|
+| SQLite structured memory | LIVE. Five halls (facts/events/discoveries/preferences/advice) as typed rows in per-owner DO SQLite with trust class + source taint + decision log; writes stage through the Scribe inbox, recall is trust-filtered at compose time. Tools: read_memory / update_memory, permission-scoped per trigger. |
+| FTS | LIVE. FTS5 (unicode61) over the episodes store, search_episodes tool; hall recall queries at compose time. |
+| Vector | NOT BUILT. Verdict-level only (HARNESS_GAP_INVENTORY: "hybrid or vector recall" is open). FTS misses paraphrase; vector is the known gap. |
+| Files | PARTIAL. Skill bodies are markdown in R2 (versioned, provenance-locked playbooks). No freeform markdown memory/workspace layer exists - deliberate: auto-injected markdown is the biggest prompt-injection surface in file-based agents; rows carry taint precisely so untrusted content cannot ride the prompt. A7 standing orders lands the always-on-instructions capability as typed rows instead. |
+
+Against what others run: OpenClaw is file/workspace-markdown memory (simple, hackable,
+injection-prone). Hermes runs FTS5 over sessions plus agent-written memory. Pi is minimal
+(session tree, file-ish). mem0/Hindsight-style services sell typed memory layers. The common
+default across the field is plain vector RAG; the frontier is typed, provenance-carrying memory.
+Waldo exceeds the common default on governance (trust/taint classes, correctable and forgettable
+memory, spots+constellations with evidence) and trails on semantic recall - the vector leg is the
+one real gap, and it slots in as a recall-ranking addition, not a redesign.

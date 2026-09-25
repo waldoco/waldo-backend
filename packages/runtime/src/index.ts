@@ -10,6 +10,7 @@ import {
 } from '@waldo/contracts';
 import { armAlarm } from './scheduler/alarm-slot';
 import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
+import { handleWhatsAppWebhook, WHATSAPP_WEBHOOK_PATH } from './channels/whatsapp-webhook';
 import { handleGoogleCallback } from './channels/google-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
@@ -118,6 +119,9 @@ export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     if (new URL(request.url).pathname === TELEGRAM_WEBHOOK_PATH) {
       return handleTelegramWebhook(request, env, (work) => ctx?.waitUntil(work));
+    }
+    if (new URL(request.url).pathname === WHATSAPP_WEBHOOK_PATH) {
+      return handleWhatsAppWebhook(request, env, (work) => ctx?.waitUntil(work));
     }
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) {
       const signedIn = await handleConsole(request, env);
