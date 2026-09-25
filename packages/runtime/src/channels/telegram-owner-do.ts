@@ -35,6 +35,7 @@ import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, gatedCaller, createTelegramOwnerApi } from './telegram-api';
+import { whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
 import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './telegram-listener';
@@ -105,8 +106,10 @@ export const resolveOwnerTelegramId = (
   return env.WALDO_OWNER_TELEGRAM_ID ? Number(env.WALDO_OWNER_TELEGRAM_ID) : 0;
 };
 
+type ChannelKind = 'telegram' | 'whatsapp';
+
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
-  private runtime?: OwnerRuntime;
+  private runtimes: Partial<Record<ChannelKind, OwnerRuntime>> = {};
   private queue: Promise<unknown> = Promise.resolve();
 
   override async fetch(request: Request): Promise<Response> {
@@ -136,9 +139,33 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         console.log(JSON.stringify({ hop: 'set_webhook', ok: false, error: String(error) }));
       }
     }
+    if (new URL(request.url).pathname === '/whatsapp-turn' && request.method === 'POST') {
+      return this.whatsappTurn(request, body);
+    }
     const update = JSON.parse(body) as RawUpdate;
     if (this.intercept(update)) return new Response('ok');
     await this.serial(() => this.turn(update));
+    return new Response('ok');
+  }
+
+  // WhatsApp ingress (WHATSAPP_CHANNEL_SPEC W3). The webhook has already verified Meta's
+  // signature and resolved this sender to this owner; here we bind the whatsapp subject, then
+  // normalize each text message into the telegram-shaped update the turn pipeline consumes
+  // (subject digits double as the numeric owner/chat id). Approval replies arrive as text
+  // ("a:p12") because WhatsApp buttons carry no callback_data, so that shape synthesizes the
+  // equivalent callback_query. Non-text messages are skipped (voice notes are W4).
+  private async whatsappTurn(request: Request, body: string): Promise<Response> {
+    const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '';
+    if (!/^\d{6,15}$/.test(subject)) return new Response('forbidden', { status: 403 });
+    const { kv } = this.ctx.storage;
+    if (kv.get<string>('whatsapp_subject') !== subject) {
+      kv.put('whatsapp_subject', subject);
+      this.runtimes = {};
+    }
+    const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string } }[] };
+    const { updates, seq } = whatsappIngressUpdates(value.messages ?? [], subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
+    for (const update of updates) await this.serial(() => this.turn(update, 'whatsapp'));
+    await this.ctx.storage.put('wa_seq', seq);
     return new Response('ok');
   }
 
@@ -149,7 +176,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (subject) kv.delete('telegram_unlinked');
     if (subject && kv.get<string>('telegram_subject') !== subject) {
       kv.put('telegram_subject', subject);
-      this.runtime = undefined;
+      delete this.runtimes.telegram;
     }
     const timezone = headers.get('x-waldo-timezone');
     if (timezone && kv.get<string>('timezone') !== timezone) kv.put('timezone', timezone);
@@ -267,8 +294,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   // Runs outside the serial queue so it reaches a turn that is still running.
   private intercept(update: RawUpdate): boolean {
-    if (!this.runtime || update.update_id === undefined) return false;
-    const { owner, control, call, log } = this.runtime;
+    const runtime = this.runtimes.telegram;
+    if (!runtime || update.update_id === undefined) return false;
+    const { owner, control, call, log } = runtime;
     const text = update.message?.text?.trim();
     if (update.message?.from?.id !== owner || update.message.chat?.id !== owner || !text) return false;
     const trace = `tg-${update.update_id}`;
@@ -282,23 +310,24 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     return false;
   }
 
-  private async turn(update: unknown): Promise<void> {
-    const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup();
+  private async turn(update: unknown, channel: ChannelKind = 'telegram'): Promise<void> {
+    const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
     await ready;
     if (!listener) {
-      log({ trace: 'tg-unlinked', hop: 'turn', ms: 0, ok: false, detail: 'dropped: telegram not linked for this owner' });
+      log({ trace: `${channel}-unlinked`, hop: 'turn', ms: 0, ok: false, detail: `dropped: ${channel} not linked for this owner` });
       return;
     }
-    const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
+    const offsetKey = channel === 'whatsapp' ? 'wa_offset' : 'offset';
+    const offset = (await this.ctx.storage.get<number>(offsetKey)) ?? 0;
     const raw = update as RawUpdate;
     const fromOwner = raw.message?.from?.id === owner && raw.message.chat?.id === owner;
     if (fromOwner && raw.update_id !== undefined && raw.update_id >= offset && control.absorbed(raw.update_id)) {
-      await this.ctx.storage.put('offset', raw.update_id + 1);
+      await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return log({ trace: `tg-${raw.update_id}`, hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
     }
     if (fromOwner && raw.message?.text?.trim() === '/stop') {
       if (raw.update_id === undefined || raw.update_id < offset) return;
-      await this.ctx.storage.put('offset', raw.update_id + 1);
+      await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return void (await call('sendMessage', { chat_id: owner, text: 'Nothing is running right now.' }));
     }
     const harness = fromOwner ? parseHarnessCommand(raw.message?.text) : null;
@@ -306,13 +335,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (handledDirectly) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
       if (harness?.kind === 'console') {
-        await this.ctx.storage.put('offset', raw.update_id + 1);
+        await this.ctx.storage.put(offsetKey, raw.update_id + 1);
         const origin = await this.ctx.storage.get<string>('origin');
         await call('sendMessage', { chat_id: owner, text: origin ? `Console (link works once, for 10 minutes): ${await consoleAccess(this.ctx.storage).mintLink(origin)}` : 'Console origin is not known yet; send any message first.', link_preview_options: { is_disabled: true } });
         return;
       }
       if (harness) {
-        await this.ctx.storage.put('offset', raw.update_id + 1);
+        await this.ctx.storage.put(offsetKey, raw.update_id + 1);
         await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, raw.update_id)).slice(0, 4000) });
         return;
       }
@@ -324,7 +353,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (rated && query.message) await call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
       } else if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${raw.update_id}`);
       else await call('sendMessage', { chat_id: owner, text: ledger() });
-      await this.ctx.storage.put('offset', raw.update_id + 1);
+      await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return;
     }
     await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
@@ -366,17 +395,24 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
   }
 
-  private setup(): OwnerRuntime {
-    if (this.runtime) return this.runtime;
+  private setup(channel: ChannelKind = 'telegram'): OwnerRuntime {
+    const cached = this.runtimes[channel];
+    if (cached) return cached;
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
     const identity = this.ctx.storage.kv;
     // consoleAuth is non-null exactly when the Supabase directory backs this deploy.
-    const owner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
-    if (!token || !key) throw new Error('telegram owner runtime is unconfigured');
+    // WhatsApp identity is the E.164-digit subject bound at ingress; a directory-backed DO with
+    // no whatsapp_subject resolves owner 0 and every send drops at the gate (same rule as d3a050c).
+    const owner = channel === 'whatsapp'
+      ? Number(identity.get<string>('whatsapp_subject') ?? '0') || 0
+      : resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
+    if (channel === 'whatsapp' && (!this.env.WHATSAPP_ACCESS_TOKEN || !this.env.WHATSAPP_PHONE_NUMBER_ID)) throw new Error('whatsapp owner runtime is unconfigured');
+    if (channel === 'telegram' && !token) throw new Error('telegram owner runtime is unconfigured');
+    if (!key) throw new Error('owner runtime is unconfigured');
     const otlp = langfuseOtlpConfig(this.env);
     const exportTurn = otlp ? otlpTurnExporter(otlp, {
       environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
-      channel: 'telegram', userId: owner > 0 ? `telegram:${owner}` : 'telegram:unlinked', sessionId: owner > 0 ? `telegram-dm:${owner}` : 'telegram-dm:unlinked',
+      channel, userId: owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`, sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
       captureText: this.env.LANGFUSE_CAPTURE_TEXT === 'true',
     }) : undefined;
     const traces = traceBook(this.ctx.storage.sql);
@@ -401,8 +437,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
+    const baseCall = channel === 'whatsapp'
+      ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
+      : createTelegramCaller(token!);
     const call = egressGuardedCaller(
-      gatedCaller(createTelegramCaller(token), () => owner === 0 || identity.get<boolean>('telegram_unlinked') === true),
+      gatedCaller(baseCall, () => owner === 0 || identity.get<boolean>(channel === 'whatsapp' ? 'whatsapp_unlinked' : 'telegram_unlinked') === true),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
     );
     const api = createTelegramOwnerApi(call);
@@ -596,7 +635,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
     const ledger = () => [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity())].join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
-    const download = createTelegramFileDownloader(token);
+    const download = createTelegramFileDownloader(token ?? '');
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
       .then(async ([, , , seeded]) => {
@@ -627,7 +666,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },
-      saveOffset: (offset) => this.ctx.storage.put('offset', offset),
+      saveOffset: (offset) => this.ctx.storage.put(channel === 'whatsapp' ? 'wa_offset' : 'offset', offset),
     }) : null;
     const fire = async (entry: ScheduleEntry) => {
       const note = book.note(entry.id);
@@ -764,7 +803,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    this.runtime = { owner, listener, control: responder.control, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
+    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
       view: async (session, notice) => {
         const linked = await google.state();
         const now = Date.now();
@@ -838,6 +877,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
       },
       timezone: clock.timezone, ready };
-    return this.runtime;
+    this.runtimes[channel] = runtime;
+    return runtime;
   }
 }
