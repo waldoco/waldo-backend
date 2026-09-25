@@ -19,15 +19,16 @@ const setup = (start = 1_000_000) => {
   return { deps, memory, advance: (ms: number) => { now += ms; } };
 };
 
-const begin = async (deps: Parameters<typeof startConsent>[0], owner = '5458446350') => {
-  const { url, nonce } = await startConsent(deps, app, SECRET, owner);
+// The default test flow mints from telegram, matching how the chat connect affordance mints.
+const begin = async (deps: Parameters<typeof startConsent>[0], owner = '5458446350', surface?: 'telegram' | 'whatsapp' | 'dashboard' | 'app') => {
+  const { url, nonce } = await startConsent(deps, app, SECRET, owner, { surface });
   return { url: new URL(url), nonce };
 };
 
 describe('google consent attempt', () => {
   it('records the connect-session ticket hash on the attempt when started from a /c/ link (S3)', async () => {
     const { deps, memory } = setup();
-    const { nonce } = await startConsent(deps, app, SECRET, '5458446350', 'hashabc');
+    const { nonce } = await startConsent(deps, app, SECRET, '5458446350', { session: 'hashabc' });
     expect(memory.flows()[nonce]!.session).toBe('hashabc');
     const { nonce: plain } = await startConsent(deps, app, SECRET, '5458446350');
     expect(memory.flows()[plain]!.session).toBeUndefined();
@@ -124,8 +125,8 @@ describe('google consent attempt', () => {
 });
 
 describe('consent result page', () => {
-  it('shows success with the account and a Back to Telegram button', async () => {
-    const response = consentPage({ kind: 'linked', email: 'me@example.com', scopes: [] }, 'waldo_bot');
+  it('shows success with the account and a Back to Telegram button for a telegram-origin flow', async () => {
+    const response = consentPage({ kind: 'linked', email: 'me@example.com', scopes: [] }, 'waldo_bot', 'telegram');
     const html = await response.text();
     expect(response.status).toBe(200);
     expect(html).toContain('Google is connected');
@@ -156,6 +157,35 @@ describe('consent result page', () => {
     expect(response.headers.get('x-frame-options')).toBe('DENY');
     expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
   });
+
+  it('routes each initiating surface back to where it started, with the console as the safe fallback', async () => {
+    const linked = { kind: 'linked', email: null, scopes: [] } as const;
+    const telegram = await consentPage(linked, 'waldo_bot', 'telegram').text();
+    expect(telegram).toContain('href="https://t.me/waldo_bot"');
+    const whatsapp = await consentPage(linked, null, 'whatsapp').text();
+    expect(whatsapp).toContain('back to WhatsApp');
+    expect(whatsapp).not.toContain('class="button"');
+    const dashboard = await consentPage(linked, null, 'dashboard').text();
+    expect(dashboard).toContain('href="/console"');
+    expect(dashboard).toContain('Back to your console');
+    const app = await consentPage(linked, null, 'app').text();
+    expect(app).toContain('href="waldo://oauth/complete"');
+    // no surface in the state: console fallback, never a telegram guess
+    const fallback = await consentPage(linked, 'waldo_bot').text();
+    expect(fallback).toContain('href="/console"');
+    expect(fallback).not.toContain('t.me');
+  });
+
+  it('never renders an arbitrary return URL: every href is from the fixed allowlist', async () => {
+    const linked = { kind: 'linked', email: null, scopes: [] } as const;
+    for (const surface of ['telegram', 'whatsapp', 'dashboard', 'app', undefined] as const) {
+      const html = await consentPage(linked, 'waldo_bot', surface).text();
+      for (const href of html.match(/href="([^"]*)"/g) ?? []) {
+        const target = href.slice(6, -1);
+        expect(target === '/console' || target === 'waldo://oauth/complete' || target.startsWith('https://t.me/')).toBe(true);
+      }
+    }
+  });
 });
 
 describe('google callback in the Worker', () => {
@@ -180,7 +210,7 @@ describe('google callback in the Worker', () => {
 
   it('forwards a verified attempt to the owner Durable Object and renders its outcome', async () => {
     const { deps } = setup();
-    const { url, nonce } = await begin(deps, 'owner.with.dots');
+    const { url, nonce } = await begin(deps, 'owner.with.dots', 'telegram');
     const owner = ownerNamespace(async () => Response.json({ outcome: { kind: 'linked', email: 'me@example.com', scopes: [] }, bot: 'waldo_bot' }));
     const state = encodeURIComponent(url.searchParams.get('state')!);
     const response = await handleGoogleCallback(callback(`state=${state}&code=c1&scope=openid`), env(owner.ns));

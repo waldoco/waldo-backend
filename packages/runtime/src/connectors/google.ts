@@ -31,15 +31,36 @@ async function sign(secret: string, payload: string): Promise<string> {
 // The state names the owner's Durable Object (to route the callback) and a one-time nonce whose
 // record, expiry and PKCE verifier live in that Durable Object. The MAC lets the Worker drop forged
 // callbacks before waking anything.
-export async function consentState(secret: string, owner: string, nonce: string): Promise<string> {
-  return `${owner}.${nonce}.${await sign(secret, `${owner}.${nonce}`)}`;
+// The surface that started the flow (telegram, whatsapp, dashboard, app) rides in the signed
+// state so the completion page can route the owner back where they came from. Unknown or
+// tampered surfaces fail verification; the page falls back to the console.
+export const CONSENT_SURFACES = ['telegram', 'whatsapp', 'dashboard', 'app'] as const;
+export type ConsentSurface = (typeof CONSENT_SURFACES)[number];
+
+export async function consentState(secret: string, owner: string, nonce: string, surface?: ConsentSurface): Promise<string> {
+  const body = surface ? `${owner}.${nonce}.${surface}` : `${owner}.${nonce}`;
+  return `${body}.${await sign(secret, body)}`;
 }
 
 // The owner is the Durable Object name, which may hold dots, so split from the right.
-export async function readConsentState(secret: string, state: string): Promise<Readonly<{ owner: string; nonce: string }> | null> {
-  const [mac, nonce, ...rest] = state.split('.').reverse();
-  const owner = rest.reverse().join('.');
-  if (!owner || !nonce || !mac) return null;
+export async function readConsentState(secret: string, state: string): Promise<Readonly<{ owner: string; nonce: string; surface?: ConsentSurface }> | null> {
+  const parts = state.split('.');
+  const mac = parts[parts.length - 1];
+  if (!mac || parts.length < 3) return null;
+  // Surface-aware shape first: owner.nonce.surface.mac, owner itself dotted. The MAC binds the
+  // exact layout, so a surface moved or edited by hand fails both shapes.
+  if (parts.length >= 4) {
+    const surface = parts[parts.length - 2] ?? '';
+    const nonce = parts[parts.length - 3] ?? '';
+    const owner = parts.slice(0, -3).join('.');
+    if (owner && nonce && (CONSENT_SURFACES as readonly string[]).includes(surface)) {
+      const body = `${owner}.${nonce}.${surface}`;
+      if ((await sign(secret, body)) === mac) return { owner, nonce, surface: surface as ConsentSurface };
+    }
+  }
+  const nonce = parts[parts.length - 2] ?? '';
+  const owner = parts.slice(0, -2).join('.');
+  if (!owner || !nonce) return null;
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
