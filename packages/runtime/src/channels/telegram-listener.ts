@@ -4,6 +4,8 @@ import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTu
 
 
 export const TURN_TIMEOUT_MS = 150_000;
+// Reactions are best-effort UX; one hung call must never gate the turn that follows it.
+export const REACTION_TIMEOUT_MS = 5_000;
 
 class TurnTimeout extends Error {
   constructor(ms: number) { super(`turn timed out after ${ms} ms`); }
@@ -24,6 +26,7 @@ export type TelegramOwnerListenerOptions = Readonly<{
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   turnTimeoutMs?: number;
+  reactionTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
   saveOffset(offset: number): Promise<void>;
   log?(entry: TurnLogEntry): void;
@@ -92,9 +95,26 @@ export class TelegramOwnerListener {
     const chat_id = turn.chatId;
     const ack = this.options.ackEmoji ?? '👀';
     const message_id = turn.messageId;
-    const react = (hop: string, emoji: string) => message_id === null
-      ? Promise.resolve()
-      : time(hop, () => api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] })).then(() => undefined, () => undefined);
+    const react = (hop: string, emoji: string): Promise<void> => {
+      if (message_id === null) return Promise.resolve();
+      const limit = this.options.reactionTimeoutMs ?? REACTION_TIMEOUT_MS;
+      const t0 = now();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      // One span per reaction: whichever of success, failure, or the timeout lands first wins,
+      // so a hung reaction does not log a second misleading span when the API abort fires later.
+      let settled = false;
+      const done = (ok: boolean, error?: string) => {
+        if (settled) return;
+        settled = true;
+        log(hop, Math.max(0, now() - t0), ok, error);
+      };
+      const bounded = new Promise<void>((resolve) => {
+        timer = setTimeout(() => { done(false, 'telegram reaction timed out'); resolve(undefined); }, limit);
+      });
+      const attempt = api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] })
+        .then(() => done(true), (error) => done(false, error instanceof Error ? error.message : String(error)));
+      return Promise.race([attempt, bounded]).finally(() => clearTimeout(timer));
+    };
     await react('receipt', ack);
     const choice = message_id === null || !this.options.chooseReaction
       ? Promise.resolve(null)
