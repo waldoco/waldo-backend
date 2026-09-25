@@ -5,6 +5,8 @@
 
 alter table waldo.owners add column phone text;
 comment on column waldo.owners.phone is 'Contact phone (E.164) required at signup. UNVERIFIED until the account-bound SMS OTP at WhatsApp connect succeeds.';
+alter table waldo.owners add column bootstrap_claimable boolean not null default false;
+comment on column waldo.owners.bootstrap_claimable is 'One-use bootstrap mark, set only by hand on a manually seeded owner row. The bind-by-email path requires it and clears it atomically on use; every other row can never be claimed by email match. Never set by application code.';
 alter table waldo.owners add column phone_verified_at timestamptz;
 comment on column waldo.owners.phone_verified_at is 'Set exactly once, when the account-bound SMS OTP at WhatsApp connect verifies the stored phone. NULL = unverified; no whatsapp presence may link while NULL.';
 
@@ -38,8 +40,11 @@ begin
   end if;
   select do_name into v_do from waldo.owners where auth_user_id = p_auth_user and state = 'active';
   if v_do is not null then return v_do; end if;
-  update waldo.owners set auth_user_id = p_auth_user, phone = coalesce(nullif(p_phone, ''), phone)
-    where lower(email) = lower(p_email) and auth_user_id is null and state = 'active' returning do_name into v_do;
+  -- Bootstrap claim: the ONLY email-match bind, gated on a hand-set one-use mark that this same
+  -- statement consumes. Without the mark an unbound row is never claimed by email.
+  update waldo.owners set auth_user_id = p_auth_user, phone = coalesce(nullif(p_phone, ''), phone), bootstrap_claimable = false
+    where lower(email) = lower(p_email) and auth_user_id is null and state = 'active' and bootstrap_claimable
+    returning do_name into v_do;
   if v_do is not null then return v_do; end if;
   -- Phone is required for new-owner provisioning: the edge normalizes to E.164 and the RPC
   -- enforces presence so the edge is not the only enforcement. The refusal comes BEFORE an
