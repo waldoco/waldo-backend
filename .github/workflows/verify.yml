@@ -53,6 +53,10 @@ jobs:
   verify-runtime:
     name: Runtime tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    # Owner decision 2026-09-25: the workerd teardown crash (#154) must not block merges while
+    # the hunt continues. Suites still RUN in full on every push - logs and counts are the
+    # evidence; in-lane 4-shard gates remain the green signal. Remove this when #154 lands.
+    continue-on-error: true
     timeout-minutes: 20
     strategy:
       fail-fast: false
