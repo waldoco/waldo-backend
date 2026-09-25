@@ -62,6 +62,17 @@ describe('trace privacy canary', () => {
     expect(bodies).toContain(MARKER);
   });
 
+  it('a typed tool failure keeps its code:reason while free-form error text is stripped', async () => {
+    const entry: TurnLogEntry = { trace: 't2', hop: 'tool_query_calendar', ms: 3, ok: false, error: `google says ${MARKER}`, code: 'oversize:tool_result' };
+    const gated = gateTraceEntry(entry, false);
+    expect(gated.error).toBeUndefined();
+    expect(gated.detail).toBe('oversize:tool_result');
+    const bodies = await exportBodies([gated, { trace: 't2', hop: 'turn', ms: 10, ok: true }], false);
+    expect(bodies).toContain('oversize:tool_result');
+    expect(bodies).not.toContain(MARKER);
+    expect(bodies).toContain('"message":"oversize:tool_result"');
+  });
+
   it('keeps verified count/enum detail for whitelisted hops while gating free-form detail', () => {
     const safe = gateTraceEntry({ trace: 't', hop: 'brief_sweep', ms: 0, ok: true, detail: '3 sent' }, false);
     expect(safe.detail).toBe('3 sent');

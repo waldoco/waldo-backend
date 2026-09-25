@@ -32,6 +32,18 @@ describe('claims', () => {
     });
   });
 
+  it('the consolidation summary is counts-only: marker text in ops never reaches the logged detail', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const MARKER = 'ZXQ-NIGHTLY-4b1c9';
+      const summary = applyClaimOps(store, ops({ add: [
+        { kind: 'fact', text: `owns a boat called ${MARKER}`, source: 'stated', evidence: `said "${MARKER}" twice`, touches_forgotten: false },
+      ] }), AT);
+      expect(summary).toBe('+1 held0 seen0 confirmed0 dismissed0 forgot0');
+      expect(summary).not.toContain(MARKER);
+    });
+  });
+
   it('holds back anything the extractor ties to a forgotten topic, and shows barriers to the nightly pass', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);

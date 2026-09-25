@@ -21,7 +21,7 @@ export type ToolLoopStep = (
   turns: readonly LLMToolTurn[],
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -76,10 +76,17 @@ export async function runToolLoop(input: Readonly<{
       const output = capToolOutput(JSON.stringify(result), input.offload);
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
-      // The typed code:reason rides the span so a failed hop is diagnosable from the trace or
-      // tail without exposing any result content.
-      const failure = result.ok ? undefined : 'code' in result ? `${result.code}${'reason' in result && result.reason ? `:${result.reason}` : ''}` : result.error;
-      input.onTool?.({ call, ok: result.ok, ms: Date.now() - started, output, ...(failure ? { error: failure } : {}) });
+      // The typed code/reason ride the span as their own fields so a failed hop stays
+      // diagnosable from the trace or tail even when the capture switch gates free-form error
+      // text off; error keeps the human-facing message for capture-on.
+      const typed = result.ok ? undefined : (result as { code?: string; reason?: string });
+      const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
+      input.onTool?.({
+        call, ok: result.ok, ms: Date.now() - started, output,
+        ...(failure ? { error: failure } : {}),
+        ...(typed?.code ? { code: typed.code } : {}),
+        ...(typed?.reason ? { reason: typed.reason } : {}),
+      });
       anyOk ||= result.ok;
     }
     failedRounds = anyOk ? 0 : failedRounds + 1;

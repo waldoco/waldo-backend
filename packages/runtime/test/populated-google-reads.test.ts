@@ -254,16 +254,16 @@ describe('Fix targets', () => {
     }
   });
 
-  it('a failed tool call surfaces its typed code:reason on the span, without result content', async () => {
+  it('a failed tool call surfaces its typed code/reason as their own fields, without result content', async () => {
     const [calendar] = googleHandlers(googleWith(populatedEvents, []), desk, clock);
-    const events: { ok: boolean; error?: string }[] = [];
+    const events: { ok: boolean; error?: string; code?: string; reason?: string }[] = [];
     const { runToolLoop } = await import('../src/conversation/tool-loop');
     let stepped = 0;
     await runToolLoop({
       handlers: [calendar!],
       ctx: ctx('user_message'),
       maxSteps: 1,
-      onTool: (event) => events.push({ ok: event.ok, error: event.error }),
+      onTool: (event) => events.push({ ok: event.ok, error: event.error, code: event.code, reason: event.reason }),
       step: async () => {
         stepped += 1;
         if (stepped > 1) return { text: 'done' };
@@ -275,7 +275,9 @@ describe('Fix targets', () => {
     }).catch(() => undefined);
     expect(events).toHaveLength(1);
     expect(events[0]!.ok).toBe(false);
-    expect(events[0]!.error).toMatch(/^oversize/);
-    expect(events[0]!.error).not.toContain('Quarterly planning sync');
+    expect(events[0]!.code).toMatch(/^oversize/);
+    expect(events[0]!.code).not.toContain('Quarterly planning sync');
+    expect(events[0]!.reason ?? '').not.toContain('Quarterly planning sync');
+    expect(events[0]!.error ?? '').not.toContain('Quarterly planning sync');
   });
 });
