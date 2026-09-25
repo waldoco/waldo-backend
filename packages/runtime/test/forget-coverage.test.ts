@@ -3,6 +3,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { episodeIndex } from '../src/channels/episodes';
 import { applyClaimOps, claimStore } from '../src/memory/claims';
+import { durableConversationStore } from '../src/channels/conversation-store';
 
 let sequence = 0;
 const withSql = <T>(fn: (sql: SqlStorage) => T) =>
@@ -84,6 +85,37 @@ describe('forget coverage', () => {
       }), AT);
       expect(store.claims()).toEqual([]);
       expect(result).toContain('forgot1');
+    });
+  });
+});
+
+const withStorage = <T>(fn: (storage: DurableObjectStorage) => T | Promise<T>) =>
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-conv-${sequence++}`)), (_instance, state) => fn(state.storage));
+
+describe('forget coverage - known gap', () => {
+  // Pins the gap the owner called out on #196: the purge covers the six derived stores, not the
+  // rolling conversation window, so forgotten text can still shape replies until it ages out
+  // (MEMORY_ONTOLOGY_REVIEW_2026-09-26 section 5). The console copy stays narrowly scoped while
+  // this expectation holds; flipping it to false is the deliberate completion of the gap.
+  it('forget leaves the rolling conversation store untouched', async () => {
+    await withStorage(async (storage) => {
+      const conv = durableConversationStore(storage);
+      await conv.save([{
+        id: 'tg-1', ownerId: 'owner', chatId: 'chat', parentId: null, threadAnchorId: null,
+        surface: 'telegram', modelPayload: `owner: remember the ${MARKER} code word`, appPayload: '',
+        modelProjection: { mode: 'include' }, role: 'user',
+      }], 'tg-1');
+      const store = claimStore(storage.sql);
+      const claimId = Number(
+        storage.sql.exec<{ id: number }>(
+          `INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`,
+          CLAIM_TEXT, AT, AT,
+        ).one().id,
+      );
+      const summary = applyClaimOps(store, JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: 'code words' }), AT);
+      expect(summary).toContain('purged');
+      const { entries } = await conv.load();
+      expect(entries.some((entry) => entry.modelPayload.includes(MARKER))).toBe(true);
     });
   });
 });
