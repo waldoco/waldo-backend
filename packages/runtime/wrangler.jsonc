@@ -3,6 +3,10 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-06-16",
   "observability": { "enabled": true },
+  "ai": { "binding": "AI" },
+  "vectorize": [
+    { "binding": "VECTORIZE", "index_name": "waldo-recall" }
+  ],
   "durable_objects": {
     "bindings": [
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
