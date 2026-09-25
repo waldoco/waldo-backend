@@ -73,7 +73,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '1', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '2', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');
@@ -102,6 +102,8 @@ describe('otlpTurnExporter', () => {
     const on = capture();
     await otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, { ...context, captureText: true }, on.send, () => 5_000)({ trace: 'tg-5', hop: 'turn', ms: 10, ok: true, text });
     expect(attrs(on.spans(0)[0]!)).toMatchObject({ 'langfuse.observation.input': text.input, 'langfuse.observation.output': JSON.stringify({ reasoning: 'greet back', text: 'hello' }) });
+    expect(attrs(on.spans(0)[0]!)).toMatchObject({ 'langfuse.trace.input': text.input, 'langfuse.trace.output': JSON.stringify({ reasoning: 'greet back', text: 'hello' }) });
+    expect(attrs(off.spans(0)[0]!)['langfuse.trace.input']).toBeUndefined();
   });
 
   it('evicts the oldest buffered trace when too many never close', async () => {

@@ -8,7 +8,7 @@ type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number }>;
 
 // Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
-export const TRACE_SCHEMA_VERSION = '1';
+export const TRACE_SCHEMA_VERSION = '2';
 
 // Every hop has one feature area and a Langfuse observation type. New hops land in `other`
 // as plain spans until they are added here; model calls (`llm_*`) are always generations.
@@ -48,8 +48,9 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
   const pending = new Map<string, Span[]>();
   const exported = new Map<string, Readonly<{ traceId: string; rootId: string }>>();
 
+  const observationType = (hop: string) => HOPS[hop]?.type ?? (hop.startsWith('tool_') ? 'tool' : 'span');
   const generation = ({ hop, usage }: TurnLogEntry) => {
-    if (!usage) return [attr('langfuse.observation.type', HOPS[hop]?.type ?? 'span')];
+    if (!usage) return [attr('langfuse.observation.type', observationType(hop))];
     const cost = modelCost(usage);
     return [
       attr('langfuse.observation.type', 'generation'),
@@ -64,6 +65,17 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
     return [
       attr('langfuse.observation.input', text.input),
       ...(text.output === undefined ? [] : [attr('langfuse.observation.output', text.reasoning ? JSON.stringify({ reasoning: text.reasoning, text: text.output }) : text.output)]),
+    ];
+  };
+
+  // Langfuse's trace list/preview reads langfuse.trace.input/output off the ROOT span; the
+  // per-hop observation attrs above don't surface there. The turn entry carries the owner's
+  // message and the final reply, gated by the same captureText switch.
+  const traceIo = ({ text }: TurnLogEntry) => {
+    if (!context.captureText || !text) return [];
+    return [
+      attr('langfuse.trace.input', text.input),
+      ...(text.output === undefined ? [] : [attr('langfuse.trace.output', text.reasoning ? JSON.stringify({ reasoning: text.reasoning, text: text.output }) : text.output)]),
     ];
   };
 
@@ -132,6 +144,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       attr('langfuse.trace.metadata.trace_key', entry.trace),
       attr('langfuse.trace.metadata.outcome', entry.ok ? 'answered' : 'failed'),
       ...totals(hops),
+      ...traceIo(item.entry),
     ]);
     return post([root, ...hops.map((hop) => span(ids.traceId, hex(8), ids.rootId, hop))]);
   };

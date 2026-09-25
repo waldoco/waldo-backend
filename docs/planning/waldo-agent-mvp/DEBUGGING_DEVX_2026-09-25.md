@@ -107,3 +107,24 @@ becomes the bottleneck.
 2. Approve S7a/S7b/S7c as the next code slice (they are what make every other surface useful).
 3. Approve the packet R1 diagnostic already sent (settles which Supabase project is live and
    reads the connection row's own error record - tonight's RCA hinges on it).
+
+## Langfuse trace shape (O1 pass, 2026-09-25)
+
+Audited against langfuse.com/docs/observability/best-practices (fetched live) + the official
+langfuse/skills instrumentation guide. Our OTLP exporter already matched most of the good-trace
+model (one trace per turn, session per conversation, a generation per model call with usage +
+cost, feature tags, environment/release). Fixes in this pass:
+
+1. `langfuse.trace.input`/`langfuse.trace.output` now set on the root span - this is what the
+   Langfuse trace list and preview pane read; per-hop observation attrs alone never surfaced a
+   preview. Still gated by LANGFUSE_CAPTURE_TEXT.
+2. `tool_*` hops now emit observation type `tool` (was generic `span`) - LLM-as-judge targeting
+   and tool filtering key on it.
+3. TRACE_SCHEMA_VERSION bumped 1 -> 2 (new keys + type rule change).
+
+Staging action (packet v3): set LANGFUSE_CAPTURE_TEXT=true - with it off there are no text
+previews at all by design (privacy switch); for single-owner alpha staging it should be on.
+Live verification step (his bar: a real trace audited in the UI, not tests alone): send one
+telegram turn on staging, open the newest trace, confirm the preview shows the message and reply,
+the tree shows pickup/llm_reply/tool_*/send nested under the root, and the llm generations carry
+tokens + cost.
