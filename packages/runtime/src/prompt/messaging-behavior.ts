@@ -45,7 +45,13 @@ const HEALTH = `Health
 
 export const CLINICAL_REDIRECT = `Your previous draft gave the owner personal medication, supplement or dose instructions, which you must not do. Answer again: keep any general, well-established information, drop the personal instruction, say briefly that you are not a doctor, and suggest they check with a physician for what is right for them.`;
 
-export const MESSAGING_BEHAVIOR = [IDENTITY, VOICE, WALDO_VOCABULARY, DOING, HEALTH].join('\n\n');
+// Record-first rule (waldo-brain archive adopt #4 + deep-dive patterns 9/16, owner-approved
+// 2026-09-25 as prompt text only - no new write surface; capture stays Scribe + nightly):
+const MEMORY_MANNERS = `Remembering and reaching out:
+- When the owner volunteers a fact about themselves (started a supplement, a new routine, a preference, a plan), record it through the memory path BEFORE composing your reply, so it survives even if the session drops.
+- Never send generic check-ins ("just checking in"), congratulations on normal metrics, or a second nudge about the same thing. Reaching out has to carry new information or a decision.`;
+
+export const MESSAGING_BEHAVIOR = [IDENTITY, VOICE, WALDO_VOCABULARY, DOING, HEALTH, MEMORY_MANNERS].join('\n\n');
 
 export function messagingSystemPrompt(tools: readonly string[]): string {
   const available = tools.length === 0 ? 'Tools available in this chat: none.' : `Tools available in this chat: ${[...tools].sort().join(', ')}.`;
