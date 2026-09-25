@@ -121,7 +121,7 @@ export function assembleReasonsPrompt(
     requirements,
     materials.identity.text,
     approach,
-    `Allowed tools: ${TOOL_PERMISSIONS[invocation.runtime_binding.trigger].join(', ')}.`,
+    `Tool ACL ceiling: ${TOOL_PERMISSIONS[invocation.runtime_binding.trigger].join(', ')}. Call only tools in this request's function list; ceiling entries without a live handler are not callable.`,
     operations,
     [materials.zone_modifier.text, materials.mode_template.text, materials.soul_base.text].join('\n'),
     materials.safety_rules.text,

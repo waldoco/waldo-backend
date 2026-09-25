@@ -449,7 +449,7 @@ describe('ContextComposer', () => {
     expect(result.prompt).toContain('Could you help me plan my afternoon?');
     expect(result.prompt).toContain('<available-skills>');
     expect(result.prompt).toContain('afternoon-planning');
-    expect(result.prompt).toContain('Allowed tools: ' + TOOL_PERMISSIONS.user_message.join(', ') + '.');
+    expect(result.prompt).toContain('Tool ACL ceiling: ' + TOOL_PERMISSIONS.user_message.join(', ') + '.');
     expect(result.prompt).toContain('<memory-context>');
     expect(result.prompt).toContain('<recall>');
     expect(result.prompt).toContain('Form zone: steady.');
@@ -463,7 +463,7 @@ describe('ContextComposer', () => {
       '<invocation-inputs>',
       'The verified principal is asking for a practical response.',
       'Help the user choose a feasible next sequence.',
-      'Allowed tools:',
+      'Tool ACL ceiling:',
       '<memory-context>',
       'Prefer a calm, concrete pace.',
       'Respect privacy and require approved actions.',
@@ -1520,8 +1520,8 @@ describe('ContextComposer', () => {
     expect(second.prompt).toBe(first.prompt);
     expect(second.checkpoint).toEqual(first.checkpoint);
     // The hash re-pins when the composed prompt legitimately changes (send_email joined the
-// user_message ACL, 2026-09-25); determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_9d375582067a6d79826bdfcb8b78f5e9');
+// user_message ACL ceiling wording, 2026-09-25); determinism is proven by first===second above.
+    expect(first.checkpoint.context_ref).toBe('ctx_c18e13403f5eb1cea5aa3a55b6442a28');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );

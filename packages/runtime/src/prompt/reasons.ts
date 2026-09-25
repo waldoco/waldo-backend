@@ -82,7 +82,11 @@ function renderApproach(
 }
 
 function renderStructure(ctx: RuntimePromptContext): string {
-  return `Allowed tools: ${TOOL_PERMISSIONS[ctx.trigger].join(', ')}.`;
+  // This is the ACL CEILING, not the live tool list: contracts grant capabilities ahead of
+  // their handlers (search_connector, execute_code). The callable set is this request's
+  // function list (registered handlers within the ceiling) - say so or the model attempts
+  // ceiling-only tools and eats handler_unavailable rejections mid-task.
+  return `Tool ACL ceiling: ${TOOL_PERMISSIONS[ctx.trigger].join(', ')}. Call only tools in this request's function list; ceiling entries without a live handler are not callable.`;
 }
 
 function renderOperations(

@@ -145,7 +145,7 @@ describe('createRuntimePromptBuilder', () => {
         'Trigger context.',
         'User profile.',
         'Trigger behaviour.',
-        `Allowed tools: ${TOOL_PERMISSIONS.brief.join(', ')}.`,
+        `Tool ACL ceiling: ${TOOL_PERMISSIONS.brief.join(', ')}. Call only tools in this request's function list; ceiling entries without a live handler are not callable.`,
         [
           [
             '<memory-context>',
@@ -405,7 +405,7 @@ describe('createRuntimePromptBuilder', () => {
       const base = context();
       const prompt = await builder({ ...base, trigger });
 
-      expect(prompt).toContain(`Allowed tools: ${TOOL_PERMISSIONS[trigger].join(', ')}.`);
+      expect(prompt).toContain(`Tool ACL ceiling: ${TOOL_PERMISSIONS[trigger].join(', ')}.`);
       expect(prompt.endsWith(base.canvas.safetyRules)).toBe(true);
       expect(prompt).toMatchSnapshot(trigger);
     }
