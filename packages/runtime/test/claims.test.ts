@@ -28,7 +28,7 @@ describe('claims', () => {
       applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT);
       expect(store.claims()).toEqual([]);
       expect(store.claims('dismissed').map((claim) => claim.id)).toEqual([gym!.id]);
-      expect(store.barriers().map((barrier) => barrier.topic)).toEqual(['lunch habits']);
+      expect(store.barriers().map((barrier) => barrier.topic)).toEqual(['lunch habits', 'Skips lunch on meeting-heavy days']);
     });
   });
 

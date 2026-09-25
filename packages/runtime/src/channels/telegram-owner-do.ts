@@ -851,8 +851,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
           else if (action === 'spot.confirm') memory.confirm(spotId, 'owner, console', new Date(now).toISOString());
           else {
-            memory.forget(spotId);
-            memory.barrier(claim.text, new Date(now).toISOString());
+            memory.purge([spotId], new Date(now).toISOString());
           }
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);

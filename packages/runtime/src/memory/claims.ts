@@ -10,6 +10,10 @@ export type ConstellationNode = Readonly<{ id: number; domain: string; label: st
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
 type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string }>;
 
+const FORGOTTEN = '[forgotten]';
+const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char}`);
+const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
+
 export const claimStore = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
@@ -67,6 +71,48 @@ export const claimStore = (sql: Sql) => {
     forgetNode(id: number): void {
       sql.exec('DELETE FROM constellation_edges WHERE from_id = ? OR to_id = ?', id, id);
       sql.exec('DELETE FROM constellation_nodes WHERE id = ?', id);
+    },
+    // Forget is cleanup across every store, not one row: the claim leaves claims, its text
+    // leaves the search index, backups, and frozen legacy tables (redacted, preserving
+    // unrelated content), constellation nodes stop quoting it and stop referencing its id,
+    // and a barrier blocks re-admission. Fresh-state verification reports what survived.
+    purge(ids: readonly number[], at: string): { removed: number; remaining: Record<string, number> } {
+      const forgotten = ids.length
+        ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
+        : [];
+      const texts = [...new Set(forgotten.map((claim) => claim.text.trim()).filter(Boolean))];
+      for (const claim of forgotten) {
+        sql.exec('DELETE FROM claims WHERE id = ?', claim.id);
+        sql.exec('INSERT INTO forget_barriers (topic, created_at) VALUES (?, ?)', claim.text, at);
+      }
+      const hasEpisodes = tableExists(sql, 'episodes');
+      const hasSpots = tableExists(sql, 'spots');
+      const hasRevisions = tableExists(sql, 'core_file_revisions');
+      for (const text of texts) {
+        const like = `%${likeEscape(text)}%`;
+        if (hasEpisodes) sql.exec(`DELETE FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like);
+        sql.exec(`UPDATE memory_backups SET payload = replace(payload, ?, ?) WHERE payload LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like);
+        if (hasSpots) sql.exec(`DELETE FROM spots WHERE text LIKE ? ESCAPE '\\'`, like);
+        if (hasRevisions) sql.exec(`UPDATE core_file_revisions SET content = replace(content, ?, ?) WHERE content LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like);
+        sql.exec(`UPDATE constellation_nodes SET label = replace(label, ?, ?), summary = replace(summary, ?, ?) WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like);
+      }
+      for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
+        const spots = JSON.parse(node.supporting_spots) as number[];
+        const kept = spots.filter((id) => !ids.includes(id));
+        if (kept.length !== spots.length) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
+      }
+      const remaining: Record<string, number> = {};
+      for (const text of texts) {
+        const like = `%${likeEscape(text)}%`;
+        const add = (store: string, n: number) => { if (n > 0) remaining[store] = (remaining[store] ?? 0) + n; };
+        add('claims', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, like, like).one().n);
+        if (hasEpisodes) add('episodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
+        add('memory_backups', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like, ).one().n);
+        if (hasSpots) add('legacy_spots', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
+        if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
+        add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
+      }
+      return { removed: forgotten.length, remaining };
     },
   };
 };
@@ -173,9 +219,11 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id))) store.setStatus(id, 'dismissed');
-  for (const id of ops.forget_claims.filter((id) => known.has(id))) store.forget(id);
+  const forgetIds = ops.forget_claims.filter((id) => known.has(id));
+  const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
   for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);
-  return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}`;
+  const leftover = purge ? Object.keys(purge.remaining) : [];
+  return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [
