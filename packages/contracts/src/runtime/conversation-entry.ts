@@ -5,6 +5,10 @@ export type ConversationProjection =
   | Readonly<{ mode: 'omit' }>
   | Readonly<{ mode: 'replace'; payload: string }>;
 
+export type ConversationRole = 'user' | 'assistant';
+
+export type ConversationModelMessage = Readonly<{ role: ConversationRole; content: string }>;
+
 export type ConversationEntry = Readonly<{
   id: string;
   ownerId: string;
@@ -15,6 +19,9 @@ export type ConversationEntry = Readonly<{
   modelPayload: string;
   appPayload: string;
   modelProjection: ConversationProjection;
+  // Stamped by the conversation path that appends the entry. Optional only for rows stored
+  // before the seam existed; modelContext derives those from the assistant-entry id convention.
+  role?: ConversationRole;
 }>;
 
 export class ConversationTree {
@@ -67,12 +74,13 @@ export class ConversationTree {
     return path.reverse();
   }
 
-  modelContext(leafId: string): readonly string[] {
+  modelContext(leafId: string): readonly ConversationModelMessage[] {
     return this.path(leafId).flatMap((entry) => {
+      const role = entry.role ?? (entry.id.endsWith('-reply') ? 'assistant' : 'user');
       switch (entry.modelProjection.mode) {
-        case 'include': return [entry.modelPayload];
+        case 'include': return [{ role, content: entry.modelPayload }];
         case 'omit': return [];
-        case 'replace': return [entry.modelProjection.payload];
+        case 'replace': return [{ role, content: entry.modelProjection.payload }];
       }
     });
   }

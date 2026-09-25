@@ -1,6 +1,7 @@
 import {
   ConversationTree,
   type ConversationEntry,
+  type ConversationModelMessage,
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import type { ContextComposer, RuntimeOwnedContextInputs } from '../context-composer';
@@ -8,7 +9,7 @@ import type { ContextComposer, RuntimeOwnedContextInputs } from '../context-comp
 export type JoinedConversationModel = Readonly<{
   complete(request: Readonly<{
     system: string;
-    messages: readonly string[];
+    messages: readonly ConversationModelMessage[];
     tools: readonly string[];
   }>): Promise<string>;
 }>;
@@ -48,7 +49,7 @@ export class JoinedConversationPath {
     const existing = this.publications.get(request.assistantEntryId);
     if (existing) return existing;
 
-    this.tree.append(request.userEntry);
+    this.tree.append({ ...request.userEntry, role: 'user' });
     const composition = await this.composer.compose(request.invocation, request.context);
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
     const text = await this.model.complete({
@@ -67,6 +68,7 @@ export class JoinedConversationPath {
       modelPayload: text,
       appPayload: text,
       modelProjection: { mode: 'include' },
+      role: 'assistant',
     };
     this.tree.append(assistantEntry);
     const publication = Object.freeze({
