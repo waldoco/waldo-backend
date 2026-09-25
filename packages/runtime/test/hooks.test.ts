@@ -575,6 +575,67 @@ describe('hook registry', () => {
     expect(calls).toBe(1);
   });
 
+  it('never rewrites executable tool-call arguments: text redacts, arguments pass through (2026-09-25 draft_email)', async () => {
+    const ctx = runtimeCtx({ sanitise });
+    const args = JSON.stringify({ to: ['priya@example.com'], subject: 'Deck', body_markdown: 'I will send the deck by Thursday.' });
+    const result = await runHooks(
+      'PostLLMCall',
+      {
+        event: 'PostLLMCall',
+        response: {
+          model: ROSTER.fallback,
+          text: 'Drafted it to priya@example.com - not sent.',
+          tool_calls: [{ call_id: 'c1', name: 'draft_email', arguments: args }],
+          input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1,
+        },
+        tokens_in: 1,
+        tokens_out: 1,
+      },
+      ctx,
+    );
+    expect(result.event).toBe('PostLLMCall');
+    if (result.event !== 'PostLLMCall') throw new Error('unreachable');
+    const response = result.response as { text: string; tool_calls: { arguments: string }[] };
+    // Owner-bound text keeps full redaction...
+    expect(response.text).toBe('Drafted it to [REDACTED_EMAIL] - not sent.');
+    // ...but the executable call is byte-identical: the recipient IS the call.
+    expect(response.tool_calls[0]!.arguments).toBe(args);
+  });
+
+  it('still halts fail-closed when a canary hides inside tool-call arguments', async () => {
+    const ctx = runtimeCtx({ sanitise });
+    await expect(
+      runHooks(
+        'PostLLMCall',
+        {
+          event: 'PostLLMCall',
+          response: {
+            model: ROSTER.fallback,
+            text: 'on it',
+            tool_calls: [{ call_id: 'c1', name: 'draft_email', arguments: JSON.stringify({ to: ['a@b.co'], subject: 'x', body_markdown: `see ${validCanaries[0]}` }) }],
+            input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, latency_ms: 1,
+          },
+          tokens_in: 1,
+          tokens_out: 1,
+        },
+        ctx,
+      ),
+    ).rejects.toMatchObject({ code: expect.any(String) });
+  });
+
+  it('passes draft_email args through PreToolUse unredacted while send_message keeps redaction', async () => {
+    const ctx = runtimeCtx({ sanitise });
+    await runHooks('OnInvocationStart', { event: 'OnInvocationStart', trace_id: 'trace-exec-args' }, ctx);
+    const draftArgs = { to: ['priya@example.com'], subject: 'Deck', body_markdown: 'reach me at priya@example.com' };
+    const draftResult = await runHooks(
+      'PreToolUse',
+      { event: 'PreToolUse', tool: 'draft_email', args: draftArgs },
+      ctx,
+    );
+    if (draftResult.event !== 'PreToolUse') throw new Error('unreachable');
+    expect(draftResult.args).toEqual(draftArgs);
+  });
+
   it('halts PostLLMCall when the Scribe sanitiser rejects generated text', async () => {
     await expect(
       runHooks(

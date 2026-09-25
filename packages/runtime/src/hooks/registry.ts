@@ -303,10 +303,17 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     if (!tool.parsed) return tool.result;
     const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
     if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
+    const destination = preToolUseDestination(tool.data);
+    // draft_email args are executable: the recipient addresses ARE the call. Redaction would
+    // corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they are checked
+    // (hard denies still halt fail-closed) but never rewritten.
+    if (destination === 'draft_email') {
+      return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
+    }
     const sanitized = await sanitiseCandidate(
       payload.args,
       ctx,
-      preToolUseDestination(tool.data),
+      destination,
       sourceTaint.data,
     );
     return sanitized.ok
@@ -699,18 +706,44 @@ async function sanitiseHookPayload(
   if (payload.event === 'PostLLMCall') {
     const sourceTaint = sourceTaintSchema.safeParse(ctx.sourceTaint);
     if (!sourceTaint.success) return halt('model output taint invalid', 'transient');
-    const sanitized = await sanitiseCandidate(
-      payload.response,
-      ctx,
-      destination,
-      sourceTaint.data,
-    );
+    // When the response carries tool_calls, split them out: text is owner-bound prose and
+    // keeps full redaction, while tool calls are executable and run reject-only - a redacted
+    // argument corrupts the call (an email recipient became [REDACTED_EMAIL] and the schema
+    // rejected it, 2026-09-25) while a hard deny (canary, ADR-0081 health value, injection)
+    // must still halt fail-closed. Any other response shape sanitises whole, as before.
+    const response = payload.response;
+    if (response !== null && typeof response === 'object' && !Array.isArray(response)
+        && Array.isArray((response as { tool_calls?: unknown }).tool_calls)) {
+      const { tool_calls: toolCalls, ...textResponse } = response as { tool_calls: unknown[] } & Record<string, unknown>;
+      const sanitized = await sanitiseCandidate(textResponse, ctx, destination, sourceTaint.data);
+      if (!sanitized.ok) return sanitized.result;
+      for (const call of toolCalls) {
+        const checked = await checkExecutableArgs(call, ctx, destination, sourceTaint.data);
+        if (!checked.ok) return checked;
+      }
+      return { ok: true, payload: { ...payload, response: { ...(sanitized.payload as Record<string, unknown>), tool_calls: toolCalls } } };
+    }
+    const sanitized = await sanitiseCandidate(response, ctx, destination, sourceTaint.data);
     return sanitized.ok
       ? { ok: true, payload: { ...payload, response: sanitized.payload } }
       : sanitized.result;
   }
 
   return ok();
+}
+
+// Executable values (tool args, tool calls) are checked, never rewritten: redaction exists
+// for text that flows to a person or a log, and substituting into an argument corrupts the
+// action the owner asked for. Rejections still halt fail-closed - this only skips the
+// substitution, so canary/health/injection denies keep their teeth.
+async function checkExecutableArgs(
+  value: unknown,
+  ctx: HookRuntimeContext,
+  destination: SanitiseDestination,
+  sourceTaint: SourceTaint,
+): Promise<HookResult> {
+  const checked = await sanitiseCandidate(value, ctx, destination, sourceTaint);
+  return checked.ok ? ok() : checked.result;
 }
 
 async function sanitiseCandidate(

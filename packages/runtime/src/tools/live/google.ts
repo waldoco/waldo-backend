@@ -83,14 +83,20 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
-    handle: (args: DraftEmailArgs) => withGoogle(google, 'mail', async (client) => {
-      const draft = await client.draft({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-        subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
+    // The draft receipt is a mutation ack, not provider-controlled content, so the result is
+    // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
+    // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
+    handle: async (args: DraftEmailArgs) => {
+      const result = await withGoogle(google, 'mail', async (client) => {
+        const draft = await client.draft({
+          to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+          subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
+        });
+        desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
+        return { ...draft, sent: false };
       });
-      desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
-      return { ...draft, sent: false };
-    }),
+      return result.ok ? { ...result, source_taint: null } : result;
+    },
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
 ];
 

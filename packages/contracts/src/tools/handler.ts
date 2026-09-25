@@ -107,7 +107,10 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative
 // superset the taint gate blocks, in tool-union order: the memory/Scribe write, execute_action,
 // external send_message, the MCP write bridge, the copilot writes, and every message/thread
-// mutation. ADR-0049 defines the class as "any external mutation or send" and requires a
+// mutation. Amendment (owner decision 2026-09-25): draft_email leaves the privileged class -
+// a Gmail draft is a reviewable artifact, not a send (the owner sends it himself in Gmail),
+// and the chat path never wired the approval door, so gating silently halted every chat draft.
+// ADR-0049 defines the class as "any external mutation or send" and requires a
 // tainted web/MCP result that asks Waldo to mutate a message/task/thread to route through
 // propose_action or block — never direct execution; the message/thread and MCP-write members
 // are exactly what a narrower reading would have leaked.
@@ -123,7 +126,6 @@ export const PRIVILEGED_ACTION_TOOLS: readonly ToolName[] = [
   'write_task',
   'update_task',
   'draft_document',
-  'draft_email',
   'propose_schedule',
   'write_sheet_cell',
   'create_thread',

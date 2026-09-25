@@ -152,6 +152,8 @@ describe('privileged-action set — ADR-0049', () => {
     // superset — the connector/copilot writes AND the MCP write bridge AND every thread/message
     // mutation (create/delete/restore/archive/topics) — so tainted content can drive none of
     // them straight to execution. Union order is contract (permissions.toolNameSchema).
+    // draft_email is deliberately absent (owner decision 2026-09-25): a draft is a reviewable
+    // artifact, not a send.
     expect(PRIVILEGED_ACTION_TOOLS).toEqual([
       'update_memory',
       'execute_action',
@@ -160,7 +162,6 @@ describe('privileged-action set — ADR-0049', () => {
       'write_task',
       'update_task',
       'draft_document',
-      'draft_email',
       'propose_schedule',
       'write_sheet_cell',
       'create_thread',

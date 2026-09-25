@@ -99,11 +99,10 @@ export const SCENARIOS: readonly Scenario[] = [
     ],
     assert: {
       mustCall: ['draft_email'],
-      // PINNED LIVE BUG (bug log 2026-09-25): draft_email is in PRIVILEGED_ACTION_TOOLS, and the
-      // chat responder ctx never wires hasApproval, so the autonomy gate halts every chat-issued
-      // draft with 'approval check unavailable'. This assertion pins CURRENT behavior so the
-      // harness stays green; flip to ok: true when the approval-door wiring lands.
-      hops: [{ hop: 'tool_draft_email', ok: false }],
+      // RESOLVED 2026-09-25 (owner decision: enable draft email): draft_email demoted out of
+      // PRIVILEGED_ACTION_TOOLS - a draft is a reviewable artifact, not a send - so the
+      // autonomy gate no longer halts chat drafts. This hop now proves the draft lands.
+      hops: [{ hop: 'tool_draft_email', ok: true }],
       replies: [/draft/i],
     },
   },
