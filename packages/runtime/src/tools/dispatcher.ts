@@ -827,7 +827,7 @@ function failParse(error: string, repaired: boolean): ParseToolCallsResult & { o
 
 
 type OffloadedResult =
-  | { ok: true; data: { stored_output: string; total_chars: number; head: string; read_with: 'read_tool_output' } }
+  | { ok: true; data: { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head: string; read_with: 'read_tool_output' } }
   | { ok: false; result: DispatchToolResult };
 
 // Raw external output is never stored: the offload guard runs the full sanitise pipeline minus
@@ -860,10 +860,12 @@ const offloadResult = (
     };
   }
   const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
-  const id = store.put(text);
+  const stored = store.put(text);
   return {
     ok: true,
-    data: { stored_output: id, total_chars: text.length, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
+    // total_chars is the full guarded length; stored_chars + truncated say what is actually
+    // retrievable - the receipt never claims retrievable output the store did not keep
+    data: { stored_output: stored.id, total_chars: stored.original_chars, stored_chars: stored.stored_chars, truncated: stored.truncated, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
   };
 };
 

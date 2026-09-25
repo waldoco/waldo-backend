@@ -174,7 +174,7 @@ describe('Fix targets', () => {
     const chunk = 'q'.repeat(64_000);
     const ids: string[] = [];
     const puts = Math.ceil(MAX_STORED_OUTPUT_CHARS / 64_001) + 2;
-    for (let i = 0; i < puts; i += 1) ids.push(store.put(`${chunk}${i}`));
+    for (let i = 0; i < puts; i += 1) ids.push(store.put(`${chunk}${i}`).id);
     // oldest entries evicted beyond the budget; the newest is always kept
     expect(store.read(ids[0]!, 0, 8)).toBeNull();
     const latest = store.read(ids[puts - 1]!, 0, 8);
@@ -199,17 +199,59 @@ describe('Fix targets', () => {
     if (kept.ok) expect(kept.source_taint).toBe('external');
   });
 
-  it('the store enforces a per-item bound on the stored post-redaction text', async () => {
+  it('the store enforces a per-item bound on the stored post-redaction text, truthfully reported', async () => {
     const { MAX_STORED_ITEM_CHARS } = await import('../src/conversation/tool-output-store');
     const store = inMemoryToolOutputStore();
-    const id = store.put('r'.repeat(MAX_STORED_ITEM_CHARS * 2));
-    const whole = store.read(id, 0, MAX_STORED_ITEM_CHARS * 2);
+    const put = store.put('r'.repeat(MAX_STORED_ITEM_CHARS * 2));
+    // no silent slice: the caller learns the stored length, the original length, and the flag
+    expect(put).toEqual({ id: 'to-1', stored_chars: MAX_STORED_ITEM_CHARS, original_chars: MAX_STORED_ITEM_CHARS * 2, truncated: true });
+    const whole = store.read(put.id, 0, MAX_STORED_ITEM_CHARS * 2);
     expect(whole).not.toBeNull();
     expect(whole!.total).toBe(MAX_STORED_ITEM_CHARS);
+    expect(whole!.original_chars).toBe(MAX_STORED_ITEM_CHARS * 2);
+    expect(whole!.truncated).toBe(true);
     expect(whole!.next_offset).toBeNull();
-    // a small item is stored whole, unbounded reads return it intact
+    // a small item is stored whole, unbounded reads return it intact and untruncated
     const small = store.put('short output');
-    expect(store.read(small, 0, 4_000)!.text).toBe('short output');
+    expect(small.truncated).toBe(false);
+    expect(store.read(small.id, 0, 4_000)!.text).toBe('short output');
+  });
+
+  it('DISPATCH-LEVEL: post-redaction output over the item cap gets a truthful receipt; only the stored part is ever served', async () => {
+    const { MAX_STORED_ITEM_CHARS } = await import('../src/conversation/tool-output-store');
+    const events = [
+      { ...populatedEvents[0]!, id: 'evt-huge', description: 'w'.repeat(MAX_STORED_ITEM_CHARS + 20_000) },
+    ];
+    const [calendar] = googleHandlers(googleWith(events, []), desk, clock);
+    const store = inMemoryToolOutputStore();
+    const result = await dispatchTool(
+      { id: 'c8', name: 'query_calendar', args: {} },
+      ctx('user_message'),
+      { handlers: [calendar!], offload: store },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as { stored_output: string; total_chars: number; stored_chars: number; truncated: boolean; head: string };
+    // the receipt describes the STORED text honestly: full guarded length vs kept length + flag
+    expect(data.truncated).toBe(true);
+    expect(data.stored_chars).toBe(MAX_STORED_ITEM_CHARS);
+    expect(data.total_chars).toBeGreaterThan(MAX_STORED_ITEM_CHARS);
+    // read-backs carry the same truth per slice and never serve past the stored end
+    const { readToolOutputHandler } = await import('../src/tools/read-tool-output');
+    const reader = readToolOutputHandler(store);
+    const pastEnd = await dispatchTool(
+      { id: 'r-past', name: 'read_tool_output', args: { id: data.stored_output, offset: MAX_STORED_ITEM_CHARS, length: 4_000 } },
+      ctx('user_message'),
+      { handlers: [reader] },
+    );
+    expect(pastEnd.ok).toBe(true);
+    if (pastEnd.ok) {
+      const sliceData = pastEnd.data as { text: string; truncated: boolean; original_chars: number; next_offset: number | null };
+      expect(sliceData.text).toBe('');
+      expect(sliceData.next_offset).toBeNull();
+      expect(sliceData.truncated).toBe(true);
+      expect(sliceData.original_chars).toBe(data.total_chars);
+    }
   });
 
   it('a failed tool call surfaces its typed code:reason on the span, without result content', async () => {

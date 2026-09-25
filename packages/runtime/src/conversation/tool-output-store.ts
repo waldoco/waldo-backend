@@ -1,9 +1,11 @@
 // Large tool outputs are stored, not inlined: the model gets a head slice plus a reference
 // and reads ranges on demand with read_tool_output. In-memory per responder; outputs are
 // re-derivable by re-calling the tool, so durability adds nothing here.
+export type StoredPut = Readonly<{ id: string; stored_chars: number; original_chars: number; truncated: boolean }>;
+
 export type ToolOutputStore = Readonly<{
-  put(output: string): string;
-  read(id: string, offset: number, length: number): Readonly<{ text: string; total: number; next_offset: number | null }> | null;
+  put(output: string): StoredPut;
+  read(id: string, offset: number, length: number): Readonly<{ text: string; total: number; original_chars: number; truncated: boolean; next_offset: number | null }> | null;
 }>;
 
 // Aggregate budget: input preparation bounds each string and node count, but without a total
@@ -19,29 +21,37 @@ export const MAX_STORED_ITEM_CHARS = 65_536;
 
 export const inMemoryToolOutputStore = (): ToolOutputStore => {
   const outputs = new Map<string, string>();
+  const originals = new Map<string, number>();
   let total = 0;
   let next = 0;
   return {
     put(output) {
       next += 1;
       const id = `to-${next}`;
-      const stored = output.length > MAX_STORED_ITEM_CHARS ? output.slice(0, MAX_STORED_ITEM_CHARS) : output;
+      // never a silent slice: callers get the stored length and the truncation flag and the
+      // receipt/read-back contract must carry them (a claimed full length for a stored prefix
+      // is a lie the model will plan against)
+      const truncated = output.length > MAX_STORED_ITEM_CHARS;
+      const stored = truncated ? output.slice(0, MAX_STORED_ITEM_CHARS) : output;
       outputs.set(id, stored);
+      originals.set(id, output.length);
       total += stored.length;
       for (const oldest of outputs.keys()) {
         if (total <= MAX_STORED_OUTPUT_CHARS || outputs.size <= 1) break;
         if (oldest === id) break;
         total -= outputs.get(oldest)?.length ?? 0;
         outputs.delete(oldest);
+        originals.delete(oldest);
       }
-      return id;
+      return { id, stored_chars: stored.length, original_chars: output.length, truncated };
     },
     read(id, offset, length) {
       const output = outputs.get(id);
       if (output === undefined) return null;
       const text = output.slice(offset, offset + length);
       const end = offset + text.length;
-      return { text, total: output.length, next_offset: end < output.length ? end : null };
+      const original = originals.get(id) ?? output.length;
+      return { text, total: output.length, original_chars: original, truncated: original > output.length, next_offset: end < output.length ? end : null };
     },
   };
 };

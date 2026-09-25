@@ -10,8 +10,10 @@ export const TOOL_OUTPUT_HEAD = 4_000;
 export const capToolOutput = (output: string, offload?: ToolOutputStore): string => {
   if (output.length <= TOOL_OUTPUT_LIMIT) return output;
   if (offload === undefined) return `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n[cut: ${output.length - TOOL_OUTPUT_LIMIT} more characters not shown; narrow the request]`;
-  const id = offload.put(output);
-  return `${output.slice(0, TOOL_OUTPUT_HEAD)}\n[full output stored as ${id}: ${output.length} characters total; call read_tool_output with this id, offset and length to read more]`;
+  const stored = offload.put(output);
+  return stored.truncated
+    ? `${output.slice(0, TOOL_OUTPUT_HEAD)}\n[partial output stored as ${stored.id}: first ${stored.stored_chars} of ${stored.original_chars} characters kept (store bound); the tail is NOT retrievable - re-run the tool with narrower arguments if you need it. call read_tool_output with this id, offset and length to read the stored part]`
+    : `${output.slice(0, TOOL_OUTPUT_HEAD)}\n[full output stored as ${stored.id}: ${stored.stored_chars} characters total; call read_tool_output with this id, offset and length to read more]`;
 };
 
 export type ToolLoopStep = (
