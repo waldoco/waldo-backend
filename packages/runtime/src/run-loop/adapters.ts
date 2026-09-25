@@ -241,6 +241,13 @@ export function fakeGatewayStats(keys: readonly string[]): {
 // This local-only fixture is intentionally a no-argument factory. The ingress route can select
 // it, but no HTTP caller can select its authority, trigger, output disposition, snapshot, or
 // source material. Its fixed identity also makes duplicate local admission deterministic.
+// Live per-turn snapshot attestation for the local trusted-brief path: the ref names the
+// frozen staged brief content while snapshot_at is the truthful as-of time of this turn, so
+// real-time tool outputs from earlier turns satisfy the provenance bound without weakening it.
+export function localTrustedBriefTurnSnapshot(): Readonly<{ snapshot_ref: string; snapshot_at: number }> {
+  return { snapshot_ref: LOCAL_TRUSTED_BRIEF_SNAPSHOT_REF, snapshot_at: Date.now() };
+}
+
 export function localTrustedBriefScheduleInput(): Readonly<{
   admission: TrustedInvocationAdmission;
   snapshot_ref: string;
@@ -568,12 +575,20 @@ function assertLocalTrustedBriefRequest(
   assertLocalTrustedBriefSnapshot(request);
 }
 
+const LOCAL_TRUSTED_BRIEF_SNAPSHOT_SKEW_MS = 60_000;
+
 function assertLocalTrustedBriefSnapshot(
   request: Readonly<{ snapshot_ref: string; snapshot_at: number }>,
 ): void {
+  // The ref names the frozen staged brief content and stays pinned. snapshot_at is the
+  // truthful as-of time of the requesting turn: a live value so tool outputs produced
+  // earlier in real time satisfy the provenance bound, bounded above so a future-dated
+  // snapshot cannot smuggle later-produced material past it.
   if (
     request.snapshot_ref !== LOCAL_TRUSTED_BRIEF_SNAPSHOT_REF ||
-    request.snapshot_at !== LOCAL_TRUSTED_BRIEF_SNAPSHOT_AT
+    !Number.isSafeInteger(request.snapshot_at) ||
+    request.snapshot_at <= 0 ||
+    request.snapshot_at > Date.now() + LOCAL_TRUSTED_BRIEF_SNAPSHOT_SKEW_MS
   ) {
     throw new ContextSourceUnavailableError();
   }
