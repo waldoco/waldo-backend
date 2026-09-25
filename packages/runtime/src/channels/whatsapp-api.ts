@@ -48,10 +48,14 @@ export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 // 9e12 namespace so they never collide with telegram update ids). An approval reply "a:p12"
 // synthesizes the equivalent callback_query because WhatsApp buttons carry no callback_data.
 // Non-text messages and any foreign sender are skipped.
-export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], subject: string, seqStart: number): { updates: WaSyntheticUpdate[]; seq: number } => {
+export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], subject: string, seqStart: number): { updates: WaSyntheticUpdate[]; providerIds: string[]; seq: number } => {
   let seq = seqStart;
   const ownerNum = Number(subject);
   const updates: WaSyntheticUpdate[] = [];
+  // Parallel to updates: the provider event ID whose turn each update carries, so the caller
+  // can tombstone exactly the processed ones. Missing IDs are preserved as '' - the inbox
+  // filter upstream fails them closed before this runs.
+  const providerIds: string[] = [];
   for (const message of messages) {
     if (message.from !== subject || message.type !== 'text') continue;
     const text = (message.text?.body ?? '').trim();
@@ -63,11 +67,13 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     // replies are channel commands that can never carry an artifact, so they skip the filter.
     if (/^([aseu]):(\S+)$/.exec(text)) {
       updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
+      providerIds.push(message.id ?? '');
       continue;
     }
     const q = quarantineArtifacts(text);
     const clean = q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
     updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' }, text: clean } });
+    providerIds.push(message.id ?? '');
   }
-  return { updates, seq };
+  return { updates, providerIds, seq };
 };
