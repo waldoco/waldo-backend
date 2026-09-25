@@ -40,16 +40,17 @@ begin
   end if;
   select do_name into v_do from waldo.owners where auth_user_id = p_auth_user and state = 'active';
   if v_do is not null then return v_do; end if;
+  -- Phone is required for EVERY bind-or-provision branch below, the bootstrap claim included:
+  -- the edge normalizes to E.164 and the RPC enforces presence so the edge is not the only
+  -- enforcement. The refusal comes BEFORE any claim or invite consumption: a malformed call
+  -- must never burn the one-use mark or attribution.
+  if nullif(p_phone, '') is null then return null; end if;
   -- Bootstrap claim: the ONLY email-match bind, gated on a hand-set one-use mark that this same
   -- statement consumes. Without the mark an unbound row is never claimed by email.
-  update waldo.owners set auth_user_id = p_auth_user, phone = coalesce(nullif(p_phone, ''), phone), bootstrap_claimable = false
+  update waldo.owners set auth_user_id = p_auth_user, phone = nullif(p_phone, ''), bootstrap_claimable = false
     where lower(email) = lower(p_email) and auth_user_id is null and state = 'active' and bootstrap_claimable
     returning do_name into v_do;
   if v_do is not null then return v_do; end if;
-  -- Phone is required for new-owner provisioning: the edge normalizes to E.164 and the RPC
-  -- enforces presence so the edge is not the only enforcement. The refusal comes BEFORE an
-  -- invite is consumed: a malformed call must never burn attribution.
-  if nullif(p_phone, '') is null then return null; end if;
   update waldo.invites set used_at = now()
     where code_hash = (select code_hash from waldo.invites where lower(email) = lower(p_email) and used_at is null and revoked_at is null limit 1)
     returning code_hash into v_invite;
@@ -82,5 +83,41 @@ begin
   end if;
   return new;
 end $$;
-create trigger presences_whatsapp_verified_phone before insert on waldo.presences
+-- INSERT and UPDATE of the two columns that carry the invariant: a provider flip or an owner
+-- swap must pass the same check, so the guard cannot be bypassed by editing an existing row.
+create trigger presences_whatsapp_verified_phone before insert or update of provider, owner_id on waldo.presences
   for each row execute function waldo.require_verified_phone_for_whatsapp();
+
+-- Auth-specific fixed-window throttle: the wrangler rate-limit binding only expresses 10s/60s
+-- periods per location, so the strict per-email and per-IP OTP limits live here, global and
+-- durable. p_at is signed, so the bucket cannot be rolled forward by a forged call.
+create table waldo.console_auth_attempts (
+  key text not null,
+  bucket bigint not null,
+  attempts integer not null,
+  updated_at timestamptz not null default now(),
+  primary key (key, bucket)
+);
+
+alter table waldo.console_auth_attempts enable row level security;
+alter table waldo.console_auth_attempts force row level security;
+
+create or replace function waldo.console_auth_throttle(p_key text, p_limit integer, p_window_seconds integer, p_at bigint, p_sig text) returns boolean
+language plpgsql security definer set search_path = '' as $$
+declare v_bucket bigint; v_attempts integer;
+begin
+  if not waldo.router_signed('throttle.' || p_key || '.' || p_limit::text || '.' || p_window_seconds::text, p_at, p_sig) then
+    raise exception 'unsigned router call' using errcode = '42501';
+  end if;
+  if p_limit < 1 or p_window_seconds < 1 then
+    raise exception 'throttle requires a positive limit and window' using errcode = '22023';
+  end if;
+  v_bucket := p_at / p_window_seconds;
+  delete from waldo.console_auth_attempts where bucket < v_bucket - 1;
+  insert into waldo.console_auth_attempts (key, bucket, attempts) values (p_key, v_bucket, 1)
+    on conflict (key, bucket) do update set attempts = waldo.console_auth_attempts.attempts + 1, updated_at = now()
+    returning attempts into v_attempts;
+  return v_attempts <= p_limit;
+end $$;
+revoke all on function waldo.console_auth_throttle(text, integer, integer, bigint, text) from public;
+grant execute on function waldo.console_auth_throttle(text, integer, integer, bigint, text) to anon;

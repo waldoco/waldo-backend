@@ -43,7 +43,7 @@ const deployOwner = (env: OwnerDirectoryEnv): OwnerDirectory => ({
 export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()) => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   if (!base || !key || !secret) return null;
-  return async (fn: string, message: string, args: Record<string, string>): Promise<unknown> => {
+  return async (fn: string, message: string, args: Record<string, string | number>): Promise<unknown> => {
     const at = Math.floor(now() / 1000);
     const response = await fetcher(`${base}/rest/v1/rpc/${fn}`, {
       method: 'POST',

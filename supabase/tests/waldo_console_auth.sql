@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(17);
+select plan(21);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(extract(epoch from now())::bigint::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
@@ -16,7 +16,13 @@ insert into waldo.invites (code_hash, email, used_at) values ('inv-0', 'invited@
 select is(waldo.signin_allowed('seeded@test.invalid', pg_temp.at(), pg_temp.sig('signin.seeded@test.invalid')), true, 'a seeded owner may sign in');
 select is(waldo.signin_allowed('Invited@test.invalid', pg_temp.at(), pg_temp.sig('signin.invited@test.invalid')), true, 'an invited address may sign in');
 select is(waldo.signin_allowed('stranger@test.invalid', pg_temp.at(), pg_temp.sig('signin.stranger@test.invalid')), true, 'open signup: a stranger may request a code');
-select is(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c1', 'seeded@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c1.seeded@test.invalid.')), 'do-seeded', 'first sign-in binds the seeded owner and keeps its DO');
+-- The bootstrap claim requires a phone like every other bind: a signed EMPTY phone is refused
+-- BEFORE the claim, leaving the row unbound and the one-use mark intact.
+select is(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c1', 'seeded@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c1.seeded@test.invalid.')), null, 'bootstrap claim refuses a signed empty phone');
+select is((select auth_user_id from waldo.owners where do_name = 'do-seeded'), null::uuid, 'the refused bootstrap claim leaves the row unbound');
+select is((select bootstrap_claimable from waldo.owners where do_name = 'do-seeded'), true, 'the refusal does not consume the one-use mark');
+select is(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c1', 'seeded@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c1.seeded@test.invalid.+91 9000000010'), '+91 9000000010'), 'do-seeded', 'first sign-in with a phone binds the seeded owner and keeps its DO');
+select is((select phone from waldo.owners where do_name = 'do-seeded'), '+91 9000000010', 'the bind phone lands on the claimed row');
 select matches(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c2', 'invited@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c2.invited@test.invalid.+91 9000000011'), '+91 9000000011'), '^owner-', 'an invite creates a new owner with its own DO');
 select is((select count(*) from waldo.invites where used_at is not null and used_by is not null), 1::bigint, 'the invite is spent');
 select is((select used_by from waldo.invites where code_hash = 'inv-0'), null::uuid, 'the older used invite keeps its null attribution');

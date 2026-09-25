@@ -1,10 +1,11 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(18);
+select plan(30);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(extract(epoch from now())::bigint::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
+create function pg_temp.sig_at(msg text, at bigint) returns text language sql as $$ select encode(extensions.hmac(at::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
 
 -- Open signup: a brand-new verified email self-provisions owner + settings, non-admin.
 insert into auth.users (id, email) values
@@ -51,6 +52,39 @@ select throws_matching(
   'whatsapp presence requires a verified phone',
   'whatsapp link refused while phone_verified_at is null'
 );
+
+-- The guard fires on UPDATE of the invariant-bearing columns too: editing an existing row
+-- cannot launder a whatsapp presence past the phone check.
+select lives_ok(
+  $$insert into waldo.presences (owner_id, provider, subject) values ((select id from waldo.owners where email = 'new@test.invalid'), 'console', 'console:opensignup-test')$$,
+  'a non-whatsapp presence inserts while the phone is unverified'
+);
+select throws_matching(
+  $$update waldo.presences set provider = 'whatsapp' where owner_id = (select id from waldo.owners where email = 'new@test.invalid') and provider = 'console'$$,
+  'whatsapp presence requires a verified phone',
+  'UPDATE provider to whatsapp is refused while the phone is unverified'
+);
+update waldo.owners set phone_verified_at = now() where email = 'new@test.invalid';
+select lives_ok(
+  $$insert into waldo.presences (owner_id, provider, subject) values ((select id from waldo.owners where email = 'new@test.invalid'), 'whatsapp', '919876543210')$$,
+  'a whatsapp presence inserts once the phone is verified'
+);
+select throws_matching(
+  $$update waldo.presences set owner_id = (select id from waldo.owners where email = 'clone@test.invalid') where provider = 'whatsapp' and subject = '919876543210'$$,
+  'whatsapp presence requires a verified phone',
+  'UPDATE owner_id onto an unverified owner is refused'
+);
+
+-- Auth-specific fixed-window throttle: per-key, signed, global (the binding layer cannot
+-- express 15-minute windows). at0 sits two windows back but inside the 300s signature freshness.
+select is(waldo.console_auth_throttle('send:t@x.invalid', 2, 60, pg_temp.at() - 120, pg_temp.sig_at('throttle.send:t@x.invalid.2.60', pg_temp.at() - 120)), true, 'throttle: first call in a window allowed');
+select is(waldo.console_auth_throttle('send:t@x.invalid', 2, 60, pg_temp.at() - 120, pg_temp.sig_at('throttle.send:t@x.invalid.2.60', pg_temp.at() - 120)), true, 'throttle: second call at the limit allowed');
+select is(waldo.console_auth_throttle('send:t@x.invalid', 2, 60, pg_temp.at() - 120, pg_temp.sig_at('throttle.send:t@x.invalid.2.60', pg_temp.at() - 120)), false, 'throttle: third call in the same window refused');
+select is(waldo.console_auth_throttle('verify:t@x.invalid', 2, 60, pg_temp.at() - 120, pg_temp.sig_at('throttle.verify:t@x.invalid.2.60', pg_temp.at() - 120)), true, 'throttle: a different key has its own window');
+select is(waldo.console_auth_throttle('send:t@x.invalid', 2, 60, pg_temp.at(), pg_temp.sig_at('throttle.send:t@x.invalid.2.60', pg_temp.at())), true, 'throttle: the next window admits again');
+select throws_ok($$ select waldo.console_auth_throttle('send:t@x.invalid', 2, 60, pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'throttle refuses a forged signature');
+select is(has_function_privilege('anon', 'waldo.console_auth_throttle(text, integer, integer, bigint, text)', 'execute'), true, 'the runtime key can call the throttle (signature still required)');
+select is(has_function_privilege('service_role', 'waldo.console_auth_throttle(text, integer, integer, bigint, text)', 'execute'), false, 'service role is not granted the throttle');
 
 -- Tenant isolation under RLS: the new owner sees only itself.
 set local role authenticated;

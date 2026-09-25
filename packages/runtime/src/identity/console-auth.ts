@@ -13,6 +13,9 @@ export type ConsoleSession = Readonly<{ session: string; created_at: string; las
 
 export type ConsoleAuth = Readonly<{
   sendCode(email: string): Promise<boolean>;
+  // Strict fixed-window auth throttle kept in the owner directory: global and durable, unlike
+  // the per-location binding layer, which only expresses 10s/60s periods.
+  throttle(key: string, limit: number, windowSeconds: number): Promise<boolean>;
   verify(email: string, code: string, phone?: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
@@ -45,6 +48,9 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   });
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
   return {
+    async throttle(key, limit, windowSeconds) {
+      return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
+    },
     // Unknown addresses get no email and the same answer, so the page never reveals who is invited.
     async sendCode(email) {
       const address = email.trim().toLowerCase();

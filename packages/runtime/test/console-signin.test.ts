@@ -9,6 +9,7 @@ const owners = () => {
 };
 const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   sendCode: vi.fn(async () => true),
+  throttle: vi.fn(async () => true),
   verify: vi.fn(async () => null),
   issueLinkCode: vi.fn(async () => null),
   saveSettings: vi.fn(async () => true),
@@ -49,6 +50,39 @@ describe('handleConsole', () => {
     const response = await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, auth());
     expect(response?.status).toBe(303);
     expect(response?.headers.get('location')).toBe('/console/signin');
+  });
+
+  it('refuses an OTP send when the strict per-email throttle is exhausted', async () => {
+    const sendCode = vi.fn(async () => true);
+    const throttle = vi.fn(async (key: string) => !key.startsWith('send:'));
+    const a = auth({ sendCode, throttle });
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const response = (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
+    expect(await response.text()).toContain('Too many attempts');
+    expect(sendCode).not.toHaveBeenCalled();
+    expect(throttle).toHaveBeenCalledWith('send:owner@example.com', 5, 900);
+  });
+
+  it('fails closed when the strict throttle cannot answer', async () => {
+    const sendCode = vi.fn(async () => true);
+    const a = auth({ sendCode, throttle: vi.fn(async () => { throw new Error('directory down'); }) });
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const response = (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
+    expect(await response.text()).toContain('Too many attempts');
+    expect(sendCode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a verify when the strict per-email guess throttle is exhausted', async () => {
+    const verify = vi.fn(async () => 'do-a');
+    const throttle = vi.fn(async (key: string) => !key.startsWith('verify:'));
+    const ns = owners().ns;
+    const a = auth({ verify, throttle });
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!;
+    expect(await response.text()).toContain('Too many attempts');
+    expect(verify).not.toHaveBeenCalled();
+    expect(throttle).toHaveBeenCalledWith('verify:owner@example.com', 10, 900);
+    expect(throttle).not.toHaveBeenCalledWith('ip:unknown', 30, 900);
   });
 
   it('gives the same answer for an invited and an unknown address', async () => {

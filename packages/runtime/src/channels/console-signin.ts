@@ -5,6 +5,14 @@ import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
 
+// Auth-specific fixed-window limits (per email, and per IP across both endpoints), enforced in
+// the owner directory so they hold globally: OTP send 5 per 15 min, verify 10 per 15 min,
+// IP 30 per 15 min. The per-location binding stays as a coarse first pass on top.
+export const CONSOLE_OTP_SEND_LIMIT = 5;
+export const CONSOLE_OTP_VERIFY_LIMIT = 10;
+export const CONSOLE_AUTH_IP_LIMIT = 30;
+export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
+
 type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const esc = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -50,6 +58,18 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'rate_limited' }));
       return emailForm('Too many attempts. Wait a minute and try again.');
     }
+    const address = email.trim().toLowerCase();
+    let admitted = false;
+    try {
+      admitted = (await auth.throttle(`send:${address}`, CONSOLE_OTP_SEND_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS))
+        && (await auth.throttle(`ip:${ip}`, CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS));
+    } catch {
+      admitted = false;
+    }
+    if (!admitted) {
+      console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'throttled' }));
+      return emailForm('Too many attempts. Try again in a few minutes.');
+    }
     const sent = await auth.sendCode(email);
     if (!sent) console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'not_allowed' }));
     return codeForm(email, phone);
@@ -73,6 +93,17 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if (!emailOk || !ipOk) {
       console.log(JSON.stringify({ hop: 'console_verify', ok: false, detail: 'rate_limited' }));
       return codeForm(email, phone, 'Too many attempts. Wait a minute and try again.');
+    }
+    let admitted = false;
+    try {
+      admitted = (await auth.throttle(`verify:${address}`, CONSOLE_OTP_VERIFY_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS))
+        && (await auth.throttle(`ip:${ip}`, CONSOLE_AUTH_IP_LIMIT, CONSOLE_AUTH_WINDOW_SECONDS));
+    } catch {
+      admitted = false;
+    }
+    if (!admitted) {
+      console.log(JSON.stringify({ hop: 'console_verify', ok: false, detail: 'throttled' }));
+      return codeForm(email, phone, 'Too many attempts. Try again in a few minutes.');
     }
     const doName = await auth.verify(email, String(form.get('code') ?? ''), phone);
     if (!doName) return codeForm(email, phone, 'That code did not work. Try again.');
