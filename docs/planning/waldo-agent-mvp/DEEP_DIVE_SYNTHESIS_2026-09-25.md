@@ -172,8 +172,12 @@ DIVERGED (conscious, reason given) / NOT-FOLLOWING (should fix).
 
 Score: 11 FOLLOWING, 2 FOLLOWING-AHEAD, 5 PARTIAL, 3 DIVERGED-BETTER, 1 NOT-FOLLOWING,
 0 VERIFY (#19 resolved: diverged-better). Net actions: (a) adopt #4 prompt rule gains the NEVER-list items (#16 joins it);
-(b) update_memory handler question is the one real design decision surfaced - recommend the
-Scribe-staged guarded handler, flagged for A7/A9; (c) #19 resolved during this pass.
+(b) update_memory handler question DECIDED (owner, same day): SKIP for alpha - the capture
+path (Scribe staging + nightly consolidation + trust filtering) is sufficient; the widened
+write surface is not worth the marginal mid-turn recording gain. Revisit post-alpha only if
+dogfooding shows volunteered facts being missed. The proactive-recording prompt rule and the
+pattern-16 NEVER list still land as prompt text + scenario test (no new write surface);
+(c) #19 resolved during this pass.
 
 ## Compared against
 
