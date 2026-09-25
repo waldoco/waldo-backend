@@ -139,6 +139,42 @@ Proposed additions (following his fold-in directive; costs honest):
 - Deferred with reasons: dps full-timeline review (needs logged-in browser; marketing value,
   not engineering), OpenMausBot look (same bucket), WALDO_TOOL_OFFLOAD live decision (packet v4).
 
+## 10. agent-os-deep-dive.md conformance check (owner ask 12:58)
+
+Pattern-by-pattern against the archive's OneSync deep dive (754 lines, re-read for this
+section; every verdict verified in current code). Legend: FOLLOWING / PARTIAL /
+DIVERGED (conscious, reason given) / NOT-FOLLOWING (should fix).
+
+| # | Pattern (source doc) | Verdict | Evidence / reason |
+|---|---|---|---|
+| 1 | Layered modules (llm / agent-core / app) | FOLLOWING | contracts / runtime-llm gateway+provider / channels split |
+| 2 | Agent loop: assemble -> ReAct w/ max iterations + timeout -> post-process | FOLLOWING | runToolLoop MAX_TOOL_ROUNDS, turnTimeoutMs, trace hops post-process |
+| 3 | Output validation (banned medical phrases) | FOLLOWING | CLINICAL_REDIRECT + messaging-behavior safety rules |
+| 4 | Steering/follow-up dual queues (Pi Mono) | PARTIAL | serial() serializes turns per owner (follow-ups queue naturally); no mid-run steering interrupt. Judgment: DO single-writer makes mid-run interrupt risky; revisit if owners report interjection pain. Not alpha. |
+| 5 | Context assembly pipeline, static/user/dynamic | FOLLOWING | 7-layer REASONS canvas; cached vs fresh split lives in composer layers |
+| 6 | Context utilization 40-60% target | PARTIAL | no budget assertion exists - gap analysis already adds a prompt-size budget test (trivial) |
+| 7 | Dynamic tool loading | DIVERGED-BETTER | archive prescribes keyword/intent classification; we load by per-trigger ACL intersect registered handlers - deterministic, no misclassification failure mode. Same token win, stronger guarantee. |
+| 8 | Structured compaction (session + weekly) | PARTIAL | session compaction via conversation tree + nightly 'dreaming' pass live; WEEKLY deeper pass is the adopted residue (corrected archive audit) |
+| 9 | Proactive recording ("record first, answer second") | NOT-FOLLOWING | no prompt rule today; archive adopt #4 stands: add to messaging behavior prompt + scenario test |
+| 10 | Triple-layer memory; skip embeddings+KG for MVP | FOLLOWING-AHEAD | halls + FTS5 = their MVP shape; their Phase-2 vector = our V1 pulled INTO alpha today; KG still correctly skipped |
+| 11 | File-based memory -> serverless equivalent | DIVERGED-BETTER | DO SQLite halls + R2 instead of MEMORY.md files - per-owner isolation beats shared-fs; archive's own Option E made this call |
+| 12 | Self-modifying memory (update_core_memory tool) | PARTIAL-GAP | memory evolves via Scribe + nightly pass, but the update_memory/read_memory contract tools have NO registered handler (integration audit finding). The model cannot self-record mid-turn. Fix option: guarded update_memory handler writing via Scribe staging only (never direct hall writes) - proposed as part of A7/A9 neighborhood |
+| 13 | Hook pipeline (safety/context/compaction/rate pre; output/memory/analytics post) | FOLLOWING | hooks registry + Pre/PostToolUse, RESPONSIBILITY_RATE_LIMITER, trace hops as analytics; event names differ, semantics match |
+| 14 | Skills: SKILL.md + frontmatter + trigger-matched loading (1-2 max) | FOLLOWING | skills/loader.ts + reasons renderSkill trigger matching |
+| 15 | Autonomous Hands w/ playbooks + gates | FOLLOWING | scheduler + day cards + event briefs + pre-activity spots + nightly; gates = quiet hours + confidence thresholds |
+| 16 | Proactive ALWAYS/CONDITIONALLY/NEVER rules | PARTIAL | set_proactivity + quiet hours + cooldowns live; the NEVER list ("no generic check-ins, no patronizing congrats") is prompt-level and untested - add to messaging behavior prompt alongside adopt #4 |
+| 17 | Security must-haves (output validation, input sanitization, RLS, audit, rate limit, disclaimer) | FOLLOWING | all six present (Scribe/canaries, Supabase RLS, ledger+traces, limiter, clinical rules) |
+| 18 | Phase-2 taint tracking + approval gates | FOLLOWING-AHEAD | both shipped beyond the archive's Phase-2 placement |
+| 19 | Loop guard (SHA256 tool-call loop detection) | DIVERGED-BETTER | loop governor denies on no_progress + duplicate_observation + iteration/token budgets - semantic stall detection, strictly stronger than exact-hash repeats (verified governor.ts) |
+| 20 | Provider failover chain | FOLLOWING | gateway fallback_step with receipts |
+| 21 | Model router (skip/Haiku/Sonnet/Opus tiers) | PARTIAL | pricing-aware model selection exists; a rules-skip tier (template response without LLM) is in the archive's mermaid but not current - cheap win for cost, low priority |
+| 22 | Cost tracking per call | FOLLOWING | usage on every hop + modelCost in traces |
+
+Score: 11 FOLLOWING, 2 FOLLOWING-AHEAD, 5 PARTIAL, 3 DIVERGED-BETTER, 1 NOT-FOLLOWING,
+0 VERIFY (#19 resolved: diverged-better). Net actions: (a) adopt #4 prompt rule gains the NEVER-list items (#16 joins it);
+(b) update_memory handler question is the one real design decision surfaced - recommend the
+Scribe-staged guarded handler, flagged for A7/A9; (c) #19 resolved during this pass.
+
 ## Compared against
 
 Every claim above cites a doc committed today or code verified live this run; external
