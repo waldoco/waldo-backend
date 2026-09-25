@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState } from '../src/connectors/google';
+import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -83,7 +83,7 @@ describe('google client', () => {
 });
 
 describe('google tools', () => {
-  const proposals = { propose: async () => 'proposal:1', record: () => undefined };
+  const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
     const [query] = googleHandlers(google, proposals, clock);
@@ -143,5 +143,39 @@ describe('google tools', () => {
     const google: GoogleAccess = { client: async () => null };
     const propose = googleHandlers(google, proposals, clock).find((h) => h.name === 'propose_calendar_change')!;
     expect(await propose.handle({ action: 'cancel', event_id: 'e1', reason: 'double booked' } as never)).toMatchObject({ ok: true, data: { proposal_id: 'proposal:1', applied: false } });
+  });
+});
+
+describe('gmail send rail bytes', () => {
+  it('buildMime is canonical: fixed header order, CRLF, injected newlines stripped, Message-ID only when set', async () => {
+    const mime = buildMime({ to: ['a@x.test', 'b@x.test'], cc: ['c@x.test'], subject: 'Hi\r\nBcc: evil@x.test', body: 'line1\nline2', messageId: '<m1@waldo-send>' });
+    expect(mime).toBe('To: a@x.test, b@x.test\r\nCc: c@x.test\r\nSubject: Hi Bcc: evil@x.test\r\nMessage-ID: <m1@waldo-send>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\nline1\nline2');
+    const draftMime = buildMime({ to: ['a@x.test'], subject: 'Hi', body: 'b' });
+    expect(draftMime).not.toContain('Message-ID');
+    // digest is stable for identical bytes and flips on a single-byte change
+    const d1 = await sha256Hex(mime);
+    expect(await sha256Hex(mime)).toBe(d1);
+    expect(await sha256Hex(mime.replace('line1', 'line2'))).not.toBe(d1);
+    expect(d1).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('sendRaw posts the exact approved bytes to messages/send; findSentByMessageId reconciles via rfc822msgid', async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const f = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, init });
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+      if (url.includes('/messages/send')) return Response.json({ id: 'sent1', threadId: 't1' });
+      if (url.includes('/messages?')) return Response.json({ messages: [{ id: 'sent1' }] });
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    const client = googleClient(app, { refresh_token: 'rt' }, f);
+    const raw = 'xJ7';
+    expect(await client.sendRaw(raw, 't1')).toEqual({ message_id: 'sent1', thread_id: 't1' });
+    const sendCall = calls.find((c) => c.url.includes('/messages/send'))!;
+    expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: 'xJ7', threadId: 't1' });
+    expect(await client.findSentByMessageId('<m1@waldo-send>')).toBe(true);
+    const findCall = calls.find((c) => c.url.includes('/messages?'))!;
+    expect(decodeURIComponent(findCall.url.replace(/\+/g, ' '))).toContain('in:sent rfc822msgid:m1@waldo-send');
   });
 });

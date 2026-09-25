@@ -1,5 +1,5 @@
 import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
-import { GoogleError, type GoogleClient } from '../connectors/google';
+import { GoogleError, sha256Hex, type GoogleClient } from '../connectors/google';
 import type { TurnLogEntry } from './telegram-listener';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
@@ -24,11 +24,20 @@ export type BrowserSubmitProposal = Readonly<{
 }>;
 const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 
+// The gmail send rail's stored proposal: the canonical MIME bytes the owner approved plus the
+// sha256 digest binding them. Approval replays payload.raw verbatim; a digest mismatch fails
+// closed instead of sending; message_id reconciles an ambiguous send via Sent-mail lookup.
+export type EmailSendProposal = Readonly<{
+  to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
+  subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string;
+}>;
+
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
+  proposeSendEmail(payload: EmailSendProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
@@ -69,8 +78,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
     return `${p.action.description} on ${p.url}${binding ? ` (${binding})` : ''}`;
   };
-  const describeAny = (entry: LedgerRow) =>
-    entry.kind === 'browser_submit' ? describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal) : describe(JSON.parse(entry.payload_json) as Stored);
+  const describeEmail = (p: EmailSendProposal) => `Send email to ${p.to.join(', ')}: "${p.subject}"`;
+  const describeAny = (entry: LedgerRow) => {
+    if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
+    if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
+    return describe(JSON.parse(entry.payload_json) as Stored);
+  };
   const expired = (entry: LedgerRow, p: Stored) =>
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
   const apply = async (client: GoogleClient, p: Stored): Promise<Undo | null | 'stale'> => {
@@ -124,6 +137,34 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         } else {
           out = { toast: "Can't be undone", message: 'A browser submit cannot be undone from here. Nothing was reversed.' };
         }
+      } else if (entry.kind === 'email_send') {
+        const ep = JSON.parse(entry.payload_json) as EmailSendProposal;
+        if (action === 'u') {
+          out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
+        } else {
+          const client = await deps.google();
+          if (client === null) {
+            out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
+          } else if (await sha256Hex(ep.raw) !== ep.digest) {
+            setStatus(id, 'failed');
+            out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
+          } else {
+            try {
+              await client.sendRaw(ep.raw, ep.thread_id);
+              setStatus(id, 'done');
+              out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
+            } catch (error) {
+              const landed = await client.findSentByMessageId(ep.message_id).catch(() => false);
+              if (landed) {
+                setStatus(id, 'done');
+                out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` };
+              } else {
+                setStatus(id, 'failed');
+                out = { toast: "That didn't send", message: `The email did not send (${error instanceof Error ? error.message : String(error)}). Nothing was delivered - ask me to send it again.` };
+              }
+            }
+          }
+        }
       } else {
         const client = await deps.google();
         if (client === null) {
@@ -159,6 +200,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeBrowser(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'browser_submit', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       await say(`Approve this browser action? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
+      return id;
+    },
+    async proposeSendEmail(payload) {
+      const id = `p${deps.newId()}`;
+      const summary = describeEmail(payload);
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
       return id;
     },
     async propose(p) {

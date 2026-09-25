@@ -69,7 +69,7 @@ describe('incremental Google access', () => {
   it('a mail tool on a calendar-only grant reports a scope_missing intent for mail, not a retry and not a URL', async () => {
     const client = { draft: async () => { throw new GoogleError(403, 'google 403: insufficient scopes'); } } as unknown as GoogleClient;
     const google = { client: async () => client };
-    const draft = googleHandlers(google, { propose: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
+    const draft = googleHandlers(google, { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
     const result = await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',

@@ -9,9 +9,9 @@ import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 import { GoogleError } from '../src/connectors/google';
 
 const clock = { timezone: 'Asia/Calcutta', now: () => new Date('2026-09-24T10:00:00Z') };
-const desk = { propose: async () => 'proposal:1', record: () => undefined };
+const desk = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
 
-const TIER2_HANDLERS = ['query_calendar', 'get_communication', 'draft_email'];
+const TIER2_HANDLERS = ['query_calendar', 'get_communication', 'draft_email', 'send_email'];
 
 describe('tier-2 connector contract', () => {
   it('pins which google handlers are tier-2 (update this list with any new connector tool)', () => {

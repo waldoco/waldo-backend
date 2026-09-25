@@ -85,9 +85,8 @@ export const draftDocumentArgsSchema = z.strictObject({
 });
 export type DraftDocumentArgs = z.infer<typeof draftDocumentArgsSchema>;
 
-// Drafts only — Waldo never sends (ADR-0027); send_draft is a separate user-tap-only
-// execute_action invocation. Tool args carry bare addresses: display-name forms are the
-// adapter's inbound draft shape, never the model's outbound one.
+// Drafts carry no approval rail; sends do. Tool args carry bare addresses: display-name
+// forms are the adapter's inbound draft shape, never the model's outbound one.
 export const draftEmailArgsSchema = z.strictObject({
   to: z.array(z.email()).min(1).max(50),
   cc: z.array(z.email()).max(50).optional(),
@@ -98,6 +97,13 @@ export const draftEmailArgsSchema = z.strictObject({
   in_reply_to_msg_id: z.string().min(1).optional(),
 });
 export type DraftEmailArgs = z.infer<typeof draftEmailArgsSchema>;
+
+// send_email shares the draft's arg shape but not its path: the tool only PROPOSES. The
+// approval rail binds the canonicalized raw MIME bytes + sha256 digest the owner saw, and the
+// executor replays exactly those bytes via users.messages.send - never drafts.send, never a
+// re-serialization of model args (IMPLEMENTATION_CONTRACTS: gmail send TOCTOU boundary).
+export const sendEmailArgsSchema = draftEmailArgsSchema;
+export type SendEmailArgs = z.infer<typeof sendEmailArgsSchema>;
 
 // 'energized'/'steady' mirror the form-zone vocabulary (health/crs); 'avoid_trough' is a
 // scheduling-only preference. 'peak' is deliberately absent — it names a load zone, not a

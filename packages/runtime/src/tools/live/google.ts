@@ -1,8 +1,9 @@
 import {
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type ToolHandler, type ToolName, type ToolResult,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { GoogleError, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import type { EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
@@ -12,6 +13,7 @@ export type GoogleAccess = Readonly<{
 
 export type EffectDesk = Readonly<{
   propose(proposal: ProposeCalendarChangeArgs): Promise<string>;
+  proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
 
@@ -98,6 +100,35 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       return result.ok ? { ...result, source_taint: null } : result;
     },
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
+  {
+    name: 'send_email',
+    description: "Send an email from the owner's Gmail. The owner gets Send it / Modify / Not now buttons showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
+    schema: sendEmailArgsSchema,
+    trigger_allowlist: allowlist('send_email'),
+    autonomy_gated: false,
+    // The tool only proposes: it canonicalizes the MIME bytes, binds them with a sha256 digest
+    // and hands both to the approval desk. The desk replays the stored bytes on approval
+    // (users.messages.send, never drafts.send) and reconciles an ambiguous send through the
+    // Message-ID we set, so the model's post-approval state cannot change what goes out.
+    handle: async (args: SendEmailArgs) => {
+      // Connectivity is gated at propose time (same tier-2 contract as the other google
+      // handlers): no client -> typed connect intent, no half-proposed card.
+      const gate = await withGoogle(google, 'mail', async () => null);
+      if (!gate.ok) return { ...gate, source_taint: null };
+      const message_id = `<${crypto.randomUUID()}@waldo-send>`;
+      const raw = buildMime({
+        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+        subject: args.subject, body: args.body_markdown, messageId: message_id,
+      });
+      const proposal_id = await desk.proposeSendEmail({
+        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+        subject: args.subject, body: args.body_markdown,
+        ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
+        message_id, raw, digest: await sha256Hex(raw),
+      });
+      return { ok: true, data: { proposal_id, status: 'sent to the owner with Send it / Modify / Not now buttons', sent: false }, source_taint: null };
+    },
+  } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
 ];
 
 // The tool only reports the typed intent; the responder turns it into the channel's connect

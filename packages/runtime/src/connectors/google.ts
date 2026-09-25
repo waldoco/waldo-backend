@@ -81,9 +81,32 @@ export type CalendarChange = CalendarItem & Readonly<{ status: string; created: 
 export type MailItem = Readonly<{ id: string; from: string; subject: string; snippet: string; at: string }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
 
+// Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
+// owner approves binds these exact bytes; Message-ID (set by us) is the reconciliation handle
+// when the send result is ambiguous (timeout after Gmail accepted).
+export const buildMime = (input: DraftInput & { messageId?: string }): string => {
+  const clean = (value: string) => value.replace(/[\r\n]+/g, ' ');
+  const headers = [
+    `To: ${clean(input.to.join(', '))}`,
+    ...(input.cc?.length ? [`Cc: ${clean(input.cc.join(', '))}`] : []),
+    ...(input.bcc?.length ? [`Bcc: ${clean(input.bcc.join(', '))}`] : []),
+    `Subject: ${clean(input.subject)}`,
+    ...(input.messageId ? [`Message-ID: ${input.messageId}`, 'MIME-Version: 1.0'] : []),
+    'Content-Type: text/plain; charset="UTF-8"',
+  ];
+  return `${headers.join('\r\n')}\r\n\r\n${input.body}`;
+};
+
+export const sha256Hex = async (text: string): Promise<string> => {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+};
+
 export type GoogleClient = Readonly<{
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
+  sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
+  findSentByMessageId(messageId: string): Promise<boolean>;
   event(id: string): Promise<CalendarItem>;
   createEvent(input: Readonly<{ title: string; start: string; end: string }>): Promise<CalendarItem>;
   moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
@@ -151,20 +174,26 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       }));
     },
     async draft(input) {
-      const clean = (value: string) => value.replace(/[\r\n]+/g, ' ');
-      const headers = [
-        `To: ${clean(input.to.join(', '))}`,
-        ...(input.cc?.length ? [`Cc: ${clean(input.cc.join(', '))}`] : []),
-        ...(input.bcc?.length ? [`Bcc: ${clean(input.bcc.join(', '))}`] : []),
-        `Subject: ${clean(input.subject)}`,
-        'Content-Type: text/plain; charset="UTF-8"',
-      ];
-      const raw = b64url(new TextEncoder().encode(`${headers.join('\r\n')}\r\n\r\n${input.body}`));
+      const raw = b64url(new TextEncoder().encode(buildMime(input)));
       const json = await call('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ message: { raw, ...(input.threadId ? { threadId: input.threadId } : {}) } }),
       }) as { id: string; message?: { id?: string; threadId?: string } };
       return { draft_id: json.id, ...(json.message?.id ? { message_id: json.message.id } : {}), ...(json.message?.threadId ? { thread_id: json.message.threadId } : {}) };
+    },
+    async sendRaw(raw, threadId) {
+      const json = await call('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ raw, ...(threadId ? { threadId } : {}) }),
+      }) as { id: string; threadId?: string };
+      return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
+    },
+    async findSentByMessageId(messageId) {
+      const list = new URL('https://gmail.googleapis.com/gmail/v1/users/me/messages');
+      const bare = messageId.replace(/^<|>$/g, '');
+      list.search = new URLSearchParams({ q: `in:sent rfc822msgid:${bare}`, maxResults: '1' }).toString();
+      const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
+      return messages.length > 0;
     },
   };
 }

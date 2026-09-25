@@ -26,6 +26,7 @@ import {
   deleteMessageArgsSchema,
   draftDocumentArgsSchema,
   draftEmailArgsSchema,
+  sendEmailArgsSchema,
   executeActionArgsSchema,
   executeCodeArgsSchema,
   getCommunicationArgsSchema,
@@ -144,6 +145,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   update_task: updateTaskArgsSchema,
   draft_document: draftDocumentArgsSchema,
   draft_email: draftEmailArgsSchema,
+  send_email: sendEmailArgsSchema,
   propose_schedule: proposeScheduleArgsSchema,
   write_sheet_cell: writeSheetCellArgsSchema,
   execute_code: executeCodeArgsSchema,
@@ -304,9 +306,9 @@ export const scribeSanitisePreToolUseHook: HookHandler<HookRuntimeContext> = {
     const sourceTaint = sourceTaintSchema.safeParse(ctx.toolArgSourceTaint);
     if (!sourceTaint.success) return halt('tool argument taint invalid', 'invalid_args');
     const destination = preToolUseDestination(tool.data);
-    // draft_email args are executable: the recipient addresses ARE the call. Redaction would
-    // corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they are checked
-    // (hard denies still halt fail-closed) but never rewritten.
+    // draft_email/send_email args are executable: the recipient addresses ARE the call.
+    // Redaction would corrupt them (the 2026-09-25 halt - [REDACTED_EMAIL] fails zod), so they
+    // are checked (hard denies still halt fail-closed) but never rewritten.
     if (destination === 'draft_email') {
       return checkExecutableArgs(payload.args, ctx, destination, sourceTaint.data);
     }
@@ -825,6 +827,7 @@ function preToolUseDestination(tool: ToolName): SanitiseDestination {
     case 'draft_document':
       return 'draft_document';
     case 'draft_email':
+    case 'send_email':
       return 'draft_email';
     case 'send_message':
       return 'send_message';

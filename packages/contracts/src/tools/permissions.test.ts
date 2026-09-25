@@ -33,7 +33,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 41 canonical tools, in order', () => {
+  it('is exactly the 42 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -55,6 +55,7 @@ describe('toolName', () => {
       'update_task',
       'draft_document',
       'draft_email',
+      'send_email',
       'search_connector',
       'propose_schedule',
       'write_sheet_cell',
@@ -188,6 +189,7 @@ describe('TOOL_PERMISSIONS', () => {
         'update_task',
         'draft_document',
         'draft_email',
+        'send_email',
         'propose_schedule',
         'write_sheet_cell',
         'propose_action',
@@ -222,11 +224,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 40 of 41', () => {
+  it('grants no trigger the full surface — user_message tops out at 41 of 42', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(40);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(41);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
