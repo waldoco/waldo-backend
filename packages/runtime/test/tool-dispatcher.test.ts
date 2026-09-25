@@ -1046,7 +1046,7 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-invalid-args',
       tool: 'get_crs',
-      error: 'hook halted',
+      error: 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly - datetimes need ISO 8601 with seconds and a UTC offset',
       code: 'invalid_args',
       reason: 'invalid_args',
     });

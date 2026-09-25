@@ -287,8 +287,14 @@ export const toolArgZodValidateHook: HookHandler<HookRuntimeContext> = {
       return halt('tool args schema unavailable', 'invalid_args');
     }
 
-    if (!schema.safeParse(payload.args).success) {
-      return halt('tool args failed schema validation', 'invalid_args');
+    const parsed = schema.safeParse(payload.args);
+    if (!parsed.success) {
+      // Model-authored args are safe to echo: the message is the model's recovery path, so name
+      // the failing fields and the format the schema expects instead of an opaque halt.
+      const issues = (parsed as { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } }).error.issues
+        .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+        .join('; ');
+      return halt(`invalid tool arguments: ${issues}; match the tool schema exactly - datetimes need ISO 8601 with seconds and a UTC offset`, 'invalid_args');
     }
 
     return ok();
@@ -487,7 +493,7 @@ export type RunHooksOptions<Ctx> = {
 };
 
 export class HookHaltError extends Error {
-  readonly clientMessage = 'hook halted';
+  readonly clientMessage: string;
   readonly onErrorPayload: HookPayload;
 
   constructor(
@@ -497,6 +503,9 @@ export class HookHaltError extends Error {
   ) {
     super(`hook ${hook} halted: ${reason}`);
     this.name = 'HookHaltError';
+    // invalid_args carries model-authored arg details the model needs to recover; every other
+    // halt (acl, sanitise, egress, ...) stays opaque so security reasons never reach the model.
+    this.clientMessage = code === 'invalid_args' ? reason : 'hook halted';
     this.onErrorPayload = {
       event: 'OnError',
       error: this.clientMessage,
