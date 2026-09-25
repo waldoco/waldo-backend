@@ -98,11 +98,21 @@ export class TelegramOwnerListener {
     const react = (hop: string, emoji: string): Promise<void> => {
       if (message_id === null) return Promise.resolve();
       const limit = this.options.reactionTimeoutMs ?? REACTION_TIMEOUT_MS;
+      const t0 = now();
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // One span per reaction: whichever of success, failure, or the timeout lands first wins,
+      // so a hung reaction does not log a second misleading span when the API abort fires later.
+      let settled = false;
+      const done = (ok: boolean, error?: string) => {
+        if (settled) return;
+        settled = true;
+        log(hop, Math.max(0, now() - t0), ok, error);
+      };
       const bounded = new Promise<void>((resolve) => {
-        timer = setTimeout(() => { log(hop, limit, false, 'telegram reaction timed out'); resolve(undefined); }, limit);
+        timer = setTimeout(() => { done(false, 'telegram reaction timed out'); resolve(undefined); }, limit);
       });
-      const attempt = time(hop, () => api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] })).then(() => undefined, () => undefined);
+      const attempt = api.setMessageReaction({ chat_id, message_id, reaction: [{ type: 'emoji', emoji }] })
+        .then(() => done(true), (error) => done(false, error instanceof Error ? error.message : String(error)));
       return Promise.race([attempt, bounded]).finally(() => clearTimeout(timer));
     };
     await react('receipt', ack);
