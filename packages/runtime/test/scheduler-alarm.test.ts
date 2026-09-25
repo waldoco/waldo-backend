@@ -95,6 +95,18 @@ async function forceSchedulesDue(stub: SchedulerStub): Promise<void> {
   });
 }
 
+// Park any still-armed rows far in the future so a past-due re-arm cannot auto-fire during the
+// assertions that follow a partial batch dispatch.
+async function holdSchedules(stub: SchedulerStub): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(
+      "UPDATE schedule SET due_at = ?, updated_at = ? WHERE status = 'armed'",
+      Date.now() + 60_000,
+      Date.now(),
+    );
+  });
+}
+
 async function deleteAlarm(stub: SchedulerStub): Promise<void> {
   await runInDurableObject(stub, async (_instance, state) => {
     await state.storage.deleteAlarm();
@@ -109,12 +121,12 @@ async function runAlarmEntrypoint(stub: SchedulerStub): Promise<void> {
 
 async function startScheduledRun(
   stub: SchedulerStub,
-  input: { userId: string; dueAt: number },
+  input: { userId: string; dueAt: number; occurrenceAt?: number },
 ): Promise<string> {
   const runId = await stub.startRun({
     userId: input.userId,
     trigger: FETCH,
-    occurrenceAt: input.dueAt,
+    occurrenceAt: input.occurrenceAt ?? input.dueAt,
   });
   await stub.scheduleRun({ runId, dueAt: input.dueAt });
   return runId;
@@ -277,9 +289,10 @@ describe('scheduler alarm multiplexer', () => {
   it('survives eviction before the alarm and treats duplicate delivery after success as a no-op', async () => {
     const sink = new FakeSink();
     const stub = freshStub();
-    const dueAt = soon();
+    const occurrenceAt = Date.now();
+    const dueAt = occurrenceAt + 60_000;
 
-    await startScheduledRun(stub, { userId: 'user-scheduler-evict', dueAt });
+    await startScheduledRun(stub, { userId: 'user-scheduler-evict', dueAt, occurrenceAt });
     expect(await readScheduleRows(stub)).toHaveLength(1);
 
     await runInDurableObject(stub, () => {
@@ -287,6 +300,7 @@ describe('scheduler alarm multiplexer', () => {
     });
     await evictDurableObject(stub);
 
+    await forceSchedulesDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect((await readState(stub)).schedules).toEqual([]);
     expect(sink.observedDeliveries()).toBe(1);
@@ -297,14 +311,17 @@ describe('scheduler alarm multiplexer', () => {
 
   it('selects a deterministic due batch by kind priority, due time, and schedule id', async () => {
     const stub = freshStub();
-    const dueAt = soon();
+    const occurrenceAt = Date.now();
+    const dueAt = occurrenceAt + 60_000;
 
     for (let i = 0; i < 9; i += 1) {
-      await startScheduledRun(stub, { userId: `user-scheduler-order-${i}`, dueAt });
+      await startScheduledRun(stub, { userId: `user-scheduler-order-${i}`, dueAt, occurrenceAt });
     }
     const orderedIds = (await readScheduleRows(stub)).map((row) => row.id).sort();
 
+    await forceSchedulesDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
+    await holdSchedules(stub);
 
     const remaining = await readScheduleRows(stub);
     expect(remaining).toHaveLength(1);
@@ -315,9 +332,10 @@ describe('scheduler alarm multiplexer', () => {
   it('picks up a lost due schedule row on the next in-scope wake', async () => {
     const sink = new FakeSink();
     const stub = freshStub();
-    const dueAt = soon();
+    const occurrenceAt = Date.now();
+    const dueAt = occurrenceAt + 60_000;
 
-    await startScheduledRun(stub, { userId: 'user-scheduler-lost', dueAt });
+    await startScheduledRun(stub, { userId: 'user-scheduler-lost', dueAt, occurrenceAt });
     await deleteAlarm(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(false);
 
@@ -326,9 +344,10 @@ describe('scheduler alarm multiplexer', () => {
       kind: 'brief',
       userId: 'user-scheduler-lost-brief',
       dueAt,
-      occurrenceAt: dueAt,
+      occurrenceAt,
     });
 
+    await forceSchedulesDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect((await readState(stub)).schedules).toEqual([]);
     expect(sink.observedDeliveries()).toBe(2);
@@ -336,14 +355,14 @@ describe('scheduler alarm multiplexer', () => {
 
   it('quarantines a repeatedly failing product schedule instead of wedging the alarm slot', async () => {
     const stub = freshStub();
-    const dueAt = soon();
+    const dueAt = Date.now() + 60_000;
 
     await stub.scheduleProactiveWake({
       id: 'brief:poison',
       kind: 'brief',
       userId: 'user-scheduler-poison',
       dueAt,
-      occurrenceAt: dueAt,
+      occurrenceAt: Date.now(),
     });
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.sql.exec(
@@ -357,6 +376,7 @@ describe('scheduler alarm multiplexer', () => {
       );
     });
 
+    await forceSchedulesDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     await forceSchedulesDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
@@ -368,14 +388,15 @@ describe('scheduler alarm multiplexer', () => {
     expect(row!.attempts).toBe(3);
     expect(row!.quarantined_until).not.toBeNull();
 
-    const healthyAt = soon();
+    const healthyAt = Date.now() + 60_000;
     await stub.scheduleProactiveWake({
       id: 'brief:healthy-after-poison',
       kind: 'brief',
       userId: 'user-scheduler-healthy',
       dueAt: healthyAt,
-      occurrenceAt: healthyAt,
+      occurrenceAt: Date.now(),
     });
+    await forceSchedulesDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const afterHealthy = await readScheduleRows(stub);

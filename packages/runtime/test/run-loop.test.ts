@@ -85,6 +85,36 @@ function soon(): number {
   return Date.now() + 500;
 }
 
+// Arm the wake well past the test's setup so workerd cannot auto-fire it before the controlled
+// manual alarm; the persisted row is then forced due immediately before that alarm fires.
+function heldDue(): number {
+  return Date.now() + 60_000;
+}
+
+// After a crashing dispatch the scheduler re-arms the armed row's (now past) wake, which workerd
+// would auto-fire during the resume-phase awaits; hold it far out until the next manual alarm.
+async function holdSchedule(stub: RunLoopStub): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    state.storage.sql.exec(
+      "UPDATE schedule SET due_at = ?, updated_at = ? WHERE status = 'armed'",
+      Date.now() + 60_000,
+      Date.now(),
+    );
+  });
+}
+
+async function forceScheduleDue(stub: RunLoopStub): Promise<void> {
+  await runInDurableObject(stub, (_instance, state) => {
+    const now = Date.now();
+    state.storage.sql.exec(
+      "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+      now,
+      now,
+      now,
+    );
+  });
+}
+
 function utcLocalDate(at: number): string {
   return new Date(at).toISOString().slice(0, 10);
 }
@@ -121,7 +151,7 @@ it('stops before provider egress when gateway-mode spend state is unavailable', 
   const runId = await stub.scheduleFakeRun({
     scheduleId: 'brief:spend-preflight',
     userId: USER + '-spend-preflight',
-    dueAt,
+    dueAt: heldDue(),
     occurrenceAt: dueAt,
   });
   await runInDurableObject(stub, (instance) => {
@@ -131,6 +161,7 @@ it('stops before provider egress when gateway-mode spend state is unavailable', 
     });
   });
 
+  await forceScheduleDue(stub);
   expect(await runDurableObjectAlarm(stub)).toBe(true);
   expect((await stub.readRunProof(runId)).current).toEqual({
     state: 'FAILED',
@@ -148,7 +179,7 @@ it('stops before provider egress when a gateway-mode spend reader returns malfor
   const runId = await stub.scheduleFakeRun({
     scheduleId: 'brief:malformed-spend-preflight',
     userId: USER + '-malformed-spend-preflight',
-    dueAt,
+    dueAt: heldDue(),
     occurrenceAt: dueAt,
   });
   await runInDurableObject(stub, (instance) => {
@@ -164,6 +195,7 @@ it('stops before provider egress when a gateway-mode spend reader returns malfor
     });
   });
 
+  await forceScheduleDue(stub);
   expect(await runDurableObjectAlarm(stub)).toBe(true);
   expect((await stub.readRunProof(runId)).current).toEqual({
     state: 'FAILED',
@@ -181,7 +213,7 @@ it('stops before provider egress when a gateway-mode spend reader returns a malf
   const runId = await stub.scheduleFakeRun({
     scheduleId: 'brief:malformed-spend-envelope',
     userId: USER + '-malformed-spend-envelope',
-    dueAt,
+    dueAt: heldDue(),
     occurrenceAt: dueAt,
   });
   await runInDurableObject(stub, (instance) => {
@@ -197,6 +229,7 @@ it('stops before provider egress when a gateway-mode spend reader returns a malf
     });
   });
 
+  await forceScheduleDue(stub);
   expect(await runDurableObjectAlarm(stub)).toBe(true);
   expect((await stub.readRunProof(runId)).current).toEqual({
     state: 'FAILED',
@@ -228,7 +261,7 @@ it('rejects accessor-backed gateway spend state before a second read can bypass 
   const runId = await stub.scheduleFakeRun({
     scheduleId: 'brief:accessor-spend-preflight',
     userId: USER + '-accessor-spend-preflight',
-    dueAt,
+    dueAt: heldDue(),
     occurrenceAt: dueAt,
   });
   await runInDurableObject(stub, (instance) => {
@@ -241,6 +274,7 @@ it('rejects accessor-backed gateway spend state before a second read can bypass 
     });
   });
 
+  await forceScheduleDue(stub);
   expect(await runDurableObjectAlarm(stub)).toBe(true);
   expect((await stub.readRunProof(runId)).current).toEqual({
     state: 'FAILED',
@@ -261,7 +295,7 @@ it('records a capped primary-only route as metadata-only durable LLM evidence', 
   const runId = await stub.scheduleFakeRun({
     scheduleId: 'brief:spend-cap-evidence',
     userId: USER + '-spend-cap-evidence',
-    dueAt,
+    dueAt: heldDue(),
     occurrenceAt: dueAt,
   });
   await runInDurableObject(stub, (instance) => {
@@ -271,6 +305,7 @@ it('records a capped primary-only route as metadata-only durable LLM evidence', 
     });
   });
 
+  await forceScheduleDue(stub);
   expect(await runDurableObjectAlarm(stub)).toBe(true);
   const proof = await stub.readRunProof(runId);
   expect(proof.current).toEqual({ state: 'DONE', failure_reason: null });
@@ -301,7 +336,7 @@ it('persists capped-route metadata when the provider fails before a successful L
   const runId = await stub.scheduleFakeRun({
     scheduleId: 'brief:spend-cap-failure-evidence',
     userId: USER + '-spend-cap-failure-evidence',
-    dueAt,
+    dueAt: heldDue(),
     occurrenceAt: dueAt,
   });
   await runInDurableObject(stub, (instance) => {
@@ -311,6 +346,7 @@ it('persists capped-route metadata when the provider fails before a successful L
     });
   });
 
+  await forceScheduleDue(stub);
   expect(await runDurableObjectAlarm(stub)).toBe(true);
   const proof = await stub.readRunProof(runId);
   expect(proof.current).toEqual({ state: 'FAILED', failure_reason: 'llm:invalid_response' });
@@ -351,7 +387,7 @@ describe('RunLoopDO full contract FSM', () => {
         (instance as unknown as { scheduleFakeRun: RunLoopStub['scheduleFakeRun'] }).scheduleFakeRun({
           scheduleId: 'brief:opaque-user-id',
           userId: 'person@example.com',
-          dueAt,
+          dueAt: heldDue(),
           occurrenceAt: dueAt,
         }),
       ),
@@ -370,7 +406,7 @@ describe('RunLoopDO full contract FSM', () => {
         (instance as unknown as { scheduleFakeRun: RunLoopStub['scheduleFakeRun'] }).scheduleFakeRun({
           scheduleId: 'brief:pii-candidate-id',
           userId: `${USER}-pii-candidate-id`,
-          dueAt,
+          dueAt: heldDue(),
           occurrenceAt: dueAt,
           candidate: {
             push_class: 'brief',
@@ -392,7 +428,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:legacy-row',
       userId,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     const legacyContext = {
@@ -435,7 +471,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:mixed-migration-row',
       userId: `${USER}-mixed-migration-row`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     const legacyContext = {
@@ -480,7 +516,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:unsafe-legacy-row',
       userId: `${USER}-unsafe-legacy-row`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (_instance, state) => {
@@ -565,7 +601,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:unsafe-current-row',
       userId: `${USER}-unsafe-current-row`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (_instance, state) => {
@@ -599,7 +635,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:malformed-taint-row',
       userId: `${USER}-malformed-taint-row`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (_instance, state) => {
@@ -624,7 +660,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:unsafe-legacy-candidate',
       userId: `${USER}-unsafe-legacy-candidate`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (_instance, state) => {
@@ -640,6 +676,7 @@ describe('RunLoopDO full contract FSM', () => {
       );
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     const replay = await stub.replayFixture(runId);
     expect(replay.current).toEqual({
@@ -670,14 +707,16 @@ describe('RunLoopDO full contract FSM', () => {
     const input = {
       scheduleId: 'brief:poisoned-gated-candidate',
       userId: `${USER}-poisoned-gated-candidate`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     };
     const runId = await stub.scheduleFakeRun(input);
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'GATED';
     });
+    await forceScheduleDue(stub);
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:GATED');
+    await holdSchedule(stub);
     expect((await stub.readRunProof(runId)).current.state).toBe('GATED');
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.sql.exec(
@@ -693,7 +732,14 @@ describe('RunLoopDO full contract FSM', () => {
     });
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+            now,
+            now,
+            now,
+          );
       await (instance as unknown as CrashableRunLoopInstance).alarm();
     });
 
@@ -711,6 +757,7 @@ describe('RunLoopDO full contract FSM', () => {
     ]);
 
     expect(await stub.scheduleFakeRun(input)).toBe(runId);
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect((await stub.readRunProof(runId)).current).toEqual(failed.current);
   });
@@ -721,13 +768,15 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:pre-scrubbed-gated-candidate',
       userId: `${USER}-pre-scrubbed-gated-candidate`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'GATED';
     });
+    await forceScheduleDue(stub);
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:GATED');
+    await holdSchedule(stub);
     await runInDurableObject(stub, (_instance, state) => {
       state.storage.transactionSync(() => {
         state.storage.sql.exec('DELETE FROM run_candidates WHERE run_id = ?', runId);
@@ -739,7 +788,14 @@ describe('RunLoopDO full contract FSM', () => {
     });
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+            now,
+            now,
+            now,
+          );
       await (instance as unknown as CrashableRunLoopInstance).alarm();
     });
 
@@ -761,9 +817,10 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:done-migration-row',
       userId: `${USER}-done-migration-row`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     const before = await stub.readRunProof(runId);
     expect(before.current).toEqual({ state: 'DONE', failure_reason: null });
@@ -809,7 +866,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:failed-migration-row',
       userId: `${USER}-failed-migration-row`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
@@ -817,6 +874,7 @@ describe('RunLoopDO full contract FSM', () => {
         providerMode: 'gateway',
       });
     });
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     const before = await stub.readRunProof(runId);
     expect(before.current).toEqual({
@@ -887,7 +945,7 @@ describe('RunLoopDO full contract FSM', () => {
     const input = {
       scheduleId: 'brief:safe-ingress',
       userId: `${USER}-safe-ingress`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
       ...unsafe,
     };
@@ -929,10 +987,11 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:morning',
       userId: USER,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1002,13 +1061,13 @@ describe('RunLoopDO full contract FSM', () => {
     const firstRunId = await stub.scheduleFakeRun({
       scheduleId: 'brief:duplicate',
       userId,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     const secondRunId = await stub.scheduleFakeRun({
       scheduleId: 'brief:duplicate',
       userId,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
 
@@ -1020,8 +1079,16 @@ describe('RunLoopDO full contract FSM', () => {
     );
     expect(openedRuns).toBe(1);
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+            now,
+            now,
+            now,
+          );
       const runLoop = instance as unknown as CrashableRunLoopInstance;
       await runLoop.alarm();
     });
@@ -1042,7 +1109,7 @@ describe('RunLoopDO full contract FSM', () => {
       body: JSON.stringify({
         scheduleId: 'brief:unauth-ingress',
         userId,
-        dueAt,
+        dueAt: heldDue(),
         occurrenceAt: dueAt,
       }),
     });
@@ -1069,7 +1136,7 @@ describe('RunLoopDO full contract FSM', () => {
       body: JSON.stringify({
         scheduleId: 'brief:local-ingress',
         userId: `${USER}-local-ingress`,
-        dueAt,
+        dueAt: heldDue(),
         occurrenceAt: dueAt,
       }),
     });
@@ -1078,6 +1145,7 @@ describe('RunLoopDO full contract FSM', () => {
     const scheduled = (await scheduleResponse.json()) as { run_id: string };
     expect(scheduled.run_id).toMatch(/[0-9a-f-]{36}/);
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const inspectResponse = await stub.fetch(
@@ -1153,7 +1221,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:gate-degrade',
       userId,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
       candidate: {
         push_class: 'spot_digest',
@@ -1171,6 +1239,7 @@ describe('RunLoopDO full contract FSM', () => {
       );
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1192,7 +1261,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:gate-hold',
       userId,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
       candidate: {
         push_class: 'spot_digest',
@@ -1211,6 +1280,7 @@ describe('RunLoopDO full contract FSM', () => {
       );
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1235,7 +1305,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:gate-drop',
       userId,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
       candidate: {
         push_class: 'spot_digest',
@@ -1245,6 +1315,7 @@ describe('RunLoopDO full contract FSM', () => {
       },
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1268,7 +1339,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:admission-kill',
       userId: `${USER}-admission-kill`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
@@ -1279,6 +1350,7 @@ describe('RunLoopDO full contract FSM', () => {
       });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1330,13 +1402,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:budget-kill',
       userId: `${USER}-budget-kill`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1378,13 +1451,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:malformed-tools',
       userId: `${USER}-malformed-tools`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1419,13 +1493,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:scribe-health-denial',
       userId: `${USER}-scribe-health-denial`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1476,13 +1551,14 @@ describe('RunLoopDO full contract FSM', () => {
       const runId = await stub.scheduleFakeRun({
         scheduleId: `brief:scribe-${label}-denial`,
         userId: `${USER}-scribe-${label}-denial`,
-        dueAt,
+        dueAt: heldDue(),
         occurrenceAt: dueAt,
       });
       await runInDurableObject(stub, (instance) => {
         (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
       });
 
+      await forceScheduleDue(stub);
       expect(await runDurableObjectAlarm(stub)).toBe(true);
 
       const proof = await stub.readRunProof(runId);
@@ -1525,13 +1601,15 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:scribe-resume-delivery',
       userId: `${USER}-scribe-resume-delivery`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'TOOLS_DONE';
     });
+    await forceScheduleDue(stub);
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+    await holdSchedule(stub);
 
     await runInDurableObject(stub, (_instance, state) => {
       const row = state.storage.sql
@@ -1553,7 +1631,14 @@ describe('RunLoopDO full contract FSM', () => {
     });
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+            now,
+            now,
+            now,
+          );
       await (instance as unknown as CrashableRunLoopInstance).alarm();
     });
 
@@ -1604,13 +1689,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:denied-tool',
       userId: `${USER}-denied-tool`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1648,13 +1734,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:bad-tool-args',
       userId: `${USER}-bad-tool-args`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1693,7 +1780,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:no-progress',
       userId,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, async (instance, state) => {
@@ -1714,6 +1801,7 @@ describe('RunLoopDO full contract FSM', () => {
       );
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1752,13 +1840,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:cumulative-budget-kill',
       userId: `${USER}-cumulative-budget-kill`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1794,13 +1883,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:observe-pass',
       userId: `${USER}-observe-pass`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1837,13 +1927,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:multi-pass',
       userId: `${USER}-multi-pass`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1903,13 +1994,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:observe-malformed-tools',
       userId: `${USER}-observe-malformed-tools`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1946,13 +2038,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:observe-json-terminal',
       userId: `${USER}-observe-json-terminal`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -1989,13 +2082,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:multi-pass-budget-kill',
       userId: `${USER}-multi-pass-budget-kill`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -2034,13 +2128,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:iteration-budget-exhausted',
       userId: `${USER}-iteration-budget-exhausted`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -2074,13 +2169,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:duplicate-observation',
       userId: `${USER}-duplicate-observation`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -2111,7 +2207,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:multi-pass-resume',
       userId: `${USER}-multi-pass-resume`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
@@ -2120,7 +2216,9 @@ describe('RunLoopDO full contract FSM', () => {
       runLoop.__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+    await holdSchedule(stub);
     const atCrash = await stub.readRunProof(runId);
     expect(atCrash.fsm).toEqual(['PENDING', 'CONTEXT_BUILT', 'LLM_CALLED', 'TOOLS_DONE']);
     await runInDurableObject(stub, async (instance) => {
@@ -2132,6 +2230,13 @@ describe('RunLoopDO full contract FSM', () => {
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+            now,
+            now,
+            now,
+          );
       const runLoop = instance as unknown as CrashableRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({ gateway });
       await expect(runLoop.__runLoopProbePrivilegedToolForTest(runId)).resolves.toMatchObject({
@@ -2191,7 +2296,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:kill-before-observe',
       userId: `${USER}-kill-before-observe`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
@@ -2200,11 +2305,20 @@ describe('RunLoopDO full contract FSM', () => {
       runLoop.__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+    await holdSchedule(stub);
     expect(gateway.requests).toHaveLength(1);
 
     await evictDurableObject(stub);
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+            now,
+            now,
+            now,
+          );
       const runLoop = instance as unknown as CrashableRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({ gateway });
       runLoop.__runLoopSetKillFlag({ scope: 'loop', loopType: 'brief', active: true });
@@ -2232,13 +2346,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:malformed-llm',
       userId: `${USER}-malformed-llm`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const evidence = await stub.readRunEvidence(runId);
@@ -2283,13 +2398,14 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:tool-denial',
       userId: `${USER}-tool-denial`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopSetTestOverrides({ gateway });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const evidence = await stub.readRunEvidence(runId);
@@ -2309,7 +2425,7 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:stored-governor-decision',
       userId: `${USER}-stored-governor-decision`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (_instance, state) => {
@@ -2336,6 +2452,7 @@ describe('RunLoopDO full contract FSM', () => {
       });
     });
 
+    await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
 
     const proof = await stub.readRunProof(runId);
@@ -2356,7 +2473,7 @@ describe('RunLoopDO full contract FSM', () => {
       const runId = await stub.scheduleFakeRun({
         scheduleId: `brief:${crashAfter.toLowerCase()}`,
         userId: `${USER}-${crashAfter.toLowerCase()}`,
-        dueAt,
+        dueAt: heldDue(),
         occurrenceAt: dueAt,
       });
       await runInDurableObject(stub, (instance) => {
@@ -2364,14 +2481,23 @@ describe('RunLoopDO full contract FSM', () => {
         runLoop.__runLoopCrashAfter = crashAfter;
       });
 
+      await forceScheduleDue(stub);
       await expect(runDurableObjectAlarm(stub)).rejects.toThrow(
         `crash-injection:${crashAfter}`,
       );
+      await holdSchedule(stub);
       const atCrash = await stub.readRunProof(runId);
       expect(atCrash.fsm.at(-1)).toBe(crashAfter);
 
       await evictDurableObject(stub);
-      await runInDurableObject(stub, async (instance) => {
+      await runInDurableObject(stub, async (instance, state) => {
+            const now = Date.now();
+            state.storage.sql.exec(
+              "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+              now,
+              now,
+              now,
+            );
         const runLoop = instance as unknown as CrashableRunLoopInstance;
         await runLoop.alarm();
       });
@@ -2396,15 +2522,24 @@ describe('RunLoopDO full contract FSM', () => {
     const runId = await stub.scheduleFakeRun({
       scheduleId: 'brief:legacy-direct-done-rejected',
       userId: `${USER}-legacy-direct-done-rejected`,
-      dueAt,
+      dueAt: heldDue(),
       occurrenceAt: dueAt,
     });
     await runInDurableObject(stub, (instance) => {
       (instance as unknown as CrashableRunLoopInstance).__runLoopCrashAfter = 'TOOLS_DONE';
     });
+    await forceScheduleDue(stub);
     await expect(runDurableObjectAlarm(stub)).rejects.toThrow('crash-injection:TOOLS_DONE');
+    await holdSchedule(stub);
 
-    await runInDurableObject(stub, async (instance) => {
+    await runInDurableObject(stub, async (instance, state) => {
+          const now = Date.now();
+          state.storage.sql.exec(
+            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+            now,
+            now,
+            now,
+          );
       // A TypeScript-private writer used to be reachable on this prototype. The runtime now keeps
       // it ECMAScript-private, so neither an RPC caller nor a test can manufacture DONE outside
       // the existing DeliveryGate/outbox path.
@@ -2457,7 +2592,7 @@ describe('RunLoopDO full contract FSM', () => {
       const runId = await stub.scheduleFakeRun({
         scheduleId: `brief:${crashPoint}`,
         userId: `${USER}-${crashPoint}`,
-        dueAt,
+        dueAt: heldDue(),
         occurrenceAt: dueAt,
       });
       await runInDurableObject(stub, (instance) => {
@@ -2465,16 +2600,25 @@ describe('RunLoopDO full contract FSM', () => {
         runLoop.__runLoopOutboxCrashPoint = crashPoint;
       });
 
+      await forceScheduleDue(stub);
       await expect(runDurableObjectAlarm(stub)).rejects.toThrow(
         `crash-injection:${crashPoint}`,
       );
+      await holdSchedule(stub);
       const atCrash = await stub.readRunProof(runId);
       expect(atCrash.current).toEqual({ state: 'GATED', failure_reason: null });
       expect(atCrash.outbox).toEqual(atCrashOutbox);
       expect(atCrash.sink).toEqual(atCrashSink);
 
       await evictDurableObject(stub);
-      await runInDurableObject(stub, async (instance) => {
+      await runInDurableObject(stub, async (instance, state) => {
+            const now = Date.now();
+            state.storage.sql.exec(
+              "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
+              now,
+              now,
+              now,
+            );
         const runLoop = instance as unknown as CrashableRunLoopInstance;
         await runLoop.alarm();
       });
