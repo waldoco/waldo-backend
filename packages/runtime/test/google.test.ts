@@ -131,6 +131,40 @@ describe('google tools', () => {
     expect(Date.now() - seen[0]!).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5000);
   });
 
+  it('E1: verification artifacts in mail are quarantined before the result reaches model context; ordinary mail flows', async () => {
+    const google: GoogleAccess = {
+      client: async () => ({
+        events: async () => [],
+        newMail: async () => [
+          { id: 'm-otp', from: 'google-no-reply@accounts.google.com', subject: '123456 is your Google verification code', snippet: 'Enter 123456 to continue', at: '2026-09-25T09:00:00.000Z' },
+          { id: 'm-reset', from: 'no-reply@example.com', subject: 'Reset your password', snippet: 'Open https://app.example.com/auth/v1/verify?token=pkce_LIVESECRET&type=recovery to choose a new one', at: '2026-09-25T09:01:00.000Z' },
+          { id: 'm-receipt', from: 'receipts@amazon.com', subject: 'Your receipt from Amazon #112-3948572-1849561', snippet: 'Order total $12.34, arriving Thursday', at: '2026-09-25T09:02:00.000Z' },
+        ],
+        draft: async () => ({}),
+      } as never),
+    };
+    const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
+    const result = await comms.handle({} as never);
+    expect(result.ok).toBe(true);
+    const json = JSON.stringify(result);
+    // falsifier: the artifact strings appear NOWHERE in the model-visible result
+    expect(json).not.toContain('123456');
+    expect(json).not.toContain('pkce_LIVESECRET');
+    // quarantined rows stay owner-findable: from/at/id survive, content becomes a typed marker
+    const data = result.ok ? (result.data as { messages: { id: string; from: string; subject: string; snippet: string; quarantined?: string[] }[] }) : { messages: [] };
+    const otp = data.messages.find((m) => m.id === 'm-otp')!;
+    expect(otp.from).toBe('google-no-reply@accounts.google.com');
+    expect(otp.subject).toContain('[quarantined:');
+    expect(otp.quarantined).toEqual(['otp']);
+    const reset = data.messages.find((m) => m.id === 'm-reset')!;
+    expect(reset.quarantined).toEqual(['magic_link']);
+    // the receipt passes through byte-identical
+    const receipt = data.messages.find((m) => m.id === 'm-receipt')!;
+    expect(receipt.subject).toBe('Your receipt from Amazon #112-3948572-1849561');
+    expect(receipt.snippet).toBe('Order total $12.34, arriving Thursday');
+    expect(receipt.quarantined).toBeUndefined();
+  });
+
   it('get_communication honours an explicit date_range and never fabricates mail when unconnected', async () => {
     const google: GoogleAccess = { client: async () => null };
     const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
