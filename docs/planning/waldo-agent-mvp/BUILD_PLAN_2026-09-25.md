@@ -27,11 +27,29 @@ Lane can drive the browser for 3 if he wants; 1-2 are his hands.
 | A2 | WhatsApp W1-W3 (schema literals, webhook, API caller + DO ingress) | spec 3c271e7; test number works unverified | none lane-side |
 | A3 | S6 live proof (connect funnel end-to-end on staging) | closes the connect-flow arc | P0.1 |
 | A4 | MCP client handler (call_mcp_tool typed, unwired) | ONE handler -> connectors become config; the leverage move | none |
-| A5 | Background task tracking (tasks table, trace hops, console list) + typed artifact store (DO SQLite metadata + R2 bodies, provenance/taint, read-on-demand - the audit's workspace answer) | owner moved it into alpha 11:13; CLOUDFLARE_ADAPTATION_AUDIT adds artifacts + a Workflows evaluation for durable runs | none |
+| A5 | Background task tracking (tasks table, trace hops, console list) + typed artifact store (DO SQLite metadata + R2 bodies, provenance/taint, read-on-demand - the audit's workspace answer; owner 11:44: BUILT in alpha, not specced) + Workflows evaluation for durable runs | owner moved it into alpha 11:13 and reaffirmed 11:44 | none |
 | A6 | Vision input wiring (LLMAttachment typed, no channel uses it) | telegram photos -> model; also the meal-photo path | none |
 | A7 | Standing orders (typed): scope/trigger/gate/escalation rows, injected via context composer, enforced by scheduler | owner-approved; OpenClaw pattern mined (auto-injected AGENTS.md programs) | scheduler + approvals (exist) |
 | A8 | Generic webhook/event ingress channel | mirrors telegram-webhook shape; event-driven beats polling; evaluate a Queue buffer per Cloudflare's event pattern (audit) | none |
 | A9 | Meal + workout logging (meals first) | owner added 11:13: feeds the proactive loop and shopping | none; photo logging uses A6 later |
+| O1 | Observability: Langfuse full-run tracing fix (wrap the whole agent run, nest tool calls, capture inputs/outputs with scrubbing intact) + logging DX pass + CF Workers observability settings | owner 11:45: trace previews unusable = alpha debugging degraded; rides the tracing todo | none |
+| V1 | Vector recall leg: Cloudflare Vectorize index + Workers AI embeddings as a recall RANKER over the FTS/hall recall set (not a redesign; typed rows stay the source of truth) | owner 11:44 folds the audit's vector gap into alpha: paraphrase recall degrades agent work quality | needs Vectorize + Workers AI binding in the staging deploy packet (P0.1 v3) |
+
+### Fold-in decisions (owner 11:44 + 11:45)
+
+The CLOUDFLARE_ADAPTATION_AUDIT deferrals, re-filtered against his bar ("small things can degrade
+the entire experience and the agent's ability to perform the work"):
+
+- Artifact store -> alpha, built inside A5 (was already folded; now confirmed build-not-spec).
+- Vector leg -> alpha as V1 (recall ranker over existing FTS/hall recall; typed rows remain truth).
+- Langfuse tracing fix + logging DX -> alpha as O1, placed BEFORE A5: it instruments every later
+  slice and the A3 live proof. Cost: one lane session + one staging redeploy line.
+- A8's Queue buffer evaluation -> stays an evaluation inside A8, now bias-to-adopt if the wrapper
+  is thin (Queues are the CF-native event buffer; the evaluation decides, honest cost recorded).
+- STAYS post-alpha, with the reason: B1 voice-out (text + cards carry alpha conversations);
+  Cloudflare Browser Rendering swap (Browserbase covers browse/cart-prep today; custody + cost
+  review not an experience gap); CF Workflows ADOPTION (evaluated in A5, adopted only if durable
+  long runs need more than our DO-alarm Scheduler).
 
 ## P2 - post-alpha (ordered)
 
