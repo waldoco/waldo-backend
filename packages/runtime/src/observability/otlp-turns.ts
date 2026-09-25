@@ -100,6 +100,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       attr('langfuse.observation.metadata.feature', hopFeature(entry.hop)),
       attr('langfuse.observation.metadata.trace_key', entry.trace),
       ...(entry.detail ? [attr('langfuse.observation.metadata.detail', entry.detail)] : []),
+      ...(entry.owner ? [attr('langfuse.observation.metadata.owner', entry.owner)] : []),
       ...generation(entry),
       ...io(entry),
       ...extra,

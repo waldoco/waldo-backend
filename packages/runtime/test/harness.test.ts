@@ -38,6 +38,16 @@ describe('owner harness', () => {
     });
   });
 
+  it('stores the emitting owner on every span so an alarm or card is attributable', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 3);
+      const at = Date.parse('2026-09-23T04:30:00Z');
+      book.record({ trace: 'card:close:1', hop: 'day_card', ms: 800, ok: true, owner: 'do-old' }, at);
+      const rows = sql.exec<{ owner: string | null }>('SELECT owner FROM trace_log').toArray();
+      expect(rows).toEqual([{ owner: 'do-old' }]);
+    });
+  });
+
   it('rolls up model usage by billing type across the pre-usage schema migration', async () => {
     await withSql((sql) => {
       // The pre-usage table shape, as existing owner DOs hold it.

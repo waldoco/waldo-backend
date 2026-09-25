@@ -5,7 +5,7 @@ import { claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
-import { consoleAuth, type OwnerSettings } from '../identity/console-auth';
+import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
@@ -418,12 +418,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }) : undefined;
     const traces = traceBook(this.ctx.storage.sql);
     const log = (entry: TurnLogEntry) => {
-      traces.record({ ...entry, owner: identity.get<string>('do_name') ?? 'unresolved' }, Date.now());
-      console.log(JSON.stringify({ ...entry, text: undefined }));
-      if (exportTurn) this.ctx.waitUntil(exportTurn(entry).catch((error: unknown) => {
+      // Owner attribution lands on every surface: the DO trace table, the wrangler tail, and Langfuse.
+      const enriched: TurnLogEntry = { ...entry, owner: entry.owner ?? identity.get<string>('do_name') ?? 'unresolved' };
+      traces.record(enriched, Date.now());
+      console.log(JSON.stringify({ ...enriched, text: undefined }));
+      if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
         const note = String(error);
-        console.log(JSON.stringify({ trace: entry.trace, hop: 'otlp_export', ok: false, error: note }));
-        traces.record({ trace: entry.trace, hop: 'otlp_export', ms: 0, ok: false, error: note }, Date.now());
+        const failed: TurnLogEntry = { trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, owner: enriched.owner };
+        console.log(JSON.stringify(failed));
+        traces.record(failed, Date.now());
       }));
     };
     const deps = productionDeps();
@@ -447,9 +450,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const call = egressGuardedCaller(
       gatedCaller(baseCall, egressGate(
         () => owner === 0 || identity.get<boolean>(channel === 'whatsapp' ? 'whatsapp_unlinked' : 'telegram_unlinked') === true,
-        egressAuth && egressDoName && egressSubject
-          ? () => egressAuth.assertChannelPresence(egressDoName, channel, egressSubject)
-          : undefined,
+        presenceRecheck(egressAuth, egressDoName, channel, egressSubject),
       )),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
     );

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { egressGate, gatedCaller } from '../src/channels/telegram-api';
-import { consoleAuth } from '../src/identity/console-auth';
+import { consoleAuth, presenceRecheck } from '../src/identity/console-auth';
 
 describe('Send-time presence re-check', () => {
   it('blocks a fresh owner with no presence row, so no outbound can precede a link', async () => {
@@ -70,5 +70,35 @@ describe('Send-time presence re-check', () => {
     const gated = gatedCaller(call, egressGate(() => false, async () => null as unknown as boolean));
     expect(await gated('sendMessage', { chat_id: 1, text: 'hello' })).toBeUndefined();
     expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe('presenceRecheck composition', () => {
+  const authOk = { assertChannelPresence: vi.fn(async () => true) } as unknown as import('../src/identity/console-auth').ConsoleAuth;
+
+  it('blocks a directory-backed send when the DO has no do_name, instead of falling back to local-only', async () => {
+    const call = vi.fn().mockResolvedValue({ message_id: 1 });
+    const gated = gatedCaller(call, egressGate(() => false, presenceRecheck(authOk, undefined, 'telegram', 'tg-1')));
+    expect(await gated('sendMessage', { chat_id: 1, text: 'hello' })).toBeUndefined();
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('blocks a directory-backed send when the channel subject is missing', async () => {
+    const call = vi.fn().mockResolvedValue({ message_id: 1 });
+    const gated = gatedCaller(call, egressGate(() => false, presenceRecheck(authOk, 'do-a', 'whatsapp', undefined)));
+    expect(await gated('sendMessage', { chat_id: 1, text: 'hello' })).toBeUndefined();
+    expect(call).not.toHaveBeenCalled();
+    expect(authOk.assertChannelPresence).not.toHaveBeenCalled();
+  });
+
+  it('checks the database when directory, do_name, and subject are all present', async () => {
+    const call = vi.fn().mockResolvedValue({ message_id: 1 });
+    const gated = gatedCaller(call, egressGate(() => false, presenceRecheck(authOk, 'do-a', 'telegram', 'tg-1')));
+    expect(await gated('sendMessage', { chat_id: 1, text: 'hello' })).toEqual({ message_id: 1 });
+    expect(authOk.assertChannelPresence).toHaveBeenCalledWith('do-a', 'telegram', 'tg-1');
+  });
+
+  it('wires no recheck only when no directory is configured (explicit local dev)', () => {
+    expect(presenceRecheck(null, 'do-a', 'telegram', 'tg-1')).toBeUndefined();
   });
 });

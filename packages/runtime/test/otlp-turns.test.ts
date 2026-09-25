@@ -62,6 +62,16 @@ describe('otlpTurnExporter', () => {
     expect(root!.traceId).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  it('carries the emitting owner on every hop span, so an alarm or card is attributable in Langfuse', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'card:close:1', hop: 'day_card', ms: 800, ok: true, owner: 'do-old' });
+    await log({ trace: 'card:close:1', hop: 'turn', ms: 900, ok: true, owner: 'do-old' });
+    for (const span of spans(0)) {
+      expect(attrs(span)['langfuse.observation.metadata.owner']).toBe('do-old');
+    }
+  });
+
   it('labels the trace for filtering: user, session, environment, release, tags, schema', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);

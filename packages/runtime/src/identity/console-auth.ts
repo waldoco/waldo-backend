@@ -41,6 +41,19 @@ const newLinkCode = () => [...crypto.getRandomValues(new Uint8Array(10))].map((b
 const newSessionId = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // Invite-gated Supabase email OTP. Returns null when Supabase is not configured, so the Telegram link sign-in stays.
+// Directory-backed sends fail closed when the DO's identity is incomplete: no recheck function
+// exists only where no directory is wired at all (explicit local dev), never when the database
+// is reachable but the do_name or channel subject is missing.
+export const presenceRecheck = (
+  auth: ConsoleAuth | null,
+  doName: string | undefined,
+  provider: 'telegram' | 'whatsapp',
+  subject: string | undefined,
+): (() => Promise<boolean>) | undefined =>
+  auth === null
+    ? undefined
+    : async () => doName !== undefined && subject !== undefined && (await auth.assertChannelPresence(doName, provider, subject));
+
 export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): ConsoleAuth | null => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
