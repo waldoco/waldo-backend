@@ -43,6 +43,9 @@ begin
   update waldo.invites set used_at = now()
     where code_hash = (select code_hash from waldo.invites where lower(email) = lower(p_email) and used_at is null and revoked_at is null limit 1)
     returning code_hash into v_invite;
+  -- Phone is REQUIRED for new-owner provisioning (owner decision 16:39/16:52): the edge
+  -- normalizes to E.164; the RPC enforces presence so the edge is not the only enforcement.
+  if nullif(p_phone, '') is null then return null; end if;
   insert into waldo.owners (auth_user_id, do_name, email, phone) values (p_auth_user, 'owner-' || gen_random_uuid()::text, lower(p_email), nullif(p_phone, ''))
     on conflict do nothing
     returning id, do_name into v_owner, v_do;

@@ -16,11 +16,11 @@ select is(waldo.signin_allowed('seeded@test.invalid', pg_temp.at(), pg_temp.sig(
 select is(waldo.signin_allowed('Invited@test.invalid', pg_temp.at(), pg_temp.sig('signin.invited@test.invalid')), true, 'an invited address may sign in');
 select is(waldo.signin_allowed('stranger@test.invalid', pg_temp.at(), pg_temp.sig('signin.stranger@test.invalid')), true, 'open signup: a stranger may request a code (#156)');
 select is(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c1', 'seeded@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c1.seeded@test.invalid')), 'do-seeded', 'first sign-in binds the seeded owner and keeps its DO');
-select matches(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c2', 'invited@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c2.invited@test.invalid')), '^owner-', 'an invite creates a new owner with its own DO');
+select matches(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c2', 'invited@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c2.invited@test.invalid'), '+91 9000000011'), '^owner-', 'an invite creates a new owner with its own DO');
 select is((select count(*) from waldo.invites where used_at is not null and used_by is not null), 1::bigint, 'the invite is spent');
 select is((select used_by from waldo.invites where code_hash = 'inv-0'), null::uuid, 'the older used invite keeps its null attribution');
 select is((select used_by from waldo.invites where code_hash = 'inv-1'), (select id from waldo.owners where email = 'invited@test.invalid'), 'only the claimed invite is stamped with the new owner');
-select matches(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c3', 'stranger@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c3.stranger@test.invalid')), '^owner-', 'open signup: a stranger gets their own owner (#156)');
+select matches(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c3', 'stranger@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000c3.stranger@test.invalid'), '+91 9000000012'), '^owner-', 'open signup: a stranger gets their own owner (#156)');
 select throws_ok($$ select waldo.owner_for_auth('00000000-0000-0000-0000-0000000000c3', 'seeded@test.invalid', pg_temp.at(), 'forged') $$, '42501', 'unsigned router call', 'a forged call cannot take over an owner');
 select is(waldo.issue_link_code('do-seeded', 'hash-1', pg_temp.at(), pg_temp.sig('link.do-seeded.hash-1')), true, 'an owner can issue a link code');
 select * from finish();
