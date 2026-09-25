@@ -13,7 +13,7 @@ export type ConsoleSession = Readonly<{ session: string; created_at: string; las
 
 export type ConsoleAuth = Readonly<{
   sendCode(email: string): Promise<boolean>;
-  verify(email: string, code: string): Promise<string | null>;
+  verify(email: string, code: string, phone?: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
@@ -53,13 +53,13 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (!response.ok) throw new Error(`otp send ${response.status}`);
       return true;
     },
-    async verify(email, code) {
+    async verify(email, code, phone) {
       const address = email.trim().toLowerCase();
       const response = await auth('verify', { type: 'email', email: address, token: code.trim() });
       if (!response.ok) return null;
       const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
       if (!user?.id || user.email?.toLowerCase() !== address) return null;
-      return (await rpc('owner_for_auth', `owner.${user.id}.${address}`, { p_auth_user: user.id, p_email: address })) as string | null;
+      return (await rpc('owner_for_auth', `owner.${user.id}.${address}`, { p_auth_user: user.id, p_email: address, p_phone: (phone ?? '').trim() })) as string | null;
     },
     async issueLinkCode(doName) {
       const code = newLinkCode();

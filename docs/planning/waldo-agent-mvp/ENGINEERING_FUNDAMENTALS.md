@@ -69,6 +69,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Signed or secret-bearing URLs never pass through model-visible text. They travel in structured channels only (Telegram URL buttons, direct sends). Tool results must not contain them.
 - Verification artifacts (OTP codes, password-reset and magic-link URLs) are quarantined deterministically at communication ingress (gmail read, whatsapp inbound) before model context, so persistence and traces never carry them; the item stays owner-inspectable in the source app (E1, src/security/artifact-hygiene.ts).
 - An owner Durable Object never borrows the deploy owner's Telegram identity; when Telegram is unlinked, sends drop (logged) instead of rerouting.
+- Signup self-provisions: one owner per auth user and per email (unique guards, conflict-safe create), settings in the same transaction, never admin, phone stored unverified until the WhatsApp pairing proves it (#156).
 - The rule covers every path that can mint the link, not only the connect tool: tool failure branches (not connected, missing scope) and prompts built for scheduled cards too.
 - A percent sequence the strict decoder rejects is plain text, not a pending decode layer: scan it raw, never deny the payload for it. Fail-closed stays for encodings that DO decode (nested/base64/oversize) - those are real obfuscation (#152).
 

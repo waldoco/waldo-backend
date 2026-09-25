@@ -5,15 +5,17 @@ import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
 
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace }>;
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
 
 const esc = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 const page = (body: string, status = 200) => new Response(
   `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Waldo console</title><style>body{font-family:system-ui,sans-serif;background:#FAFAF8;color:#1A1A1A;display:grid;place-items:center;min-height:100vh;margin:0}form{display:grid;gap:12px;width:min(320px,90vw)}input,button{font:inherit;font-size:17px;padding:12px;border-radius:10px;border:1px solid #ccc}button{border:0;background:#1A1A1A;color:#FAFAF8;cursor:pointer}</style></head><body>${body}</body></html>`,
   { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } },
 );
-const emailForm = (note = '') => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}"><p>Sign in to Waldo</p>${note ? `<p>${esc(note)}</p>` : ''}<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"><button>Email me a code</button></form>`);
-const codeForm = (email: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}"><p>${note ? esc(note) : `If ${esc(email)} has access, a code is on its way.`}</p><input type="hidden" name="email" value="${esc(email)}"><input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form>`);
+const emailForm = (note = '') => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}"><p>Sign in to Waldo</p>${note ? `<p>${esc(note)}</p>` : ''}<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"><input name="phone" type="tel" autocomplete="tel" placeholder="Phone (for WhatsApp later)"><button>Email me a code</button></form>`);
+// The phone rides along as a hidden field so it lands on the owner row at first verify; it is
+// unverified contact data until the WhatsApp pairing proves the number (#156).
+const codeForm = (email: string, phone: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}"><p>${note ? esc(note) : `If ${esc(email)} has access, a code is on its way.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form>`);
 
 // With Supabase configured, the console signs in by invite-gated email code and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
@@ -23,17 +25,31 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   const url = new URL(request.url);
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return emailForm();
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {
-    const email = String((await request.formData()).get('email') ?? '').trim().toLowerCase();
+    const form = await request.formData();
+    const email = String(form.get('email') ?? '').trim().toLowerCase();
+    const phone = String(form.get('phone') ?? '').trim();
     if (!email.includes('@')) return emailForm('Enter your email address.');
+    // OTP bombing guard: per-email and per-IP throttle when the limiter binding exists.
+    // Supabase's own OTP caps are the floor when it does not (#156).
+    if (env.RESPONSIBILITY_RATE_LIMITER) {
+      const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
+      const emailOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-signin:${email}` })).success;
+      const ipOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-signin-ip:${ip}` })).success;
+      if (!emailOk || !ipOk) {
+        console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'rate_limited' }));
+        return emailForm('Too many attempts. Wait a minute and try again.');
+      }
+    }
     const sent = await auth.sendCode(email);
     if (!sent) console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'not_allowed' }));
-    return codeForm(email);
+    return codeForm(email, phone);
   }
   if (url.pathname === CONSOLE_VERIFY_PATH && request.method === 'POST') {
     const form = await request.formData();
     const email = String(form.get('email') ?? '');
-    const doName = await auth.verify(email, String(form.get('code') ?? ''));
-    if (!doName) return codeForm(email, 'That code did not work, or this address has no access. Try again.');
+    const phone = String(form.get('phone') ?? '');
+    const doName = await auth.verify(email, String(form.get('code') ?? ''), phone);
+    if (!doName) return codeForm(email, phone, 'That code did not work. Try again.');
     const grant = await owners.get(owners.idFromName(doName))
       .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName } });
     const ownerCookieValue = await auth.ownerCookie(doName);

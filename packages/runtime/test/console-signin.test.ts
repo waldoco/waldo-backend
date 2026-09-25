@@ -85,3 +85,48 @@ describe('handleConsole', () => {
     expect((fetch.mock.calls[0]?.[0] as Request).headers.get('x-waldo-do-name')).toBe('do-b');
   });
 });
+
+describe('open signup (issue #156)', () => {
+  it('the signup form collects phone; it rides hidden into verify and reaches owner provisioning', async () => {
+    const verify = vi.fn(async () => 'owner-abc');
+    const a = auth({ verify });
+    const send = await handleConsole(form('/console/signin', { email: 'New@Example.com', phone: '+91 98765 43210' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
+    const html = await send!.text();
+    expect(html).toContain('name="phone" value="+91 98765 43210"');
+    expect(html).toContain('name="email" value="new@example.com"');
+    const done = await handleConsole(form('/console/verify', { email: 'new@example.com', phone: '+91 98765 43210', code: '123456' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
+    expect(done?.status).toBe(303);
+    expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+91 98765 43210');
+  });
+
+  it('throttles code sends per email and per IP when the limiter binding exists', async () => {
+    const sendCode = vi.fn(async () => true);
+    const limit = vi.fn(async ({ key }: { key: string }) => ({ success: !key.includes('repeat@x.com') }));
+    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+    const blocked = await handleConsole(
+      new Request('https://w.test/console/signin', { method: 'POST', body: new URLSearchParams({ email: 'repeat@x.com' }), headers: { 'cf-connecting-ip': '1.2.3.4' } }),
+      env, auth({ sendCode }));
+    expect(await blocked!.text()).toContain('Too many attempts');
+    expect(sendCode).not.toHaveBeenCalled();
+    expect(limit).toHaveBeenCalledWith({ key: 'console-signin:repeat@x.com' });
+    expect(limit).toHaveBeenCalledWith({ key: 'console-signin-ip:1.2.3.4' });
+    const allowed = await handleConsole(form('/console/signin', { email: 'fresh@x.com' }), env, auth({ sendCode }));
+    expect(await allowed!.text()).toContain('name="code"');
+    expect(sendCode).toHaveBeenCalledWith('fresh@x.com');
+  });
+
+  it('proceeds without the limiter binding (Supabase OTP caps remain the floor)', async () => {
+    const sendCode = vi.fn(async () => true);
+    const response = await handleConsole(form('/console/signin', { email: 'a@b.com' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ sendCode }));
+    expect(sendCode).toHaveBeenCalledWith('a@b.com');
+    expect(await response!.text()).toContain('name="code"');
+  });
+
+  it('phone is optional - signup works email-only', async () => {
+    const verify = vi.fn(async () => 'owner-xyz');
+    const a = auth({ verify });
+    await handleConsole(form('/console/signin', { email: 'solo@x.com' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
+    await handleConsole(form('/console/verify', { email: 'solo@x.com', code: '999999' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
+    expect(verify).toHaveBeenCalledWith('solo@x.com', '999999', '');
+  });
+});
