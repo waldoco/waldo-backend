@@ -34,7 +34,7 @@ import { googleProxy } from '../connectors/connections';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
-import { createTelegramCaller, gatedCaller, createTelegramOwnerApi } from './telegram-api';
+import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { callMcpToolHandler } from '../tools/live/mcp';
 import { createTelegramFileDownloader } from './telegram-media';
@@ -418,7 +418,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }) : undefined;
     const traces = traceBook(this.ctx.storage.sql);
     const log = (entry: TurnLogEntry) => {
-      traces.record(entry, Date.now());
+      traces.record({ ...entry, owner: identity.get<string>('do_name') ?? 'unresolved' }, Date.now());
       console.log(JSON.stringify({ ...entry, text: undefined }));
       if (exportTurn) this.ctx.waitUntil(exportTurn(entry).catch((error: unknown) => {
         const note = String(error);
@@ -441,8 +441,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const baseCall = channel === 'whatsapp'
       ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
       : createTelegramCaller(token!);
+    const egressDoName = identity.get<string>('do_name');
+    const egressSubject = identity.get<string>(channel === 'whatsapp' ? 'whatsapp_subject' : 'telegram_subject');
+    const egressAuth = consoleAuth(this.env);
     const call = egressGuardedCaller(
-      gatedCaller(baseCall, () => owner === 0 || identity.get<boolean>(channel === 'whatsapp' ? 'whatsapp_unlinked' : 'telegram_unlinked') === true),
+      gatedCaller(baseCall, egressGate(
+        () => owner === 0 || identity.get<boolean>(channel === 'whatsapp' ? 'whatsapp_unlinked' : 'telegram_unlinked') === true,
+        egressAuth && egressDoName && egressSubject
+          ? () => egressAuth.assertChannelPresence(egressDoName, channel, egressSubject)
+          : undefined,
+      )),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
     );
     const api = createTelegramOwnerApi(call);

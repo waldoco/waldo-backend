@@ -21,11 +21,26 @@ export const createTelegramCaller = (token: string, fetcher: typeof fetch = fetc
   };
 
 // Once the owner unlinks Telegram, nothing more goes out to that chat, including queued reminders and cards.
-export const gatedCaller = (call: ReturnType<typeof createTelegramCaller>, unlinked: () => boolean): ReturnType<typeof createTelegramCaller> =>
+export const gatedCaller = (call: ReturnType<typeof createTelegramCaller>, blocked: () => boolean | Promise<boolean>): ReturnType<typeof createTelegramCaller> =>
   async (method, body) => {
-    if (!unlinked()) return call(method, body);
-    console.log(JSON.stringify({ hop: 'telegram_send', ok: false, skipped: 'unlinked', method }));
+    if (!(await blocked())) return call(method, body);
+    console.log(JSON.stringify({ hop: 'telegram_send', ok: false, skipped: 'blocked', method }));
     return undefined;
+  };
+
+// Send-time ownership: the local flag blocks immediately, and when a DB directory is wired the
+// presence check makes the database authoritative for every outbound - a rebound channel blocks
+// the old owner's sends no matter what its DO remembers. The check fails closed: an error
+// blocks the send rather than risking a cross-owner leak.
+export const egressGate = (localBlocked: () => boolean, recheck?: () => Promise<boolean>) =>
+  async (): Promise<boolean> => {
+    if (localBlocked()) return true;
+    if (!recheck) return false;
+    try {
+      return !(await recheck());
+    } catch {
+      return true;
+    }
   };
 
 export const createTelegramOwnerApi = (call: ReturnType<typeof createTelegramCaller>): TelegramOwnerApi => ({
