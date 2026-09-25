@@ -19,8 +19,32 @@
     }
   ],
   "env": {
+    // Bindings, vars and secrets are NON-INHERITABLE in wrangler environments:
+    // env.staging must carry the complete binding set, not just its additions.
+    // guard-wrangler-local-bindings.mjs asserts this block mirrors the top level.
     "staging": {
       "name": "waldo-runtime-staging",
+      "durable_objects": {
+        "bindings": [
+          { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
+          { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
+          { "name": "TRACER_DO", "class_name": "TracerDO" },
+          { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
+        ]
+      },
+      "ratelimits": [
+        {
+          "name": "RESPONSIBILITY_RATE_LIMITER",
+          "namespace_id": "1001",
+          "simple": { "limit": 120, "period": 60 }
+        }
+      ],
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["RuntimeProbeDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["TracerDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["RunLoopDO"] },
+        { "tag": "v4", "new_sqlite_classes": ["TelegramOwnerDO"] }
+      ],
       "ai": { "binding": "AI" },
       "vectorize": [
         { "binding": "VECTORIZE", "index_name": "waldo-recall" }
