@@ -137,22 +137,65 @@ describe('Fix targets', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const data = result.data as { stored_output: string; head: string };
-    // every read-back chunk, walked across the whole stored output, is already guarded
+    // every read-back chunk, walked across the whole stored output through actual dispatch, is
+    // already guarded and carries the external taint (a direct reader.handle call would miss
+    // the parseToolResult boundary - that bypass rejected nothing pre-fix and hid the
+    // EXTERNAL_ORIGIN_TOOLS gap behind invalid_handler_result in production)
     const { readToolOutputHandler } = await import('../src/tools/read-tool-output');
     const reader = readToolOutputHandler(store);
     let offset = 0;
     let combined = '';
+    let dispatched = 0;
     for (let i = 0; i < 32; i += 1) {
-      const slice = await reader.handle({ id: data.stored_output, offset, length: 997 });
+      const slice = await dispatchTool(
+        { id: `r${i}`, name: 'read_tool_output', args: { id: data.stored_output, offset, length: 997 } },
+        ctx('user_message'),
+        { handlers: [reader] },
+      );
       if (!slice.ok) break;
-      expect(slice.data.text).not.toContain(secret);
-      combined += slice.data.text;
-      if (slice.data.next_offset === null) break;
-      offset = slice.data.next_offset;
+      dispatched += 1;
+      expect(slice.source_taint).toBe('external');
+      const sliceData = slice.data as { text: string; next_offset: number | null };
+      expect(sliceData.text).not.toContain(secret);
+      combined += sliceData.text;
+      if (sliceData.next_offset === null) break;
+      offset = sliceData.next_offset;
     }
+    expect(dispatched).toBeGreaterThan(0);
     expect(combined).not.toContain(secret);
     expect(combined).toContain('[REDACTED_EMAIL]');
     expect(data.head).not.toContain(secret);
+  });
+
+  it('the store enforces an aggregate byte budget: oldest outputs evict, newest always survives', async () => {
+    const { MAX_STORED_OUTPUT_CHARS } = await import('../src/conversation/tool-output-store');
+    const store = inMemoryToolOutputStore();
+    const chunk = 'q'.repeat(100_000);
+    const ids: string[] = [];
+    const puts = Math.ceil(MAX_STORED_OUTPUT_CHARS / 100_000) + 2;
+    for (let i = 0; i < puts; i += 1) ids.push(store.put(`${chunk}${i}`));
+    // oldest entries evicted beyond the budget; the newest is always kept
+    expect(store.read(ids[0]!, 0, 8)).toBeNull();
+    const latest = store.read(ids[puts - 1]!, 0, 8);
+    expect(latest).not.toBeNull();
+    expect(latest!.total).toBe(100_001);
+    // an evicted id is a typed not_found through actual dispatch, tainted external
+    const { readToolOutputHandler } = await import('../src/tools/read-tool-output');
+    const reader = readToolOutputHandler(store);
+    const missing = await dispatchTool(
+      { id: 'r-evicted', name: 'read_tool_output', args: { id: ids[0]!, offset: 0, length: 64 } },
+      ctx('user_message'),
+      { handlers: [reader] },
+    );
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.code).toBe('not_found');
+    const kept = await dispatchTool(
+      { id: 'r-kept', name: 'read_tool_output', args: { id: ids[puts - 1]!, offset: 0, length: 64 } },
+      ctx('user_message'),
+      { handlers: [reader] },
+    );
+    expect(kept.ok).toBe(true);
+    if (kept.ok) expect(kept.source_taint).toBe('external');
   });
 
   it('a failed tool call surfaces its typed code:reason on the span, without result content', async () => {

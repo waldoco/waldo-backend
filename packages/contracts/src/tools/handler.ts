@@ -92,7 +92,8 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
 ];
 
 // External-origin result classification is broader than the general-agent discovery cluster:
-// calendar, communication, task, and connector reads also carry provider-controlled text. Keeping
+// calendar, communication, task, and connector reads also carry provider-controlled text, and
+// read_tool_output serves slices of stored external results (guarded before storage). Keeping
 // the complete set here makes a null taint stamp unrepresentable at the dispatcher boundary.
 export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_calendar',
@@ -102,6 +103,7 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'read_document',
   'call_mcp_tool',
   'search_connector',
+  'read_tool_output',
 ];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative

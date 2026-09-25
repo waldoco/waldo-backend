@@ -6,14 +6,29 @@ export type ToolOutputStore = Readonly<{
   read(id: string, offset: number, length: number): Readonly<{ text: string; total: number; next_offset: number | null }> | null;
 }>;
 
+// Aggregate budget: input preparation bounds each string and node count, but without a total
+// cap a long run could accumulate unbounded guarded outputs in the responder's memory. Evict
+// oldest-first once the budget is exceeded; a stored output is re-derivable by re-calling the
+// tool, so eviction is a cache miss (not_found), not data loss. The newest entry is always
+// kept even if it alone exceeds the budget (the pre-storage guard already bounds item size).
+export const MAX_STORED_OUTPUT_CHARS = 512_000;
+
 export const inMemoryToolOutputStore = (): ToolOutputStore => {
   const outputs = new Map<string, string>();
+  let total = 0;
   let next = 0;
   return {
     put(output) {
       next += 1;
       const id = `to-${next}`;
       outputs.set(id, output);
+      total += output.length;
+      for (const oldest of outputs.keys()) {
+        if (total <= MAX_STORED_OUTPUT_CHARS || outputs.size <= 1) break;
+        if (oldest === id) break;
+        total -= outputs.get(oldest)?.length ?? 0;
+        outputs.delete(oldest);
+      }
       return id;
     },
     read(id, offset, length) {
