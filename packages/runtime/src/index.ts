@@ -75,6 +75,7 @@ declare global {
       WALDO_OWNER_TELEGRAM_ID?: string;
       OPENAI_API_KEY?: string;
       WALDO_ENV?: string;
+      WALDO_RELEASE?: string;
     }
   }
 }
@@ -117,6 +118,9 @@ export class RuntimeProbeDO extends DurableObject<Env> {
 
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+    if (new URL(request.url).pathname === '/healthz') {
+      return Response.json({ ok: true, release: env.WALDO_RELEASE ?? null });
+    }
     if (new URL(request.url).pathname === TELEGRAM_WEBHOOK_PATH) {
       return handleTelegramWebhook(request, env, (work) => ctx?.waitUntil(work));
     }
