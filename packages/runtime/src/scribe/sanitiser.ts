@@ -248,7 +248,9 @@ function decodeBase64Tokens(text: string): string | undefined {
 }
 
 function canDecodeAgain(text: string): boolean {
-  if (JSON_ESCAPE.test(text) || PERCENT_ESCAPE.test(text)) return true;
+  // Percent is only "decodable again" when the strict decoder actually accepts it - a malformed
+  // escape (issue #152) is plain text, not a pending decode layer.
+  if (JSON_ESCAPE.test(text) || (PERCENT_ESCAPE.test(text) && typeof decodePercent(text) === 'string')) return true;
   BASE64_TOKEN.lastIndex = 0;
   for (const match of text.matchAll(BASE64_TOKEN)) {
     if (printableUtf8FromBase64(match[0]) !== undefined) return true;
@@ -269,10 +271,10 @@ function decodedViews(text: string, destination: SanitiseDestination): DecodeBun
   for (let pass = 0; pass < MAX_DECODE_PASSES; pass += 1) {
     const next: string[] = [];
     for (const candidate of frontier) {
-      const percent = decodePercent(candidate);
-      if (PERCENT_ESCAPE.test(candidate) && typeof percent !== 'string') {
-        return { invalid: true, views };
-      }
+      // A percent sequence the strict decoder rejects is not an encoding - the model cannot
+      // decode it either, so no obfuscation channel exists. The raw string stays in views[0]
+      // and is scanned as-is; ordinary text like "20%DEALS" must not deny the payload (#152).
+      const percent = decodePercent(candidate) ?? undefined;
       const generated = [decodeJsonEscapes(candidate), percent, decodeBase64Tokens(candidate)];
       for (const value of generated) {
         if (typeof value !== 'string' || value === candidate || known.has(value)) continue;

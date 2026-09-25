@@ -1704,7 +1704,10 @@ describe('sanitiseRequest structural degradation', () => {
   // Regression guard for the live outage where one un-decodable sequence in conversation
   // history killed every reply turn pre-flight. Structural scribe denies (invalid_payload,
   // oversize) degrade to a reduced, re-sanitised request; hard security denies fail closed.
-  const softBad = 'broken %C3 sequence';
+  // #152: '%C3'-shaped malformed escapes are plain text now (that WAS the live outage - the
+  // false positive these tests used as their fixture). The structural-deny fixture is a
+  // third-pass encoding, which stays fail-closed as real obfuscation.
+  const softBad = encodeURIComponent(encodeURIComponent(encodeURIComponent('hrv: 42 ms')));
 
   it('degrades history to the current message when earlier turns trip a structural scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
