@@ -54,7 +54,7 @@ type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[]
 
 type OwnerRuntime = Readonly<{
   owner: number;
-  listener: TelegramOwnerListener;
+  listener: TelegramOwnerListener | null;
   control: TurnControl;
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
@@ -90,6 +90,19 @@ const validZone = (zone: string): boolean => {
   } catch {
     return false;
   }
+};
+
+// A directory-backed DO whose owner has not linked Telegram yet resolves to 0 (not the deploy
+// owner's id): every send gate drops on 0, so one owner's messages can never land in another's chat.
+// The env fallback exists only for legacy single-owner deploys with no Supabase directory.
+export const resolveOwnerTelegramId = (
+  linkedSubject: string | undefined,
+  env: Readonly<{ WALDO_OWNER_TELEGRAM_ID?: string }>,
+  directoryBacked: boolean,
+): number => {
+  if (linkedSubject) return Number(linkedSubject);
+  if (directoryBacked) return 0;
+  return env.WALDO_OWNER_TELEGRAM_ID ? Number(env.WALDO_OWNER_TELEGRAM_ID) : 0;
 };
 
 export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
@@ -270,6 +283,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async turn(update: unknown): Promise<void> {
     const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup();
     await ready;
+    if (!listener) {
+      log({ trace: 'tg-unlinked', hop: 'turn', ms: 0, ok: false, detail: 'dropped: telegram not linked for this owner' });
+      return;
+    }
     const offset = (await this.ctx.storage.get<number>('offset')) ?? 0;
     const raw = update as RawUpdate;
     const fromOwner = raw.message?.from?.id === owner && raw.message.chat?.id === owner;
@@ -351,13 +368,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (this.runtime) return this.runtime;
     const { TELEGRAM_BOT_TOKEN: token, OPENAI_API_KEY: key } = this.env;
     const identity = this.ctx.storage.kv;
-    const ownerId = identity.get<string>('telegram_subject') ?? this.env.WALDO_OWNER_TELEGRAM_ID;
-    if (!token || !key || !ownerId) throw new Error('telegram owner runtime is unconfigured');
-    const owner = Number(ownerId);
+    // consoleAuth is non-null exactly when the Supabase directory backs this deploy.
+    const owner = resolveOwnerTelegramId(identity.get<string>('telegram_subject'), this.env, consoleAuth(this.env) !== null);
+    if (!token || !key) throw new Error('telegram owner runtime is unconfigured');
     const otlp = langfuseOtlpConfig(this.env);
     const exportTurn = otlp ? otlpTurnExporter(otlp, {
       environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
-      channel: 'telegram', userId: `telegram:${owner}`, sessionId: `telegram-dm:${owner}`,
+      channel: 'telegram', userId: owner > 0 ? `telegram:${owner}` : 'telegram:unlinked', sessionId: owner > 0 ? `telegram-dm:${owner}` : 'telegram-dm:unlinked',
       captureText: this.env.LANGFUSE_CAPTURE_TEXT === 'true',
     }) : undefined;
     const traces = traceBook(this.ctx.storage.sql);
@@ -383,7 +400,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const call = egressGuardedCaller(
-      gatedCaller(createTelegramCaller(token), () => identity.get<boolean>('telegram_unlinked') === true),
+      gatedCaller(createTelegramCaller(token), () => owner === 0 || identity.get<boolean>('telegram_unlinked') === true),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
     );
     const api = createTelegramOwnerApi(call);
@@ -420,7 +437,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const vault = googleProxy(this.env);
     const vaultOwner = () => identity.get<string>('do_name');
-    const stateOwner = () => vaultOwner() ?? String(owner);
+    const stateOwner = () => vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
     const accounts = async () => (await storage.get<GoogleAccount[]>('google:accounts')) ?? [];
     const health = async () => (await storage.get<Record<string, string>>('google:health')) ?? {};
     const noteHealth = (id: string, error: string) => {
@@ -516,7 +533,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!google.configured()) return null;
         const origin = await storage.get<string>('origin');
         const callRpc = signedRpc(env);
-        const doName = vaultOwner() ?? String(owner);
+        const doName = vaultOwner() ?? (owner > 0 ? String(owner) : 'unlinked');
         if (!origin || !callRpc) return null;
         const ticket = newTicket();
         const hash = await ticketHash(ticket);
@@ -602,14 +619,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'memory_migration', ms: Date.now() - started, ok: false, error: String(error) });
       }
     };
-    const listener = new TelegramOwnerListener({
+    const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, api, ...responder, log,
       respond: (turn, time) => {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
       },
       saveOffset: (offset) => this.ctx.storage.put('offset', offset),
-    });
+    }) : null;
     const fire = async (entry: ScheduleEntry) => {
       const note = book.note(entry.id);
       if (note === null) return;
