@@ -26,7 +26,7 @@ path - see outage row). Supabase: Waldo-MVP (togds) is the wired project; Woof 1
 | S3 /c/ticket connect links (06aeee5) | in 57c098ce; live re-run blocked by the outage, then by sleep |
 | 12b tool outputs into context composer (a9438d3) | deployed, never exercised live |
 | web_search + browse_page/browse_act handlers | keys live on the worker (Brave, Browserbase reconciled tonight); never exercised live |
-| RESEND_API_KEY on worker | secret live tonight; console email sign-in code not started |
+| RESEND_API_KEY on worker | secret live; console email sign-in CODE shipped (eb8acdc hop + 94d4eda sessions, Supabase Auth OTP + invite gate + tests) - worker secret itself is unread by code: Resend is used as Supabase custom SMTP. Remaining is enablement: SMTP config + owner-email bootstrap + live verify (packet 10:13) |
 
 ## COMMITTED, NOT DEPLOYED
 
