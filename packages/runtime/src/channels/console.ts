@@ -87,6 +87,12 @@ export const sessionCookie = (request: Request): string | null =>
 export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'account.delete'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
+// Linked means a telegram subject is actually bound to this owner (set when presence routing
+// delivers a message to this DO) and a console unlink has not tombstoned it. Reading the
+// unlink flag alone inverts the truth for a fresh owner: an unset flag is not a link.
+export const telegramLinked = (identity: Readonly<{ get: <T>(key: string) => T | undefined }>): boolean =>
+  identity.get<string>('telegram_subject') !== undefined && identity.get<boolean>('telegram_unlinked') !== true;
+
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
   const action = CONSOLE_ACTIONS.find((name) => name === form.get('action'));
   if (!action || form.get('csrf') !== csrf) return null;

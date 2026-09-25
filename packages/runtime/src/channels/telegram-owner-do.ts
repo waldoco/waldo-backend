@@ -7,7 +7,7 @@ import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
@@ -815,7 +815,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           release: this.env.WALDO_RELEASE ?? 'unknown', timezone: clock.timezone, now: localIso(now, clock.timezone).slice(0, 16).replace('T', ' '),
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, approvals: desk.pending(Date.now()), usage: traces.usageRows(), csrf: session.csrf, notice,
           google: { accounts: linked, connectAvailable: google.configured() },
-          telegram: { linked: identity.get<boolean>('telegram_unlinked') !== true, unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
+          telegram: { linked: telegramLinked(identity), unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
