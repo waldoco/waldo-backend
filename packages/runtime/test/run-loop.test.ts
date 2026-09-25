@@ -13,6 +13,7 @@ import {
   type RuntimeReplayFixture,
   type RuntimeTraceEval,
 } from '@waldo/contracts';
+import { armAlarm } from '../src/scheduler/alarm-slot';
 import type { LLMGatewayAdapter, LLMGatewayRequest } from '../src/llm/provider';
 
 const USER = 'user-run-loop-01';
@@ -94,23 +95,20 @@ function heldDue(): number {
 // After a crashing dispatch the scheduler re-arms the armed row's (now past) wake, which workerd
 // would auto-fire during the resume-phase awaits; hold it far out until the next manual alarm.
 async function holdSchedule(stub: RunLoopStub): Promise<void> {
-  await runInDurableObject(stub, (_instance, state) => {
-    state.storage.sql.exec(
-      "UPDATE schedule SET due_at = ?, updated_at = ? WHERE status = 'armed'",
-      Date.now() + 60_000,
-      Date.now(),
-    );
+  await runInDurableObject(stub, async (_instance, state) => {
+    const held = Date.now() + 60_000;
+    state.storage.sql.exec("UPDATE schedule SET due_at = ?, updated_at = ? WHERE status = 'armed'", held, Date.now());
+    // The scheduler's post-crash finally already re-armed the platform alarm from the past-due
+    // row; move the storage alarm itself too, or workerd auto-fires it during resume awaits.
+    await armAlarm(state.storage, held);
   });
 }
 
 async function forceScheduleDue(stub: RunLoopStub): Promise<void> {
   await runInDurableObject(stub, (_instance, state) => {
-    const now = Date.now();
     state.storage.sql.exec(
-      "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-      now,
-      now,
-      now,
+      "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+      Date.now(),
     );
   });
 }
@@ -733,12 +731,12 @@ describe('RunLoopDO full contract FSM', () => {
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
-          const now = Date.now();
           state.storage.sql.exec(
-            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-            now,
-            now,
-            now,
+
+            "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+            Date.now(),
+
           );
       await (instance as unknown as CrashableRunLoopInstance).alarm();
     });
@@ -789,12 +787,12 @@ describe('RunLoopDO full contract FSM', () => {
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
-          const now = Date.now();
           state.storage.sql.exec(
-            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-            now,
-            now,
-            now,
+
+            "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+            Date.now(),
+
           );
       await (instance as unknown as CrashableRunLoopInstance).alarm();
     });
@@ -1082,12 +1080,12 @@ describe('RunLoopDO full contract FSM', () => {
     await forceScheduleDue(stub);
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     await runInDurableObject(stub, async (instance, state) => {
-          const now = Date.now();
           state.storage.sql.exec(
-            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-            now,
-            now,
-            now,
+
+            "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+            Date.now(),
+
           );
       const runLoop = instance as unknown as CrashableRunLoopInstance;
       await runLoop.alarm();
@@ -1632,12 +1630,12 @@ describe('RunLoopDO full contract FSM', () => {
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
-          const now = Date.now();
           state.storage.sql.exec(
-            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-            now,
-            now,
-            now,
+
+            "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+            Date.now(),
+
           );
       await (instance as unknown as CrashableRunLoopInstance).alarm();
     });
@@ -2230,12 +2228,12 @@ describe('RunLoopDO full contract FSM', () => {
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
-          const now = Date.now();
           state.storage.sql.exec(
-            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-            now,
-            now,
-            now,
+
+            "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+            Date.now(),
+
           );
       const runLoop = instance as unknown as CrashableRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({ gateway });
@@ -2312,12 +2310,12 @@ describe('RunLoopDO full contract FSM', () => {
 
     await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance, state) => {
-          const now = Date.now();
           state.storage.sql.exec(
-            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-            now,
-            now,
-            now,
+
+            "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+            Date.now(),
+
           );
       const runLoop = instance as unknown as CrashableRunLoopInstance;
       runLoop.__runLoopSetTestOverrides({ gateway });
@@ -2491,12 +2489,12 @@ describe('RunLoopDO full contract FSM', () => {
 
       await evictDurableObject(stub);
       await runInDurableObject(stub, async (instance, state) => {
-            const now = Date.now();
             state.storage.sql.exec(
-              "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-              now,
-              now,
-              now,
+
+              "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+              Date.now(),
+
             );
         const runLoop = instance as unknown as CrashableRunLoopInstance;
         await runLoop.alarm();
@@ -2533,12 +2531,12 @@ describe('RunLoopDO full contract FSM', () => {
     await holdSchedule(stub);
 
     await runInDurableObject(stub, async (instance, state) => {
-          const now = Date.now();
           state.storage.sql.exec(
-            "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-            now,
-            now,
-            now,
+
+            "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+            Date.now(),
+
           );
       // A TypeScript-private writer used to be reachable on this prototype. The runtime now keeps
       // it ECMAScript-private, so neither an RPC caller nor a test can manufacture DONE outside
@@ -2612,12 +2610,12 @@ describe('RunLoopDO full contract FSM', () => {
 
       await evictDurableObject(stub);
       await runInDurableObject(stub, async (instance, state) => {
-            const now = Date.now();
             state.storage.sql.exec(
-              "UPDATE schedule SET occurrence_at = ?, due_at = ?, updated_at = ? WHERE status = 'armed'",
-              now,
-              now,
-              now,
+
+              "UPDATE schedule SET due_at = occurrence_at, updated_at = ? WHERE status = 'armed'",
+
+              Date.now(),
+
             );
         const runLoop = instance as unknown as CrashableRunLoopInstance;
         await runLoop.alarm();

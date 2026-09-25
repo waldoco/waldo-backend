@@ -1,4 +1,5 @@
 import { env } from 'cloudflare:workers';
+import { armAlarm } from '../src/scheduler/alarm-slot';
 import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Scheduler } from '../src/scheduler/multiplexer';
@@ -98,12 +99,12 @@ async function forceSchedulesDue(stub: SchedulerStub): Promise<void> {
 // Park any still-armed rows far in the future so a past-due re-arm cannot auto-fire during the
 // assertions that follow a partial batch dispatch.
 async function holdSchedules(stub: SchedulerStub): Promise<void> {
-  await runInDurableObject(stub, (_instance, state) => {
-    state.storage.sql.exec(
-      "UPDATE schedule SET due_at = ?, updated_at = ? WHERE status = 'armed'",
-      Date.now() + 60_000,
-      Date.now(),
-    );
+  await runInDurableObject(stub, async (_instance, state) => {
+    const held = Date.now() + 60_000;
+    state.storage.sql.exec("UPDATE schedule SET due_at = ?, updated_at = ? WHERE status = 'armed'", held, Date.now());
+    // Move the platform alarm itself, not only the row: a past-due re-arm would otherwise
+    // auto-fire during the assertions that follow a partial batch dispatch.
+    await armAlarm(state.storage, held);
   });
 }
 
