@@ -10,6 +10,7 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
+import { gateTraceEntry } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { durableConversationStore, scrubConversationHistory } from './conversation-store';
@@ -269,7 +270,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (fresh && outcome.kind === 'linked') {
       const can = [googleHas(outcome.scopes, 'calendar') ? 'read your calendar' : '', googleHas(outcome.scopes, 'mail') ? 'read and send mail you approve' : ''].filter(Boolean).join(' and ');
       await api.sendMessage({ chat_id: owner, text: `Google is connected${outcome.email ? ` (${outcome.email})` : ''}.${can ? ` I can ${can} now.` : ''}` })
-        .catch((error: unknown) => log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, error: String(error) }));
+        .catch((error: unknown) => log({ trace: `oauth:${input.nonce.slice(0, 8)}`, hop: 'google_linked_notice', ms: 0, ok: false, error: String(error), code: 'send_failed' }));
     }
     return { outcome, bot };
   }
@@ -417,15 +418,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       captureText: this.env.LANGFUSE_CAPTURE_TEXT === 'true',
     }) : undefined;
     const traces = traceBook(this.ctx.storage.sql);
+    const captureText = this.env.LANGFUSE_CAPTURE_TEXT === 'true';
     const log = (entry: TurnLogEntry) => {
       // Owner attribution lands on every surface: the DO trace table, the wrangler tail, and Langfuse.
-      const enriched: TurnLogEntry = { ...entry, owner: entry.owner ?? identity.get<string>('do_name') ?? 'unresolved' };
+      // The gate runs once here so free-form detail/error text reaches none of the sinks while
+      // the capture switch is off; whitelisted hops keep their count/enum detail either way.
+      const enriched: TurnLogEntry = gateTraceEntry({ ...entry, owner: entry.owner ?? identity.get<string>('do_name') ?? 'unresolved' }, captureText);
       traces.record(enriched, Date.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
       if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
         const note = String(error);
-        const failed: TurnLogEntry = { trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, owner: enriched.owner };
-        console.log(JSON.stringify(failed));
+        const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner }, captureText);
+        console.log(JSON.stringify({ ...failed, text: undefined }));
         traces.record(failed, Date.now());
       }));
     };
@@ -463,7 +467,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
         reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url }]] },
       }).then(() => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: true }), true))
-        .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error) }), false));
+        .catch((error: unknown) => (log({ trace, hop: 'oauth_link_sent', ms: 0, ok: false, error: String(error), code: 'send_failed' }), false));
     };
     const storage = this.ctx.storage;
     // S4 (CONNECT_FLOW_DESIGN 4.4): the responder calls this when a tool reports auth_required.
@@ -617,7 +621,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: grant !== null, detail: vault ? 'proxy' : 'local', ...(grant ? {} : { error: 'no account returned' }) });
             return grant;
           } catch (error) {
-            log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: false, detail: vault ? 'proxy' : 'local', error: error instanceof Error ? error.message : String(error) });
+            log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: false, detail: vault ? 'proxy' : 'local', error: error instanceof Error ? error.message : String(error), code: 'provider_error' });
             throw error;
           }
         });
@@ -717,9 +721,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
         const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()) });
         const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards));
-        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: applied.map((plan) => `${plan.card}=${plan.time ?? 'skip'} (${plan.reason})`).join('; ') });
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: applied.map((plan) => `${plan.card}=${plan.time ?? 'skip'}`).join('; ') });
       } catch (error) {
-        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error) });
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
       }
     };
     const nightly = async (entry: ScheduleEntry) => {
@@ -733,7 +737,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const detail = await responder.consolidate(trace, transcript(day, clock.timezone));
           log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${detail}` });
         } catch (error) {
-          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error) });
+          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
         }
       }
       const promoting = Date.now();

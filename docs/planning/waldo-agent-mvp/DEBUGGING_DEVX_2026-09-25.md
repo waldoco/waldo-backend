@@ -128,3 +128,28 @@ Live verification step (his bar: a real trace audited in the UI, not tests alone
 telegram turn on staging, open the newest trace, confirm the preview shows the message and reply,
 the tree shows pickup/llm_reply/tool_*/send nested under the root, and the llm generations carry
 tokens + cost.
+
+## Trace privacy gate (SHIPPED on fix/populated-tool-reads, 2026-09-26)
+
+Owner review on #181 (febc235): free-form detail/error text was reaching every trace sink with no
+gate - the OTLP export (`metadata.detail`, `status.message`), the wrangler console JSON line, and
+the DO `trace_log.note` column (200-char slice). Model day-plan reasons and provider error
+messages are free-form content: they can quote owner schedule context or request fragments.
+
+Fix: one gate at the `log()` fan-out in telegram-owner-do.ts (`gateTraceEntry`,
+observability/trace-privacy.ts), so all three sinks see the same gated entry.
+- `detail` survives the gate only for hops on a verified content-free whitelist (fixed strings,
+  enums, counts, card ids): stop/steer/connect_offer/google_token_migrated/memory_backup/
+  egress_scrub/egress_redacted/oauth_exchange/oauth_callback/google_linked/day_plan/nightly_memory/
+  brief_sweep/day_card/update_card/console_action. The whitelist trusts its producers; the
+  day_plan producer was changed to emit `card=time` pairs only (the model reason is gone from
+  detail entirely).
+- `error` text never survives the gate; failures leave a typed `code` instead
+  (`provider_error`, `send_failed`, `export_failed`). OTLP `status.message` falls back
+  error -> code -> 'failed'.
+- `LANGFUSE_CAPTURE_TEXT=true` restores the full detail/error/text on every sink, as before.
+
+Proof: `trace-privacy-canary.test.ts` seeds a synthetic marker into a failed hop's detail, error
+and turn text, runs the gated entries through all three sinks with capture off, and asserts the
+marker appears in none - plus a capture-on control proving the test can see the marker, and a
+whitelist case proving count/enum detail still flows.

@@ -105,7 +105,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       ...io(entry),
       ...extra,
     ],
-    status: entry.ok ? { code: 1 } : { code: 2, message: entry.error ?? 'failed' },
+    status: entry.ok ? { code: 1 } : { code: 2, message: entry.error ?? entry.code ?? 'failed' },
   });
 
   const post = (spans: readonly object[]) => send(config.endpoint, {

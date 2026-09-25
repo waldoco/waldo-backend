@@ -84,6 +84,10 @@ Consent passed live (oauth_exchange ok, oauth_callback linked, google_linked 7 s
 Table + 3 router-signed RPCs (issue/resolve/complete), hash-only storage, 30-min TTL, single completion, revoke-on-reissue, RLS forced, service-role denied. pgTAP file written (12 assertions) but NOT yet executed (needs the local supabase stack on the Mac). Canonical migration list updated.
 - [ ] MAC: apply migration on staging (supabase db push) and run pgTAP file waldo_connect_sessions.sql
 
+### Trace privacy gate (all three sinks)
+gateTraceEntry at the log() fan-out covers the DO trace table, wrangler console JSON and the OTLP export. Capture off: detail limited to a verified count/enum hop whitelist, error text dropped for typed codes, status.message falls back to the code. Capture on: full detail/error/text as before. Canary: trace-privacy-canary.test.ts proves a synthetic marker reaches no sink with capture off.
+- [ ] STAGING: with LANGFUSE_CAPTURE_TEXT unset/false, send one telegram turn + trigger one provider failure; confirm the console trace view and Langfuse show typed codes/counts only, no message fragments
+
 ### Connect funnel (named hops, console + chat share it)
 connect_issued (ticket minted, channel=telegram|console) -> /c/<ticket> resolve (unknown/expired/completed pages are distinct) -> consent begin (single-use state + PKCE) -> callback settle (idempotent, double-load replays success) -> owner notified in-channel with the linked account email. Console entry is a CSRF POST -> 303 /c/...; GET /console/google mints nothing.
 
