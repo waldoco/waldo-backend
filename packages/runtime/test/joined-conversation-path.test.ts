@@ -28,7 +28,7 @@ const input = (id = 'user-1') => ({
 describe('JoinedConversationPath', () => {
   it('joins actual context composition, ACL, model call, durable publication and read-back', async () => {
     const composer = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).contextComposer!;
-    let observed: { system: string; messages: readonly string[]; tools: readonly string[] } | undefined;
+    let observed: { system: string; messages: readonly { role: string; content: string }[]; tools: readonly string[] } | undefined;
     const publications = new Map();
     const path = new JoinedConversationPath(composer, {
       async complete(request) { observed = request; return 'Ready from Waldo.'; },
@@ -37,7 +37,7 @@ describe('JoinedConversationPath', () => {
     const result = await path.submit(input());
     expect(result.text).toBe('Ready from Waldo.');
     expect(result.contextRef).toMatch(/^ctx_/);
-    expect(observed?.messages).toEqual(['What is ready?']);
+    expect(observed?.messages).toEqual([{ role: 'user', content: 'What is ready?' }]);
     expect(observed?.tools).toEqual(expect.arrayContaining(['get_crs', 'read_memory']));
     expect(observed?.system).not.toContain('0123456789abcdef');
 

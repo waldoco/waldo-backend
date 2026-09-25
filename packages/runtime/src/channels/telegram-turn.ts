@@ -2,6 +2,7 @@ import {
   acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
+import type { ConversationModelMessage } from '@waldo/contracts';
 import { runToolLoop } from '../conversation/tool-loop';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
@@ -68,21 +69,29 @@ export const createTelegramResponder = (
   };
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const handlers = [getContextHandler(clock), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
-  const complete = async (trace: string, purpose: string, system: string, content: string, format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
+  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
     const started = Date.now();
     let reasoning: string | undefined;
+    // Entries stay separate typed messages so the provider's degrade path can actually reduce:
+    // when one historical entry is unrenderable, the retry carries only the current text instead
+    // of the identical joined string. Roles come from the typed entry seam, never guessed here.
+    const texts: readonly ConversationModelMessage[] = typeof content === 'string' ? [{ role: 'user', content }] : content;
+    const userMessages = texts.map((message, index) => ({
+      ...message,
+      ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
+    }));
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const result = await new RuntimeLLMProvider({ gateway: adapter, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,
       renderRequest: () => ({
         cache_key: cacheKey,
-        system, messages: [{ role: 'user' as const, content }], max_tokens: 4096, temperature: 0.2,
+        system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: 4096, temperature: 0.2,
         ...(format ? { response_format: format } : {}), ...(attachments ? { attachments: [...attachments] } : {}),
         ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
       }),
     }, safety);
-    const input = JSON.stringify([{ role: 'system', content: system }, { role: 'user', content, ...(attachments ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}) }, ...(turns ?? [])]);
+    const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, error: [result.code, result.halted_by].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
@@ -113,9 +122,11 @@ export const createTelegramResponder = (
         step: async (tools, turns) => {
           const added = control.round();
           if (added === null) return { text: STOPPED_REPLY };
+          const entries = [...request.messages];
+          entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           return complete(trace, 'reply',
           [messagingSystemPrompt(handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
-          request.messages.join('\n') + added,
+          entries,
           undefined,
           pending,
           tools,
