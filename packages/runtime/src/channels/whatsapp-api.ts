@@ -1,3 +1,4 @@
+import { onlyArtifacts, quarantineArtifacts } from '../security/artifact-hygiene';
 // Minimal WhatsApp Cloud API caller (WHATSAPP_CHANNEL_SPEC W2): text sends only for the webhook's
 // link-code replies. The full gated send surface (buttons, templates, the owner-0 drop gate) is W3.
 export type WhatsAppCall = (body: object) => Promise<unknown>;
@@ -56,9 +57,17 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     const text = (message.text?.body ?? '').trim();
     if (!text) continue;
     seq += 1;
-    updates.push(/^([aseu]):(\S+)$/.exec(text)
-      ? { update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } }
-      : { update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' }, text } });
+    // E1 (issue #150): verification artifacts in the owner's inbound text are redacted before the
+    // update exists, so no downstream consumer (turn pipeline, episodes, traces) ever sees the raw
+    // code or link. The original stays owner-inspectable in their own WhatsApp thread. Approval
+    // replies are channel commands that can never carry an artifact, so they skip the filter.
+    if (/^([aseu]):(\S+)$/.exec(text)) {
+      updates.push({ update_id: WA_UPDATE_BASE + seq, callback_query: { id: `wa-${message.id ?? seq}`, from: { id: ownerNum }, data: text, message: { message_id: 0, chat: { id: ownerNum } } } });
+      continue;
+    }
+    const q = quarantineArtifacts(text);
+    const clean = q.kinds.length === 0 ? text : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text;
+    updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' }, text: clean } });
   }
   return { updates, seq };
 };

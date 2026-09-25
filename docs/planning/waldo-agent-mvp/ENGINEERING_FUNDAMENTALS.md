@@ -67,6 +67,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Connect, link and setup intent routes to connect_service or the service tool itself - a real URL from GoogleAccess.connectUrl, never model-described setup from memory. A capability with no tool gets an honest not-built answer.
 - A tool's auth failure is a typed ConnectIntent on the result, delivered by the channel's offerConnect seam (rate-limited, one per service:reason per turn); the model only ever sees fixed words. External-origin tools stamp source_taint on success AND failure arms.
 - Signed or secret-bearing URLs never pass through model-visible text. They travel in structured channels only (Telegram URL buttons, direct sends). Tool results must not contain them.
+- Verification artifacts (OTP codes, password-reset and magic-link URLs) are quarantined deterministically at communication ingress (gmail read, whatsapp inbound) before model context, so persistence and traces never carry them; the item stays owner-inspectable in the source app (E1, src/security/artifact-hygiene.ts).
 - An owner Durable Object never borrows the deploy owner's Telegram identity; when Telegram is unlinked, sends drop (logged) instead of rerouting.
 - The rule covers every path that can mint the link, not only the connect tool: tool failure branches (not connected, missing scope) and prompts built for scheduled cards too.
 

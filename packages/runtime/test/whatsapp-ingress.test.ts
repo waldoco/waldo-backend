@@ -16,6 +16,34 @@ describe('whatsapp ingress normalization', () => {
     expect(updates[0]).toMatchObject({ callback_query: { from: { id: 15550001111 }, data: 'a:p12' } });
   });
 
+  it('E1: a verification artifact in inbound text is redacted before the turn exists', () => {
+    const { updates } = whatsappIngressUpdates([
+      { id: 'wamid.otp', from: '15550001111', type: 'text', text: { body: 'Fwd: Your WhatsApp code: 123-456. Do not share it.' } },
+      { id: 'wamid.link', from: '15550001111', type: 'text', text: { body: 'sign me in https://togdshayyxycitzckpqv.supabase.co/auth/v1/verify?token=pkce_LIVE&type=magiclink please' } },
+      { id: 'wamid.chat', from: '15550001111', type: 'text', text: { body: 'dinner at 8?' } },
+    ], '15550001111', 0);
+    const json = JSON.stringify(updates);
+    expect(json).not.toContain('123-456');
+    expect(json).not.toContain('pkce_LIVE');
+    const otpText = (updates[0] as { message: { text: string } }).message.text;
+    expect(otpText).toContain('[quarantined: otp artifact');
+    expect(otpText).toContain('Do not share it.');
+    const linkText = (updates[1] as { message: { text: string } }).message.text;
+    expect(linkText).toContain('sign me in');
+    expect(linkText).toContain('[quarantined:');
+    expect((updates[2] as { message: { text: string } }).message.text).toBe('dinner at 8?');
+  });
+
+  it('E1: a message that IS the artifact arrives as a pure quarantine marker; approval replies are never filtered', () => {
+    const { updates } = whatsappIngressUpdates([
+      { id: 'wamid.pure', from: '15550001111', type: 'text', text: { body: 'G-729314' } },
+      { id: 'wamid.approve', from: '15550001111', type: 'text', text: { body: 'a:p12' } },
+    ], '15550001111', 0);
+    expect(JSON.stringify(updates)).not.toContain('729314');
+    expect((updates[0] as { message: { text: string } }).message.text).toBe('[quarantined: otp artifact - see your WhatsApp thread]');
+    expect(updates[1]).toMatchObject({ callback_query: { data: 'a:p12' } });
+  });
+
   it('foreign senders, non-text and empty messages never become turns', () => {
     const { updates, seq } = whatsappIngressUpdates([
       { id: 'wamid.3', from: '15550009999', type: 'text', text: { body: 'intruder' } },

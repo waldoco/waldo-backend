@@ -1,3 +1,4 @@
+import { artifactMarker, quarantineArtifacts, type ArtifactKind } from '../../security/artifact-hygiene';
 import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
@@ -44,6 +45,17 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work:
   }
 }
 
+// E1 (issue #150): a verification artifact in either visible field quarantines both - the
+// snippet routinely re-states a code the subject hides, and vice versa. from/at/id stay so the
+// owner can find the item in Gmail itself; the raw artifact never enters model context.
+const quarantineMailItem = <T extends { subject: string; snippet: string }>(item: T): T & { quarantined?: readonly ArtifactKind[] } => {
+  const q = quarantineArtifacts(`${item.subject}
+${item.snippet}`);
+  if (q.kinds.length === 0) return item;
+  const marker = q.kinds.map(artifactMarker).join(' ');
+  return { ...item, subject: marker, snippet: marker, quarantined: q.kinds };
+};
+
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock) => [
   {
     name: 'query_calendar',
@@ -66,7 +78,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     autonomy_gated: false,
     handle: ({ date_range }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
-      return { since: new Date(since).toISOString(), messages: await client.newMail(since, 10) };
+      return { since: new Date(since).toISOString(), messages: (await client.newMail(since, 10)).map(quarantineMailItem) };
     }),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
