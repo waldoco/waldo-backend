@@ -105,7 +105,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {
     name: 'draft_email',
-    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves.",
+    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves. It creates NO approval card and nothing enters the owner's approval queue - when the owner asked to send, or asked to approve first, use send_email instead.",
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
