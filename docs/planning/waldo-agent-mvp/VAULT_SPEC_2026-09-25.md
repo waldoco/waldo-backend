@@ -71,3 +71,19 @@ model-readable secrets of any kind, and any value path through chat.
 - V1: Vault schema + RLS + console CRUD + audit table.
 - V2: fill broker + browser placeholder resolution + the one-login staging proof.
 - V3: key-to-sandbox channel (rung 2) once V2's broker is proven on a low-stakes credential.
+
+## Amendment (owner-approved 2026-09-25 10:41 IST): 1Password as optional per-owner backend
+
+Owner approved the CAPABILITY_MATRIX hybrid recommendation verbatim ("1Password... I agree with the
+hybrid one"). Scope change, invariants unchanged:
+
+- Supabase Vault stays system-of-record for platform-minted connector OAuth tokens (ADR-0075).
+- Owner-entered secrets (logins, cards) MAY live in the owner's own 1Password account under a
+  scoped service account, referenced as op:// URIs. The fill broker gains a second backend:
+  op:// refs resolve via op CLI at fill time, same origin check, same audit trail, same rule
+  that the model sees refs, never values.
+- Effect: the console collection UX for owner secrets is descoped (the 1Password app is the
+  picker, biometric-gated, already on the owner's devices), and multi-tenant custody strengthens
+  (the platform holds no tenant-entered secrets). Per-owner setup friction is the accepted cost.
+- 1Password's own agent guidance ("avoid passing secrets to the model; use short-lived scoped
+  tokens", 1password.dev/sdks/ai-agent) matches invariant 1; cited as industry corroboration.
