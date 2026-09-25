@@ -77,6 +77,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - An exporter's own failures land where the owner can see them (the trace book), not only in a worker console.
 
 ### Database tests
+- Lane gates include `scripts/pgtap/run-local.sh` (wired as guard-pgtap.mjs): the full suite executes on a fresh PG15 + Supabase-compat shim before any migration or pgTAP change ships. If the harness itself is ever unavailable, the UNRUN rule below applies.
 - A ship report folds only EXECUTED pgTAP files into a green claim. A pgTAP file written-but-not-run is labeled UNRUN in the ship report, never counted as green; first execution is a Mac-packet step and its result is graded from raw output.
 - A migration that creates a function revokes PUBLIC EXECUTE in the same file. Postgres grants EXECUTE to PUBLIC by default, which silently extends to service_role and authenticated.
 - pgTAP `throws_ok` pins the 5-char SQLSTATE ('23514'), never the errname ('check_violation') - errname matching does not fire in our pgTAP build and the test goes red on a correctly-thrown error.
