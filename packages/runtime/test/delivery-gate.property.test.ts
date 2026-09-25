@@ -25,6 +25,10 @@ const MS_PER_DAY = 24 * 60 * MS_PER_MINUTE;
 const BASE_DAY = Date.UTC(2026, 0, 1, 0, 0, 0, 0);
 const PURE_PROPERTY_RUNS = 300;
 const RUNTIME_PROPERTY_RUNS = 30;
+// The runtime properties open real DO/storage paths per run; on a contended CI runner 30
+// async runs exceed vitest's 5s default (observed: two tests timed out at exactly 5000ms
+// while the same file finished in seconds in-lane). Give them explicit headroom.
+const RUNTIME_PROPERTY_TIMEOUT_MS = 60_000;
 
 const SEEDS = {
   countedBudget: 0x1370001,
@@ -490,7 +494,7 @@ describe('DeliveryGate fast-check properties', () => {
     });
   });
 
-  it(`does not charge counted budget for exempt runtime interleavings (seed ${SEEDS.exemptInterleaving})`, async () => {
+  it(`does not charge counted budget for exempt runtime interleavings (seed ${SEEDS.exemptInterleaving})`, { timeout: RUNTIME_PROPERTY_TIMEOUT_MS }, async () => {
     await fc.assert(
       fc.asyncProperty(
         fc.array(
@@ -529,7 +533,7 @@ describe('DeliveryGate fast-check properties', () => {
     );
   });
 
-  it(`keeps once-ever and counted state separated across UTC days (seed ${SEEDS.dayRollover})`, async () => {
+  it(`keeps once-ever and counted state separated across UTC days (seed ${SEEDS.dayRollover})`, { timeout: RUNTIME_PROPERTY_TIMEOUT_MS }, async () => {
     await fc.assert(
       fc.asyncProperty(fc.integer({ min: 1, max: 45 }), async (dayOffset) => {
         new FakeSink().reset();
@@ -598,7 +602,7 @@ describe('DeliveryGate fast-check properties', () => {
     expect(result).toEqual({ state: 'DONE', verdict: 'send', reason: null, holdUntil: null });
   });
 
-  it(`keeps cross-date fetch cooldowns monotone (seed ${SEEDS.cooldown})`, async () => {
+  it(`keeps cross-date fetch cooldowns monotone (seed ${SEEDS.cooldown})`, { timeout: RUNTIME_PROPERTY_TIMEOUT_MS }, async () => {
     const lastSentAt = Date.UTC(2026, 0, 1, 23, 59, 0, 0);
     await fc.assert(
       fc.asyncProperty(fc.integer({ min: 1, max: 180 }), async (deltaMinutes) => {
