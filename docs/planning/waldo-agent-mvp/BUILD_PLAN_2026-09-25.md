@@ -27,10 +27,10 @@ Lane can drive the browser for 3 if he wants; 1-2 are his hands.
 | A2 | WhatsApp W1-W3 (schema literals, webhook, API caller + DO ingress) | spec 3c271e7; test number works unverified | none lane-side |
 | A3 | S6 live proof (connect funnel end-to-end on staging) | closes the connect-flow arc | P0.1 |
 | A4 | MCP client handler (call_mcp_tool typed, unwired) | ONE handler -> connectors become config; the leverage move | none |
-| A5 | Background task tracking (tasks table, trace hops, console list) | owner moved it into alpha 11:13; long runs become first-class; console's task-list endpoint | none |
+| A5 | Background task tracking (tasks table, trace hops, console list) + typed artifact store (DO SQLite metadata + R2 bodies, provenance/taint, read-on-demand - the audit's workspace answer) | owner moved it into alpha 11:13; CLOUDFLARE_ADAPTATION_AUDIT adds artifacts + a Workflows evaluation for durable runs | none |
 | A6 | Vision input wiring (LLMAttachment typed, no channel uses it) | telegram photos -> model; also the meal-photo path | none |
 | A7 | Standing orders (typed): scope/trigger/gate/escalation rows, injected via context composer, enforced by scheduler | owner-approved; OpenClaw pattern mined (auto-injected AGENTS.md programs) | scheduler + approvals (exist) |
-| A8 | Generic webhook/event ingress channel | mirrors telegram-webhook shape; event-driven beats polling | none |
+| A8 | Generic webhook/event ingress channel | mirrors telegram-webhook shape; event-driven beats polling; evaluate a Queue buffer per Cloudflare's event pattern (audit) | none |
 | A9 | Meal + workout logging (meals first) | owner added 11:13: feeds the proactive loop and shopping | none; photo logging uses A6 later |
 
 ## P2 - post-alpha (ordered)
