@@ -14,7 +14,8 @@ PORT=54331
 if [ ! -x "$PGBASE/bin/postgres" ]; then
   echo "pgtap-gate: bootstrapping PostgreSQL 15 + pgTAP from PGDG (no root)"
   mkdir -p "$DEBS" "$HOME/pgdg/lists/partial" "$HOME/pgdg/cache/archives/partial"
-  echo "deb http://apt.postgresql.org/pub/repos/apt jammy-pgdg main" > "$HOME/pgdg/sources.list"
+  CODENAME="$( . /etc/os-release && echo "${VERSION_CODENAME:-jammy}" )"
+  echo "deb http://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" > "$HOME/pgdg/sources.list"
   AOPTS="-o Dir::Etc::sourcelist=$HOME/pgdg/sources.list -o Dir::Etc::sourceparts=- -o Dir::State::lists=$HOME/pgdg/lists -o Dir::Cache=$HOME/pgdg/cache -o Acquire::AllowInsecureRepositories=true -o APT::Get::AllowUnauthenticated=true"
   apt-get $AOPTS update >/dev/null 2>&1
   (cd "$DEBS" && apt-get $AOPTS download postgresql-15 postgresql-15-pgtap >/dev/null 2>&1)
@@ -24,7 +25,7 @@ fi
 
 "$PGBASE/bin/pg_ctl" -D "$DATA" -m fast stop >/dev/null 2>&1
 rm -rf "$DATA" "$SOCK" && mkdir -p "$SOCK"
-"$PGBASE/bin/initdb" -D "$DATA" -U postgres --auth=trust -E UTF8 >/dev/null 2>&1 || { echo "pgtap-gate: initdb failed"; exit 1; }
+if ! "$PGBASE/bin/initdb" -D "$DATA" -U postgres --auth=trust -E UTF8 >"$DATA.initdb.log" 2>&1; then echo "pgtap-gate: initdb failed"; cat "$DATA.initdb.log"; exit 1; fi
 "$PGBASE/bin/pg_ctl" -D "$DATA" -o "-k $SOCK -p $PORT -c listen_addresses=''" -l "$HOME/pgtap-gate.log" start >/dev/null || { echo "pgtap-gate: server start failed"; exit 1; }
 trap '"$PGBASE/bin/pg_ctl" -D "$DATA" -m fast stop >/dev/null 2>&1' EXIT
 sleep 1
