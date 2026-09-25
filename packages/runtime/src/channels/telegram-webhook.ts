@@ -27,6 +27,7 @@ export type TelegramWebhookEnv = Readonly<{
   WHATSAPP_APP_SECRET?: string;
   WHATSAPP_ACCESS_TOKEN?: string;
   WHATSAPP_PHONE_NUMBER_ID?: string;
+  WALDO_MCP_SERVERS?: string;
 }> & OwnerDirectoryEnv;
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
