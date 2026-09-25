@@ -53,16 +53,16 @@ export const traceBook = (sql: Sql, keep = 500) => {
     model TEXT, input_tokens INTEGER, output_tokens INTEGER, cached_tokens INTEGER, usd REAL,
     system_bytes INTEGER, request_bytes INTEGER)`);
   // Existing owner DOs carry the pre-usage shape; add the columns they miss.
-  for (const column of ['model TEXT', 'input_tokens INTEGER', 'output_tokens INTEGER', 'cached_tokens INTEGER', 'usd REAL', 'system_bytes INTEGER', 'request_bytes INTEGER']) {
+  for (const column of ['model TEXT', 'input_tokens INTEGER', 'output_tokens INTEGER', 'cached_tokens INTEGER', 'usd REAL', 'system_bytes INTEGER', 'request_bytes INTEGER', 'owner TEXT']) {
     try { sql.exec(`ALTER TABLE trace_log ADD COLUMN ${column}`); } catch { /* column already exists */ }
   }
   return {
     record(entry: TurnLogEntry, at: number): void {
       const cost = entry.usage ? modelCost(entry.usage) : null;
-      sql.exec('INSERT INTO trace_log (at, trace, hop, ok, ms, note, model, input_tokens, output_tokens, cached_tokens, usd, system_bytes, request_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      sql.exec('INSERT INTO trace_log (at, trace, hop, ok, ms, note, model, input_tokens, output_tokens, cached_tokens, usd, system_bytes, request_bytes, owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         at, entry.trace, entry.hop, entry.ok ? 1 : 0, Math.round(entry.ms), (entry.error ?? entry.detail ?? '').slice(0, 200),
         entry.usage?.model ?? null, entry.usage?.input ?? null, entry.usage?.output ?? null, entry.usage?.cached ?? null, cost?.total ?? null,
-        entry.shape?.system_bytes ?? null, entry.shape?.request_bytes ?? null);
+        entry.shape?.system_bytes ?? null, entry.shape?.request_bytes ?? null, entry.owner ?? null);
       sql.exec('DELETE FROM trace_log WHERE id <= (SELECT MAX(id) FROM trace_log) - ?', keep);
     },
     recent(timezone: string, filter: string | null, limit = 25): string {

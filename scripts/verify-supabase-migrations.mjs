@@ -23,6 +23,7 @@ const expectedMigrations = [
   '20260925110000_waldo_whatsapp_presence.sql',
   '20260925120000_waldo_console_sessions_revoke_public.sql',
   '20260925130000_waldo_open_signup.sql',
+  '20260925170000_waldo_assert_channel_presence.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

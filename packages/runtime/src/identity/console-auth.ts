@@ -23,6 +23,8 @@ export type ConsoleAuth = Readonly<{
   invite(doName: string, email: string): Promise<boolean>;
   revokeInvite(doName: string, invite: string): Promise<boolean>;
   unlinkTelegram(doName: string): Promise<boolean>;
+  // Send-time ownership re-check: true only while an active presence binds this channel subject to this owner.
+  assertChannelPresence(doName: string, provider: string, subject: string): Promise<boolean>;
   deleteOwner(doName: string): Promise<boolean>;
   // D1: cookies carry a session id; minting opens a server-side session, reading validates it,
   // and sign-out-everywhere drops them all. ownerCookie returns null when the session cannot be
@@ -39,6 +41,19 @@ const newLinkCode = () => [...crypto.getRandomValues(new Uint8Array(10))].map((b
 const newSessionId = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 
 // Invite-gated Supabase email OTP. Returns null when Supabase is not configured, so the Telegram link sign-in stays.
+// Directory-backed sends fail closed when the DO's identity is incomplete: no recheck function
+// exists only where no directory is wired at all (explicit local dev), never when the database
+// is reachable but the do_name or channel subject is missing.
+export const presenceRecheck = (
+  auth: ConsoleAuth | null,
+  doName: string | undefined,
+  provider: 'telegram' | 'whatsapp',
+  subject: string | undefined,
+): (() => Promise<boolean>) | undefined =>
+  auth === null
+    ? undefined
+    : async () => doName !== undefined && subject !== undefined && (await auth.assertChannelPresence(doName, provider, subject));
+
 export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): ConsoleAuth | null => {
   const { SUPABASE_PROJECT_URL: base, SUPABASE_PUBLISHABLE_KEY: key, WALDO_ROUTER_HMAC_SECRET: secret } = env;
   const rpc = signedRpc(env, fetcher, now);
@@ -86,6 +101,7 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     },
     revokeInvite: async (doName, invite) => (await rpc('admin_revoke', `revoke.${doName}.${invite}`, { p_do_name: doName, p_invite: invite })) === true,
     unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
+    assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
     deleteOwner: async (doName) => (await rpc('delete_owner', `delown.${doName}`, { p_do_name: doName })) === true,
     async ownerCookie(doName) {
       const sessionId = newSessionId();
