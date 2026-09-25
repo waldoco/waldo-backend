@@ -62,7 +62,8 @@ describe('handleConsole', () => {
 
   it('a verified code gets a session from that owner DO and both cookies', async () => {
     const { ns, fetch, idFromName } = owners();
-    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: ns }, auth({ verify: vi.fn(async () => 'do-a') })))!;
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a') })))!;
     expect(response.status).toBe(303);
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch.mock.calls[0]?.[0]).toBe('https://telegram-owner/grant-console');
@@ -73,7 +74,8 @@ describe('handleConsole', () => {
 
   it('a wrong code wakes no owner DO', async () => {
     const { ns, fetch } = owners();
-    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '000000' }), { TELEGRAM_OWNER_DO: ns }, auth()))!;
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '000000' }), { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth()))!;
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('did not work');
     expect(fetch).not.toHaveBeenCalled();
@@ -87,7 +89,7 @@ describe('handleConsole', () => {
   });
 });
 
-describe('open signup (issue #156, owner corrections 16:39)', () => {
+describe('open signup', () => {
   it('phone is required and normalized to E.164; it rides hidden into verify and reaches owner provisioning', async () => {
     const verify = vi.fn(async () => 'owner-abc');
     const a = auth({ verify });
@@ -135,7 +137,43 @@ describe('open signup (issue #156, owner corrections 16:39)', () => {
     expect(sendCode).toHaveBeenCalledWith('fresh@x.com');
   });
 
-  it('fails CLOSED without the limiter binding: no code is sent on a public endpoint (owner decision 16:39)', async () => {
+  it('throttles verify attempts per email and per IP: auth.verify never runs', async () => {
+    const verify = vi.fn(async () => 'owner-abc');
+    const limit = vi.fn(async ({ key }: { key: string }) => ({ success: !key.includes('guess@x.com') }));
+    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
+    const blocked = await handleConsole(
+      new Request('https://w.test/console/verify', { method: 'POST', body: new URLSearchParams({ email: 'guess@x.com', phone: '+14155550100', code: '123456' }), headers: { 'cf-connecting-ip': '1.2.3.4' } }),
+      env, auth({ verify }));
+    const html = await blocked!.text();
+    expect(html).toContain('Too many attempts');
+    expect(html).toContain('name="phone" value="+14155550100"');
+    expect(verify).not.toHaveBeenCalled();
+    expect(limit).toHaveBeenCalledWith({ key: 'console-verify:guess@x.com' });
+    expect(limit).toHaveBeenCalledWith({ key: 'console-verify-ip:1.2.3.4' });
+  });
+
+  it('verify fails CLOSED without the limiter binding: no code check happens', async () => {
+    const verify = vi.fn(async () => 'owner-abc');
+    const response = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ verify }));
+    const html = await response!.text();
+    expect(html).toContain('temporarily unavailable');
+    expect(html).toContain('name="phone" value="+14155550100"');
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('a session-storage failure keeps the phone on the retry form instead of swallowing the error text', async () => {
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const response = await handleConsole(
+      form('/console/verify', { email: 'a@b.com', phone: '+14155550100', code: '123456' }),
+      { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter },
+      auth({ verify: vi.fn(async () => 'do-a'), ownerCookie: vi.fn(async () => null) }));
+    const html = await response!.text();
+    expect(html).toContain('having trouble');
+    expect(html).toContain('name="phone" value="+14155550100"');
+    expect(html).not.toContain('name="phone" value="Sign-in is having trouble');
+  });
+
+  it('fails CLOSED without the limiter binding: no code is sent on a public endpoint', async () => {
     const sendCode = vi.fn(async () => true);
     const response = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ sendCode }));
     expect(await response!.text()).toContain('temporarily unavailable');

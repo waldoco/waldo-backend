@@ -59,7 +59,10 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (!response.ok) return null;
       const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
       if (!user?.id || user.email?.toLowerCase() !== address) return null;
-      return (await rpc('owner_for_auth', `owner.${user.id}.${address}`, { p_auth_user: user.id, p_email: address, p_phone: (phone ?? '').trim() })) as string | null;
+      // The phone is part of the signed canonical data: it lands on the owner row, so an
+      // unsigned phone swap would be a tampered write the RPC must refuse.
+      const phoneE164 = (phone ?? '').trim();
+      return (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164 })) as string | null;
     },
     async issueLinkCode(doName) {
       const code = newLinkCode();
