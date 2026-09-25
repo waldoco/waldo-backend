@@ -102,6 +102,10 @@ export const sha256Hex = async (text: string): Promise<string> => {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
+export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
+export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string }>;
+type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
+
 export type GoogleClient = Readonly<{
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
@@ -113,6 +117,7 @@ export type GoogleClient = Readonly<{
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
+  tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
 // health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
@@ -172,6 +177,23 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         return { id, from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
       }));
+    },
+    async tasks(status, limit) {
+      const url = new URL('https://tasks.googleapis.com/tasks/v1/lists/@default/tasks');
+      // Google Tasks has no in-progress state: todo and in_progress both read the open list;
+      // the handler says so on the result when the owner filtered for in_progress.
+      const want = status === 'done' ? 'completed' : 'needsAction';
+      url.search = new URLSearchParams({
+        maxResults: String(limit), showHidden: 'false',
+        showCompleted: status === 'done' || status === 'all' ? 'true' : 'false',
+      }).toString();
+      const json = await call(url.toString()) as { items?: GoogleTask[] };
+      return (json.items ?? [])
+        .filter((task) => status === 'all' || task.status === want)
+        .map((task) => ({
+          id: task.id, title: task.title ?? '(no title)', status: task.status === 'completed' ? 'done' as const : 'todo' as const,
+          ...(task.due ? { due: task.due } : {}), ...(task.updated ? { updated: task.updated } : {}),
+        }));
     },
     async draft(input) {
       const raw = b64url(new TextEncoder().encode(buildMime(input)));
