@@ -13,7 +13,10 @@ export type ConsoleSession = Readonly<{ session: string; created_at: string; las
 
 export type ConsoleAuth = Readonly<{
   sendCode(email: string): Promise<boolean>;
-  verify(email: string, code: string): Promise<string | null>;
+  // Strict fixed-window auth throttle kept in the owner directory: global and durable, unlike
+  // the per-location binding layer, which only expresses 10s/60s periods.
+  throttle(key: string, limit: number, windowSeconds: number): Promise<boolean>;
+  verify(email: string, code: string, phone?: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
@@ -45,6 +48,9 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   });
   const cookieSig = (doName: string, sessionId: string) => routerSignature(secret, 0, `cookie.${doName}.${sessionId}`);
   return {
+    async throttle(key, limit, windowSeconds) {
+      return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
+    },
     // Unknown addresses get no email and the same answer, so the page never reveals who is invited.
     async sendCode(email) {
       const address = email.trim().toLowerCase();
@@ -53,13 +59,16 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (!response.ok) throw new Error(`otp send ${response.status}`);
       return true;
     },
-    async verify(email, code) {
+    async verify(email, code, phone) {
       const address = email.trim().toLowerCase();
       const response = await auth('verify', { type: 'email', email: address, token: code.trim() });
       if (!response.ok) return null;
       const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
       if (!user?.id || user.email?.toLowerCase() !== address) return null;
-      return (await rpc('owner_for_auth', `owner.${user.id}.${address}`, { p_auth_user: user.id, p_email: address })) as string | null;
+      // The phone is part of the signed canonical data: it lands on the owner row, so an
+      // unsigned phone swap would be a tampered write the RPC must refuse.
+      const phoneE164 = (phone ?? '').trim();
+      return (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164 })) as string | null;
     },
     async issueLinkCode(doName) {
       const code = newLinkCode();

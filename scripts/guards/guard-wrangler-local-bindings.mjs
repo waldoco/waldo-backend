@@ -33,6 +33,16 @@ if (!staging || staging.name !== 'waldo-runtime-staging') {
   if (!staging.vectorize) bad.push('env.staging missing vectorize binding');
 }
 
+// 3. The public console signup FAILS CLOSED when RESPONSIBILITY_RATE_LIMITER is absent
+//    (owner decision 2026-09-25 16:39): the binding must exist at top level and in every
+//    named env, so no deployable environment can serve signup unthrottled.
+const hasLimiter = (cfgNode) =>
+  Array.isArray(cfgNode?.ratelimits) && cfgNode.ratelimits.some((b) => b?.name === 'RESPONSIBILITY_RATE_LIMITER');
+if (!hasLimiter(cfg)) bad.push('top-level ratelimits missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)');
+for (const [envName, envCfg] of Object.entries(cfg?.env ?? {})) {
+  if (!hasLimiter(envCfg)) bad.push(`env.${envName} missing RESPONSIBILITY_RATE_LIMITER (console signup fails closed without it)`);
+}
+
 if (bad.length) {
   process.stderr.write(`guard-wrangler-local-bindings: ${bad.join('; ')}\n`);
   process.exit(1);
