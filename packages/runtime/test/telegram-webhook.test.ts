@@ -26,7 +26,7 @@ describe('handleTelegramWebhook', () => {
     const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata' };
     expect((await run(post('s3cret'), env)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('42');
-    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/turn', {
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/telegram-ingress', {
       method: 'POST', body: message(42),
       headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-telegram-subject': '42', 'x-waldo-timezone': 'Asia/Kolkata' },
     });
@@ -43,6 +43,30 @@ describe('handleTelegramWebhook', () => {
     await run(post('s3cret', message(2)), env, directory);
     expect(idFromName.mock.calls.map(([name]) => name)).toEqual(['do-a', 'do-b']);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails closed when the directory lookup throws, so Telegram redelivers', async () => {
+    const { fetch, ns } = namespace();
+    const directory: OwnerDirectory = { byPresence: async () => { throw new Error('db down'); }, redeem: async () => null };
+    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret' };
+    expect((await run(post('s3cret'), env, directory)).status).toBe(500);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the ingress write fails, so Telegram redelivers', async () => {
+    const { fetch, ns } = namespace();
+    fetch.mockResolvedValueOnce(new Response('boom', { status: 500 }));
+    const directory: OwnerDirectory = { byPresence: async (_p, subject) => ({ doName: 'do-a', subject, timezone: null }), redeem: async () => null };
+    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret' };
+    expect((await run(post('s3cret'), env, directory)).status).toBe(500);
+  });
+
+  it('fails closed when the ingress fetch throws, so Telegram redelivers', async () => {
+    const { fetch, ns } = namespace();
+    fetch.mockRejectedValueOnce(new Error('do unreachable'));
+    const directory: OwnerDirectory = { byPresence: async (_p, subject) => ({ doName: 'do-a', subject, timezone: null }), redeem: async () => null };
+    const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret' };
+    expect((await run(post('s3cret'), env, directory)).status).toBe(500);
   });
 
   it('never wakes an owner for a stranger, a sender-less update, or a stranger trying a link code', async () => {
