@@ -42,11 +42,18 @@ jobs:
       - name: Start isolated Supabase Auth, REST, and database stack
         run: supabase start > /dev/null
 
-      # Everything except the runtime vitest suite. The suite moved to the verify-runtime
-      # matrix below: unsharded in one process, workerd dies at TEARDOWN after all tests pass
-      # (every run 2026-09-25, incl. docs-only commits) - the lane's 4 shards exit cleanly (#154).
+      # Everything except the runtime vitest suite and the scenario harness. The suite moved
+      # to the verify-runtime matrix below: unsharded in one process, workerd dies at TEARDOWN
+      # after all tests pass (every run 2026-09-25, incl. docs-only commits) - the lane's 4
+      # shards exit cleanly (#154). The scenario harness runs here, in the required job, below.
       - name: Verify (core)
         run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:supabase:session-revocation && pnpm verify:guards
+
+      # Required scenario gate: the main vitest config excludes the scenario harness, so the
+      # shards above never run it. This step is the only CI coverage for the scenario suite.
+      - name: Runtime scenarios
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.scenarios.config.ts
 
   # Matches the in-lane gate exactly: 4 shards, each a small process that exits cleanly.
   # Falsifier for coverage: the shard totals must sum to the full runtime test count.
