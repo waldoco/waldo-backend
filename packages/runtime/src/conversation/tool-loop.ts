@@ -19,7 +19,7 @@ export type ToolLoopStep = (
   turns: readonly LLMToolTurn[],
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -74,7 +74,10 @@ export async function runToolLoop(input: Readonly<{
       const output = capToolOutput(JSON.stringify(result), input.offload);
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
-      input.onTool?.({ call, ok: result.ok, ms: Date.now() - started, output });
+      // The typed code:reason rides the span so a failed hop is diagnosable from the trace or
+      // tail without exposing any result content.
+      const failure = result.ok ? undefined : 'code' in result ? `${result.code}${'reason' in result && result.reason ? `:${result.reason}` : ''}` : result.error;
+      input.onTool?.({ call, ok: result.ok, ms: Date.now() - started, output, ...(failure ? { error: failure } : {}) });
       anyOk ||= result.ok;
     }
     failedRounds = anyOk ? 0 : failedRounds + 1;

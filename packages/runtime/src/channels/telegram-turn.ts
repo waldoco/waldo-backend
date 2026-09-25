@@ -134,7 +134,7 @@ export const createTelegramResponder = (
           );
         },
         onTool: (event) => {
-          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, text: { input: event.call.arguments, output: event.output } });
+          log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), text: { input: event.call.arguments, output: event.output } });
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: event.output });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),

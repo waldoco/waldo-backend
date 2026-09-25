@@ -303,10 +303,25 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
     ), settledTrustedEffect);
   }
 
+  // Bound before sanitise: the PostToolUse sanitiser denies oversized payloads outright, which
+  // killed large legitimate reads before the offload store could shrink them. Offload the full
+  // untrusted data first; the reduced head still flows through every PostToolUse hook.
+  let effectiveHandlerResult = parsedHandlerResult;
+  if (parsedHandlerResult.ok && options.offload !== undefined) {
+    const full = JSON.stringify(parsedHandlerResult.data);
+    if (full.length > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
+      const id = options.offload.put(full);
+      effectiveHandlerResult = {
+        ...parsedHandlerResult,
+        data: { stored_output: id, total_chars: full.length, head: full.slice(0, 4_000), read_with: 'read_tool_output' },
+      };
+    }
+  }
+
   let postToolPayload: PostToolUsePayload = {
     event: 'PostToolUse' as const,
     tool: tool.data,
-    result: parsedHandlerResult,
+    result: effectiveHandlerResult,
     latency_ms: Math.max(0, Date.now() - startedAt),
   };
   try {

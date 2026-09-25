@@ -660,7 +660,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1', toolOutputLedger(storage), offerConnect,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect,
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
