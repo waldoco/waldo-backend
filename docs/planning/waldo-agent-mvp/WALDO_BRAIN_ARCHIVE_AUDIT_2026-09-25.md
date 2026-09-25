@@ -36,14 +36,23 @@ an artifact store but a nightly consolidation cycle and decay-aware recall.
 | Memory fencing (<memory-context>) | composer renderMemoryContext (Hermes pattern) |
 | FTS5 on episodes | live, plus hall recall at compose time |
 
+## CORRECTION (same day, multi-lens pass)
+
+Adopt #1 was wrong as stated: nightly consolidation IS live - the scheduler fires a 'dreaming'
+entry (NIGHTLY_ID 'nightly-memory') that consolidates the last 24h of episodes
+(responder.consolidate), promotes constellation patterns, arms day cards, and plans today.
+Verified in telegram-owner-do.ts:712 after the owner challenged the audit's depth. The genuine
+residue the archive adds on top: (a) marking episodes consolidated (bookkeeping so re-runs
+don't double-count), (b) the weekly DEEPER pass on diary rows (current pass is daily-only),
+(c) the archive's "missing link" framing still holds for level two. Adopt #1 is re-scoped to
+those three items. Lesson recorded: greps for 'compaction' missed the feature because the code
+calls it 'dreaming/nightly' - search by concept, not by the archive's vocabulary.
+
 ## ADOPT - forgotten strong points worth building now
 
-1. **Daily compaction (the archive's "missing link", marked Phase D = now).** Episodes
-   accumulate; nothing currently summarizes yesterday into a diary row or marks episodes
-   consolidated. Weekly-only thinking drifts. Build: patrol-triggered nightly job
-   (DO alarm): yesterday's episodes -> diary summary row -> promote validated patterns ->
-   mark consolidated. Cheap model call, ~50 tokens/day. The archive even specifies the
-   function shape. This is the dreaming-mode core minus the self-evolution ambitions.
+1. **Daily compaction LEVEL TWO (re-scoped after correction above).** The daily pass exists
+   ('dreaming' schedule). Adopt the residue: consolidated-marking on episodes, a weekly
+   deeper pass over the daily summaries, and surfacing the diary rows as artifacts (A5).
 2. **Memory decay (HOT/WARM/COLD) with validation_count resisting decay.** Current recall
    has trust filtering but no recency weighting: a pattern validated 15x and one seen once
    rank alike. Build: recall ranking gains recency+validation factors (pairs naturally
