@@ -13,6 +13,10 @@ export type ToolOutputStore = Readonly<{
 // kept even if it alone exceeds the budget (the pre-storage guard already bounds item size).
 export const MAX_STORED_OUTPUT_CHARS = 512_000;
 
+// Per-item bound on the post-redaction text, enforced here independently of the pre-storage
+// guard (defense in depth): nothing larger is ever held, whatever path called put.
+export const MAX_STORED_ITEM_CHARS = 65_536;
+
 export const inMemoryToolOutputStore = (): ToolOutputStore => {
   const outputs = new Map<string, string>();
   let total = 0;
@@ -21,8 +25,9 @@ export const inMemoryToolOutputStore = (): ToolOutputStore => {
     put(output) {
       next += 1;
       const id = `to-${next}`;
-      outputs.set(id, output);
-      total += output.length;
+      const stored = output.length > MAX_STORED_ITEM_CHARS ? output.slice(0, MAX_STORED_ITEM_CHARS) : output;
+      outputs.set(id, stored);
+      total += stored.length;
       for (const oldest of outputs.keys()) {
         if (total <= MAX_STORED_OUTPUT_CHARS || outputs.size <= 1) break;
         if (oldest === id) break;

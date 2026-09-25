@@ -170,15 +170,16 @@ describe('Fix targets', () => {
   it('the store enforces an aggregate byte budget: oldest outputs evict, newest always survives', async () => {
     const { MAX_STORED_OUTPUT_CHARS } = await import('../src/conversation/tool-output-store');
     const store = inMemoryToolOutputStore();
-    const chunk = 'q'.repeat(100_000);
+    // items sized under the per-item bound so the aggregate budget is what bites
+    const chunk = 'q'.repeat(64_000);
     const ids: string[] = [];
-    const puts = Math.ceil(MAX_STORED_OUTPUT_CHARS / 100_000) + 2;
+    const puts = Math.ceil(MAX_STORED_OUTPUT_CHARS / 64_001) + 2;
     for (let i = 0; i < puts; i += 1) ids.push(store.put(`${chunk}${i}`));
     // oldest entries evicted beyond the budget; the newest is always kept
     expect(store.read(ids[0]!, 0, 8)).toBeNull();
     const latest = store.read(ids[puts - 1]!, 0, 8);
     expect(latest).not.toBeNull();
-    expect(latest!.total).toBe(100_001);
+    expect(latest!.total).toBe(64_001);
     // an evicted id is a typed not_found through actual dispatch, tainted external
     const { readToolOutputHandler } = await import('../src/tools/read-tool-output');
     const reader = readToolOutputHandler(store);
@@ -196,6 +197,19 @@ describe('Fix targets', () => {
     );
     expect(kept.ok).toBe(true);
     if (kept.ok) expect(kept.source_taint).toBe('external');
+  });
+
+  it('the store enforces a per-item bound on the stored post-redaction text', async () => {
+    const { MAX_STORED_ITEM_CHARS } = await import('../src/conversation/tool-output-store');
+    const store = inMemoryToolOutputStore();
+    const id = store.put('r'.repeat(MAX_STORED_ITEM_CHARS * 2));
+    const whole = store.read(id, 0, MAX_STORED_ITEM_CHARS * 2);
+    expect(whole).not.toBeNull();
+    expect(whole!.total).toBe(MAX_STORED_ITEM_CHARS);
+    expect(whole!.next_offset).toBeNull();
+    // a small item is stored whole, unbounded reads return it intact
+    const small = store.put('short output');
+    expect(store.read(small, 0, 4_000)!.text).toBe('short output');
   });
 
   it('a failed tool call surfaces its typed code:reason on the span, without result content', async () => {
