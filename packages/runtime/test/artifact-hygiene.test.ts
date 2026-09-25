@@ -14,6 +14,7 @@ const ARTIFACTS: ReadonlyArray<{ text: string; kinds: string[]; stolen: string }
   // magic links
   { text: 'Confirm: https://togdshayyxycitzckpqv.supabase.co/auth/v1/verify?token=pkce_ABCSECRET&type=magiclink&redirect_to=https://waldo.dev', kinds: ['magic_link'], stolen: 'pkce_ABCSECRET' },
   { text: 'Reset here https://app.example.com/auth/confirm?token_hash=def456ghi&type=recovery now', kinds: ['password_reset'], stolen: 'token_hash=def456ghi' },
+  { text: 'Reset: https://togdshayyxycitzckpqv.supabase.co/auth/v1/verify?token=pkce_REC&type=recovery&redirect_to=https://waldo.dev', kinds: ['password_reset'], stolen: 'pkce_REC' },
   { text: 'https://accounts.example.com/reset-password?token=zzz999&user=me', kinds: ['password_reset'], stolen: 'token=zzz999' },
   { text: 'click https://x.example.com/confirm?confirmation_token=q1w2e3 to finish', kinds: ['password_reset'], stolen: 'confirmation_token=q1w2e3' },
   // mixed: an OTP and a magic link in one pasted forward

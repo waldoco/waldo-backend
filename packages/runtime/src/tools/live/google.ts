@@ -45,7 +45,7 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work:
   }
 }
 
-// E1 (issue #150): a verification artifact in either visible field quarantines both - the
+// A verification artifact in either visible field quarantines both - the
 // snippet routinely re-states a code the subject hides, and vice versa. from/at/id stay so the
 // owner can find the item in Gmail itself; the raw artifact never enters model context.
 const quarantineMailItem = <T extends { subject: string; snippet: string }>(item: T): T & { quarantined?: readonly ArtifactKind[] } => {

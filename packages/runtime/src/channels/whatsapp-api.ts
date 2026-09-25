@@ -57,7 +57,7 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
     const text = (message.text?.body ?? '').trim();
     if (!text) continue;
     seq += 1;
-    // E1 (issue #150): verification artifacts in the owner's inbound text are redacted before the
+    // Verification artifacts in the owner's inbound text are redacted before the
     // update exists, so no downstream consumer (turn pipeline, episodes, traces) ever sees the raw
     // code or link. The original stays owner-inspectable in their own WhatsApp thread. Approval
     // replies are channel commands that can never carry an artifact, so they skip the filter.

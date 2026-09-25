@@ -1,4 +1,4 @@
-// E1 (issue #150): deterministic quarantine of verification artifacts - OTP codes, password-reset
+// Deterministic quarantine of verification artifacts - OTP codes, password-reset
 // and magic-link URLs - at communication ingress, BEFORE content reaches model-visible context.
 // This is a hard security boundary (an artifact in context is lethal-trifecta fuel: private data +
 // untrusted content + an exfil channel), so the filter is a fixed pattern set by design - judgment
@@ -26,11 +26,11 @@ const CODE = String.raw`(?:\d{3}-\d{3}|\d{4,8})`;
 const URL_TAIL = String.raw`[^\s"'<>)\]]*`;
 
 const PATTERNS: ReadonlyArray<{ kind: ArtifactKind; re: RegExp }> = [
+  // recovery is the password-reset artifact; it runs before the /auth/v*/verify endpoint pattern
+  // so a recovery URL is labeled (and logged) as what it is, not as a magic link.
+  { kind: 'password_reset', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*[?&]type=recovery${URL_TAIL}`, 'gi') },
   // Supabase (and lookalike) token endpoints carry the live bearer in the query string.
   { kind: 'magic_link', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*/auth/v\d+/verify${URL_TAIL}`, 'gi') },
-  // recovery is the password-reset artifact; it runs before the generic token patterns so a
-  // recovery URL is labeled (and logged) as what it is.
-  { kind: 'password_reset', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*[?&]type=recovery${URL_TAIL}`, 'gi') },
   { kind: 'magic_link', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*[?&]type=(?:magiclink|signup|email_change|invite)${URL_TAIL}`, 'gi') },
   { kind: 'magic_link', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*[?&]token_hash=${URL_TAIL}`, 'gi') },
   { kind: 'password_reset', re: new RegExp(String.raw`https?://[^\s"'<>)\]]*(?:/reset[-_]?password|/password[-_]?reset|reset[-_]?token=|confirmation[-_]?token=)${URL_TAIL}`, 'gi') },

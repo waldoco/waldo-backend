@@ -157,7 +157,7 @@ describe('google tools', () => {
     expect(otp.subject).toContain('[quarantined:');
     expect(otp.quarantined).toEqual(['otp']);
     const reset = data.messages.find((m) => m.id === 'm-reset')!;
-    expect(reset.quarantined).toEqual(['magic_link']);
+    expect(reset.quarantined).toEqual(['password_reset']);
     // the receipt passes through byte-identical
     const receipt = data.messages.find((m) => m.id === 'm-receipt')!;
     expect(receipt.subject).toBe('Your receipt from Amazon #112-3948572-1849561');
