@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { errorCodeSchema, iso8601Schema } from './error';
 
 describe('errorCode', () => {
-  it('is exactly the seven canonical codes, in order', () => {
+  it('is exactly the eight canonical codes, in order', () => {
     expect(errorCodeSchema.options).toEqual([
       'auth_failed',
       'not_found',
@@ -11,6 +11,7 @@ describe('errorCode', () => {
       'transient',
       'oversize',
       'invalid_args',
+      'rejected',
     ]);
   });
 

@@ -36,13 +36,44 @@ describe('call_mcp_tool handler', () => {
     const out = await handler.handle({ server: 'github', tool: 'get_issue', args: { n: 1 } }, {} as never);
     expect(out.ok).toBe(true);
     if (out.ok) {
-      expect(out.data).toMatchObject({ output: [{ type: 'text', text: 'answer' }], source_taint: 'external' });
+      expect(out.data).toMatchObject({ output: [{ type: 'text', text: 'answer' }], source_taint: 'external', protocol: '2025-06-18' });
     }
     expect(capture.map((c) => (JSON.parse(String(c.init!.body)) as { method: string }).method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
     const callHeaders = capture[2]!.init!.headers as Record<string, string>;
     expect(callHeaders['mcp-session-id']).toBe('sess1');
     expect(callHeaders.authorization).toBe('Bearer tok');
     expect(JSON.stringify(capture[2]!.init!.body)).not.toContain('tok');
+    vi.unstubAllGlobals();
+  });
+
+  it('adopts the protocol version the server negotiates back (spec 2025-11-25 servers)', async () => {
+    const capture: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
+      capture.push({ url: String(input), init });
+      const method = (JSON.parse(String(init?.body)) as { method: string }).method;
+      if (method === 'initialize') return Response.json({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-11-25' } });
+      if (method === 'notifications/initialized') return new Response(null, { status: 202 });
+      return Response.json({ jsonrpc: '2.0', id: 3, result: { content: [] } });
+    }) as typeof fetch);
+    const out = await handler.handle({ server: 'github', tool: 't', args: {} }, {} as never);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.data).toMatchObject({ protocol: '2025-11-25' });
+    vi.unstubAllGlobals();
+  });
+
+  it('tool-execution errors (isError, SEP-1303) come back as rejected, not transient - model-correctable', async () => {
+    vi.stubGlobal('fetch', (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (JSON.parse(String(init?.body)) as { method: string }).method;
+      if (method === 'initialize') return Response.json({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18' } });
+      if (method === 'notifications/initialized') return new Response(null, { status: 202 });
+      return Response.json({ jsonrpc: '2.0', id: 3, result: { isError: true, content: [{ type: 'text', text: 'issue 999 not found' }] } });
+    }) as typeof fetch);
+    const out = await handler.handle({ server: 'github', tool: 'get_issue', args: { n: 999 } }, {} as never);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.code).toBe('rejected');
+      expect(out.error).toContain('issue 999 not found');
+    }
     vi.unstubAllGlobals();
   });
 

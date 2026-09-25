@@ -13,6 +13,9 @@ export const errorCodeSchema = z.enum([
   'transient',
   'oversize',
   'invalid_args',
+  // A tool/adapter ran and deterministically rejected the call (e.g. MCP isError per SEP-1303):
+  // not transient, not an auth/lookup failure - the model should correct and retry differently.
+  'rejected',
 ]);
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 
