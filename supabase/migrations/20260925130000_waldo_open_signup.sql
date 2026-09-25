@@ -1,10 +1,13 @@
 -- Open signup (issue #156): anyone with a verified email gets an owner; the form also collects a
--- phone (stored unverified - verification rides the existing whatsapp pairing, per owner policy
+-- phone (required at signup, stored UNVERIFIED; verification is an account-bound SMS OTP at
+-- WhatsApp connect - pairing alone never verifies the number - owner decision 16:39)
 -- decision 16:26). The HMAC-signed call shape stays the abuse boundary; invites remain for
 -- attribution only, no longer a gate.
 
 alter table waldo.owners add column phone text;
-comment on column waldo.owners.phone is 'Contact phone collected at signup. UNVERIFIED until a whatsapp presence proves the number.';
+comment on column waldo.owners.phone is 'Contact phone (E.164) required at signup. UNVERIFIED until the account-bound SMS OTP at WhatsApp connect succeeds.';
+alter table waldo.owners add column phone_verified_at timestamptz;
+comment on column waldo.owners.phone_verified_at is 'Set exactly once, when the account-bound SMS OTP at WhatsApp connect verifies the stored phone. NULL = unverified; no whatsapp presence may link while NULL.';
 
 -- One owner per email, defensively: the real flow can never verify one email into two auth
 -- users (auth.users emails are unique), but a race or replay must degrade to a refusal, not a
@@ -57,3 +60,17 @@ end $$;
 drop function waldo.owner_for_auth(uuid, text, bigint, text);
 revoke all on function waldo.owner_for_auth(uuid, text, bigint, text, text) from public;
 grant execute on function waldo.owner_for_auth(uuid, text, bigint, text, text) to anon;
+
+-- Fail-closed until the account-bound SMS OTP slice lands (owner decision 16:39): no
+-- whatsapp presence may link while the owner's phone is unverified, on ANY path
+-- (link-code redeem, admin tooling, or a future bug). The SMS-OTP slice owns removal.
+create or replace function waldo.require_verified_phone_for_whatsapp() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if new.provider = 'whatsapp' and (select phone_verified_at from waldo.owners where id = new.owner_id) is null then
+    raise exception 'whatsapp presence requires a verified phone (phone_verified_at is null)';
+  end if;
+  return new;
+end $$;
+create trigger presences_whatsapp_verified_phone before insert on waldo.presences
+  for each row execute function waldo.require_verified_phone_for_whatsapp();

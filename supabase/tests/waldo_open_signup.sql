@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(15);
+select plan(17);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(extract(epoch from now())::bigint::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
@@ -16,6 +16,7 @@ insert into auth.users (id, email) values
 select is(waldo.signin_allowed('anyone@test.invalid', pg_temp.at(), pg_temp.sig('signin.anyone@test.invalid')), true, 'open signup: any address may request a code');
 select matches(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000d1', 'new@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000d1.new@test.invalid'), '+91 9000000001'), '^owner-', 'an uninvited verified email creates its own owner + DO');
 select is((select phone from waldo.owners where email = 'new@test.invalid'), '+91 9000000001', 'the signup phone lands on the owner row');
+select is((select phone_verified_at from waldo.owners where email = 'new@test.invalid'), null, 'signup phone is stored UNVERIFIED (phone_verified_at null)');
 select is((select count(*) from waldo.owner_settings s join waldo.owners o on o.id = s.owner_id where o.email = 'new@test.invalid'), 1::bigint, 'settings are provisioned in the same transaction');
 select is((select is_admin from waldo.owners where email = 'new@test.invalid'), false, 'a fresh signup is never an admin');
 
@@ -41,6 +42,13 @@ values ('00000000-0000-0000-0000-0000000000e1', 'telegram', '44');
 select matches(waldo.owner_for_auth('00000000-0000-0000-0000-0000000000d4', 'fresh@test.invalid', pg_temp.at(), pg_temp.sig('owner.00000000-0000-0000-0000-0000000000d4.fresh@test.invalid')), '^owner-', 'signup beside a legacy telegram-only owner still creates a NEW owner');
 select isnt((select do_name from waldo.owners where auth_user_id = '00000000-0000-0000-0000-0000000000d4'), 'legacy-do', 'the new signup never receives the legacy DO');
 select is((select count(*) from waldo.owners where id = '00000000-0000-0000-0000-0000000000e1' and auth_user_id is null and email is null), 1::bigint, 'legacy owner row untouched: still no auth user, still no email');
+
+-- Fail-closed: whatsapp presence cannot link while phone is unverified (any path).
+select throws_matching(
+  $$insert into waldo.presences (owner_id, provider, subject) values ((select id from waldo.owners where email = 'new@test.invalid'), 'whatsapp', '919876543210')$$,
+  'whatsapp presence requires a verified phone',
+  'whatsapp link refused while phone_verified_at is null'
+);
 
 -- Tenant isolation under RLS: the new owner sees only itself.
 set local role authenticated;

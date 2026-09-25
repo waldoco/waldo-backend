@@ -53,15 +53,16 @@ describe('handleConsole', () => {
 
   it('gives the same answer for an invited and an unknown address', async () => {
     const a = auth();
-    const known = await (await handleConsole(form('/console/signin', { email: 'owner@example.com' }), { TELEGRAM_OWNER_DO: owners().ns }, a))!.text();
-    const unknown = await (await handleConsole(form('/console/signin', { email: 'nobody@example.com' }), { TELEGRAM_OWNER_DO: owners().ns }, a))!.text();
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const known = await (await handleConsole(form('/console/signin', { email: 'owner@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!.text();
+    const unknown = await (await handleConsole(form('/console/signin', { email: 'nobody@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter }, a))!.text();
     expect(known.replaceAll('owner@example.com', 'X')).toBe(unknown.replaceAll('nobody@example.com', 'X'));
     expect(a.sendCode).toHaveBeenCalledTimes(2);
   });
 
   it('a verified code gets a session from that owner DO and both cookies', async () => {
     const { ns, fetch, idFromName } = owners();
-    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', code: '123456' }), { TELEGRAM_OWNER_DO: ns }, auth({ verify: vi.fn(async () => 'do-a') })))!;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }), { TELEGRAM_OWNER_DO: ns }, auth({ verify: vi.fn(async () => 'do-a') })))!;
     expect(response.status).toBe(303);
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch.mock.calls[0]?.[0]).toBe('https://telegram-owner/grant-console');
@@ -72,7 +73,7 @@ describe('handleConsole', () => {
 
   it('a wrong code wakes no owner DO', async () => {
     const { ns, fetch } = owners();
-    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', code: '000000' }), { TELEGRAM_OWNER_DO: ns }, auth()))!;
+    const response = (await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '000000' }), { TELEGRAM_OWNER_DO: ns }, auth()))!;
     expect(response.status).toBe(200);
     expect(await response.text()).toContain('did not work');
     expect(fetch).not.toHaveBeenCalled();
@@ -86,47 +87,58 @@ describe('handleConsole', () => {
   });
 });
 
-describe('open signup (issue #156)', () => {
-  it('the signup form collects phone; it rides hidden into verify and reaches owner provisioning', async () => {
+describe('open signup (issue #156, owner corrections 16:39)', () => {
+  it('phone is required and normalized to E.164; it rides hidden into verify and reaches owner provisioning', async () => {
     const verify = vi.fn(async () => 'owner-abc');
     const a = auth({ verify });
-    const send = await handleConsole(form('/console/signin', { email: 'New@Example.com', phone: '+91 98765 43210' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
+    const limiter = { limit: vi.fn(async () => ({ success: true })) as unknown as RateLimit['limit'] } as unknown as RateLimit;
+    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
+    const send = await handleConsole(form('/console/signin', { email: 'New@Example.com', phone: '+91 98765 43210' }), env, a);
     const html = await send!.text();
-    expect(html).toContain('name="phone" value="+91 98765 43210"');
+    expect(html).toContain('name="phone" value="+919876543210"');
     expect(html).toContain('name="email" value="new@example.com"');
-    const done = await handleConsole(form('/console/verify', { email: 'new@example.com', phone: '+91 98765 43210', code: '123456' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
+    const done = await handleConsole(form('/console/verify', { email: 'new@example.com', phone: '+91 98765 43210', code: '123456' }), env, a);
     expect(done?.status).toBe(303);
-    expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+91 98765 43210');
+    expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+919876543210');
   });
 
-  it('throttles code sends per email and per IP when the limiter binding exists', async () => {
+  it('refuses code send without a phone, and refuses an un-normalizable phone', async () => {
+    const sendCode = vi.fn(async () => true);
+    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit };
+    const missing = await handleConsole(form('/console/signin', { email: 'a@b.com' }), env, auth({ sendCode }));
+    expect(await missing!.text()).toContain('Enter your phone number');
+    const bad = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: 'call me maybe' }), env, auth({ sendCode }));
+    expect(await bad!.text()).toContain('Enter your phone number');
+    expect(sendCode).not.toHaveBeenCalled();
+  });
+
+  it('a tampered verify form with an invalid hidden phone never reaches auth.verify', async () => {
+    const verify = vi.fn(async () => 'owner-abc');
+    const done = await handleConsole(form('/console/verify', { email: 'a@b.com', phone: '1', code: '123456' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ verify }));
+    expect(await done!.text()).toContain('Enter your phone number');
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('throttles code sends per email and per IP', async () => {
     const sendCode = vi.fn(async () => true);
     const limit = vi.fn(async ({ key }: { key: string }) => ({ success: !key.includes('repeat@x.com') }));
     const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: { limit } as unknown as RateLimit };
     const blocked = await handleConsole(
-      new Request('https://w.test/console/signin', { method: 'POST', body: new URLSearchParams({ email: 'repeat@x.com' }), headers: { 'cf-connecting-ip': '1.2.3.4' } }),
+      new Request('https://w.test/console/signin', { method: 'POST', body: new URLSearchParams({ email: 'repeat@x.com', phone: '+14155550100' }), headers: { 'cf-connecting-ip': '1.2.3.4' } }),
       env, auth({ sendCode }));
     expect(await blocked!.text()).toContain('Too many attempts');
     expect(sendCode).not.toHaveBeenCalled();
     expect(limit).toHaveBeenCalledWith({ key: 'console-signin:repeat@x.com' });
     expect(limit).toHaveBeenCalledWith({ key: 'console-signin-ip:1.2.3.4' });
-    const allowed = await handleConsole(form('/console/signin', { email: 'fresh@x.com' }), env, auth({ sendCode }));
+    const allowed = await handleConsole(form('/console/signin', { email: 'fresh@x.com', phone: '+14155550100' }), env, auth({ sendCode }));
     expect(await allowed!.text()).toContain('name="code"');
     expect(sendCode).toHaveBeenCalledWith('fresh@x.com');
   });
 
-  it('proceeds without the limiter binding (Supabase OTP caps remain the floor)', async () => {
+  it('fails CLOSED without the limiter binding: no code is sent on a public endpoint (owner decision 16:39)', async () => {
     const sendCode = vi.fn(async () => true);
-    const response = await handleConsole(form('/console/signin', { email: 'a@b.com' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ sendCode }));
-    expect(sendCode).toHaveBeenCalledWith('a@b.com');
-    expect(await response!.text()).toContain('name="code"');
-  });
-
-  it('phone is optional - signup works email-only', async () => {
-    const verify = vi.fn(async () => 'owner-xyz');
-    const a = auth({ verify });
-    await handleConsole(form('/console/signin', { email: 'solo@x.com' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
-    await handleConsole(form('/console/verify', { email: 'solo@x.com', code: '999999' }), { TELEGRAM_OWNER_DO: owners().ns }, a);
-    expect(verify).toHaveBeenCalledWith('solo@x.com', '999999', '');
+    const response = await handleConsole(form('/console/signin', { email: 'a@b.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns }, auth({ sendCode }));
+    expect(await response!.text()).toContain('temporarily unavailable');
+    expect(sendCode).not.toHaveBeenCalled();
   });
 });
