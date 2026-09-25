@@ -3,7 +3,7 @@ import { handleWhatsAppWebhook, type WhatsAppWebhookEnv } from '../src/channels/
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 
 const namespace = () => {
-  const fetch = vi.fn(async () => new Response('ok'));
+  const fetch = vi.fn(async (_url: string, _init?: RequestInit) => new Response('ok'));
   const idFromName = vi.fn((name: string) => name);
   return { fetch, idFromName, ns: { idFromName, get: () => ({ fetch }) } as unknown as DurableObjectNamespace };
 };
