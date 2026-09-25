@@ -24,11 +24,21 @@ if (!staging || staging.name !== 'waldo-runtime-staging') {
   bad.push('env.staging missing or name != waldo-runtime-staging');
 } else {
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  for (const key of ['durable_objects', 'ratelimits', 'migrations', 'kv_namespaces', 'r2_buckets', 'd1_databases', 'queues', 'services', 'vars']) {
+  for (const key of ['durable_objects', 'ratelimits', 'migrations', 'kv_namespaces', 'r2_buckets', 'd1_databases', 'queues', 'services']) {
     if (cfg[key] !== undefined && !eq(cfg[key], staging[key])) {
       bad.push(`env.staging does not mirror top-level "${key}"`);
     }
   }
+  // vars mirror by KEY SET, not value: trace identity (WALDO_ENVIRONMENT) must differ per
+  // environment or staging traces pollute production. Every top-level var key must exist in
+  // staging and vice versa, and both sides must pin the trace identity vars.
+  const topVars = cfg.vars ?? {};
+  const stagingVars = staging.vars ?? {};
+  for (const k of Object.keys(topVars)) if (!(k in stagingVars)) bad.push(`env.staging missing var "${k}"`);
+  for (const k of Object.keys(stagingVars)) if (!(k in topVars)) bad.push(`top level missing var "${k}" present in env.staging`);
+  if (topVars.WALDO_ENVIRONMENT !== 'production') bad.push('top-level WALDO_ENVIRONMENT must be "production"');
+  if (stagingVars.WALDO_ENVIRONMENT !== 'staging') bad.push('env.staging WALDO_ENVIRONMENT must be "staging"');
+  if (!('WALDO_RELEASE' in topVars) || !('WALDO_RELEASE' in stagingVars)) bad.push('WALDO_RELEASE must exist at top level and in env.staging (deploy wrapper restamps it)');
   if (!staging.ai) bad.push('env.staging missing ai binding');
   if (!staging.vectorize) bad.push('env.staging missing vectorize binding');
 }
