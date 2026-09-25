@@ -99,6 +99,62 @@ describe('Fix targets', () => {
     }
   });
 
+  it('ADVERSARIAL: a canary token in the tail (past the head) fails the offload guard; nothing raw is stored', async () => {
+    const events = [
+      ...populatedEvents.slice(0, 5),
+      { ...populatedEvents[0]!, id: 'evt-tail', description: `${'z'.repeat(20_000)} tail marker ${canaryTokens[0]}` },
+    ];
+    const [calendar] = googleHandlers(googleWith(events, []), desk, clock);
+    const store = inMemoryToolOutputStore();
+    const result = await dispatchTool(
+      { id: 'c6', name: 'query_calendar', args: {} },
+      ctx('user_message'),
+      { handlers: [calendar!], offload: store },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe('forbidden');
+    // the guard ran before the store: no output was persisted at all
+    expect(store.read('to-1', 0, 16)).toBeNull();
+  });
+
+  it('ADVERSARIAL: a secret near a read boundary is redacted before storage; no chunk ever serves it raw', async () => {
+    // Pad so the address lands within a few chars of the 4000-char head/read boundary.
+    const secret = 'victim@example.com';
+    const events = [
+      {
+        ...populatedEvents[0]!,
+        id: 'evt-boundary',
+        description: `${'x'.repeat(3_800)}${secret}${'y'.repeat(20_000)}`,
+      },
+    ];
+    const [calendar] = googleHandlers(googleWith(events, []), desk, clock);
+    const store = inMemoryToolOutputStore();
+    const result = await dispatchTool(
+      { id: 'c7', name: 'query_calendar', args: {} },
+      ctx('user_message'),
+      { handlers: [calendar!], offload: store },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as { stored_output: string; head: string };
+    // every read-back chunk, walked across the whole stored output, is already guarded
+    const { readToolOutputHandler } = await import('../src/tools/read-tool-output');
+    const reader = readToolOutputHandler(store);
+    let offset = 0;
+    let combined = '';
+    for (let i = 0; i < 32; i += 1) {
+      const slice = await reader.handle({ id: data.stored_output, offset, length: 997 });
+      if (!slice.ok) break;
+      expect(slice.data.text).not.toContain(secret);
+      combined += slice.data.text;
+      if (slice.data.next_offset === null) break;
+      offset = slice.data.next_offset;
+    }
+    expect(combined).not.toContain(secret);
+    expect(combined).toContain('[REDACTED_EMAIL]');
+    expect(data.head).not.toContain(secret);
+  });
+
   it('a failed tool call surfaces its typed code:reason on the span, without result content', async () => {
     const [calendar] = googleHandlers(googleWith(populatedEvents, []), desk, clock);
     const events: { ok: boolean; error?: string }[] = [];

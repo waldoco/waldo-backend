@@ -31,6 +31,8 @@ import {
   type HookRegistry,
   type HookRuntimeContext,
 } from '../hooks/registry';
+import { guardForOffload } from '../scribe/sanitiser';
+import type { ToolOutputStore } from '../conversation/tool-output-store';
 
 export type RuntimeToolCall = {
   id: string;
@@ -310,11 +312,9 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   if (parsedHandlerResult.ok && options.offload !== undefined) {
     const full = JSON.stringify(parsedHandlerResult.data);
     if (full.length > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
-      const id = options.offload.put(full);
-      effectiveHandlerResult = {
-        ...parsedHandlerResult,
-        data: { stored_output: id, total_chars: full.length, head: full.slice(0, 4_000), read_with: 'read_tool_output' },
-      };
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
+      effectiveHandlerResult = { ...parsedHandlerResult, data: offloaded.data };
     }
   }
 
@@ -396,12 +396,13 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
   if (resultSize > (options.maxResultJsonChars ?? DEFAULT_MAX_RESULT_JSON_CHARS)) {
     if (options.offload !== undefined) {
       const full = JSON.stringify(finalResult.data);
-      const id = options.offload.put(full);
+      const offloaded = offloadResult(call.id, tool.data, full, ctx, options.offload);
+      if (!offloaded.ok) return withTrustedEffect(offloaded.result, settledTrustedEffect);
       return withTrustedEffect({
         ok: true,
         call_id: call.id,
         tool: tool.data,
-        data: { stored_output: id, total_chars: full.length, head: full.slice(0, 4_000), read_with: 'read_tool_output' },
+        data: offloaded.data,
         source_taint: finalResult.source_taint,
       }, settledTrustedEffect);
     }
@@ -823,6 +824,48 @@ function failParse(error: string, repaired: true): FailedToolCallParse<true>;
 function failParse(error: string, repaired: boolean): ParseToolCallsResult & { ok: false } {
   return { ok: false, repaired, error, code: 'invalid_args' };
 }
+
+
+type OffloadedResult =
+  | { ok: true; data: { stored_output: string; total_chars: number; head: string; read_with: 'read_tool_output' } }
+  | { ok: false; result: DispatchToolResult };
+
+// Raw external output is never stored: the offload guard runs the full sanitise pipeline minus
+// the destination size cap (storage is not model context). Only guarded text reaches the store,
+// so a read-back slice can never expose unguarded content, including a secret that would span
+// read chunks.
+const offloadResult = (
+  callId: string,
+  tool: ToolName,
+  full: string,
+  ctx: ToolDispatcherContext,
+  store: ToolOutputStore,
+): OffloadedResult => {
+  const guarded = guardForOffload({
+    payload: full,
+    destination: 'internal_context',
+    canary_tokens: ctx.session?.canary_tokens ?? [],
+    source_taint: 'external',
+  });
+  if (!guarded.ok) {
+    return {
+      ok: false,
+      result: failDispatch(
+        callId,
+        tool,
+        'tool result failed the offload guard',
+        guarded.reason === 'oversize' ? 'oversize' : 'forbidden',
+        'sanitise_denied',
+      ),
+    };
+  }
+  const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
+  const id = store.put(text);
+  return {
+    ok: true,
+    data: { stored_output: id, total_chars: text.length, head: text.slice(0, 4_000), read_with: 'read_tool_output' },
+  };
+};
 
 function failDispatch(
   callId: string,

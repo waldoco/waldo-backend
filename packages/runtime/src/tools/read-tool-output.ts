@@ -17,6 +17,6 @@ export const readToolOutputHandler = (store: ToolOutputStore) => ({
   async handle({ id, offset, length }: ReadToolOutputArgs) {
     const slice = store.read(id, offset ?? 0, length ?? 4_000);
     if (slice === null) return { ok: false as const, code: 'not_found' as const, error: `No stored output ${id}; stored outputs live for the current conversation only.` };
-    return { ok: true as const, data: slice, source_taint: null };
+    return { ok: true as const, data: slice, source_taint: 'external' as const };
   },
 } satisfies ToolHandler<ReadToolOutputArgs, { text: string; total: number; next_offset: number | null }, ToolDispatcherContext>);
