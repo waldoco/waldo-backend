@@ -173,8 +173,9 @@ completeness, task duplication - never graph-row counts.
 7. **Cross-owner isolation.** Two owner DOs; a fact from owner A never appears in owner B's
    prompts, search or console. Metric: isolation breaches (must be zero).
 8. **No duplicate owner-visible work.** A "remind me to call the dentist" turn produces exactly
-   one actionable record. Pass: one loops row, zero followup claims. Metric: task duplication
-   (2c/4).
+   one actionable record: a reminder for a time-bound ask, a loops row for an open loop - not
+   both, and never also a followup claim. Pass: one reminder OR one loops row as the ask
+   intends, zero followup claims. Metric: task duplication (2c/4).
 
 If scenarios 1-6 pass on the claims+episodes path (with the small honesty fixes above), the case
 for graph/vector expansion is weak and ADR-0078 stays parked. If they fail in ways claims cannot
