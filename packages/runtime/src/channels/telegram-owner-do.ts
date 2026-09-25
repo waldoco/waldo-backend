@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
-import { claimStore, profile } from '../memory/claims';
+import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
@@ -12,7 +12,7 @@ import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
-import { durableConversationStore, scrubConversationHistory } from './conversation-store';
+import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller } from './egress-guard';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
@@ -656,7 +656,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1', toolOutputLedger(storage), offerConnect,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN),
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -851,13 +851,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
           else if (action === 'spot.confirm') memory.confirm(spotId, 'owner, console', new Date(now).toISOString());
           else {
-            memory.purge([spotId], new Date(now).toISOString());
+            const result = memory.purge([spotId], new Date(now).toISOString());
+            if (result.texts.length) await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN);
           }
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);
           if (!node) return false;
           memory.forgetNode(spotId);
           memory.barrier(node.label, new Date(now).toISOString());
+          await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

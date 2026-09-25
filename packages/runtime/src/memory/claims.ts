@@ -10,7 +10,7 @@ export type ConstellationNode = Readonly<{ id: number; domain: string; label: st
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
 type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string }>;
 
-const FORGOTTEN = '[forgotten]';
+export const FORGOTTEN = '[forgotten]';
 const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char}`);
 const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
 
@@ -76,7 +76,7 @@ export const claimStore = (sql: Sql) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string): { removed: number; remaining: Record<string, number> } {
+    purge(ids: readonly number[], at: string): { removed: number; remaining: Record<string, number>; texts: readonly string[] } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -112,7 +112,7 @@ export const claimStore = (sql: Sql) => {
         if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
         add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
       }
-      return { removed: forgotten.length, remaining };
+      return { removed: forgotten.length, remaining, texts };
     },
   };
 };
@@ -207,7 +207,7 @@ export const nightlyInput = (store: ClaimStore, day: string): string =>
 
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed'): string => {
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[]) => void): string => {
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
   const known = new Set(store.claims().map((claim) => claim.id));
   const nodes = new Set(store.nodes().map((node) => node.id));
@@ -221,6 +221,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.dismiss.filter((id) => known.has(id))) store.setStatus(id, 'dismissed');
   const forgetIds = ops.forget_claims.filter((id) => known.has(id));
   const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
+  if (purge && purge.texts.length > 0) onPurged?.(purge.texts);
   for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);
   const leftover = purge ? Object.keys(purge.remaining) : [];
   return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
