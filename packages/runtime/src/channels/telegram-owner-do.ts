@@ -70,7 +70,7 @@ type OwnerRuntime = Readonly<{
   updateCheck(trace: string): Promise<void>;
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
   act(action: ConsoleAction): Promise<boolean>;
-  googleConnectUrl(feature: GoogleFeature): Promise<string | null>;
+  googleConnectUrl(feature: GoogleFeature, channel?: 'telegram' | 'console'): Promise<string | null>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
     beginSession(ticketHash: string): Promise<Readonly<{ url: string; nonce: string }> | null>;
@@ -171,11 +171,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { ready, view, act, googleConnectUrl, openFile, desk } = this.setup();
     await ready;
     const back = (notice: string) => new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${notice}` } });
-    if (url.pathname === CONSOLE_GOOGLE_PATH) {
-      const feature = url.searchParams.get('feature') ?? 'calendar';
-      const consent = isGoogleFeature(feature) ? await googleConnectUrl(feature) : null;
-      return consent ? new Response(null, { status: 302, headers: { location: consent } }) : back('invalid');
-    }
+    if (url.pathname === CONSOLE_GOOGLE_PATH) return new Response(null, { status: 303, headers: { location: CONSOLE_PATH } });
     const admin = consoleAuth(this.env);
     const doName = this.ctx.storage.kv.get<string>('do_name');
     if (url.pathname === CONSOLE_ADMIN_PATH) {
@@ -186,6 +182,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST') {
       const action = parseConsoleAction(await request.formData(), session.csrf);
       if (action?.action === 'telegram.link') return this.telegramLinkPage();
+      if (action?.action === 'google.connect') {
+        const ticketUrl = isGoogleFeature(action.value) ? await googleConnectUrl(action.value, 'console') : null;
+        return ticketUrl
+          ? new Response(null, { status: 303, headers: { location: ticketUrl } })
+          : back('google.connect.failed');
+      }
       if (action?.action === 'invite.create' || action?.action === 'invite.revoke') {
         const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value) : admin.revokeInvite(doName, action.id)) : false;
         return new Response(null, { status: 303, headers: { location: done ? CONSOLE_ADMIN_PATH : `${CONSOLE_PATH}?m=invalid` } });
@@ -529,7 +531,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       // Chat links are short and first-party: /c/<ticket>. The consent URL is minted at click time
       // (beginSession) and never passes through model-visible text.
-      async connectUrl(_feature: GoogleFeature) {
+      async connectUrl(_feature: GoogleFeature, channel: 'telegram' | 'console' = 'telegram') {
         if (!google.configured()) return null;
         const origin = await storage.get<string>('origin');
         const callRpc = signedRpc(env);
@@ -537,8 +539,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!origin || !callRpc) return null;
         const ticket = newTicket();
         const hash = await ticketHash(ticket);
-        const sessionId = await callRpc('connect_session_issue', `connsess.issue.${doName}.google.telegram.${hash}`, {
-          p_do_name: doName, p_provider: 'google', p_channel: 'telegram', p_ticket_hash: hash,
+        const sessionId = await callRpc('connect_session_issue', `connsess.issue.${doName}.google.${channel}.${hash}`, {
+          p_do_name: doName, p_provider: 'google', p_channel: channel, p_ticket_hash: hash,
         });
         if (!sessionId) return null;
         log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
@@ -825,7 +827,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: `${action} ${id}`.trim() });
         return true;
       },
-      googleConnectUrl: (feature) => google.connectUrl(feature),
+      googleConnectUrl: (feature, channel) => google.connectUrl(feature, channel),
       openFile: async (id) => {
         const file = Number.isInteger(id) ? files.get(id) : null;
         if (!file) return null;

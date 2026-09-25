@@ -185,7 +185,7 @@ A small `ConnectorRegistry` entry per provider (consent-URL builder, exchange, s
 | S2 | `waldo.connect_sessions` migration + RPCs + pgTAP | tickets resolve only through signed RPC | anon cannot call; the hash only is stored; expiry, single completion, revoke-on-reissue | down migration, table unused |
 | S3 | `/c/<ticket>` endpoint + DO `startConsent` link to the session | a short link redirects to a fresh consent | unknown / expired / completed pages; the redirect carries state + challenge; a double GET mints two attempts and completes one | route removed; the button falls back to the direct URL |
 | S4 | `ConnectIntent` contract + responder `offerConnect` + Telegram renderer; remove per-tool `deliver` | one seam for all connector tools | every connector tool's auth-failed result carries the intent and no URL; 60 s rate limit | contract is additive |
-| S5 | Console "Connect Google" via session + funnel hops in the E2E checklist | console and chat share one path | console POST is CSRF-checked -> 303 `/c/...` | - |
+| S5 | Console "Connect Google" via session + funnel hops in the E2E checklist | console and chat share one path | console POST is CSRF-checked -> 303 `/c/...` | DONE 2026-09-25: console connect is a CSRF POST minting a `/c/` ticket (channel 'console'); GET /console/google no longer mints |
 | S6 | Live proof on staging | the owner connects, the page shows success, a `waldo.connections` row exists, a calendar question answers from real data | the tail shows the full funnel | - |
 
 Deploy order for anything touching the proxy stays **edge function first, worker second**.

@@ -84,7 +84,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'account.delete'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'account.delete'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 export const parseConsoleAction = (form: FormData, csrf: string): ConsoleAction | null => {
@@ -109,6 +109,7 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
   'google.disconnect': 'Google disconnected. Waldo no longer reads your calendar or mail.',
   'google.connected': 'Google connected.',
+  'google.connect.failed': 'Google connect could not start. Try again.',
   'file.remove': 'File removed from this list. It stays in your Telegram chat.',
   'file.unavailable': 'That file could not be fetched from Telegram.',
   invalid: 'That change could not be applied.',
@@ -162,15 +163,15 @@ const connectors = (view: ConsoleView) => {
   return [
     ...google.accounts.map((account) => {
       const disconnect = form(csrf, 'google.disconnect', 'Disconnect', { id: account.id }, { tone: 'danger', confirm: `Disconnect ${account.email}? Waldo stops reading its calendar and mail.` });
-      const action = account.error && google.connectAvailable ? `<a class="btn primary" href="${CONSOLE_GOOGLE_PATH}">Reconnect</a>${disconnect}`
-        : `${!account.mail && google.connectAvailable ? `<a class="btn quiet" href="${CONSOLE_GOOGLE_PATH}?feature=mail">Allow Gmail</a>` : ''}${disconnect}`;
+      const action = account.error && google.connectAvailable ? form(csrf, 'google.connect', 'Reconnect', { value: 'calendar' }, { tone: 'primary' }) + disconnect
+        : `${!account.mail && google.connectAvailable ? form(csrf, 'google.connect', 'Allow Gmail', { value: 'mail' }) : ''}${disconnect}`;
       const detail = account.error ? `Waldo could not refresh access (${esc(account.error)}). Reconnect and pick <b>${esc(account.email)}</b> to fix it.`
         : `Waldo reads this calendar${account.mail ? ' and mail, and sends mail only after you approve it' : '. Allow Gmail to let Waldo read mail and send what you approve'}.`;
       return row(`Google: ${account.email}`, detail, status(!account.error, account.error ? 'Needs reconnect' : 'Connected'), action);
     }),
     row(google.accounts.length ? 'Another Google account' : 'Google Calendar and Gmail', google.accounts.length ? 'Connect a second account, such as work and personal. Google asks which one.' : 'Lets Waldo read your calendar. Gmail is a separate step. Nothing is sent without your approval.',
       google.accounts.length ? '' : status(false, 'Not connected'),
-      google.connectAvailable ? `<a class="btn ${google.accounts.length ? 'quiet' : 'primary'}" href="${CONSOLE_GOOGLE_PATH}">${google.accounts.length ? 'Add account' : 'Connect Google'}</a>` : '<span class="note">OAuth app keys are not set on this server yet</span>'),
+      google.connectAvailable ? form(csrf, 'google.connect', google.accounts.length ? 'Add account' : 'Connect Google', { value: 'calendar' }, { tone: google.accounts.length ? 'quiet' : 'primary' }) : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
     row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out') + (view.sessionCount > 1 ? form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser?' }) : '')),

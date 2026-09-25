@@ -84,6 +84,9 @@ Consent passed live (oauth_exchange ok, oauth_callback linked, google_linked 7 s
 Table + 3 router-signed RPCs (issue/resolve/complete), hash-only storage, 30-min TTL, single completion, revoke-on-reissue, RLS forced, service-role denied. pgTAP file written (12 assertions) but NOT yet executed (needs the local supabase stack on the Mac). Canonical migration list updated.
 - [ ] MAC: apply migration on staging (supabase db push) and run pgTAP file waldo_connect_sessions.sql
 
+### Connect funnel (named hops, console + chat share it)
+connect_issued (ticket minted, channel=telegram|console) -> /c/<ticket> resolve (unknown/expired/completed pages are distinct) -> consent begin (single-use state + PKCE) -> callback settle (idempotent, double-load replays success) -> owner notified in-channel with the linked account email. Console entry is a CSRF POST -> 303 /c/...; GET /console/google mints nothing.
+
 ### S3 - /c/<ticket> connect links
 channels/connect-link.ts: worker route resolves ticket -> signed connect_session_resolve -> DO beginSession mints consent at click time -> 302 (no-store, no-referrer). DO connectUrl now issues tickets (chat carries only /c/<ticket>); consent attempts minted from a session carry the ticket hash and complete the session on linked. Egress guard pattern list already covers /c/<22-char> links. Tests: 7 route tests (malformed/unknown/expired/completed/ok-302/DO-failure + hash determinism), 1 consent session-field test.
 - [ ] LIVE: P3+ on next deploy - the connect button carries a /c/ link; tail shows connect_issued -> connect_link ok -> connect_begin -> oauth hops -> connect_completed

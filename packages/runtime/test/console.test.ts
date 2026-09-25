@@ -166,7 +166,9 @@ describe('owner console', () => {
     for (const id of ['checklist', 'approvals', 'connections', 'spots', 'constellation', 'day', 'memory', 'usage', 'activity']) expect(html).toContain(`id="${id}"`);
     expect(html).toContain('&#60;script&#62;x&#60;/script&#62;');
     expect(html).not.toContain('<zz>');
-    expect(html).toContain('href="/console/google">Connect Google');
+    // S5: connect is a CSRF-checked POST that 303s to a /c/<ticket>; no GET link that a preview could mint from.
+    expect(html).toContain('<input type="hidden" name="action" value="google.connect"><input type="hidden" name="value" value="calendar">');
+    expect(html).not.toContain('href="/console/google');
     expect(html).toContain(`name="csrf" value="${view.csrf}"`);
     expect(html).toContain('value="spot.forget"');
     expect(html).toContain('Not built yet');
