@@ -462,17 +462,28 @@ type Promotion = Readonly<{
 
 export const applyPromotion = (store: ClaimStore, raw: string, at: string): string => {
   const plan = JSON.parse(raw) as Promotion;
+  // Validation at the consolidation seam: model output is a proposal. Strengths
+  // clamp to [0,1]; supporting_spots must name real claims; edge endpoints must
+  // resolve to nodes that exist after the save.
+  const clamp01 = (n: number) => Math.min(1, Math.max(0, Number.isFinite(n) ? n : 0));
+  // Spots may cite promoted claims (still real evidence); only dismissed/purged are excluded.
+  const claimIds = new Set([...store.claims('active'), ...store.claims('promoted')].map((claim) => claim.id));
   const existing = new Set(store.nodes().map((node) => node.id));
-  const ids = plan.nodes.map((node) => store.saveNode({ ...node, id: node.id !== null && existing.has(node.id) ? node.id : null }, at));
+  const ids = plan.nodes.map((node) => store.saveNode({ ...node, strength: clamp01(node.strength), supporting_spots: node.supporting_spots.filter((id) => claimIds.has(id)), id: node.id !== null && existing.has(node.id) ? node.id : null }, at));
   const resolve = (ref: string) => ref.startsWith('new:') ? ids[Number(ref.slice(4))] : Number(ref);
   const all = new Set(store.nodes().map((node) => node.id));
-  const edges = plan.edges.map((edge) => ({ ...edge, from_id: resolve(edge.from), to_id: resolve(edge.to) }))
+  const edges = plan.edges.map((edge) => ({ ...edge, strength: clamp01(edge.strength), evidence_count: Math.max(1, Math.floor(edge.evidence_count) || 1), from_id: resolve(edge.from), to_id: resolve(edge.to) }))
     .filter((edge): edge is typeof edge & { from_id: number; to_id: number } => edge.from_id !== undefined && edge.to_id !== undefined && all.has(edge.from_id) && all.has(edge.to_id) && edge.from_id !== edge.to_id);
   for (const edge of edges) store.saveEdge({ from_id: edge.from_id, to_id: edge.to_id, relation: edge.relation, strength: edge.strength, evidence_count: edge.evidence_count });
   // Untrusted-origin claims (evidence lived in shared/forwarded content) are excluded
   // structurally - no amount of recurrence promotes external content into the constellation.
-  const promotable = new Set(store.claims().filter((claim) => (claim.kind === 'observation' || claim.kind === 'pattern') && claim.origin !== 'untrusted').map((claim) => claim.id));
+  // Consolidation validation (Hindsight's proof-count rule): promotion into the
+  // constellation is earned by recurrence, not asserted by the model. The prompt
+  // asks for "seen repeatedly and consistently"; code enforces the floor - a
+  // claim seen once is a single episode, never a lasting pattern.
+  const promotable = new Set(store.claims().filter((claim) => (claim.kind === 'observation' || claim.kind === 'pattern') && claim.origin !== 'untrusted' && claim.seen_count >= 2).map((claim) => claim.id));
   const promoted = plan.promoted.filter((id) => promotable.has(id));
+  const rejected = plan.promoted.length - promoted.length;
   for (const id of promoted) store.setStatus(id, 'promoted');
-  return `nodes${ids.length} edges${edges.length} promoted${promoted.length}`;
+  return `nodes${ids.length} edges${edges.length} promoted${promoted.length}${rejected ? ` rejected${rejected}` : ''}`;
 };
