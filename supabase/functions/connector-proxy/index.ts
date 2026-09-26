@@ -19,7 +19,7 @@ const same = (a: string, b: string) => {
   for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ (b.charCodeAt(i) || 0);
   return diff === 0;
 };
-const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+// Whole-body cap: the args envelope is 2MB, so 2.5MB covers it plus op/connection framing.\nconst MAX_BODY_BYTES = 2_500_000;\nconst reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const fail = (status: number, message: string) => reply({ error: { status, message } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
 const db = async (fn: string, args: Record<string, string>) => {
   const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
@@ -46,7 +46,12 @@ const logged = async (started: number, op: string, method: string | undefined, r
 Deno.serve(async (request) => {
   const started = Date.now();
   if (request.method !== 'POST' || !router || !clientId || !clientSecret || !service) return logged(started, 'unconfigured', undefined, fail(404, 'connector proxy is not configured'));
+  // Bound the bytes BEFORE the full read and hash: the signature covers the whole body, so the
+  // cap must come first or a huge body is read and hashed before any limit applies.
+  const declared = Number(request.headers.get('content-length') ?? '0');
+  if (declared > MAX_BODY_BYTES) return logged(started, 'oversize', undefined, fail(413, 'proxy request too large'));
   const raw = await request.text();
+  if (raw.length > MAX_BODY_BYTES) return logged(started, 'oversize', undefined, fail(413, 'proxy request too large'));
   const at = Number(request.headers.get('x-waldo-at'));
   if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return logged(started, 'unsigned', undefined, fail(401, 'unsigned proxy call'));
   const body = JSON.parse(raw) as Body;
@@ -73,11 +78,24 @@ const handle = async (body: Body): Promise<Response> => {
     const token = access[0]?.secret ?? null;
     if (!token) return fail(401, 'connection unavailable');
     if (!googleHas(access[0]!.scopes, PROXY_METHOD_FEATURE[method])) return fail(403, `scope_missing: ${PROXY_METHOD_FEATURE[method]}`);
+    // Durable per-approved-intent idempotency at the send boundary: the signed HMAC call is
+    // replayable inside its 5-minute window and Gmail Message-ID is not a provider idempotency
+    // guarantee, so the proxy itself refuses a second sendRaw of the identical approved bytes.
+    // A pending (ambiguous) first attempt replays as 409 unknown-outcome, never a resend.
+    let idemKey: string | null = null;
+    if (method === 'sendRaw') {
+      idemKey = await sha256(`${body.connection}:sendRaw:${JSON.stringify(body.args ?? [])}`);
+      const claim = await db('proxy_idem_claim', { p_do_name: body.do_name, p_connection: body.connection, p_key: idemKey }) as { state: string; result?: unknown } | null;
+      if (claim?.state === 'done') return reply({ data: claim.result ?? null });
+      if (claim?.state === 'pending') return fail(409, 'this exact send is in flight or its outcome is unknown - reconcile Sent before any retry');
+      if (claim?.state !== 'new') return fail(401, 'connection unavailable');
+    }
     let refreshError = '';
     const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; });
     try {
       const data = await (client[method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? []));
       await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
+      if (idemKey !== null) await db('proxy_idem_store', { p_do_name: body.do_name, p_connection: body.connection, p_key: idemKey, p_result: JSON.stringify(data ?? null) });
       return reply({ data: data ?? null });
     } catch (error) {
       if (refreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: refreshError });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { googleProxy } from '../src/connectors/connections';
-import { consentState, GoogleError, googleClient, googleHas, readConsentState, type GoogleClient } from '../src/connectors/google';
+import { consentState, GoogleError, googleClient, googleHas, readConsentState, type GoogleClient, b64url } from '../src/connectors/google';
 import { renderConsole } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 import { googleHandlers } from '../src/tools/live/google';
@@ -93,6 +93,43 @@ describe('incremental Google access', () => {
       connect: { status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'mail' },
     });
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=/);
+  });
+});
+
+describe('gmail send boundary', () => {
+  const app = { clientId: 'c', clientSecret: 's', redirectUri: 'https://r.test' };
+  const tokenOk = () => new Response(JSON.stringify({ access_token: 'at' }));
+
+  it('sendRaw posts base64url-encoded MIME as Message.raw - exactly once, never plain RFC2822', async () => {
+    const bodies: string[] = [];
+    const fetcher = vi.fn().mockImplementation((url: string, init?: { body?: string }) => {
+      if (String(url).includes('oauth2') || String(url).includes('token')) return Promise.resolve(tokenOk());
+      bodies.push(String(init?.body));
+      return Promise.resolve(new Response(JSON.stringify({ id: 'g1', threadId: 't1' })));
+    });
+    const mime = 'To: a@x.test\r\nSubject: Hello+World/1?\r\n\r\nBody text';
+    const out = await googleClient(app, { refresh_token: 'rt' }, fetcher as unknown as typeof fetch).sendRaw(mime, 't1');
+    expect(out).toEqual({ message_id: 'g1', thread_id: 't1' });
+    expect(bodies).toHaveLength(1);
+    const sent = JSON.parse(bodies[0]!) as { raw: string; threadId: string };
+    // base64url of the exact MIME bytes: no '+', '/', '=' and never the plain text
+    expect(sent.raw).toBe(b64url(new TextEncoder().encode(mime)));
+    expect(sent.raw).not.toContain('To: a@x.test');
+    expect(sent.raw).not.toMatch(/[+/=]/);
+    expect(sent.threadId).toBe('t1');
+  });
+
+  it('findSentByMessageId reconciles via the rfc822msgid Sent query, not a body guess', async () => {
+    const urls: string[] = [];
+    const fetcher = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes('token')) return Promise.resolve(tokenOk());
+      urls.push(String(url));
+      return Promise.resolve(new Response(JSON.stringify({ messages: [{ id: 'g9' }] })));
+    });
+    const found = await googleClient(app, { refresh_token: 'rt' }, fetcher as unknown as typeof fetch).findSentByMessageId('<abc@waldo-send>');
+    expect(found).toBe(true);
+    expect(urls[0]).toContain('in%3Asent');
+    expect(urls[0]).toContain('rfc822msgid%3Aabc%40waldo-send');
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
+import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex, b64url } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -212,7 +212,8 @@ describe('gmail send rail bytes', () => {
     const raw = 'xJ7';
     expect(await client.sendRaw(raw, 't1')).toEqual({ message_id: 'sent1', thread_id: 't1' });
     const sendCall = calls.find((c) => c.url.includes('/messages/send'))!;
-    expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: 'xJ7', threadId: 't1' });
+    // Gmail messages.send takes base64url MIME in Message.raw: the boundary encodes exactly once.
+    expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: b64url(new TextEncoder().encode(raw)), threadId: 't1' });
     expect(await client.findSentByMessageId('<m1@waldo-send>')).toBe(true);
     const findCall = calls.find((c) => c.url.includes('/messages?'))!;
     expect(decodeURIComponent(findCall.url.replace(/\+/g, ' '))).toContain('in:sent rfc822msgid:m1@waldo-send');

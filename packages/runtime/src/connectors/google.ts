@@ -225,9 +225,12 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return { draft_id: json.id, ...(json.message?.id ? { message_id: json.message.id } : {}), ...(json.message?.threadId ? { thread_id: json.message.threadId } : {}) };
     },
     async sendRaw(raw, threadId) {
+      // Gmail messages.send takes base64url MIME in Message.raw (same as drafts.create above).
+      // Callers pass the plain RFC2822 bytes; the encoding happens exactly once, here at the
+      // client boundary, so the approval rail never double-encodes or sends plain text.
       const json = await call('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ raw, ...(threadId ? { threadId } : {}) }),
+        body: JSON.stringify({ raw: b64url(new TextEncoder().encode(raw)), ...(threadId ? { threadId } : {}) }),
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },
