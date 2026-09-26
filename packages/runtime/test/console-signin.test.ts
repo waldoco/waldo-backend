@@ -29,6 +29,25 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
 const form = (path: string, fields: Record<string, string>) => new Request(`https://w.test${path}`, { method: 'POST', body: new URLSearchParams(fields) });
 
 describe('handleConsole', () => {
+  it('lets the single-owner staging DO validate its own one-time console link', async () => {
+    const a = auth();
+    const response = await handleConsole(
+      new Request('https://w.test/console?t=one-time-token'),
+      { TELEGRAM_OWNER_DO: owners().ns, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_TELEGRAM_ID: '12345' },
+      a,
+    );
+    expect(response).toBeNull();
+    expect(a.readOwnerCookie).not.toHaveBeenCalled();
+  });
+  it('routes a staging Telegram console session to its DO but keeps email auth active', async () => {
+    const env = { TELEGRAM_OWNER_DO: owners().ns, WALDO_ENVIRONMENT: 'staging', WALDO_OWNER_TELEGRAM_ID: '12345' };
+    const a = auth();
+    expect(await handleConsole(form('/console', { t: 'one-time-token' }), env, a)).toBeNull();
+    expect(await handleConsole(new Request('https://w.test/console/action', { headers: { cookie: 'waldo_console=token' } }), env, a)).toBeNull();
+    expect((await handleConsole(new Request('https://w.test/console'), env, a))?.headers.get('location')).toBe('/console/signin');
+    expect((await handleConsole(new Request('https://w.test/console/signin'), env, a))?.status).toBe(200);
+    expect((await handleConsole(new Request('https://w.test/console/signout-all', { method: 'POST' }), env, a))?.status).toBe(303);
+  });
   it('sign-out-everywhere drops server-side sessions and clears both cookies', async () => {
     const signOutAll = vi.fn(async () => 3);
     const response = await handleConsole(
