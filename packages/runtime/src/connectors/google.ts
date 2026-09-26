@@ -15,6 +15,11 @@ export const isGoogleFeature = (value: string): value is GoogleFeature => Object
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
   scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
+// Verified scopes only: a legacy account row with scopes null must route the owner to
+// reconsent (the proxy scope gate would deny every call anyway), never serve on blanket trust.
+export const googleServes = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
+  scopes != null && googleHas(scopes, feature);
+
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex, b64url } from '../src/connectors/google';
+import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, googleServes, readConsentState, sha256Hex, b64url } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -52,6 +52,22 @@ describe('google oauth state', () => {
     ]);
     expect(scopes.join(' ')).not.toMatch(/drive|documents|spreadsheets|presentations|contacts|gmail\.modify/);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
+  });
+});
+
+describe('googleServes (verified scopes or reconsent)', () => {
+  it('legacy null scopes never serve a feature; empty and partial verified scopes fail closed', () => {
+    // A legacy row with scopes null must route to reconsent: the proxy scope gate denies
+    // every call on it, so runtime selection must not pick it on blanket trust.
+    expect(googleServes(null, 'mail')).toBe(false);
+    expect(googleServes(null, 'calendar')).toBe(false);
+    expect(googleServes([], 'calendar')).toBe(false);
+    expect(googleServes(['https://www.googleapis.com/auth/calendar.readonly'], 'mail')).toBe(false);
+  });
+
+  it('verified scopes serve their feature', () => {
+    // Real granted scope sets (as stored after a verified exchange).
+    expect(googleServes(['https://www.googleapis.com/auth/calendar.events'], 'calendar')).toBe(true);
   });
 });
 

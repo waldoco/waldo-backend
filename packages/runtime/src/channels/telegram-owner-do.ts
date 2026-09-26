@@ -26,8 +26,8 @@ import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
-import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleClient, type GoogleFeature, type GoogleTokens } from '../connectors/google';
-import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
+import { exchangeGoogleCode, googleClient, googleHas, googleServes, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleClient, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { finishConsent, sessionGatedExchange, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { signedRpc } from '../identity/owner-directory';
@@ -53,7 +53,6 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 
 // scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
-const LEGACY_GRANT = null;
 type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null }>;
 
 type OwnerRuntime = Readonly<{
@@ -547,7 +546,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const doName = vaultOwner();
         const adopted = vault && doName ? await vault.adopt(doName, legacy).catch(() => null) : null;
         if (vault && !adopted) return;
-        await google.keep(adopted ? { ...adopted, scopes: legacy.scopes ?? LEGACY_GRANT } : { ...legacy, scopes: legacy.scopes ?? LEGACY_GRANT });
+        // Verified scopes or reconsent: a legacy token whose scopes were never recorded is
+        // adopted with an empty scope list, NOT a blanket grant. The proxy scope gate denies
+        // scope_missing either way; storing null here would let the runtime pick the account
+        // for every feature and fail only at the proxy, instead of routing the owner to
+        // reconsent where the real scopes are verified.
+        await google.keep(adopted ? { ...adopted, scopes: legacy.scopes ?? [] } : { ...legacy, scopes: legacy.scopes ?? [] });
         await storage.delete(['google:tokens', 'google:connection']);
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
@@ -562,7 +566,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!app) return null;
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
-        let fit = all.filter((account) => googleHas(account.scopes, feature));
+        // Only accounts with verified scopes serve a feature: a legacy row with scopes null
+        // never satisfied the proxy scope gate, so it must route to reconsent, not to a call
+        // that 403s after selection.
+        let fit = all.filter((account) => googleServes(account.scopes, feature));
         if (pinnedId !== undefined) fit = fit.filter((account) => account.id === pinnedId);
         let account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
@@ -629,7 +636,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const started = Date.now();
         const trace = `oauth:${input.nonce.slice(0, 8)}`;
         const doName = vaultOwner();
-        const { outcome, fresh } = await finishConsent(consentDeps, input, async (code, verifier, redirectUri) => {
+        // Read the connect-session ticket BEFORE the exchange: a revoked or expired ticket must
+        // never store a token. vault.exchange() itself writes the proxy/Vault connection, so
+        // the ticket is claimed atomically before ANY exchange, not just before google.keep().
+        const session = (await consentDeps.store.read())[input.nonce]?.session;
+        const callRpc = signedRpc(env);
+        const claimSession = session === undefined ? null : async (): Promise<boolean> => {
+          if (!callRpc) return false;
+          const done = await callRpc('connect_session_complete', `connsess.complete.${session}`, { p_ticket_hash: session }).catch(() => null);
+          log({ trace: `connect:${session.slice(0, 8)}`, hop: 'connect_completed', ms: 0, ok: done === true });
+          return done === true;
+        };
+        const { outcome, fresh } = await finishConsent(consentDeps, input, sessionGatedExchange(async (code, verifier, redirectUri) => {
           const exchangeStarted = Date.now();
           try {
             const grant = vault && doName
@@ -642,16 +660,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: false, detail: vault ? 'proxy' : 'local', error: error instanceof Error ? error.message : String(error), code: 'provider_error' });
             throw error;
           }
-        });
+        }, claimSession));
         log({ trace, hop: 'oauth_callback', ms: Date.now() - started, ok: outcome.kind === 'linked', detail: `${outcome.kind}${fresh ? '' : ' (replayed)'}`, ...(outcome.kind === 'failed' ? { error: outcome.reason } : {}) });
         if (fresh && outcome.kind === 'linked') {
           log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
-          const session = (await consentDeps.store.read())[input.nonce]?.session;
-          const callRpc = signedRpc(env);
-          if (session && callRpc) {
-            const done = await callRpc('connect_session_complete', `connsess.complete.${session}`, { p_ticket_hash: session }).catch(() => null);
-            log({ trace: `connect:${session.slice(0, 8)}`, hop: 'connect_completed', ms: 0, ok: done === true });
-          }
         }
         return { outcome, fresh, bot: await botUsername() };
       },
