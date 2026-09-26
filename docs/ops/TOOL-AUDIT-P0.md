@@ -10,7 +10,7 @@ Scope: every shipped tool. Statuses are separate by design (#177): CODE = handle
 | set_reminder (DO alarm) | scheduler + DO alarm | none extra | LIVE PASS 2026-09-25 (`tg-904957543`, alarm fired at the wall-clock minute) |
 | web_search (Brave) | live/web-search.ts | BRAVE key set 2026-09-24 | LIVE PASS 2026-09-25 (`tg-904957544`, official docs URL returned) |
 | query_calendar | live/google.ts:63 → connectors/google.ts:185 | GRANT: staging Google consent completed 2026-09-26 | EMPTY-READ LIVE PASS (`tg-904957557`, empty next-24h result). POPULATED-READ LIVE FAIL (`tg-904957561`, owner-facing failure). |
-| get_communication (Gmail read) | live/google.ts:76 → connectors/google.ts:212 (metadata headers + snippet only) | GRANT: gmail.readonly scope in the completed consent | POPULATED-READ LIVE FAIL (`tg-904957573`, owner-facing failure - the batch-overflow break). Candidate fix under review (see below); no live post-fix proof. |
+| get_communication (Gmail read) | live/google.ts:76 → connectors/google.ts:212 (metadata headers + snippet only) | GRANT: gmail.readonly scope in the completed consent | POPULATED-READ LIVE FAIL (`tg-904957573`, owner-facing). Live Langfuse evidence: `tool_get_communication` COMPLETED, then `llm_reply` failed `forbidden:scribe_sanitise` before send; the exact live Scribe reason was not exported. The batch-overflow break is a SOURCE/SYNTHETIC HYPOTHESIS (not yet distinguished live from other scribe-deny shapes); a post-fix live probe must confirm the actual mechanism. Candidate fix under review (see below); no live post-fix proof. |
 | get_tasks | live/google.ts:87 → connectors/google.ts:223 | GRANT: tasks scope in the completed consent | NOT RUN on staging - no live read attempted yet. |
 | propose_calendar_change | live/google.ts:99 → effect desk approval card | none extra | CODE + tests green; console Waiting-on-you queue NOT YET EXERCISED live |
 | draft_email | live/google.ts:109 → gmail drafts.create | gmail.compose scope in grant | CODE + tests green; live unproven |
@@ -20,7 +20,7 @@ Scope: every shipped tool. Statuses are separate by design (#177): CODE = handle
 | browse_page / browse_act | live/browser.ts | browser backend binding | CODE; live unproven |
 | search_episodes (recall) | live/search-episodes.ts + Vectorize waldo-recall | Vectorize bound on staging | CODE; live unproven |
 | MCP tools | live/mcp.ts | none configured | CODE skeleton; issue #195 open (breadth via MCP) |
-| Approval card truth | effect desk + approvals.ts (atomic claim, claim-release-on-pre-I/O-throw - on #202 pending merge) | Telegram bot token + owner id set | Console Waiting-on-you NOT EXERCISED live; card delivery + console list must be probed together |
+| Approval card truth | effect desk + approvals.ts (atomic claim, claim-release-on-pre-I/O-throw - on #202 pending merge) | Telegram bot token + owner id set | PARTIAL LIVE: a Calendar proposal -> visible pending console state -> skip path WAS exercised 2026-09-26. Missing proof: an APPROVED mutation with independent provider readback + channel delivery receipt. Probe approval and delivery together |
 
 Known live-affecting defects already filed: #161 (Telegram reply bricked by unrenderable history - stays open until the step-9 live recovery receipt passes), #149 (model offers capabilities it lacks - two unresolved live paths: invalid Calendar args and disconnected-owner connect affordance; stays open until BOTH pass), #146 (dispatcher fixed-size truncation - mitigated by read_tool_output, still open), #150/E1 (OTP quarantine - quarantineMailItem live in code), #172 (owner timezone at onboarding).
 
@@ -44,7 +44,7 @@ Langfuse receipt verification: traces carry WALDO_RELEASE (commit SHA) - each pr
 ## Candidate fixes under review (open, unmerged, undeployed; no live post-fix proof)
 
 - #212 @ 975c5be (base beta-mvp 2754a6c): reconciled tool-turn taint - per-item dispatcher-derived sanitise PLUS the final aggregate batch pass (absorbing #204's guard), typed safe omission receipts, compaction only via verified stored-output ids. Supersedes #208 @ 86299bb and #209 @ db232c9, which remain open. This is the candidate fix for the populated-read break above.
-- #202 @ cc7a59b: connect-link privacy form (`/c/?t=`), truthful per-outcome approval notices, filtered Google pagination. Awaiting owner merge.
+- #202 @ 3f82e8f: connect-link privacy form (`/c/?t=`), truthful per-outcome approval notices (exhaustive outcome mapping), filtered Google pagination with complete=provider-exhausted semantics. Awaiting owner merge.
 - #211 @ f2a7334: dynamic context budget. Awaiting owner merge.
 
 ## Queued (not worked, per owner pause): internal-taint hardening beyond #212; redaction-registry/URL-scrubber ports; sentinel egress proxy design.
