@@ -36,23 +36,22 @@ export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherCont
 // model must answer, so a turn always ends in words. Identical repeated calls are refused.
 export const FAILED_ROUNDS_LIMIT = 3;
 
-// Warn-first escalation (harness parity: Hermes injects budget warnings as ephemeral prompt
-// layers each turn, OpenClaw warns before it blocks): a silent hard stop at maxSteps surprises
-// the model mid-plan, so results delivered inside the last WARN_WINDOW_ROUNDS rounds carry an
-// explicit remaining-rounds notice and the model can close in words before tools are withdrawn.
+// Warn-first escalation: a silent hard stop at maxSteps surprises the model mid-plan, so
+// results delivered inside the last WARN_WINDOW_ROUNDS rounds carry an explicit
+// remaining-rounds notice and the model can close in words before tools are withdrawn.
 export const WARN_WINDOW_ROUNDS = 5;
 
-// Semantic no-progress detection (harness parity: OpenClaw hashes tool outcomes with volatile
-// fields stripped). Byte-exact dedupe misses the same call re-issued with fresh request ids,
-// cursors or timestamps in args, or answered with fresh ids/timestamps in the result. Volatile
-// spans - ISO-8601 timestamps, uuid-shaped ids, and 20+ char token runs (cursors, request ids) -
-// are blanked before hashing; small integers (page numbers, amounts) survive, so legit
-// pagination and genuinely different calls never collide. Once the same stabilized
-// (tool, args, result) triple appears NO_PROGRESS_LIMIT times in a turn, that stabilized
-// (tool, args) pair is refused pre-dispatch for the rest of the turn.
+// Semantic no-progress detection: byte-exact dedupe misses the same call re-issued with fresh
+// request ids, cursors or timestamps in args, or answered with fresh ids/timestamps in the
+// result. Volatile spans - ISO-8601 timestamps, uuid-shaped ids, and 20+ char token runs that
+// carry a digit, underscore, or hyphen (cursors, request ids) - are blanked before hashing.
+// Pure-alphabetic long words (ordinary search terms like electroencephalography) survive, so
+// genuinely different calls never collide; small integers (page numbers, amounts) survive too.
+// Once the same stabilized (tool, args, result) triple appears NO_PROGRESS_LIMIT times in a
+// turn, that stabilized (tool, args) pair is refused pre-dispatch for the rest of the turn.
 export const NO_PROGRESS_LIMIT = 3;
 
-const VOLATILE_SPANS = /(\d{4}-\d{2}-\d{2}[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)|([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})|([\w-]{20,})/gi;
+const VOLATILE_SPANS = /(\d{4}-\d{2}-\d{2}[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)|([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})|((?=[\w-]*[\d_-])[\w-]{20,})/gi;
 const stabilize = (text: string): string => text.replace(VOLATILE_SPANS, '#');
 
 export async function runToolLoop(input: Readonly<{
@@ -85,8 +84,8 @@ export async function runToolLoop(input: Readonly<{
       const key = `${call.name}\u0000${call.arguments}`;
       const stablePair = `${call.name}\u0000${stabilize(call.arguments)}`;
       // Harness refusals carry a typed code and never feed FAILED_ROUNDS_LIMIT: a refusal is the
-      // harness declining a redundant call, not a tool failure (Hermes tool_guardrails.py:216 -
-      // counting refusals "lets the cheap refusal feed the streak that fires the next, harder one").
+      // harness declining a redundant call, not a tool failure. Counting refusals lets a cheap
+      // refusal feed the streak that fires the next, harder one.
       const result = seen.has(key)
         ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
         : noProgressBlocked.has(stablePair)
@@ -110,7 +109,7 @@ export async function runToolLoop(input: Readonly<{
       const roundsLeft = input.maxSteps - round - 1;
       // Notes only exist when the cap exceeds the window (the real 25); tiny test caps that
       // exercise the withdrawal mechanism itself stay note-free. Pressure escalates as the
-      // window closes (Hermes pattern: budget warnings as escalating prompt pressure), and the
+      // window closes, and the
       // roundsLeft 0 notice is the graceful close - the model is told the budget is exhausted
       // alongside its last tool result, so the final no-tools step comes back as words.
       const budgetNote = input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft >= 0 && roundsLeft < WARN_WINDOW_ROUNDS

@@ -218,6 +218,27 @@ describe('warn-first budget notice and semantic no-progress', () => {
     expect(outputs[outputs.length - 1]).toContain('No progress');
   });
 
+  it('never blocks distinct long natural-language queries that return identical empty results', async () => {
+    // Long pure-alphabetic words are ordinary search terms, not volatile tokens; stabilization
+    // must preserve them, so three different queries with the same empty outcome stay callable.
+    let fetched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return Response.json({ web: { results: [] } }); });
+    const queries = ['electroencephalography', 'psychoneuroimmunology', 'antidisestablishmentarianism'];
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      handlers: [web], ctx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        return tools && n <= queries.length ? { text: '', tool_calls: [{ call_id: `q${n}`, name: 'web_search', arguments: `{"query":"${queries[n - 1]}"}` }] } : { text: 'answered.' };
+      },
+    });
+    expect(text).toBe('answered.');
+    expect(fetched).toBe(queries.length);
+    expect(outputs.every((o) => !o.includes('No progress'))).toBe(true);
+  });
+
   it('does not flag calls whose small-integer args genuinely differ (pagination survives stabilization)', async () => {
     let fetched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return okFetcher(); });
