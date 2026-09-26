@@ -853,7 +853,9 @@ const offloadResult = (
       result: failDispatch(
         callId,
         tool,
-        'tool result failed the offload guard',
+        // Typed enums only - the denied stage/reason stay provable from the trace without any
+        // provider content (live QA could not name the exact check before this).
+        `tool result failed the offload guard: ${guarded.check}:${guarded.reason}`,
         guarded.reason === 'oversize' ? 'oversize' : 'forbidden',
         'sanitise_denied',
       ),
