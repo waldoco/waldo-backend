@@ -1558,7 +1558,16 @@ async function sanitiseRequest(
       batch = await sanitiseValue(kept, 'internal_context', batchTaint);
     }
     if (!batch.ok) return { ...batch, scribeDestination: 'internal_context' };
-    toolTurns = { ok: true, payload: kept };
+    // The request forwards the sanitizer's validated payload, never the pre-sanitise array: a
+    // transforming sanitizer's redactions must be what the provider actually receives.
+    if (!Array.isArray(batch.payload) || batch.payload.length !== kept.length) {
+      return {
+        ok: false,
+        error: new HookHaltError('llm_provider', 'sanitised tool turns invalid', 'transient'),
+        scribeDestination: 'internal_context',
+      };
+    }
+    toolTurns = { ok: true, payload: batch.payload as LLMToolTurn[] };
   }
   const parsed = llmRequestSchema.safeParse({
     ...request,

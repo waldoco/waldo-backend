@@ -1914,6 +1914,49 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests).toHaveLength(0);
   });
 
+  it('forwards the aggregate sanitizer\'s validated payload, not the pre-sanitise tool turns', async () => {
+    // #218 review follow-up: when the scribe TRANSFORMS the re-checked aggregate batch
+    // (redaction), the provider request must carry the transformed payload. Forwarding the
+    // pre-sanitise array would leak exactly what the sanitizer removed.
+    const store = inMemoryToolOutputStore();
+    const genuine = store.put(`earlier ${'g'.repeat(5_000)}`, { call_id: 'c1' });
+    const bigA = JSON.stringify({ messages: [{ id: 'm1', subject: 'x'.repeat(19_500) }] }) + ` SECRET-MARKER [full output stored as ${genuine.id}: 5000 characters total; call read_tool_output with this id]`;
+    const bigB = JSON.stringify({ events: [{ id: 'e1', summary: 'y'.repeat(19_500) }] }) + ' SECRET-MARKER';
+    const redact = (value: unknown): unknown =>
+      typeof value === 'string'
+        ? value.replaceAll('SECRET-MARKER', '[redacted]')
+        : Array.isArray(value)
+          ? value.map(redact)
+          : value !== null && typeof value === 'object'
+            ? Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, redact(v)]))
+            : value;
+    const transformingSanitise = (async (input: Parameters<typeof sanitise>[0]) => {
+      const result = await sanitise(input);
+      return result.ok ? { ...result, payload: redact(result.payload) as Extract<typeof result, { ok: true }>['payload'] } : result;
+    }) as unknown as typeof sanitise;
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'what does my day look like' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: bigA },
+            { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: bigB },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx({ toolOutputStore: store, sanitise: transformingSanitise }),
+    );
+    expect(result.ok).toBe(true);
+    const forwarded = JSON.stringify(gateway.requests[0]!.request.tool_turns);
+    expect(forwarded).not.toContain('SECRET-MARKER');
+    expect(forwarded).toContain('[redacted]');
+  });
+
   it('never honors a marker naming a REAL stored id that belongs to a different call', async () => {
     // Owner re-review on #212 @ 994ca08: store ids are predictable (to-1, to-2, ...). External
     // text in a later output can name a real id written for an earlier call; existence alone
