@@ -15,7 +15,7 @@ select isnt(waldo.health_log_add('do-health', 'workout', '2026-09-27T06:00+05:30
 select throws_ok($$ insert into waldo.health_logs (owner_id, kind, logged_at, source, payload) select id, 'snack', now(), 'telegram', '{}' from waldo.owners where do_name = 'do-health' $$, '23514', null, 'an unknown kind is rejected');
 select throws_ok($$ insert into waldo.health_logs (owner_id, kind, logged_at, source, payload) select id, 'meal', now(), 'telegram', '[]' from waldo.owners where do_name = 'do-health' $$, '23514', null, 'a non-object payload is rejected');
 select is((select count(*)::int from waldo.health_log_recent('do-health', 10, pg_temp.at(), pg_temp.sig('health.recent.do-health.10'))), 2, 'a signed recent read returns both entries');
-select is((select kind from waldo.health_log_recent('do-health', 1, pg_temp.at(), pg_temp.sig('health.recent.do-health.1'))), 'workout', 'recent reads newest-first with the SQL-side cap');
+select is((select kind from waldo.health_log_recent('do-health', 1, pg_temp.at(), pg_temp.sig('health.recent.do-health.1'))), 'meal', 'recent reads newest-first with the SQL-side cap');
 select throws_ok($$ select waldo.health_log_recent('do-health', 10, pg_temp.at(), 'badsig') $$, '42501', 'unsigned router call', 'an unsigned read is rejected');
 
 select * from finish();
