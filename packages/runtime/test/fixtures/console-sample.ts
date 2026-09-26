@@ -25,6 +25,7 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
   ],
   retiredSpots: [spot(2, 'preference', 'Gym at 7am', 'inferred', 'one turn', 1, '21', 'dismissed'), spot(1, 'pattern', 'Late calls most weeks', 'stated', 'calendar', 4, '22', 'promoted')],
   forgettingSpots: [spot(7, 'fact', 'Old phone number ending 4123', 'stated', 'you said on 19 Sep', 1, '19', 'purging')],
+  holds: [{ id: 1, kind: 'observation', reason: 'self-report', created_at: '2026-09-25T22:00:00.000Z' }],
   nodes: [
     { id: 1, domain: 'work rhythm', label: 'Late calls', summary: 'Calls after 10pm, 2-3 times a week', strength: 0.7, status: 'active', first_seen: iso('21'), last_confirmed: iso('23'), supporting_spots: '[1]' },
     { id: 2, domain: 'sleep', label: 'Short sleep', summary: 'Under 6 hours on those nights', strength: 0.6, status: 'active', first_seen: iso('21'), last_confirmed: iso('23'), supporting_spots: '[4]' },
