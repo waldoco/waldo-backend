@@ -47,6 +47,10 @@ export const claimStore = (sql: Sql) => {
   // re-enter a prompt. Hash matching is unaffected (legacy rows have no hash to match).
   sql.exec('UPDATE forget_barriers SET topic = ? WHERE topic_hash IS NULL AND topic != ?', FORGOTTEN, FORGOTTEN);
   sql.exec('CREATE TABLE IF NOT EXISTS memory_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created_at TEXT NOT NULL)');
+  // Admission-gate audit: every candidate the gate refuses lands here as kind + reason +
+  // fingerprint - never the text. A held claim can quote forgotten or waldo-side text, so
+  // persisting the words would re-create the leak the hold prevented.
+  sql.exec('CREATE TABLE IF NOT EXISTS claim_holds (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, reason TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL)');
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL, strength REAL NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', first_seen TEXT NOT NULL, last_confirmed TEXT NOT NULL, supporting_spots TEXT NOT NULL DEFAULT '[]')`);
@@ -81,6 +85,10 @@ export const claimStore = (sql: Sql) => {
       const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
       if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
     },
+    recordHold(kind: string, reason: string, text: string, at: string): void {
+      sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, textFingerprint(text.trim()), at);
+    },
+    holds: () => sql.exec<{ id: number; kind: string; reason: string; fingerprint: string; created_at: string }>('SELECT * FROM claim_holds ORDER BY id').toArray(),
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,
     backup(reason: string, payload: unknown, at: string): void {
       sql.exec('INSERT OR IGNORE INTO memory_backups (reason, payload, created_at) VALUES (?, ?, ?)', reason, JSON.stringify(payload), at);
@@ -312,9 +320,50 @@ export const exchangeInput = (store: ClaimStore, owner: string, shared: string, 
 export const nightlyInput = (store: ClaimStore, day: string): string =>
   [memoryPrompt(store), barrierPrompt(store), `The last day of conversation:\n<conversation>\n${fence(day)}\n</conversation>`].join('\n\n');
 
+// Slice 4 admission gate: candidate claims are grounded against the exchange sections before
+// admission. 'stated' must ground in the owner's own words; evidence that only matches Waldo's
+// reply is a self-report (held - Waldo's words are never evidence about the owner, and an
+// unverifiable self-reported outcome is exactly the draft_saved-without-receipt failure class);
+// evidence that only matches shared/forwarded content is admitted but tainted to 'inferred'
+// (it shows what the owner shared, not who they are); an ungrounded paraphrase is admitted as
+// 'inferred' rather than silently blessed 'stated'. Nightly consolidation passes the day text
+// as owner grounding (fabrication check only - side separation happens at the per-exchange
+// gate); migration passes the file payload the evidence cites.
+export type ClaimGrounding = Readonly<{ owner?: string; shared?: string; waldo?: string }>;
+
+const normalizeForGrounding = (text: string): string => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/^ +| +$/g, '');
+
+// Quote-aware targets: evidence like `owner, tg-1: "gym usually 11am"` grounds on the quoted
+// span, not the citation prefix. Unquoted evidence is a paraphrase and checks as a whole.
+const groundingTargets = (evidence: string): readonly string[] => {
+  const spans: string[] = [];
+  const re = /"([^"]+)"/g;
+  let match = re.exec(evidence);
+  while (match !== null) {
+    const normalized = normalizeForGrounding(match[1] ?? '');
+    if (normalized.length >= 12) spans.push(normalized);
+    match = re.exec(evidence);
+  }
+  const whole = normalizeForGrounding(evidence);
+  return spans.length > 0 ? spans : whole ? [whole] : [];
+};
+
+type GroundingVerdict = 'owner' | 'waldo' | 'shared' | 'ungrounded';
+const ground = (evidence: string, sections: ClaimGrounding): GroundingVerdict => {
+  const targets = groundingTargets(evidence);
+  if (targets.length === 0) return 'ungrounded';
+  const owner = normalizeForGrounding(sections.owner ?? '');
+  const waldo = normalizeForGrounding(sections.waldo ?? '');
+  const shared = normalizeForGrounding(sections.shared ?? '');
+  if (owner && targets.every((target) => owner.includes(target))) return 'owner';
+  if (waldo && targets.some((target) => waldo.includes(target))) return 'waldo';
+  if (shared && targets.some((target) => shared.includes(target))) return 'shared';
+  return 'ungrounded';
+};
+
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void): string => {
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding): string => {
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
   const known = new Set(store.claims().map((claim) => claim.id));
   // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
@@ -323,9 +372,37 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   const topic = ops.forget_topic?.trim();
   if (topic) store.barrier(topic, at);
   const barrierHashes = new Set(store.barriers().map((barrier) => barrier.topic_hash).filter(Boolean));
+  const holdReasons = new Set<string>();
   const held = ops.add.filter((claim) => claim.touches_forgotten || barrierHashes.has(textFingerprint(claim.text.trim())));
+  for (const claim of held) {
+    store.recordHold(claim.kind, 'forgotten', claim.text, at);
+    holdReasons.add('forgotten');
+  }
+  let downgraded = 0;
+  let written = 0;
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
-  for (const claim of admitted) store.add({ kind: claim.kind, text: claim.text.trim(), source: claim.source === 'inferred' ? 'inferred' : 'stated', evidence: claim.evidence.trim() }, at);
+  for (const claim of admitted) {
+    let source = claim.source === 'inferred' ? 'inferred' : 'stated';
+    if (grounding !== undefined) {
+      const verdict = ground(claim.evidence, grounding);
+      if (verdict === 'waldo') {
+        // Self-report: evidence grounds only in Waldo's own reply. Held, never written -
+        // an unverifiable self-reported outcome is the draft_saved-without-receipt failure class.
+        store.recordHold(claim.kind, 'self-report', claim.text, at);
+        held.push(claim);
+        holdReasons.add('self-report');
+        continue;
+      }
+      if (source === 'stated' && verdict !== 'owner') {
+        // Shared-content taint or ungrounded paraphrase: admitted, but 'stated' is reserved
+        // for evidence that grounds in the owner's own words.
+        source = 'inferred';
+        downgraded += 1;
+      }
+    }
+    store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim() }, at);
+    written += 1;
+  }
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id))) store.setStatus(id, 'dismissed');
@@ -342,7 +419,8 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   }
   for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
-  return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
+  return `+${written} held${held.length}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${downgraded ? ` downgraded${downgraded}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [

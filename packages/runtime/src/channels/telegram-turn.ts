@@ -217,7 +217,7 @@ export const createTelegramResponder = (
           .then(async (raw) => {
             let purged: readonly string[] = [];
             let purgeIds: readonly number[] = [];
-            const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; });
+            const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared: media?.note ?? '', waldo: text });
             const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
             // Settle only once the KV conversation/ledger stores verify clean too; a KV
             // survivor leaves the claim 'purging' so a later retry can still find it.
@@ -246,7 +246,7 @@ export const createTelegramResponder = (
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; });
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: day });
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
@@ -256,7 +256,7 @@ export const createTelegramResponder = (
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; });
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: input });
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
