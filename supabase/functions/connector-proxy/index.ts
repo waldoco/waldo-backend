@@ -19,9 +19,11 @@ const same = (a: string, b: string) => {
   for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ (b.charCodeAt(i) || 0);
   return diff === 0;
 };
-// Whole-body cap: the args envelope is 2MB, so 2.5MB covers it plus op/connection framing.\nconst MAX_BODY_BYTES = 2_500_000;\nconst reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+// Whole-body cap: the args envelope is 2MB, so 2.5MB covers it plus op/connection framing.
+const MAX_BODY_BYTES = 2_500_000;
+const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const fail = (status: number, message: string) => reply({ error: { status, message } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
-const db = async (fn: string, args: Record<string, string>) => {
+const db = async (fn: string, args: Record<string, unknown>) => {
   const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
     method: 'POST', headers: { apikey: service, authorization: `Bearer ${service}`, 'content-profile': 'waldo', 'content-type': 'application/json' }, body: JSON.stringify(args),
   });
@@ -33,10 +35,12 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call'; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call'; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; intent?: string }>;
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
+// Provider errors can carry Google response text (addresses, query details): EF sinks emit only
+// bounded typed status/codes, never the provider message or body.
 const logged = async (started: number, op: string, method: string | undefined, response: Response) => {
   const outcome = await response.clone().json().then((json: { error?: { status: number; message: string } }) => json.error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
   console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: outcome.message } : {}) }));
@@ -45,15 +49,33 @@ const logged = async (started: number, op: string, method: string | undefined, r
 
 Deno.serve(async (request) => {
   const started = Date.now();
-  if (request.method !== 'POST' || !router || !clientId || !clientSecret || !service) return logged(started, 'unconfigured', undefined, fail(404, 'connector proxy is not configured'));
-  // Bound the bytes BEFORE the full read and hash: the signature covers the whole body, so the
-  // cap must come first or a huge body is read and hashed before any limit applies.
+  if (request.method !== 'POST' || !router || !clientId || !clientSecret || !service) return logged(started, 'unconfigured', undefined, fail(404, 'proxy_not_configured'));
+  // Bound the bytes BEFORE any read and hash: the signature covers the whole body, so the cap
+  // must come first. Content-Length is optional and untrusted, so the body is then read through
+  // a byte-counted stream - the read itself is bounded, never buffered whole and measured after.
   const declared = Number(request.headers.get('content-length') ?? '0');
-  if (declared > MAX_BODY_BYTES) return logged(started, 'oversize', undefined, fail(413, 'proxy request too large'));
-  const raw = await request.text();
-  if (raw.length > MAX_BODY_BYTES) return logged(started, 'oversize', undefined, fail(413, 'proxy request too large'));
+  if (declared > MAX_BODY_BYTES) return logged(started, 'oversize', undefined, fail(413, 'proxy_request_too_large'));
+  const readBounded = async (): Promise<string | null> => {
+    if (!request.body) return '';
+    const reader = request.body.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return text;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  };
+  const raw = await readBounded();
+  if (raw === null) return logged(started, 'oversize', undefined, fail(413, 'proxy_request_too_large'));
   const at = Number(request.headers.get('x-waldo-at'));
-  if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return logged(started, 'unsigned', undefined, fail(401, 'unsigned proxy call'));
+  if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return logged(started, 'unsigned', undefined, fail(401, 'unsigned_proxy_call'));
   const body = JSON.parse(raw) as Body;
   return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body));
 });
@@ -80,28 +102,41 @@ const handle = async (body: Body): Promise<Response> => {
     if (!googleHas(access[0]!.scopes, PROXY_METHOD_FEATURE[method])) return fail(403, `scope_missing: ${PROXY_METHOD_FEATURE[method]}`);
     // Durable per-approved-intent idempotency at the send boundary: the signed HMAC call is
     // replayable inside its 5-minute window and Gmail Message-ID is not a provider idempotency
-    // guarantee, so the proxy itself refuses a second sendRaw of the identical approved bytes.
-    // A pending (ambiguous) first attempt replays as 409 unknown-outcome, never a resend.
+    // guarantee, so the proxy itself refuses a second send of one approved intent. The key is
+    // the owner's unique immutable approval-intent id plus a content digest - two DISTINCT
+    // approved identical emails are two intents and both send; a same-intent replay returns the
+    // stored receipt; a pending (ambiguous) first attempt replays as 409 unknown-outcome.
     let idemKey: string | null = null;
     if (method === 'sendRaw') {
-      idemKey = await sha256(`${body.connection}:sendRaw:${JSON.stringify(body.args ?? [])}`);
-      const claim = await db('proxy_idem_claim', { p_do_name: body.do_name, p_connection: body.connection, p_key: idemKey }) as { state: string; result?: unknown } | null;
+      if (typeof body.intent !== 'string' || body.intent.length === 0 || body.intent.length > 512) return fail(404, 'send_raw_requires_intent');
+      idemKey = body.intent;
+      const digest = await sha256(JSON.stringify(body.args ?? []));
+      const claim = await db('proxy_idem_claim', { p_do_name: body.do_name, p_connection: body.connection, p_key: idemKey, p_digest: digest }) as { state: string; result?: unknown } | null;
       if (claim?.state === 'done') return reply({ data: claim.result ?? null });
-      if (claim?.state === 'pending') return fail(409, 'this exact send is in flight or its outcome is unknown - reconcile Sent before any retry');
+      if (claim?.state === 'pending') return fail(409, 'send_in_flight_or_unknown_outcome');
+      if (claim?.state === 'conflict') return fail(409, 'intent_reused_with_different_bytes');
       if (claim?.state !== 'new') return fail(401, 'connection unavailable');
     }
     let refreshError = '';
     const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; });
     try {
       const data = await (client[method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? []));
-      await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
-      if (idemKey !== null) await db('proxy_idem_store', { p_do_name: body.do_name, p_connection: body.connection, p_key: idemKey, p_result: JSON.stringify(data ?? null) });
+      if (idemKey !== null) {
+        // The provider receipt must be durably confirmed BEFORE anything is reported: a failed
+        // receipt write fails closed, never reported as sent. p_result passes the object itself;
+        // PostgREST stores it as jsonb, so a replay returns { message_id }, not a JSON string.
+        const stored = await db('proxy_idem_store', { p_do_name: body.do_name, p_connection: body.connection, p_key: idemKey, p_result: data ?? null }) as boolean;
+        if (stored !== true) return fail(502, 'send_receipt_not_persisted');
+      }
+      // Health is best-effort bookkeeping: it never gates and never precedes the durable receipt.
+      await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(() => undefined);
       return reply({ data: data ?? null });
     } catch (error) {
-      if (refreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: refreshError });
-      return fail(refreshError ? 401 : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error));
+      if (refreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: 'refresh_failed' }).catch(() => undefined);
+      const status = refreshError ? 401 : error instanceof GoogleError ? error.status : 502;
+      return fail(status, refreshError ? 'token_refresh_failed' : `google_error_${status}`);
     }
-  } catch (error) {
-    return fail(502, error instanceof Error ? error.message : String(error));
+  } catch {
+    return fail(502, 'proxy_internal_error');
   }
 };

@@ -8,7 +8,9 @@ export type GoogleLink = Readonly<{ id: string; email: string; scopes: readonly 
 export type GoogleProxy = Readonly<{
   exchange(doName: string, code: string, redirectUri: string, codeVerifier?: string): Promise<GoogleLink | null>;
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
-  client(doName: string, connection: string, health?: (error: string) => void): GoogleClient;
+  // sendIntent is the unique immutable approval-intent id for the sendRaw idempotency gate;
+  // it rides only on sendRaw calls and is required for them at the proxy.
+  client(doName: string, connection: string, health?: (error: string) => void, sendIntent?: string): GoogleClient;
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
@@ -36,9 +38,9 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   return {
     exchange: async (doName, code, redirectUri, codeVerifier) => link(await post({ do_name: doName, op: 'exchange', code, redirect_uri: redirectUri, ...(codeVerifier ? { code_verifier: codeVerifier } : {}) })),
     adopt: async (doName, tokens) => link(await post({ do_name: doName, op: 'adopt', refresh_token: tokens.refresh_token, email: tokens.email ?? 'google', scopes: tokens.scopes ?? [] })),
-    client: (doName, connection, health) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
+    client: (doName, connection, health, sendIntent) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
       try {
-        const { data } = await post({ do_name: doName, op: 'call', connection, method, args });
+        const { data } = await post({ do_name: doName, op: 'call', connection, method, args, ...(method === 'sendRaw' ? { intent: sendIntent ?? '' } : {}) });
         health?.('');
         return data;
       } catch (error) {

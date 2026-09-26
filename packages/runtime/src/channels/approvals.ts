@@ -51,7 +51,9 @@ export type ApprovalDesk = Readonly<{
 export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   call: TelegramCall;
   owner: number;
-  google(): Promise<GoogleClient | null>;
+  // sendIntent binds the proxy send idempotency gate to the approved proposal: the email rail
+  // passes its approval entry id, so a replayed approval can never fire a second provider send.
+  google(sendIntent?: string): Promise<GoogleClient | null>;
   newId(): string;
   now(): number;
   timezone: string;
@@ -142,7 +144,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
         } else {
-          const client = await deps.google();
+          const client = await deps.google(`email_send:${id}`);
           if (client === null) {
             out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
           } else if (await sha256Hex(ep.raw) !== ep.digest) {

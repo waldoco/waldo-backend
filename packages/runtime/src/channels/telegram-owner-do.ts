@@ -551,7 +551,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
       // The first healthy account whose grant covers the feature serves it.
-      async client(feature: GoogleFeature = 'calendar') {
+      async client(feature: GoogleFeature = 'calendar', sendIntent?: string) {
         const app = await googleApp();
         if (!app) return null;
         await google.migrate();
@@ -560,7 +560,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
         if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
-        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error)) : null;
+        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error), sendIntent) : null;
       },
       async state() {
         await google.migrate();
@@ -639,7 +639,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const desk = approvalDesk(storage.sql, {
-      call, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
+      call, owner, google: (sendIntent?: string) => google.client(sendIntent ? 'mail' : 'calendar', sendIntent), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
       timezone: clock.timezone, log,
       browserSubmit: (proposal) => executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
     });

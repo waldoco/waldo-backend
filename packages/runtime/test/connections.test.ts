@@ -36,12 +36,17 @@ describe('google proxy', () => {
 
   it('routes tasks, sendRaw and findSentByMessageId through the owner-bound signed call', async () => {
     const fetcher = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: null }))));
-    const client = proxyOf(fetcher).client('do-a', 'c-1');
+    const client = proxyOf(fetcher).client('do-a', 'c-1', undefined, 'email_send:prop-1');
     await client.tasks('todo', 20);
     await client.sendRaw('To: a@b.test\r\n\r\nhi', 'thread-1');
     await client.findSentByMessageId('<m@waldo-send>');
-    const methods = fetcher.mock.calls.map((call) => JSON.parse(String((call[1] as { body: string }).body)).method);
+    const bodies = fetcher.mock.calls.map((call) => JSON.parse(String((call[1] as { body: string }).body)));
+    const methods = bodies.map((body) => body.method);
     expect(methods).toEqual(['tasks', 'sendRaw', 'findSentByMessageId']);
+    // the approval-intent id rides only on sendRaw; other methods carry no intent field
+    expect(bodies[1].intent).toBe('email_send:prop-1');
+    expect(bodies[0]).not.toHaveProperty('intent');
+    expect(bodies[2]).not.toHaveProperty('intent');
     // every call is signed and carries the connection id, never a token
     for (const call of fetcher.mock.calls) {
       const init = call[1] as { headers: Record<string, string>; body: string };
@@ -99,6 +104,15 @@ describe('incremental Google access', () => {
 describe('gmail send boundary', () => {
   const app = { clientId: 'c', clientSecret: 's', redirectUri: 'https://r.test' };
   const tokenOk = () => new Response(JSON.stringify({ access_token: 'at' }));
+
+  it('b64url encodes near the 1MB proxy arg bound without a RangeError, byte-exact round trip', () => {
+    // 200k bytes previously threw RangeError via String.fromCharCode(...bytes) spread; the
+    // chunked helper must cover the full range the proxy accepts.
+    const big = new Uint8Array(200 * 1024).map((_, i) => i % 256);
+    const encoded = b64url(big);
+    const decoded = Uint8Array.from(atob(encoded.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+    expect(decoded).toEqual(big);
+  });
 
   it('sendRaw posts base64url-encoded MIME as Message.raw - exactly once, never plain RFC2822', async () => {
     const bodies: string[] = [];

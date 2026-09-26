@@ -236,13 +236,14 @@ describe('approval desk - email_send rail', () => {
       sendRaw: async (raw: string) => { sentRaw.push(raw); if (opts.sendError) throw opts.sendError; return { message_id: 'g1' }; },
       findSentByMessageId: async () => opts.found ?? false,
     } as unknown as GoogleClient;
+    const googleIntents: (string | undefined)[] = [];
     const desk = approvalDesk(state.storage.sql, {
       call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
-      owner: 42, google: async () => (opts.connected === false ? null : client), newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      owner: 42, google: async (sendIntent?: string) => { googleIntents.push(sendIntent); return opts.connected === false ? null : client; }, newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
     });
     const { sha256Hex } = await import('../src/connectors/google');
     const id = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
-    return { desk, id, sent, sentRaw, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
+    return { desk, id, sent, sentRaw, googleIntents, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
   it('proposes with Send it / Modify / Not now, sends the exact stored bytes on approve, never undoes, expires', async () => {
@@ -266,6 +267,15 @@ describe('approval desk - email_send rail', () => {
       const late = await desk.decide(id2, 'a', 't');
       expect(late.toast).toBe('This proposal expired');
       expect(sentRaw).toHaveLength(1);
+    });
+  });
+
+  it('binds the proxy send idempotency gate to the approved proposal id, never to content alone', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-intent'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, googleIntents } = await setup(state, {});
+      await desk.decide(id, 'a', 't');
+      expect(googleIntents).toEqual([`email_send:${id}`]);
     });
   });
 
