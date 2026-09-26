@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(12);
+select plan(16);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -26,5 +26,22 @@ create temp table s2 as select waldo.connect_session_issue('do-a', 'google', 'te
 select waldo.connect_session_issue('do-a', 'google', 'telegram', 'hash3', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.telegram.hash3'));
 select is((select status from waldo.connect_sessions where ticket_hash = 'hash2'), 'revoked', 're-issuing revokes the previous live ticket');
 select is((select count(*)::int from waldo.connect_sessions where owner_id in (select id from waldo.owners where do_name = 'do-a') and provider = 'google' and status in ('issued', 'clicked')), 1, 'exactly one live ticket per owner+provider');
+-- #215 boundary tests across both clocks (owner release-blocking review): the ticket lifetime
+-- is 12 hours, and a CLICKED ticket completes even after its resolve window closes.
+create temp table s3 as select waldo.connect_session_issue('do-a', 'google', 'console', 'hash4', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.console.hash4')) as id;
+select ok((select expires_at > now() + interval '11 hours 59 minutes' and expires_at <= now() + interval '12 hours' from waldo.connect_sessions where ticket_hash = 'hash4'), 'an issued ticket lives about 12 hours, not 30 minutes');
+
+-- issued but never clicked, past expiry: resolve reports expired and complete refuses.
+update waldo.connect_sessions set expires_at = now() - interval '1 second' where ticket_hash = 'hash4';
+select is(waldo.connect_session_resolve('hash4', pg_temp.at(), pg_temp.sig('connsess.resolve.hash4'))->>'status', 'expired', 'a ticket past its 12-hour window resolves expired');
+select is(waldo.connect_session_complete('hash4', pg_temp.at(), pg_temp.sig('connsess.complete.hash4')), false, 'an expired ticket that was never clicked cannot complete');
+
+-- clicked near expiry, callback lands after the window: completion must still record (the
+-- single-use OAuth state nonce governs the callback, not the ticket window).
+select waldo.connect_session_issue('do-a', 'google', 'console', 'hash5', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.console.hash5'));
+select waldo.connect_session_resolve('hash5', pg_temp.at(), pg_temp.sig('connsess.resolve.hash5'));
+update waldo.connect_sessions set expires_at = now() - interval '1 second' where ticket_hash = 'hash5';
+select is(waldo.connect_session_complete('hash5', pg_temp.at(), pg_temp.sig('connsess.complete.hash5')), true, 'a clicked ticket completes even after its resolve window closes');
+
 select * from finish();
 rollback;
