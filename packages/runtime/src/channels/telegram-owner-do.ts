@@ -38,7 +38,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
-import { whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { callMcpToolHandler } from '../tools/live/mcp';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
@@ -163,7 +163,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   // normalize each text message into the telegram-shaped update the turn pipeline consumes
   // (subject digits double as the numeric owner/chat id). Approval replies arrive as text
   // ("a:p12") because WhatsApp buttons carry no callback_data, so that shape synthesizes the
-  // equivalent callback_query. Non-text messages are skipped (voice notes are W4).
+  // equivalent callback_query. Voice/audio notes ride the same transcriber path as Telegram
+  // (W4): file_id carries the WhatsApp media id and the per-channel downloader in setup()
+  // resolves it through the Graph two-step. Other non-text messages are skipped.
   private async whatsappTurn(request: Request, body: string): Promise<Response> {
     const subject = request.headers.get('x-waldo-whatsapp-subject') ?? '';
     if (!/^\d{6,15}$/.test(subject)) return new Response('forbidden', { status: 403 });
@@ -172,7 +174,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       kv.put('whatsapp_subject', subject);
       this.runtimes = {};
     }
-    const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string } }[] };
+    const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }[] };
     const { updates, seq } = whatsappIngressUpdates(value.messages ?? [], subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
     for (const update of updates) await this.serial(() => this.turn(update, 'whatsapp'));
     await this.ctx.storage.put('wa_seq', seq);
@@ -721,7 +723,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
     const ledger = () => [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity())].join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
-    const download = createTelegramFileDownloader(token ?? '');
+    // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
+    // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
+    const download = channel === 'whatsapp'
+      ? createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!)
+      : createTelegramFileDownloader(token ?? '');
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now()), armHeartbeat(scheduler, Date.now())])
       .then(async ([, , , seeded]) => {

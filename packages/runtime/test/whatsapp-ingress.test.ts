@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { WA_UPDATE_BASE, whatsappIngressUpdates, whatsappTelegramShim } from '../src/channels/whatsapp-api';
+import { WA_UPDATE_BASE, createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from '../src/channels/whatsapp-api';
 import { gatedCaller } from '../src/channels/telegram-api';
 
 describe('whatsapp ingress normalization', () => {
@@ -82,6 +82,60 @@ describe('whatsapp telegram shim', () => {
     expect(graph).not.toHaveBeenCalled();
     linked = true;
     await gated('sendMessage', { chat_id: 1, text: 'through' });
+    expect(graph).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('whatsapp voice notes (W4)', () => {
+  it('a voice note becomes the telegram-shaped voice update the shared transcriber path reads', () => {
+    const { updates, seq } = whatsappIngressUpdates([
+      { id: 'wamid.v1', from: '15550001111', type: 'audio', audio: { id: 'media-1', mime_type: 'audio/ogg; codecs=opus', voice: true } },
+    ], '15550001111', 0);
+    expect(seq).toBe(1);
+    expect(updates[0]).toEqual({
+      update_id: WA_UPDATE_BASE + 1,
+      message: {
+        from: { id: 15550001111 },
+        chat: { id: 15550001111, type: 'private' },
+        voice: { file_id: 'media-1', mime_type: 'audio/ogg; codecs=opus' },
+      },
+    });
+  });
+
+  it('an audio file (voice=false) becomes the audio media update; audio without a media id is skipped', () => {
+    const { updates, seq } = whatsappIngressUpdates([
+      { id: 'wamid.a1', from: '15550001111', type: 'audio', audio: { id: 'media-2', mime_type: 'audio/mpeg', voice: false } },
+      { id: 'wamid.a2', from: '15550001111', type: 'audio' },
+      { id: 'wamid.a3', from: '15550009999', type: 'audio', audio: { id: 'media-3', voice: true } },
+    ], '15550001111', 4);
+    expect(seq).toBe(5);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({ message: { audio: { file_id: 'media-2', mime_type: 'audio/mpeg' } } });
+  });
+
+  it('the downloader does the Graph two-step with the bearer on both calls, never in a URL', async () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const graph = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      return url.includes('/media-9')
+        ? Response.json({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=abc' })
+        : new Response(bytes);
+    });
+    const download = createWhatsAppMediaDownloader('wabearer-t0ken', graph as unknown as typeof fetch);
+    expect([...await download('media-9')]).toEqual([1, 2, 3]);
+    expect(graph).toHaveBeenCalledTimes(2);
+    const [lookupUrl, lookupInit] = graph.mock.calls[0] as unknown as [string, RequestInit];
+    const [fileUrl, fileInit] = graph.mock.calls[1] as unknown as [string, RequestInit];
+    expect(lookupUrl).toBe('https://graph.facebook.com/v21.0/media-9');
+    expect(fileUrl).toBe('https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=abc');
+    for (const init of [lookupInit, fileInit]) expect((init.headers as Record<string, string>).authorization).toBe('Bearer wabearer-t0ken');
+    expect(lookupUrl + fileUrl).not.toContain('wabearer-t0ken');
+  });
+
+  it('the downloader refuses a download URL off the Meta media hosts before sending the bearer', async () => {
+    const graph = vi.fn(async () => Response.json({ url: 'https://evil.example/bytes' }));
+    const download = createWhatsAppMediaDownloader('wabearer-t0ken', graph as unknown as typeof fetch);
+    await expect(download('media-9')).rejects.toThrow('no usable url');
     expect(graph).toHaveBeenCalledTimes(1);
   });
 });
