@@ -624,7 +624,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // The channel that issued the link decides where the completion page routes back to.
         await storage.put(`connect_channel:${hash}`, channel);
         log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
-        return `${origin}/c/${ticket}`;
+        return `${origin}/c/?t=${ticket}`;
       },
       async beginSession(ticketHash: string) {
         const app = await googleApp();

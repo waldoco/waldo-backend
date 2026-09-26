@@ -1,6 +1,12 @@
-// S3 (CONNECT_FLOW_DESIGN): short first-party connect links. Chat carries /c/<ticket>; the
+// S3 (CONNECT_FLOW_DESIGN): short first-party connect links. Chat carries /c/?t=<ticket>; the
 // provider consent URL is minted at click time inside the owner's Durable Object and travels
 // only in the 302 redirect. The ticket itself is never stored - only its sha256 hash.
+//
+// The ticket rides in the `t` query parameter, never the URL path: edge observability
+// (Workers Logs, traces) captures request URLs and only query-string redaction is supported,
+// so a path-borne bearer ticket would land in persisted logs. The legacy /c/<ticket> path
+// form is still accepted so links minted before the cutover keep working until their 12h TTL
+// lapses; nothing mints it anymore.
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { consentPage } from './google-oauth';
 
@@ -24,7 +30,10 @@ const hop = (status: string, hashPrefix: string) =>
 type ConnectEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: { idFromName(name: string): unknown; get(id: unknown): { fetch(input: string, init?: RequestInit): Promise<Response> } } }>;
 
 export const handleConnectTicket = async (request: Request, env: ConnectEnv): Promise<Response> => {
-  const ticket = new URL(request.url).pathname.slice(CONNECT_LINK_PREFIX.length);
+  const url = new URL(request.url);
+  const ticket =
+    url.searchParams.get('t') ??
+    (url.pathname.startsWith(CONNECT_LINK_PREFIX) ? url.pathname.slice(CONNECT_LINK_PREFIX.length) : '');
   if (!TICKET.test(ticket)) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const call = signedRpc(env);
   const owners = env.TELEGRAM_OWNER_DO;
