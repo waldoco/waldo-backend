@@ -11,8 +11,8 @@ Scope: every shipped tool. Statuses are separate by design (#177): CODE = handle
 | web_search (Brave) | live/web-search.ts | BRAVE key set 2026-09-24 | LIVE PASS 2026-09-25 (`tg-904957544`, official docs URL returned) |
 | query_calendar | live/google.ts:63 → connectors/google.ts:185 | GRANT: staging Google consent completed 2026-09-26 | EMPTY-READ LIVE PASS (`tg-904957557`, empty next-24h result). POPULATED-READ LIVE FAIL (`tg-904957561`, owner-facing failure). |
 | get_communication (Gmail read) | live/google.ts:76 → connectors/google.ts:212 (metadata headers + snippet only) | GRANT: gmail.readonly scope in the completed consent | POPULATED-READ LIVE FAIL (`tg-904957573`, owner-facing). Live Langfuse evidence: `tool_get_communication` COMPLETED, then `llm_reply` failed `forbidden:scribe_sanitise` before send; the exact live Scribe reason was not exported. The batch-overflow break is a SOURCE/SYNTHETIC HYPOTHESIS (not yet distinguished live from other scribe-deny shapes); a post-fix live probe must confirm the actual mechanism. Candidate fix under review (see below); no live post-fix proof. |
-| get_tasks | live/google.ts:87 → connectors/google.ts:223 | GRANT: tasks scope in the completed consent | NOT RUN on staging - no live read attempted yet. |
-| propose_calendar_change | live/google.ts:99 → effect desk approval card | none extra | CODE + tests green; console Waiting-on-you queue NOT YET EXERCISED live |
+| get_tasks | live/google.ts:87 → connectors/google.ts:223 | GRANT: tasks scope in the completed consent | LIVE FAIL on old release `2754a6c` (`tg-904957580`, `transient:invalid_handler_result` - error-path stamp defect in withGoogle's caught transient arm, Langfuse root in #177; fixed at #202 @ `f027eb1`). Post-#202 live proof PENDING deploy. |
+| propose_calendar_change | live/google.ts:99 → effect desk approval card | none extra | PARTIAL LIVE: Calendar proposal -> visible pending console state -> skip path exercised 2026-09-26 (see Approval card truth row). Still unproven: an APPROVED mutation with provider readback + delivery receipt. |
 | draft_email | live/google.ts:109 → gmail drafts.create | gmail.compose scope in grant | CODE + tests green; live unproven |
 | send_email (approval rail) | live/google.ts:130; canonicalized MIME + sha256 digest + Message-ID reconciliation; oversize-card typed error | gmail.send scope in grant | CODE + 40+ tests green (#202 approvals suite); live unproven |
 | connect_service (connect link) | live/google.ts:190; telegram-owner-do.ts:602 mints link | - | LIVE ROUTE PASS (chooser). PRIVACY NOTE: on beta-mvp the minted link is still `/c/<ticket>` (ticket in path); the `/c/?t=` mint + path rejection ship with #202 (awaiting owner merge) |
@@ -43,8 +43,9 @@ Langfuse receipt verification: traces carry WALDO_RELEASE (commit SHA) - each pr
 
 ## Candidate fixes under review (open, unmerged, undeployed; no live post-fix proof)
 
-- #212 @ 975c5be (base beta-mvp 2754a6c): reconciled tool-turn taint - per-item dispatcher-derived sanitise PLUS the final aggregate batch pass (absorbing #204's guard), typed safe omission receipts, compaction only via verified stored-output ids. Supersedes #208 @ 86299bb and #209 @ db232c9, which remain open. This is the candidate fix for the populated-read break above.
-- #202 @ 3f82e8f: connect-link privacy form (`/c/?t=`), truthful per-outcome approval notices (exhaustive outcome mapping), filtered Google pagination with complete=provider-exhausted semantics. Awaiting owner merge.
-- #211 @ f2a7334: dynamic context budget. Awaiting owner merge.
+- #212 @ 73f80458 (base beta-mvp 2754a6c): reconciled tool-turn taint - per-item dispatcher-derived sanitise PLUS the final aggregate batch pass (absorbing #204's guard), typed safe omission receipts, compaction only via stored-output ids whose store provenance binds them to the turn carrying the marker. Supersedes #208 @ 86299bb and #209 @ db232c9, which remain open. This is the candidate fix for the populated-read break above. Under review, not live-proven.
+- #218 @ 6876f550 (draft): integration head combining #212 @ 73f80458 into #211 @ ba5d02e. Under review, not live-proven.
+- #202 @ f027eb1: connect-link privacy form (`/c/?t=`), truthful per-outcome approval notices (exhaustive outcome mapping), filtered Google pagination with complete=provider-exhausted semantics, external-stamp on withGoogle's caught transient arm (the `tg-904957580` defect). Awaiting owner merge.
+- #211 @ ba5d02e: dynamic context budget. Awaiting owner merge.
 
 ## Queued (not worked, per owner pause): internal-taint hardening beyond #212; redaction-registry/URL-scrubber ports; sentinel egress proxy design.
