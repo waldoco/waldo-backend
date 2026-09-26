@@ -1121,6 +1121,32 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION: DoMigration = {
   ],
 };
 
+// C4 truthful run history: one append-only row per scheduled fire, written before dispatch and
+// settled at completion. A row stuck in 'running' is the crashed-run evidence; 'missed' rows are
+// written by the missed-run policy (C3). No free-text error column - error_class carries the
+// Hermes-style split (run vs scheduler_handoff vs delivery) without leaking provider text.
+export const SCHEDULE_RUNS_SCHEMA_MIGRATION: DoMigration = {
+  version: 8,
+  name: 'schedule-runs-v0-1',
+  up: [
+    `CREATE TABLE IF NOT EXISTS schedule_runs (
+      id          TEXT PRIMARY KEY,
+      schedule_id TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      fired_at    INTEGER NOT NULL,
+      attempt     INTEGER NOT NULL CHECK (attempt > 0),
+      outcome     TEXT NOT NULL DEFAULT 'running'
+        CHECK (outcome IN ('running', 'ok', 'failed', 'quarantined', 'missed')),
+      error_class TEXT CHECK (error_class IN ('run', 'scheduler_handoff', 'delivery')),
+      settled_at  INTEGER,
+      duration_ms INTEGER,
+      CHECK ((outcome = 'running') = (settled_at IS NULL))
+    );`,
+    `CREATE INDEX IF NOT EXISTS schedule_runs_by_schedule ON schedule_runs (schedule_id, fired_at DESC);`,
+  ],
+  down: ['DROP TABLE IF EXISTS schedule_runs;'],
+};
+
 export const DO_SCHEMA_MIGRATIONS = [
   HEY10_BASE_SCHEMA_MIGRATION,
   HEY144_GOALS_SCHEMA_MIGRATION,
@@ -1129,6 +1155,7 @@ export const DO_SCHEMA_MIGRATIONS = [
   RESPONSIBILITY_PLANNING_HARNESS_SCHEMA_MIGRATION,
   RESPONSIBILITY_EXECUTION_WRITER_SCHEMA_MIGRATION,
   RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION,
+  SCHEDULE_RUNS_SCHEMA_MIGRATION,
 ] as const;
 
 export const DO_SCHEMA_VERSION = DO_SCHEMA_MIGRATIONS.at(-1)!.version;

@@ -125,17 +125,27 @@ export class Scheduler {
           continue;
         }
         const bumped = this.bumpAttempt(fresh.id, now);
+        const runId = this.recordRunStart(bumped, now);
         try {
           const executor = executors[bumped.kind];
-          if (executor === undefined) throw new Error(`no scheduler executor for ${bumped.kind}`);
+          if (executor === undefined) {
+            // Scheduler-handoff failure: the run never reached the executor.
+            this.settleRun(runId, 'failed', 'scheduler_handoff', now);
+            throw new Error(`no scheduler executor for ${bumped.kind}`);
+          }
           await executor(bumped);
           this.complete(bumped, now);
+          this.settleRun(runId, 'ok', null, now);
           dispatched.push(bumped);
         } catch (err) {
           if (isCrashInjectionError(err)) {
+            // No settle: a row stuck in 'running' is the crashed-run evidence.
             throw err;
           }
-          this.applyFailurePolicy(bumped, now);
+          const disposition = this.applyFailurePolicy(bumped, now);
+          if (this.runOutcome(runId) === 'running') {
+            this.settleRun(runId, disposition === 'quarantined' ? 'quarantined' : 'failed', 'run', now);
+          }
           if (shouldPropagateDurabilityInvariant(bumped.kind, err)) {
             throw err;
           }
@@ -205,7 +215,7 @@ export class Scheduler {
     );
   }
 
-  private applyFailurePolicy(entry: ScheduleEntry, now: number): void {
+  private applyFailurePolicy(entry: ScheduleEntry, now: number): 'quarantined' | 'retry' {
     if (scheduleKindCanQuarantine(entry.kind) && entry.attempts >= QUARANTINE_AFTER_ATTEMPTS) {
       this.sql.exec(
         `UPDATE schedule
@@ -218,7 +228,7 @@ export class Scheduler {
         entry.id,
         entry.updated_at,
       );
-      return;
+      return 'quarantined';
     }
     const delay = scheduleKindCanQuarantine(entry.kind)
       ? PRODUCT_RETRY_DELAY_MS * entry.attempts
@@ -233,6 +243,43 @@ export class Scheduler {
       entry.id,
       entry.updated_at,
     );
+    return 'retry';
+  }
+
+  // C4 run history: one row per fire, inserted before dispatch (recordRunStart) and settled
+  // exactly once (settleRun no-ops on an already-settled row, so the no-executor path can
+  // settle before rethrowing). Crash-injection rethrows leave the row 'running' on purpose.
+  private recordRunStart(entry: ScheduleEntry, now: number): string {
+    const runId = `${entry.id}:${entry.occurrence_at}:${entry.attempts}`;
+    this.sql.exec(
+      `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES (?, ?, ?, ?, ?)`,
+      runId,
+      entry.id,
+      entry.kind,
+      now,
+      entry.attempts,
+    );
+    return runId;
+  }
+
+  private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
+    this.sql.exec(
+      `UPDATE schedule_runs
+          SET outcome = ?, error_class = ?, settled_at = ?, duration_ms = ? - fired_at
+        WHERE id = ? AND outcome = 'running'`,
+      outcome,
+      errorClass,
+      now,
+      now,
+      runId,
+    );
+  }
+
+  private runOutcome(runId: string): string | null {
+    const row = this.sql
+      .exec<{ outcome: string }>('SELECT outcome FROM schedule_runs WHERE id = ?', runId)
+      .toArray()[0];
+    return row?.outcome ?? null;
   }
 
   private reapQuarantine(now: number): void {
