@@ -151,7 +151,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
-      if (action !== 'u' && action !== 's' && expired(entry, proposal)) {
+      // The 12h TTL bounds PROPOSALS (open rows) only. An 'unknown' row is an unreconciled
+      // EFFECT, not a proposal: expiring r/x would let a possibly-delivered send stop blocking
+      // a duplicate proposal without ever being reconciled (live review blocker, #202).
+      if (action !== 'u' && action !== 's' && entry.status === 'open' && expired(entry, proposal)) {
         setStatus(id, 'expired');
         out = { toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` };
       } else if (action === 's') {

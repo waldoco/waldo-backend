@@ -576,6 +576,27 @@ describe('approval desk - email_send rail', () => {
     });
   });
 
+  it('an unknown send past the 12h TTL still reconciles and still blocks duplicates', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-unknown-ttl'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sql, tick } = await setup(state, { sendError: new Error('network timeout'), found: false });
+      expect((await desk.decide(id, 'a', 't')).toast).toBe('Send unconfirmed');
+      tick(13 * 60 * 60_000); // past the 12h proposal TTL
+      // reconciliation is not a proposal action: it must NOT expire
+      const recheck = await desk.decide(id, 'r', 't');
+      expect(recheck.toast).toBe('Not in Sent yet');
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('unknown');
+      // and the possibly-delivered send still blocks a duplicate proposal
+      const { sha256Hex } = await import('../src/connectors/google');
+      const dupe = await desk.proposeSendEmail({ ...proposal, message_id: '<turn2@waldo-send>', digest: await sha256Hex(proposal.raw) });
+      expect(dupe.ok).toBe(true);
+      if (dupe.ok) { expect(dupe.reused).toBe('unknown'); expect(dupe.id).toBe(id); }
+      // owner declaration past the TTL still closes the row
+      expect((await desk.decide(id, 'x', 't')).toast).toBe('Marked as not sent');
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('failed');
+    });
+  });
+
   it('pins the sending connection and reconciles that SAME account', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-pin'));
     await runInDurableObject(stub, async (_i, state) => {
