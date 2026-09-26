@@ -20,6 +20,7 @@ import {
   type AdapterResult,
   type ErrorCode,
   errorCodeSchema,
+  EXTERNAL_ORIGIN_TOOLS,
   type GatewayConstantHeaders,
   type GatewayStep,
   type LLMRequest,
@@ -1326,12 +1327,14 @@ async function sanitiseRequest(
   const sanitiseValue = async (
     payload: unknown,
     destination: 'system_prompt' | 'internal_context',
+    payloadTaint?: 'external' | null,
   ): Promise<{ ok: true; payload: unknown } | { ok: false; error: HookHaltError }> => {
+    const effectiveTaint = payloadTaint === undefined ? sourceTaint.data : payloadTaint;
     const input = sanitiseInputSchema.safeParse({
       payload,
       destination,
       canary_tokens: canaryTokens,
-      source_taint: sourceTaint.data,
+      source_taint: effectiveTaint,
     });
     if (!input.success) {
       return {
@@ -1351,7 +1354,7 @@ async function sanitiseRequest(
           ),
         };
       }
-      if (result.source_taint !== sourceTaint.data) {
+      if (result.source_taint !== effectiveTaint) {
         return {
           ok: false,
           error: new HookHaltError('llm_provider', 'scribe sanitiser changed taint', 'transient'),
@@ -1412,7 +1415,14 @@ async function sanitiseRequest(
   if (request.tool_turns !== undefined) {
     const kept: LLMRequest['tool_turns'] & unknown[] = [];
     for (const turn of request.tool_turns) {
-      const single = await sanitiseValue([turn], 'internal_context');
+      // Dispatcher-derived provenance (owner finding on #204): a tool turn's taint comes
+      // from the dispatcher's own per-tool contract (EXTERNAL_ORIGIN_TOOLS), not from a
+      // blanket assignment - mutation acks (draft/send receipts) keep the run's taint,
+      // external-origin reads (web/mail/calendar/MCP/browse) carry 'external'.
+      const itemTaint = (EXTERNAL_ORIGIN_TOOLS as readonly string[]).includes(turn.call.name)
+        ? ('external' as const)
+        : sourceTaint.data;
+      const single = await sanitiseValue([turn], 'internal_context', itemTaint);
       if (single.ok && Array.isArray(single.payload) && single.payload.length === 1) {
         kept.push(single.payload[0]);
         continue;
@@ -1430,7 +1440,7 @@ async function sanitiseRequest(
       const receipt =
         `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. ` +
         'The tool DID return data - do not report it as empty. Page the rest with read_tool_output using the stored output id above, or ask to narrow the request.]';
-      const reduced = await sanitiseValue([{ ...turn, output: `${head}${receipt}` }], 'internal_context');
+      const reduced = await sanitiseValue([{ ...turn, output: `${head}${receipt}` }], 'internal_context', itemTaint);
       if (reduced.ok && Array.isArray(reduced.payload) && reduced.payload.length === 1) {
         kept.push(reduced.payload[0]);
         continue;

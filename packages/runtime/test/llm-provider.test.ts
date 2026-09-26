@@ -1874,6 +1874,41 @@ describe('sanitiseRequest structural degradation', () => {
     expect(output.length).toBeLessThan(stored.length);
   });
 
+  it('derives each tool turn taint from the dispatcher contract, not the run blanket', async () => {
+    // Owner finding on #204: tool_turns mixes internal mutation acks with external-origin
+    // reads; one blanket taint is not per-result provenance. A recording sanitiser proves
+    // web_search (EXTERNAL_ORIGIN_TOOLS) is sanitised 'external' while draft_email keeps the
+    // run taint (null here).
+    const seenTaints: Array<'external' | null> = [];
+    const recording = (input: { payload: unknown; source_taint: 'external' | null }) => {
+      const payload = input.payload as unknown[];
+      // Record only the single-tool-turn passes, not the messages pass.
+      if (Array.isArray(payload) && payload.length === 1 && typeof (payload[0] as { call?: unknown })?.call === 'object') {
+        seenTaints.push(input.source_taint);
+      }
+      return { ok: true as const, payload: input.payload, source_taint: input.source_taint, redactions: [] };
+    };
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'web_search', arguments: '{}' }, output: 'hits' },
+            { call: { call_id: 'c2', name: 'draft_email', arguments: '{}' }, output: 'draft saved' },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx({ sanitise: recording as never }),
+    );
+    expect(result.ok).toBe(true);
+    expect(seenTaints).toEqual(['external', null]);
+  });
+
   it('still fails the whole request closed when one tool turn carries a hard scribe deny', async () => {
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
