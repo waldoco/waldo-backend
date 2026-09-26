@@ -43,7 +43,10 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work:
     // A 403 means this feature's scope was never granted; a 401 means the stored grant is dead.
     if (error instanceof GoogleError && error.status === 403) return authFailed('scope_missing', feature);
     if (error instanceof GoogleError && error.status === 401) return authFailed('reauth_needed', feature);
-    return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
+    // Same stamp as the auth arms (owner live-QA finding on #202, trace tg-904957580): without
+    // 'external' the dispatcher's parseToolResult rejects the failure arm as
+    // invalid_handler_result and the real provider error never surfaces.
+    return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
 

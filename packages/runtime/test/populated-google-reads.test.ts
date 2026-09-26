@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSessionState, type TriggerType } from '@waldo/contracts';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
+import { GoogleError } from '../src/connectors/google';
 import { sanitise } from '../src/scribe/sanitiser';
 import { inMemoryToolOutputStore } from '../src/conversation/tool-output-store';
 
@@ -69,6 +70,27 @@ describe('Populated google reads (live failure tg-904957558/560 class)', () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe('oversize');
+  });
+
+  it('a generic provider rejection survives dispatch as its typed error, not invalid_handler_result', async () => {
+    // Live QA on #202 (trace tg-904957580): withGoogle's caught transient arm omitted
+    // source_taint:'external', so parseToolResult rejected the failure shape and the real
+    // provider error surfaced as invalid_handler_result. The stamp must ride the failure arm.
+    const failing = {
+      client: async () => ({
+        tasks: async () => {
+          throw new GoogleError(500, 'google 500: backend error');
+        },
+      }),
+    } as unknown as GoogleAccess;
+    const handlers = googleHandlers(failing, desk, clock);
+    const tasks = handlers.find((h) => h.name === 'get_tasks')!;
+    const result = await dispatchTool({ id: 'c9', name: 'get_tasks', args: {} }, ctx('user_message'), { handlers: [tasks] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('transient');
+      expect(result.error).toContain('google 500');
+    }
   });
 
   it('an empty calendar result passes, matching the live pass', async () => {
