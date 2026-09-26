@@ -69,7 +69,7 @@ export const createWhatsAppMediaDownloader = (token: string, fetcher: typeof fet
 
 export const WA_UPDATE_BASE = 9_000_000_000_000;
 
-export type WaIngressMessage = Readonly<{ id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean } }>;
+export type WaIngressMessage = Readonly<{ id?: string; from?: string; type?: string; text?: { body?: string }; audio?: { id?: string; mime_type?: string; voice?: boolean }; image?: { id?: string; mime_type?: string; caption?: string } }>;
 export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 
 // Pure normalization for /whatsapp-turn: each of the owner's text messages becomes a
@@ -78,7 +78,9 @@ export type WaSyntheticUpdate = Readonly<Record<string, unknown>>;
 // synthesizes the equivalent callback_query because WhatsApp buttons carry no callback_data.
 // An audio message becomes the voice/audio media update the shared transcriber path already
 // reads (file_id carries the WhatsApp media id; the owner DO's per-channel downloader resolves
-// it through the Graph two-step). Other types and any foreign sender are skipped.
+// it through the Graph two-step). An image message becomes the photo update the shared media
+// path reads (A6); its caption is owner text, so it gets the same artifact quarantine as a
+// text body. Other types and any foreign sender are skipped.
 export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], subject: string, seqStart: number): { updates: WaSyntheticUpdate[]; seq: number } => {
   let seq = seqStart;
   const ownerNum = Number(subject);
@@ -92,6 +94,21 @@ export const whatsappIngressUpdates = (messages: readonly WaIngressMessage[], su
         ? { audio: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } }
         : { voice: { file_id: audio.id, ...(audio.mime_type ? { mime_type: audio.mime_type } : {}) } };
       updates.push({ update_id: WA_UPDATE_BASE + seq, message: { from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' }, ...media } });
+      continue;
+    }
+    if (message.type === 'image' && message.image?.id) {
+      seq += 1;
+      const image = message.image;
+      const caption = (image.caption ?? '').trim();
+      const q = caption ? quarantineArtifacts(caption) : null;
+      updates.push({
+        update_id: WA_UPDATE_BASE + seq,
+        message: {
+          from: { id: ownerNum }, chat: { id: ownerNum, type: 'private' },
+          photo: [{ file_id: image.id }],
+          ...(q === null ? {} : { caption: q.kinds.length === 0 ? caption : onlyArtifacts(q) ? `[quarantined: ${q.kinds.join('/')} artifact - see your WhatsApp thread]` : q.text }),
+        },
+      });
       continue;
     }
     if (message.type !== 'text') continue;

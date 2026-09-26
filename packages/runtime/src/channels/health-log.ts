@@ -94,7 +94,7 @@ export const healthLogHandlers = (book: HealthLogBook) => [
   {
     name: 'log_meal',
     description:
-      'Log a meal the owner told you about. Store what they said; add calories_estimate only when it is honestly inferable, and always present it as an estimate. Log and nudge, never diagnose.',
+      'Log a meal the owner told you about or showed you in a photo. Store what they said (or what the photo shows, named as such); add calories_estimate only when it is honestly inferable, and always present it as an estimate. When the owner has not asked to log the photo, describe it and offer instead of logging. Log and nudge, never diagnose.',
     schema: logMealArgsSchema,
     trigger_allowlist: allowlist('log_meal'),
     autonomy_gated: false,
