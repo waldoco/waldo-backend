@@ -1,7 +1,7 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
 import { exchangeGoogleCode, googleClient, googleHas, GoogleError, type GoogleClient } from '../../../packages/runtime/src/connectors/google.ts';
-import { PROXY_METHODS, PROXY_METHOD_FEATURE, validateProxyArgs, type ProxyMethod } from '../../../packages/runtime/src/connectors/proxy-methods.ts';
+import { PROXY_METHODS, PROXY_METHOD_FEATURE, validateProxyArgs, validCorrelationTrace, type ProxyMethod } from '../../../packages/runtime/src/connectors/proxy-methods.ts';
 
 const env = (name: string) => Deno.env.get(name) ?? '';
 const [url, service, router, clientId, clientSecret] = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'WALDO_ROUTER_HMAC_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].map(env);
@@ -35,15 +35,17 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call'; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; intent?: string }>;
+type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call'; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[]; intent?: string; trace?: string }>;
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
 // Provider errors can carry Google response text (addresses, query details): EF sinks emit only
 // bounded typed status/codes, never the provider message or body.
-const logged = async (started: number, op: string, method: string | undefined, response: Response) => {
+const logged = async (started: number, op: string, method: string | undefined, response: Response, trace?: string) => {
   const outcome = await response.clone().json().then((json: { error?: { status: number; message: string } }) => json.error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
-  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: outcome.message } : {}) }));
+  // trace is the opaque, shape-validated turn correlation key - it joins this call to the exact
+  // Telegram/Langfuse turn. Still never do_name, connection, args, account, content or tokens.
+  console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(trace ? { trace } : {}), ...(outcome ? { status: outcome.status, error: outcome.message } : {}) }));
   return response;
 };
 
@@ -77,7 +79,11 @@ Deno.serve(async (request) => {
   const at = Number(request.headers.get('x-waldo-at'));
   if (!Number.isFinite(at) || Math.abs(Date.now() / 1000 - at) > 300 || !same(request.headers.get('x-waldo-sig') ?? '', await hmac(`${at}.proxy.${await sha256(raw)}`))) return logged(started, 'unsigned', undefined, fail(401, 'unsigned_proxy_call'));
   const body = JSON.parse(raw) as Body;
-  return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body));
+  // Correlation key is optional but shape-enforced when present: an invalid trace is rejected,
+  // never logged, so the correlation field can never smuggle free-form content into the sinks.
+  const trace = validCorrelationTrace(body.trace);
+  if (body.trace !== undefined && trace === undefined) return logged(started, body.op ?? 'call', undefined, fail(404, 'invalid_trace'));
+  return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body), trace);
 });
 
 const handle = async (body: Body): Promise<Response> => {

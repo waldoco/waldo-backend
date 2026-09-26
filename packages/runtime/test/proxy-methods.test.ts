@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PROXY_METHODS, PROXY_METHOD_FEATURE, validateProxyArgs } from '../src/connectors/proxy-methods';
+import { PROXY_METHODS, PROXY_METHOD_FEATURE, validateProxyArgs, validCorrelationTrace } from '../src/connectors/proxy-methods';
 import { googleHas } from '../src/connectors/google';
 
 // The allowlist the runtime client and the Edge Function share: Tasks and the send-approval
@@ -44,5 +44,19 @@ describe('connector proxy method allowlist', () => {
     expect(validateProxyArgs('events', 'nope')).toBe('args must be an array');
     expect(validateProxyArgs('events', ['x'.repeat(2_000_001)])).toBe('args too large');
     expect(validateProxyArgs('events', ['a', 'b', 1, false])).toBeNull();
+  });
+});
+
+describe('correlation trace shape (shared Worker/EF boundary)', () => {
+  it('accepts opaque turn ids and rejects everything else', () => {
+    expect(validCorrelationTrace('tg-904957567')).toBe('tg-904957567');
+    expect(validCorrelationTrace('a')).toBe('a');
+    expect(validCorrelationTrace('x'.repeat(64))).toBe('x'.repeat(64));
+    expect(validCorrelationTrace('x'.repeat(65))).toBeUndefined();
+    expect(validCorrelationTrace('has spaces')).toBeUndefined();
+    expect(validCorrelationTrace('gmail:msg:19c8a1b2f3d4e5f6')).toBeUndefined();
+    expect(validCorrelationTrace('')).toBeUndefined();
+    expect(validCorrelationTrace(undefined)).toBeUndefined();
+    expect(validCorrelationTrace({ toString: () => 'tg-1' })).toBeUndefined();
   });
 });

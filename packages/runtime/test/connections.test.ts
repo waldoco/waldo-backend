@@ -34,6 +34,18 @@ describe('google proxy', () => {
     expect(String(sent(fetcher)[1].body)).not.toMatch(/refresh_token|access_token/);
   });
 
+  it('carries a shape-valid turn correlation key in the signed body; invalid shapes are dropped before signing', async () => {
+    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: [] }))));
+    // success path: the opaque turn trace id rides the signed body for EF log correlation
+    await proxyOf(fetcher).client('do-a', 'c-1', undefined, undefined, 'tg-904957567').events('a', 'b', 5, false);
+    expect(JSON.parse(String(sent(fetcher, 0)[1].body)).trace).toBe('tg-904957567');
+    // failure path: invalid shapes never leave the Worker (the EF also rejects them)
+    await proxyOf(fetcher).client('do-a', 'c-1', undefined, undefined, 'not a trace!').events('a', 'b', 5, false);
+    expect(JSON.parse(String(sent(fetcher, 1)[1].body))).not.toHaveProperty('trace');
+    await proxyOf(fetcher).client('do-a', 'c-1', undefined, undefined, `tg-${'x'.repeat(100)}`).events('a', 'b', 5, false);
+    expect(JSON.parse(String(sent(fetcher, 2)[1].body))).not.toHaveProperty('trace');
+  });
+
   it('routes tasks, sendRaw and findSentByMessageId through the owner-bound signed call', async () => {
     const fetcher = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: null }))));
     const client = proxyOf(fetcher).client('do-a', 'c-1', undefined, 'email_send:prop-1');

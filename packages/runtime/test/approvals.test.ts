@@ -237,6 +237,7 @@ describe('approval desk - email_send rail', () => {
       findSentByMessageId: async () => { if (opts.findError) throw opts.findError; return opts.found ?? false; },
     } as unknown as GoogleClient;
     const googleIntents: (string | undefined)[] = [];
+    const googleCorrelations: (string | undefined)[] = [];
     const desk = approvalDesk(state.storage.sql, {
       call: async (method, body) => {
         sent.push({ method, body: body as Record<string, unknown> });
@@ -248,12 +249,12 @@ describe('approval desk - email_send rail', () => {
         }
         return {};
       },
-      owner: 42, google: async (sendIntent?: string) => { googleIntents.push(sendIntent); if (opts.googleError) { const e = opts.googleError; opts.googleError = undefined; throw e; } return opts.connected === false ? null : client; }, newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      owner: 42, google: async (sendIntent?: string, correlation?: string) => { googleIntents.push(sendIntent); googleCorrelations.push(correlation); if (opts.googleError) { const e = opts.googleError; opts.googleError = undefined; throw e; } return opts.connected === false ? null : client; }, newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
     });
     const { sha256Hex } = await import('../src/connectors/google');
     const proposed = await desk.proposeSendEmail({ ...proposal, ...(opts.messageId !== undefined ? { message_id: opts.messageId } : {}), digest: await sha256Hex(proposal.raw) });
     if (!proposed.ok) throw new Error(`unexpected proposal failure: ${proposed.reason}`);
-    return { desk, id: proposed.id, sent, sentRaw, googleIntents, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
+    return { desk, id: proposed.id, sent, sentRaw, googleIntents, googleCorrelations, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
   it('proposes with Send it / Modify / Not now, sends the exact stored bytes on approve, never undoes, expires', async () => {
@@ -546,7 +547,7 @@ describe('approval desk - email_send rail', () => {
   it('an unreconciled send is owner-visible in pending() and resolves via Check Sent or It did not go', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-unknown-resolve'));
     await runInDurableObject(stub, async (_i, state) => {
-      const { desk, id, googleIntents } = await setup(state, { sendError: new Error('network timeout'), found: false });
+      const { desk, id, googleIntents, googleCorrelations } = await setup(state, { sendError: new Error('network timeout'), found: false });
       const out = await desk.decide(id, 'a', 't');
       expect(out.toast).toBe('Send unconfirmed');
       expect(out.buttons).toEqual([['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]]);
@@ -559,6 +560,8 @@ describe('approval desk - email_send rail', () => {
       expect(miss.buttons).toEqual([['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]]);
       expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('unknown');
       expect(googleIntents[googleIntents.length - 1]).toBe(`email_send:${id}`);
+      // the turn trace id rides as the proxy correlation key, joining EF logs to this turn
+      expect(googleCorrelations[googleCorrelations.length - 1]).toBe('t');
       // owner declares it did not go -> closed, and a fresh same-content proposal mints a new card
       const closed = await desk.decide(id, 'x', 't');
       expect(closed.toast).toBe('Marked as not sent');

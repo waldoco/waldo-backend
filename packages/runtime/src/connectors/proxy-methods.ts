@@ -51,3 +51,11 @@ export const validateProxyArgs = (method: ProxyMethod, args: unknown): string | 
 
 // Feature scopes are re-exported here so the Edge Function imports one module, not two.
 export { GOOGLE_FEATURE_SCOPES };
+
+// Turn/trace correlation key: opaque, bounded, non-PII (the turn trace id, e.g. tg-904957567).
+// Both sides enforce the shape - the Worker omits an invalid value, the Edge Function rejects
+// it - so structured logs join the exact turn without ever carrying do_name, connection, args,
+// account, provider content or tokens.
+export const CORRELATION_TRACE_SHAPE = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,63}$/;
+export const validCorrelationTrace = (value: unknown): string | undefined =>
+  typeof value === 'string' && CORRELATION_TRACE_SHAPE.test(value) ? value : undefined;

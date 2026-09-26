@@ -1,6 +1,6 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { GoogleError, type GoogleClient, type GoogleTokens } from './google';
-import { PROXY_METHODS } from './proxy-methods';
+import { PROXY_METHODS, validCorrelationTrace } from './proxy-methods';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
@@ -10,7 +10,7 @@ export type GoogleProxy = Readonly<{
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
   // sendIntent is the unique immutable approval-intent id for the sendRaw idempotency gate;
   // it rides only on sendRaw calls and is required for them at the proxy.
-  client(doName: string, connection: string, health?: (error: string) => void, sendIntent?: string): GoogleClient;
+  client(doName: string, connection: string, health?: (error: string) => void, sendIntent?: string, correlation?: string): GoogleClient;
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
@@ -38,9 +38,12 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   return {
     exchange: async (doName, code, redirectUri, codeVerifier) => link(await post({ do_name: doName, op: 'exchange', code, redirect_uri: redirectUri, ...(codeVerifier ? { code_verifier: codeVerifier } : {}) })),
     adopt: async (doName, tokens) => link(await post({ do_name: doName, op: 'adopt', refresh_token: tokens.refresh_token, email: tokens.email ?? 'google', scopes: tokens.scopes ?? [] })),
-    client: (doName, connection, health, sendIntent) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
+    client: (doName, connection, health, sendIntent, correlation) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
       try {
-        const { data } = await post({ do_name: doName, op: 'call', connection, method, args, ...(method === 'sendRaw' ? { intent: sendIntent ?? '' } : {}) });
+        // Opaque turn/trace correlation rides the signed body so the EF's structured log joins
+        // the exact Telegram/Langfuse turn; invalid shapes are dropped here and rejected there.
+        const trace = validCorrelationTrace(correlation);
+        const { data } = await post({ do_name: doName, op: 'call', connection, method, args, ...(method === 'sendRaw' ? { intent: sendIntent ?? '' } : {}), ...(trace ? { trace } : {}) });
         health?.('');
         return data;
       } catch (error) {

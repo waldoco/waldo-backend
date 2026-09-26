@@ -66,7 +66,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   owner: number;
   // sendIntent binds the proxy send idempotency gate to the approved proposal: the email rail
   // passes its approval entry id, so a replayed approval can never fire a second provider send.
-  google(sendIntent?: string): Promise<GoogleClient | null>;
+  google(sendIntent?: string, correlation?: string): Promise<GoogleClient | null>;
   newId(): string;
   now(): number;
   timezone: string;
@@ -185,7 +185,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             // connection in the owner-DO wiring, so a mail-only grant could never reconcile
             // and a multi-account owner could search the wrong mailbox. The send intent id
             // routes feature=mail; it gates idempotency only on sendRaw, so reuse here is safe.
-            const client = await deps.google(`email_send:${id}`);
+            const client = await deps.google(`email_send:${id}`, trace);
             if (client === null) {
               out = { toast: 'Google is not connected', message: 'I could not check Sent because Google is not connected.', buttons: unresolvedButtons(id) };
             } else {
@@ -214,7 +214,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             try {
               // The approval id is the send idempotency intent for the proxy gate: a replayed
               // approval replays as the same intent and can never fire a second provider send.
-              client = await deps.google(`email_send:${id}`);
+              client = await deps.google(`email_send:${id}`, trace);
               digestOk = client !== null && (await sha256Hex(ep.raw)) === ep.digest;
             } catch (error) {
               setStatus(id, 'open');
