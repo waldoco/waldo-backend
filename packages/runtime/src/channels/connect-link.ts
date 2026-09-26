@@ -24,8 +24,21 @@ export const ticketHash = async (ticket: string): Promise<string> =>
 
 type Resolved = Readonly<{ status: string; do_name?: string; provider?: string; session?: string }>;
 
-const hop = (status: string, hashPrefix: string) =>
+// Custom logs persist outside the typed trace gate, so this sink takes a closed-enum
+// vocabulary only: never exception messages (signedRpc embeds up to 200 chars of the
+// external RPC response body) and never unvalidated response fields. The ticket hash
+// prefix is bounded (8 hex chars of sha256, never the ticket).
+type HopStatus =
+  | 'ok' | 'unknown' | 'expired' | 'completed' | 'revoked'
+  | 'unexpected_status' | 'resolve_rpc_error' | 'mint_rpc_error';
+
+const hop = (status: HopStatus, hashPrefix: string) =>
   console.log(JSON.stringify({ trace: `connect:${hashPrefix}`, hop: 'connect_link', ok: status === 'ok', detail: status }));
+
+// The RPC may echo only these two statuses in the not-ok branch; anything else is external
+// free-form and collapses to 'unexpected_status' before it can reach the log sink.
+const closedSessionStatus = (value: unknown): HopStatus =>
+  value === 'completed' || value === 'revoked' ? value : 'unexpected_status';
 
 type ConnectEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: { idFromName(name: string): unknown; get(id: unknown): { fetch(input: string, init?: RequestInit): Promise<Response> } } }>;
 
@@ -43,8 +56,8 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
   let session: Resolved | null;
   try {
     session = (await call('connect_session_resolve', `connsess.resolve.${hash}`, { p_ticket_hash: hash })) as Resolved | null;
-  } catch (error) {
-    console.log(JSON.stringify({ trace: `connect:${hashPrefix}`, hop: 'connect_link', ok: false, error: error instanceof Error ? error.message : String(error) }));
+  } catch {
+    hop('resolve_rpc_error', hashPrefix);
     return consentPage({ kind: 'failed', reason: 'resolve failed' }, null);
   }
   if (session === null) {
@@ -56,7 +69,7 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
     return consentPage({ kind: 'expired' }, null);
   }
   if (session.status !== 'ok' || !session.do_name) {
-    hop(session.status, hashPrefix);
+    hop(closedSessionStatus(session.status), hashPrefix);
     return consentPage({ kind: 'invalid' }, null);
   }
   try {
@@ -70,8 +83,8 @@ export const handleConnectTicket = async (request: Request, env: ConnectEnv): Pr
       status: 302,
       headers: { location: url, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' },
     });
-  } catch (error) {
-    console.log(JSON.stringify({ trace: `connect:${hashPrefix}`, hop: 'connect_link', ok: false, error: error instanceof Error ? error.message : String(error) }));
+  } catch {
+    hop('mint_rpc_error', hashPrefix);
     return consentPage({ kind: 'failed', reason: 'mint failed' }, null);
   }
 };
