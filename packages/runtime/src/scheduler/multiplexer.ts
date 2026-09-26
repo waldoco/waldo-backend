@@ -275,6 +275,40 @@ export class Scheduler {
     return runId;
   }
 
+  // Heartbeat decision + delivery lifecycle (C2/H1): the tick executor records WHAT it
+  // decided (quiet vs acted) and how the SEND went, on its own running row, separately
+  // from the run outcome. delivery 'pending' means decided-but-unconfirmed: a crash there
+  // leaves outcome 'running' + delivery 'pending', which recovery must re-deliver - never
+  // treat a pending tick as delivered.
+  runningRunId(scheduleId: string, occurrenceAt: number): string | null {
+    const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    const row = this.sql
+      .exec<{ id: string }>(
+        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY id DESC LIMIT 1`,
+        scheduleId,
+        lower,
+        upper,
+      )
+      .toArray()[0];
+    return row?.id ?? null;
+  }
+
+  markHeartbeatDecision(runId: string, result: 'quiet' | 'acted'): void {
+    this.sql.exec(
+      `UPDATE schedule_runs SET heartbeat_result = ? WHERE id = ? AND outcome = 'running'`,
+      result,
+      runId,
+    );
+  }
+
+  markDelivery(runId: string, delivery: 'pending' | 'sent' | 'failed'): void {
+    this.sql.exec(
+      `UPDATE schedule_runs SET delivery = ? WHERE id = ? AND outcome = 'running'`,
+      delivery,
+      runId,
+    );
+  }
+
   private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
     this.sql.exec(
       `UPDATE schedule_runs

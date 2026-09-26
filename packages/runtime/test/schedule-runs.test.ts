@@ -12,6 +12,7 @@ const deps = (now: number): Deps => ({ now: () => now, newRunId: () => 'run-fixe
 type RunRow = {
   id: string; schedule_id: string; kind: string; fired_at: number; attempt: number;
   outcome: string; error_class: string | null; settled_at: number | null; duration_ms: number | null;
+  heartbeat_result: string | null; delivery: string | null;
 };
 
 const withScheduler = async <T>(now: number, work: (scheduler: Scheduler, readRuns: () => RunRow[]) => Promise<T> | T) =>
@@ -98,5 +99,75 @@ describe('schedule_runs history (C4)', () => {
     });
     expect(runs.map((r) => [r.attempt, r.outcome])).toEqual([[1, 'running'], [2, 'ok']]);
     expect(runs.every((r) => r.schedule_id === longId)).toBe(true);
+  });
+});
+
+// The decision + delivery columns are generic run-history shape (heartbeat is their first
+// consumer via the #223 rework); these tests drive them with 'brief' since 'heartbeat'
+// joins the kind enum in the heartbeat PR.
+describe('run decision + delivery lifecycle (owner shape call)', () => {
+  it('records a quiet decision with no delivery, distinct from the run outcome', async () => {
+    const runs = await withScheduler(1_000, async (scheduler, readRuns) => {
+      await scheduler.schedule({ id: 'hb1', kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
+      await scheduler.dispatchDue({
+        brief: async (entry) => {
+          const runId = scheduler.runningRunId(entry.id, entry.occurrence_at);
+          expect(runId).not.toBeNull();
+          scheduler.markHeartbeatDecision(runId!, 'quiet');
+        },
+      } as ScheduleExecutors);
+      return readRuns();
+    });
+    expect(runs[0]).toMatchObject({ outcome: 'ok', heartbeat_result: 'quiet', delivery: null, error_class: null });
+  });
+
+  it('an acted tick goes pending -> sent; a crash at pending stays undelivered evidence', async () => {
+    const runs = await withScheduler(1_000, async (scheduler, readRuns) => {
+      await scheduler.schedule({ id: 'hb2', kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
+      await scheduler.dispatchDue({
+        brief: async (entry) => {
+          const runId = scheduler.runningRunId(entry.id, entry.occurrence_at)!;
+          scheduler.markHeartbeatDecision(runId, 'acted');
+          scheduler.markDelivery(runId, 'pending');
+          scheduler.markDelivery(runId, 'sent');
+        },
+      } as ScheduleExecutors);
+      return readRuns();
+    });
+    expect(runs[0]).toMatchObject({ outcome: 'ok', heartbeat_result: 'acted', delivery: 'sent' });
+  });
+
+  it('delivery is rejected unless the tick acted (schema CHECK)', async () => {
+    await runInDurableObject(stub(), async (_instance, state) => {
+      state.storage.sql.exec(
+        `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES ('r1', 'hb3', 'brief', 900, 1)`,
+      );
+      expect(() =>
+        state.storage.sql.exec(`UPDATE schedule_runs SET delivery = 'pending' WHERE id = 'r1'`),
+      ).toThrow();
+      // deciding first satisfies the CHECK
+      state.storage.sql.exec(`UPDATE schedule_runs SET heartbeat_result = 'acted' WHERE id = 'r1'`);
+      state.storage.sql.exec(`UPDATE schedule_runs SET delivery = 'pending' WHERE id = 'r1'`);
+      const row = state.storage.sql.exec<RunRow>(`SELECT * FROM schedule_runs WHERE id = 'r1'`).one();
+      expect(row.delivery).toBe('pending');
+    });
+  });
+
+  it('a crash after acted+pending leaves the row recoverable: running, acted, pending - never delivered', async () => {
+    const runs = await withScheduler(1_000, async (scheduler, readRuns) => {
+      await scheduler.schedule({ id: 'hb4', kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
+      await expect(
+        scheduler.dispatchDue({
+          brief: async (entry) => {
+            const runId = scheduler.runningRunId(entry.id, entry.occurrence_at)!;
+            scheduler.markHeartbeatDecision(runId, 'acted');
+            scheduler.markDelivery(runId, 'pending');
+            throw new Error('crash-injection: power loss before send');
+          },
+        } as ScheduleExecutors),
+      ).rejects.toThrow('crash-injection');
+      return readRuns();
+    });
+    expect(runs[0]).toMatchObject({ outcome: 'running', heartbeat_result: 'acted', delivery: 'pending', settled_at: null });
   });
 });

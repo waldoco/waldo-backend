@@ -1126,6 +1126,9 @@ export const RESPONSIBILITY_JUDGMENT_AUTHORITY_SCHEMA_MIGRATION: DoMigration = {
 // settled at completion. A row stuck in 'running' is the crashed-run evidence; 'missed' rows are
 // written by the missed-run policy (C3). No free-text error column - error_class carries the
 // Hermes-style split (run vs scheduler_handoff vs delivery) without leaking provider text.
+// heartbeat_result records the tick DECISION (quiet vs acted) separately from the run outcome;
+// delivery tracks the SEND (pending = decided but unconfirmed - recoverable after a crash,
+// never treated as delivered; sent/failed are terminal).
 export const SCHEDULE_RUNS_SCHEMA_MIGRATION: DoMigration = {
   version: 8,
   name: 'schedule-runs-v0-1',
@@ -1135,13 +1138,16 @@ export const SCHEDULE_RUNS_SCHEMA_MIGRATION: DoMigration = {
       schedule_id TEXT NOT NULL,
       kind        TEXT NOT NULL,
       fired_at    INTEGER NOT NULL,
-      attempt     INTEGER NOT NULL CHECK (attempt > 0),
+      attempt     INTEGER NOT NULL CHECK (attempt >= 0), -- 0 = policy-recorded skip (missed), never fired
       outcome     TEXT NOT NULL DEFAULT 'running'
         CHECK (outcome IN ('running', 'ok', 'failed', 'quarantined', 'missed')),
       error_class TEXT CHECK (error_class IN ('run', 'scheduler_handoff', 'delivery')),
+      heartbeat_result TEXT CHECK (heartbeat_result IN ('quiet', 'acted')),
+      delivery    TEXT CHECK (delivery IN ('pending', 'sent', 'failed')),
       settled_at  INTEGER,
       duration_ms INTEGER,
-      CHECK ((outcome = 'running') = (settled_at IS NULL))
+      CHECK ((outcome = 'running') = (settled_at IS NULL)),
+      CHECK (delivery IS NULL OR heartbeat_result IS 'acted')
     );`,
     `CREATE INDEX IF NOT EXISTS schedule_runs_by_schedule ON schedule_runs (schedule_id, fired_at DESC);`,
   ],

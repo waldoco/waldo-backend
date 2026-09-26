@@ -208,13 +208,16 @@ export function ensureSchema(storage: DurableObjectStorage): void {
       schedule_id TEXT NOT NULL,
       kind        TEXT NOT NULL,
       fired_at    INTEGER NOT NULL,
-      attempt     INTEGER NOT NULL CHECK (attempt > 0),
+      attempt     INTEGER NOT NULL CHECK (attempt >= 0), -- 0 = policy-recorded skip (missed), never fired
       outcome     TEXT NOT NULL DEFAULT 'running'
         CHECK (outcome IN ('running', 'ok', 'failed', 'quarantined', 'missed')),
       error_class TEXT CHECK (error_class IN ('run', 'scheduler_handoff', 'delivery')),
+      heartbeat_result TEXT CHECK (heartbeat_result IN ('quiet', 'acted')),
+      delivery    TEXT CHECK (delivery IN ('pending', 'sent', 'failed')),
       settled_at  INTEGER,
       duration_ms INTEGER,
-      CHECK ((outcome = 'running') = (settled_at IS NULL))
+      CHECK ((outcome = 'running') = (settled_at IS NULL)),
+      CHECK (delivery IS NULL OR heartbeat_result IS 'acted')
     );
   `);
   sql.exec('CREATE INDEX IF NOT EXISTS schedule_runs_by_schedule ON schedule_runs (schedule_id, fired_at DESC);');
