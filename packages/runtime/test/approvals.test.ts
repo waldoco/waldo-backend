@@ -224,7 +224,7 @@ describe('approval desk - email_send rail', () => {
   const proposal = {
     to: ['a@x.test'], subject: 'Hello', body: 'Body text', message_id: '<m1@waldo-send>',
     raw: 'To: a@x.test\r\nSubject: Hello\r\nMessage-ID: <m1@waldo-send>\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\nBody text',
-    digest: '',
+    digest: '', content_digest: 'cd1',
   };
   let idSeq = 0;
   const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string; failFirstCard?: boolean }) => {
@@ -250,7 +250,7 @@ describe('approval desk - email_send rail', () => {
       owner: 42, google: async () => (opts.connected === false ? null : client), newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
     });
     const { sha256Hex } = await import('../src/connectors/google');
-    const id = await desk.proposeSendEmail({ ...proposal, ...(opts.messageId !== undefined ? { message_id: opts.messageId } : {}), digest: await sha256Hex(proposal.raw) });
+    const { id } = await desk.proposeSendEmail({ ...proposal, ...(opts.messageId !== undefined ? { message_id: opts.messageId } : {}), digest: await sha256Hex(proposal.raw) });
     return { desk, id, sent, sentRaw, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
@@ -270,7 +270,7 @@ describe('approval desk - email_send rail', () => {
       expect((await desk.decide(id, 'u', 't')).toast).toBe("Can't be undone");
       expect(desk.pending(Date.now()).find((p) => p.id === id)?.undoable ?? false).toBe(false);
 
-      const id2 = await desk.proposeSendEmail({ ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) });
+      const { id: id2 } = await desk.proposeSendEmail({ ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) });
       tick(13 * 60 * 60_000);
       const late = await desk.decide(id2, 'a', 't');
       expect(late.toast).toBe('This proposal expired');
@@ -358,7 +358,8 @@ describe('approval desk - email_send rail', () => {
         call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
         owner: 42, google: async () => client, newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
       });
-      const id = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
+      const { id, reused } = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
+      expect(reused).toBe('open');
       const rows = state.storage.sql.exec<{ id: string }>("SELECT id FROM ledger WHERE kind = 'email_send'").toArray();
       expect(rows).toHaveLength(1); // no second proposal, no fresh Message-ID
       expect(id).toBe(rows[0]!.id); // the retry returned the SAME row the timed-out propose created
@@ -395,8 +396,8 @@ describe('approval desk - email_send rail', () => {
       // Two separate intents, identical content, distinct Message-IDs (as the turn-scoped key produces).
       const first = { ...proposal, message_id: '<turn1@waldo-send>', raw: proposal.raw.replace('<m1@waldo-send>', '<turn1@waldo-send>') };
       const second = { ...proposal, message_id: '<turn2@waldo-send>', raw: proposal.raw.replace('<m1@waldo-send>', '<turn2@waldo-send>') };
-      const id1 = await desk.proposeSendEmail({ ...first, digest: await sha256Hex(first.raw) });
-      const id2 = await desk.proposeSendEmail({ ...second, digest: await sha256Hex(second.raw) });
+      const { id: id1 } = await desk.proposeSendEmail({ ...first, digest: await sha256Hex(first.raw) });
+      const { id: id2 } = await desk.proposeSendEmail({ ...second, digest: await sha256Hex(second.raw) });
       expect(id2).not.toBe(id1); // distinct intents -> two proposals
       expect(state.storage.sql.exec("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'open'").toArray()).toHaveLength(2);
 
@@ -424,6 +425,54 @@ describe('approval desk - email_send rail', () => {
       expect(sentRaw).toHaveLength(1);
       const row = sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!;
       expect(row.status).toBe('unknown');
+    });
+  });
+
+  it('an unreconciled unknown send blocks a same-content re-entry - no new proposal, no duplicate risk', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-reentry'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sent } = await setup(state, { sendError: new Error('network timeout'), found: false });
+      const out = await desk.decide(id, 'a', 't');
+      expect(out.toast).toBe('Send unconfirmed');
+      const { sha256Hex } = await import('../src/connectors/google');
+      const cardsBefore = sent.filter((m) => m.method === 'sendMessage').length;
+
+      // A NEW turn proposes identical content under a fresh Message-ID: the unreconciled
+      // 'unknown' row blocks it - no second proposal the owner could approve into a duplicate.
+      const retry = await desk.proposeSendEmail({ ...proposal, message_id: '<turn2@waldo-send>', digest: await sha256Hex(proposal.raw) });
+      expect(retry.reused).toBe('unknown');
+      expect(retry.id).toBe(id);
+      const rows = state.storage.sql.exec("SELECT id FROM ledger WHERE kind = 'email_send'").toArray();
+      expect(rows).toHaveLength(1);
+      expect(sent.filter((m) => m.method === 'sendMessage')).toHaveLength(cardsBefore); // no new card
+    });
+  });
+
+  it('a same-turn retry while a send is in flight (sending) mints nothing', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-inflight'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sent } = await setup(state, {});
+      const { sha256Hex } = await import('../src/connectors/google');
+      // The row sits mid-claim, as after the atomic open -> sending flip before provider I/O.
+      state.storage.sql.exec("UPDATE ledger SET status = 'sending' WHERE id = ?", id);
+      const cardsBefore = sent.filter((m) => m.method === 'sendMessage').length;
+      const retry = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
+      expect(retry.reused).toBe('sending');
+      expect(retry.id).toBe(id);
+      expect(state.storage.sql.exec("SELECT id FROM ledger WHERE kind = 'email_send'").toArray()).toHaveLength(1);
+      expect(sent.filter((m) => m.method === 'sendMessage')).toHaveLength(cardsBefore);
+    });
+  });
+
+  it('a confirmed same-content send on a new intent still gets its own proposal', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-resolved'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id } = await setup(state, {});
+      expect((await desk.decide(id, 'a', 't')).toast).toBe('Sent'); // reconciled: status done
+      const { sha256Hex } = await import('../src/connectors/google');
+      const again = await desk.proposeSendEmail({ ...proposal, message_id: '<turn2@waldo-send>', digest: await sha256Hex(proposal.raw) });
+      expect(again.reused).toBe(null); // no unresolved outcome -> legit repeat intent proceeds
+      expect(again.id).not.toBe(id);
     });
   });
 
