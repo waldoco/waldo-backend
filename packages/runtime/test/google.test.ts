@@ -88,11 +88,11 @@ describe('google client', () => {
 });
 
 describe('google tools', () => {
-  const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
+  const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ id: 'proposal:1', reused: null }), record: () => undefined };
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
     const [query] = googleHandlers(google, proposals, clock);
-    const result = await query!.handle({ include_declined: false, limit: 20 } as never);
+    const result = await query!.handle({ include_declined: false, limit: 20 } as never, { authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at: 0 } } } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',
       error: expect.stringContaining('connect button'),
@@ -236,7 +236,7 @@ describe('get_tasks', () => {
   });
 
   it('handler is registered, returns tasks, and notes the in-progress mapping honestly', async () => {
-    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ id: 'p', reused: null }), record: () => {} };
     const access: GoogleAccess = { client: async () => googleClient(app, { refresh_token: 'rt' }, fakeFetch([])) };
     const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks');
     expect(handler).toBeDefined();
@@ -248,7 +248,7 @@ describe('get_tasks', () => {
   });
 
   it('handler returns the typed connect intent when Google is not connected', async () => {
-    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ id: 'p', reused: null }), record: () => {} };
     const access: GoogleAccess = { client: async () => null };
     const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks')!;
     const result = await handler.handle({ status: 'todo', limit: 20 });

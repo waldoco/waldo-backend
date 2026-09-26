@@ -4,7 +4,7 @@ import {
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
-import type { EmailSendProposal } from '../../channels/approvals';
+import type { EmailSendProposal, ProposeSendEmailResult } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
@@ -14,7 +14,7 @@ export type GoogleAccess = Readonly<{
 
 export type EffectDesk = Readonly<{
   propose(proposal: ProposeCalendarChangeArgs): Promise<string>;
-  proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
+  proposeSendEmail(proposal: EmailSendProposal): Promise<ProposeSendEmailResult>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
 
@@ -105,7 +105,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {
     name: 'draft_email',
-    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves.",
+    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves. It creates NO approval card and nothing enters the owner's approval queue - when the owner asked to send, or asked to approve first, use send_email instead.",
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
@@ -134,23 +134,38 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // and hands both to the approval desk. The desk replays the stored bytes on approval
     // (users.messages.send, never drafts.send) and reconciles an ambiguous send through the
     // Message-ID we set, so the model's post-approval state cannot change what goes out.
-    handle: async (args: SendEmailArgs) => {
+    handle: async (args: SendEmailArgs, ctx: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
       const gate = await withGoogle(google, 'mail', async () => null);
       if (!gate.ok) return { ...gate, source_taint: null };
-      const message_id = `<${crypto.randomUUID()}@waldo-send>`;
+      // Idempotency is scoped to the logical send: owner + turn + content. A retry of the same
+      // logical send (same turn, same content) keeps one proposal and one Message-ID, so the
+      // desk's Sent-mail reconciliation proves exactly-once across retries. The same content on
+      // a NEW request or day is a new logical send with its own Message-ID - an old Sent hit
+      // can never mark a later failed send as delivered, and distinct intents never collapse.
+      const content_key = await sha256Hex(JSON.stringify({
+        to: args.to, cc: args.cc ?? [], bcc: args.bcc ?? [],
+        subject: args.subject, body: args.body_markdown, thread: args.reply_to_thread_id ?? null,
+      }));
+      const logical_key = `${ctx.authenticatedUserId}:${ctx.session.rate_limit_window.started_at}:${content_key}`;
+      const message_id = `<${await sha256Hex(logical_key)}@waldo-send>`;
       const raw = buildMime({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,
       });
-      const proposal_id = await desk.proposeSendEmail({
+      const proposal = await desk.proposeSendEmail({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown,
         ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-        message_id, raw, digest: await sha256Hex(raw),
+        message_id, raw, digest: await sha256Hex(raw), content_digest: content_key,
       });
-      return { ok: true, data: { proposal_id, status: 'sent to the owner with Send it / Modify / Not now buttons', sent: false }, source_taint: null };
+      const status = proposal.reused === 'sending'
+        ? 'a send of this exact email is already in flight from the earlier card - no new card was sent; wait for that one to resolve'
+        : proposal.reused === 'unknown'
+          ? 'not proposed - a previous send of this exact email could not be confirmed and may already be in Sent; check Sent before asking again, so it never goes twice'
+          : 'sent to the owner with Send it / Modify / Not now buttons';
+      return { ok: true, data: { proposal_id: proposal.id, status, sent: false }, source_taint: null };
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
 ];
