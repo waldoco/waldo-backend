@@ -57,6 +57,11 @@ export const toolNameSchema = z.enum([
   // delegate_task 42 (subagent orchestration v1): turn-scoped, owner chat turns only; children
   // get a narrowed read-only tool set and cannot delegate further (flat, depth 1).
   'delegate_task',
+  // log_meal/log_workout/list_health_logs 43-45 (A9): owner-confirmed chat turns write; the
+  // proactive beats read recent entries through the ledger, not the tool ACL (reminder pattern).
+  'log_meal',
+  'log_workout',
+  'list_health_logs',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -179,6 +184,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'close_loop',
     'set_proactivity',
     'read_tool_output',
+    'log_meal',
+    'log_workout',
+    'list_health_logs',
   ],
   dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).

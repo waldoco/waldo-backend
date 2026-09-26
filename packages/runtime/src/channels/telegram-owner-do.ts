@@ -26,6 +26,7 @@ import { changeLines, collectChanges, updateBook, type UpdateBook } from './upda
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
+import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
@@ -66,7 +67,7 @@ type OwnerRuntime = Readonly<{
   probeCapture: ProbeCaptureSlot;
   probeGuard: { suppressMemory: boolean; stripLiveTools: boolean };
   desk: ApprovalDesk;
-  ledger(): string;
+  ledger(): Promise<string>;
   updates: UpdateBook;
   reminders: ReturnType<typeof reminderBook>;
   scheduler: Scheduler;
@@ -416,7 +417,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await call('answerCallbackQuery', { callback_query_id: query.id, text: rated ? 'Thanks, noted.' : 'Already handled.' });
         if (rated && query.message) await call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
       } else if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${raw.update_id}`);
-      else await call('sendMessage', { chat_id: owner, text: ledger() });
+      else await call('sendMessage', { chat_id: owner, text: await ledger() });
       await this.ctx.storage.put(offsetKey, raw.update_id + 1);
       return;
     }
@@ -507,6 +508,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
+    const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, channel, clock, (error) =>
+      log({ trace: `health:${channel}`, hop: 'health_log', ms: 0, ok: false, error: String(error) }),
+    );
     const baseCall = channel === 'whatsapp'
       ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
       : createTelegramCaller(token!);
@@ -721,7 +725,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);
     const loops = loopBook(storage.sql, { newId: () => deps.newRunId().slice(0, 8), now: () => Date.now() });
-    const ledger = () => [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity())].join('\n\n');
+    // A9: recent meal/workout logs join the proactive context; the read degrades to empty
+    // when the store is unlinked so beats and the /ledger command never break on it.
+    const ledger = async () =>
+      [loopsSection(loops, clock.timezone), desk.ledger(book.list()), proactivityLine(loops.proactivity()), healthSection(await healthLogs.recent(10), clock.timezone)]
+        .filter((section) => section !== '')
+        .join('\n\n');
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     // Media reads are per-channel: Telegram file ids go through getFile; WhatsApp media ids go
     // through the Graph two-step (W4). Both feed the same transcriber/attachment pipeline.
@@ -738,7 +747,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; })
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; })
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -873,7 +882,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const canSend = sentToday.has('card:brief') && !sentToday.has('card:close') && volume !== 'low' && !quiet();
         let text: string | null = null;
         if (canSend) {
-          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(changes), ledger: ledger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal' });
+          const said = updateCardPrompt(localIso(now, clock.timezone), { changes: changeLines(changes), ledger: await ledger(), feedback: updates.feedback(), volume: volume === 'high' ? 'high' : 'normal' });
           const reply = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
           if (reply && reply !== SKIP_UPDATE) text = reply;
         }
@@ -900,7 +909,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
       const said = await composeDayCard(card, now, clock.timezone, {
         google: client, connectable: !client && google.configured(),
-        ledger: ledger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
+        ledger: await ledger(), today: transcript(episodes.since(midnight, 30_000), clock.timezone), updates: updates.unfolded(clock.timezone),
       });
       try {
         const text = (await responder.prompt(trace, owner, said, async (hop, work) => work())).trim();
@@ -933,7 +942,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
           }),
-          ledger: ledger(), proactivity: loops.proactivity(), files: files.list(), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
+          ledger: await ledger(), proactivity: loops.proactivity(), files: files.list(), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
         };
       },
       act: async ({ action, id, value }) => {
