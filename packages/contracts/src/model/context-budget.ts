@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { modelNameSchema } from './roster';
+import {
+  ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
+  OPENAI_GPT_5_MINI_MODEL,
+  OPENAI_GPT_5_NANO_MODEL,
+  WORKERS_AI_GEMMA_4_26B_MODEL,
+  modelNameSchema,
+} from './roster';
 import type { ModelName } from './roster';
 
 // Dynamic per-model context budgets (owner decision 2026-09-26): budgets derive from the
@@ -20,37 +27,38 @@ export const modelContextSpecSchema = z.strictObject({
 });
 export type ModelContextSpec = z.infer<typeof modelContextSpecSchema>;
 
-// Sources (verified 2026-09-26):
-// - gpt-5-nano / gpt-5-mini: OpenAI model pages - 400,000 context, 128,000 max output
-//   (developers.openai.com/api/docs/models/gpt-5-nano, .../gpt-5-mini).
-// - claude-sonnet-4-6: Anthropic context-windows doc - listed in the 1M-window group, 128k max
-//   output (platform.claude.com/docs/en/build-with-claude/context-windows).
-// - claude-haiku-4-5: same doc - outside the 1M group, so the 200k window; 64k output reserve.
-// - @cf/google/gemma-4-26b-a4b-it: Workers AI model page not publicly documented at this
+// Sources (verified 2026-09-26; keyed by the roster constants, which own the identifiers):
+// - OPENAI_GPT_5_NANO_MODEL / OPENAI_GPT_5_MINI_MODEL: OpenAI model pages - 400,000 context,
+//   128,000 max output (developers.openai.com/api/docs/models/<id>).
+// - ANTHROPIC_CLAUDE_SONNET_4_6_MODEL: Anthropic context-windows doc - listed in the 1M-window
+//   group, 128k max output (platform.claude.com/docs/en/build-with-claude/context-windows).
+// - ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL: same doc - outside the 1M group, so the 200k window;
+//   64k output reserve.
+// - WORKERS_AI_GEMMA_4_26B_MODEL: Workers AI model page not publicly documented at this
 //   revision - conservative 128k-window assumption, marked for correction against the
 //   Workers AI dashboard before this model ever routes production traffic.
 export const MODEL_CONTEXT_SPECS = {
-  '@cf/google/gemma-4-26b-a4b-it': {
+  [WORKERS_AI_GEMMA_4_26B_MODEL]: {
     context_window_tokens: 131_072,
     output_reserve_tokens: 8_192,
     safety_margin_tokens: 8_192,
   },
-  'claude-sonnet-4-6': {
+  [ANTHROPIC_CLAUDE_SONNET_4_6_MODEL]: {
     context_window_tokens: 1_000_000,
     output_reserve_tokens: 128_000,
     safety_margin_tokens: 16_384,
   },
-  'claude-haiku-4-5': {
+  [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: {
     context_window_tokens: 200_000,
     output_reserve_tokens: 64_000,
     safety_margin_tokens: 8_192,
   },
-  'gpt-5-nano': {
+  [OPENAI_GPT_5_NANO_MODEL]: {
     context_window_tokens: 400_000,
     output_reserve_tokens: 128_000,
     safety_margin_tokens: 8_192,
   },
-  'gpt-5-mini': {
+  [OPENAI_GPT_5_MINI_MODEL]: {
     context_window_tokens: 400_000,
     output_reserve_tokens: 128_000,
     safety_margin_tokens: 8_192,

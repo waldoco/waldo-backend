@@ -5,7 +5,14 @@ import {
   deriveContextBudgetChars,
   modelContextSpecSchema,
 } from './context-budget';
-import { modelNameSchema } from './roster';
+import {
+  ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
+  OPENAI_GPT_5_MINI_MODEL,
+  OPENAI_GPT_5_NANO_MODEL,
+  WORKERS_AI_GEMMA_4_26B_MODEL,
+  modelNameSchema,
+} from './roster';
 
 describe('MODEL_CONTEXT_SPECS', () => {
   it('covers every roster model exactly', () => {
@@ -24,20 +31,20 @@ describe('MODEL_CONTEXT_SPECS', () => {
 
 describe('deriveContextBudgetChars', () => {
   it('clamps to the wire ceiling for large-window models (today\'s behavior preserved)', () => {
-    // gpt-5-nano usable window is (400k - 128k - 8k) * 4 = 1,055,232 chars - far above any
-    // current wire ceiling, so the derived budget IS the ceiling.
-    expect(deriveContextBudgetChars('gpt-5-nano', 32_768)).toBe(32_768);
-    expect(deriveContextBudgetChars('gpt-5-mini', 32_768)).toBe(32_768);
-    expect(deriveContextBudgetChars('claude-sonnet-4-6', 32_768)).toBe(32_768);
-    expect(deriveContextBudgetChars('claude-haiku-4-5', 32_768)).toBe(32_768);
-    expect(deriveContextBudgetChars('@cf/google/gemma-4-26b-a4b-it', 32_768)).toBe(32_768);
+    // OPENAI_GPT_5_NANO_MODEL usable window is (400k - 128k - 8k) * 4 = 1,055,232 chars - far
+    // above any current wire ceiling, so the derived budget IS the ceiling.
+    expect(deriveContextBudgetChars(OPENAI_GPT_5_NANO_MODEL, 32_768)).toBe(32_768);
+    expect(deriveContextBudgetChars(OPENAI_GPT_5_MINI_MODEL, 32_768)).toBe(32_768);
+    expect(deriveContextBudgetChars(ANTHROPIC_CLAUDE_SONNET_4_6_MODEL, 32_768)).toBe(32_768);
+    expect(deriveContextBudgetChars(ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL, 32_768)).toBe(32_768);
+    expect(deriveContextBudgetChars(WORKERS_AI_GEMMA_4_26B_MODEL, 32_768)).toBe(32_768);
   });
 
   it('derives from the model window when the ceiling is not the binding constraint', () => {
-    expect(deriveContextBudgetChars('gpt-5-nano', 2_000_000)).toBe(
+    expect(deriveContextBudgetChars(OPENAI_GPT_5_NANO_MODEL, 2_000_000)).toBe(
       (400_000 - 128_000 - 8_192) * BUDGET_CHARS_PER_TOKEN,
     );
-    expect(deriveContextBudgetChars('@cf/google/gemma-4-26b-a4b-it', 1_000_000)).toBe(
+    expect(deriveContextBudgetChars(WORKERS_AI_GEMMA_4_26B_MODEL, 1_000_000)).toBe(
       (131_072 - 8_192 - 8_192) * BUDGET_CHARS_PER_TOKEN,
     );
   });
