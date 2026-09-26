@@ -7,10 +7,12 @@ export const TOOL_OUTPUT_LIMIT = 16_000;
 
 export const TOOL_OUTPUT_HEAD = 4_000;
 
-export const capToolOutput = (output: string, offload?: ToolOutputStore): string => {
+export const capToolOutput = (output: string, offload?: ToolOutputStore, callId?: string): string => {
   if (output.length <= TOOL_OUTPUT_LIMIT) return output;
   if (offload === undefined) return `${output.slice(0, TOOL_OUTPUT_LIMIT)}\n[cut: ${output.length - TOOL_OUTPUT_LIMIT} more characters not shown; narrow the request]`;
-  const stored = offload.put(output);
+  // The call id is the provenance the store records (owner re-review on #212): receipts later
+  // honor a marker only when the stored record belongs to the call whose text carries it.
+  const stored = offload.put(output, callId === undefined ? undefined : { call_id: callId });
   return stored.truncated
     ? `${output.slice(0, TOOL_OUTPUT_HEAD)}\n[partial output stored as ${stored.id}: first ${stored.stored_chars} of ${stored.original_chars} characters kept (store bound); the tail is NOT retrievable - re-run the tool with narrower arguments if you need it. call read_tool_output with this id, offset and length to read the stored part]`
     : `${output.slice(0, TOOL_OUTPUT_HEAD)}\n[full output stored as ${stored.id}: ${stored.stored_chars} characters total; call read_tool_output with this id, offset and length to read more]`;
@@ -123,7 +125,7 @@ export async function runToolLoop(input: Readonly<{
             ? `\n[budget: ${roundsLeft} tool round${roundsLeft === 1 ? '' : 's'} left this turn - wrap up and answer now]`
             : `\n[budget: ${roundsLeft} tool rounds left this turn - start wrapping up]`
         : '';
-      const output = capToolOutput(JSON.stringify(result), input.offload) + budgetNote;
+      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
