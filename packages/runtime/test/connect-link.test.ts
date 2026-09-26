@@ -49,12 +49,13 @@ describe('connect ticket helpers', () => {
 });
 
 describe('handleConnectTicket', () => {
-  const run = async (ticket: string, rpcResult: unknown, doReply?: { url?: string | null }) => {
+  const run = async (ticket: string, rpcResult: unknown, doReply?: { url?: string | null }, form: 'query' | 'path' = 'query') => {
     const { env, rpcCalls, doCalls, fetcher } = ticketEnv(rpcResult, doReply);
     const original = globalThis.fetch;
     globalThis.fetch = fetcher as typeof fetch;
     try {
-      const response = await handleConnectTicket(new Request(`https://waldo.example/c/${ticket}`), env as never);
+      const url = form === 'path' ? `https://waldo.example/c/${ticket}` : `https://waldo.example/c/?t=${ticket}`;
+      const response = await handleConnectTicket(new Request(url), env as never);
       return { response, rpcCalls, doCalls };
     } finally {
       globalThis.fetch = original;
@@ -96,6 +97,13 @@ describe('handleConnectTicket', () => {
     expect(rpcCalls[0]!.args.p_ticket_hash).toBe(await ticketHash(TICKET));
     expect(doCalls[0]!.path).toBe(BEGIN_SESSION_PATH);
     expect(JSON.parse(doCalls[0]!.body).ticket_hash).toBe(await ticketHash(TICKET));
+  });
+
+  it('legacy /c/<ticket> path links are rejected outright (never resolved, never logged anew)', async () => {
+    const { response, rpcCalls, doCalls } = await run(TICKET, { status: 'ok', do_name: '5458446350', provider: 'google', session: 's1' }, undefined, 'path');
+    expect(response.status).toBe(404);
+    expect(rpcCalls).toHaveLength(0);
+    expect(doCalls).toHaveLength(0);
   });
 
   it('DO mint failure -> failed page, never a naked 500', async () => {

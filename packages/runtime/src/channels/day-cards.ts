@@ -120,7 +120,7 @@ export const readCalendar = async (
 ): Promise<string> => {
   if (!google) return connectable ? 'Google is not connected, so there are no events to show. The owner can ask you to connect it; do not write a link.' : 'Google Calendar is not set up.';
   try {
-    const events = await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), 25, false);
+    const events = (await google.events(new Date(window.from).toISOString(), new Date(window.to).toISOString(), 25, false)).items;
     return events.length ? events.map((event) => eventLine(event, timezone)).join('\n') : 'No events.';
   } catch (error) {
     return `Calendar could not be read right now (${error instanceof Error ? error.message : String(error)}). Say so briefly; do not guess the schedule.`;

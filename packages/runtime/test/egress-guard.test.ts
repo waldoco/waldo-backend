@@ -12,6 +12,11 @@ describe('redactSecretUrls (narrow scope)', () => {
     expect(r.count).toBe(1);
     expect(r.text).toBe('[link removed]');
   });
+  it('redacts a first-party /c/?t= ticket link (query form)', () => {
+    const r = redactSecretUrls('https://waldo.piyushfulper3210.workers.dev/c/?t=AbCdEfGhIjKlMnOpQrStUv');
+    expect(r.count).toBe(1);
+    expect(r.text).toBe('[link removed]');
+  });
   it('redacts an /oauth/ callback URL and a URL carrying state/code keys', () => {
     expect(redactSecretUrls('https://waldo.example/oauth/google/callback?code=4/0abc&state=zz').count).toBe(1);
     expect(redactSecretUrls('https://anything.example/page?code_challenge=xyz').count).toBe(1);
