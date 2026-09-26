@@ -223,7 +223,14 @@ describe('warn-first budget notice and semantic no-progress', () => {
     // must preserve them, so three different queries with the same empty outcome stay callable.
     let fetched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return Response.json({ web: { results: [] } }); });
-    const queries = ['electroencephalography', 'psychoneuroimmunology', 'antidisestablishmentarianism'];
+    const queries = [
+      'electroencephalography',
+      'psychoneuroimmunology',
+      'antidisestablishmentarianism',
+      // Distinct hyphenated natural-language phrases must never stabilize to the same key.
+      'post-traumatic-stress-disorder',
+      'large-language-model-evaluation',
+    ];
     let n = 0;
     const outputs: string[] = [];
     const text = await runToolLoop({

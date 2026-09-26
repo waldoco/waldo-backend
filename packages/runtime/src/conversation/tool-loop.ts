@@ -51,7 +51,11 @@ export const WARN_WINDOW_ROUNDS = 5;
 // turn, that stabilized (tool, args) pair is refused pre-dispatch for the rest of the turn.
 export const NO_PROGRESS_LIMIT = 3;
 
-const VOLATILE_SPANS = /(\d{4}-\d{2}-\d{2}[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)|([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})|((?=[\w-]*[\d_-])[\w-]{20,})/gi;
+// Token shapes only: dates, UUIDs, and 20+ char runs carrying digit/underscore evidence
+// (cursors, ids, keys). Hyphenated natural-language phrases carry no such evidence and must
+// never blank - 'post-traumatic-stress-disorder' and 'large-language-model-evaluation' are
+// distinct searches, not volatile tokens.
+const VOLATILE_SPANS = /(\d{4}-\d{2}-\d{2}[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)|([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})|((?=[\w-]*[\d_])[\w-]{20,})/gi;
 const stabilize = (text: string): string => text.replace(VOLATILE_SPANS, '#');
 
 export async function runToolLoop(input: Readonly<{
