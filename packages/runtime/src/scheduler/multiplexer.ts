@@ -13,6 +13,11 @@ import {
 import type { Deps } from '../seams/deps';
 import { armAlarm } from './alarm-slot';
 
+const MAX_MISSED_CHAIN = 64;
+// Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
+// (due work still fires within DUE_LOOKAHEAD_MS); the pacing lets a long missed-run drain
+// yield the isolate between deliveries instead of starving sibling work back-to-back.
+const MIN_REARM_DELAY_MS = 250;
 const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
@@ -133,9 +138,40 @@ export class Scheduler {
 
     try {
       for (const entry of due) {
-        const fresh = this.read(entry.id);
+        let fresh = this.read(entry.id);
         if (fresh === null || fresh.status !== 'armed' || fresh.due_at > now + DUE_LOOKAHEAD_MS) {
           continue;
+        }
+        // C3 dedupe: an occurrence still running (or crashed-and-unsettled) blocks this fire.
+        // The skip is recorded as a missed row, then the schedule advances past it.
+        if (this.hasRunningRun(fresh.id, fresh.occurrence_at)) {
+          this.recordMissed(fresh, fresh.occurrence_at, now);
+          this.advanceWithoutFiring(fresh, now);
+          continue;
+        }
+        // C3 missed-run policy: after a gap, fire only the latest elapsed occurrence once and
+        // record every skipped intermediate occurrence as 'missed' - never a catch-up burst.
+        const { occurrences, gapRemaining } = this.occurrenceChain(fresh, now);
+        if (gapRemaining) {
+          // Gap larger than one delivery's budget: record the whole walked chunk as missed
+          // (the last walked occurrence stays unfired), advance the cursor, and let the
+          // immediate rearm drain the rest over the next deliveries. Firing here would be a
+          // catch-up burst: occurrences[last] is not the latest elapsed occurrence (C3
+          // no-burst invariant), and the repeat fire retries were wedging the isolate.
+          for (const missedAt of occurrences) {
+            this.recordMissed(fresh, missedAt, now);
+          }
+          this.pinOccurrence(fresh, occurrences[occurrences.length - 1]!, now);
+          continue;
+        }
+        if (occurrences.length > 1) {
+          for (const missedAt of occurrences.slice(0, -1)) {
+            this.recordMissed(fresh, missedAt, now);
+          }
+          this.pinOccurrence(fresh, occurrences[occurrences.length - 1]!, now);
+          const repinned = this.read(fresh.id);
+          if (repinned === null) continue;
+          fresh = repinned;
         }
         const bumped = this.bumpAttempt(fresh.id, now);
         const runId = this.recordRunStart(bumped, now);
@@ -351,6 +387,104 @@ export class Scheduler {
     );
   }
 
+  private hasRunningRun(scheduleId: string, occurrenceAt: number): boolean {
+    const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM schedule_runs
+            WHERE schedule_id = ? AND outcome = 'running' AND NOT (id >= ? AND id < ?)
+            LIMIT 1`,
+          scheduleId,
+          lower,
+          upper,
+        )
+        .toArray().length > 0
+    );
+  }
+
+  // Missed rows use attempt 0: real fires start at attempt 1, so the skip record never
+  // collides with the run row of an occurrence that did fire. ON CONFLICT keeps a retried
+  // alarm (at-least-once) from double-recording the same skip.
+  private recordMissed(entry: ScheduleEntry, occurrenceAt: number, now: number): void {
+    this.sql.exec(
+      `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt, outcome, settled_at, duration_ms)
+       SELECT ?, ?, ?, ?, 0, 'missed', ?, 0
+       WHERE NOT EXISTS (
+         SELECT 1 FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?
+       )`,
+      `${entry.id}:${occurrenceAt}:0`,
+      entry.id,
+      entry.kind,
+      occurrenceAt,
+      now,
+      entry.id,
+      ...occurrenceIdRange(entry.id, occurrenceAt),
+    );
+  }
+
+  // Bounded walk: a fire records at most MAX_MISSED_CHAIN skipped occurrences. Gaps beyond
+  // the cap fire the last walked occurrence - the walk stays O(cap) no matter how stale the
+  // stored occurrence is (an unbounded walk over a years-old occurrence kills the isolate).
+  private occurrenceChain(entry: ScheduleEntry, now: number): { occurrences: number[]; gapRemaining: boolean } {
+    if (entry.recurrence === null) return { occurrences: [entry.occurrence_at], gapRemaining: false };
+    const occurrences = [entry.occurrence_at];
+    let cursor = entry.occurrence_at;
+    while (cursor <= now && occurrences.length < MAX_MISSED_CHAIN) {
+      const next = nextOccurrence(entry.recurrence, cursor);
+      if (next <= cursor || next > now) break;
+      occurrences.push(next);
+      cursor = next;
+    }
+    // gapRemaining: the walk hit the per-delivery cap AND at least one more elapsed
+    // occurrence exists beyond it. The caller must NOT fire in this state -
+    // occurrences[last] is mid-gap, not the latest. One extra look-ahead keeps the exact
+    // cap-boundary case (gap exactly cap-1 long) on the fire path.
+    let gapRemaining = false;
+    if (cursor <= now && occurrences.length >= MAX_MISSED_CHAIN) {
+      const next = nextOccurrence(entry.recurrence, cursor);
+      gapRemaining = next > cursor && next <= now;
+    }
+    return { occurrences, gapRemaining };
+  }
+
+  private pinOccurrence(entry: ScheduleEntry, occurrenceAt: number, now: number): void {
+    this.sql.exec(
+      `UPDATE schedule
+          SET occurrence_at = ?,
+              due_at = ?,
+              updated_at = ?
+        WHERE id = ? AND updated_at = ?`,
+      occurrenceAt,
+      occurrenceAt,
+      now,
+      entry.id,
+      entry.updated_at,
+    );
+  }
+
+  private advanceWithoutFiring(entry: ScheduleEntry, now: number): void {
+    if (entry.recurrence === null) {
+      // One-shot: the missed row is the record; the entry is done.
+      this.sql.exec('DELETE FROM schedule WHERE id = ? AND updated_at = ?', entry.id, entry.updated_at);
+      return;
+    }
+    const next = nextOccurrence(entry.recurrence, now);
+    this.sql.exec(
+      `UPDATE schedule
+          SET occurrence_at = ?,
+              due_at = ?,
+              attempts = 0,
+              updated_at = ?
+        WHERE id = ? AND updated_at = ?`,
+      next,
+      next,
+      now,
+      entry.id,
+      entry.updated_at,
+    );
+  }
+
   private runOutcome(runId: string): string | null {
     const row = this.sql
       .exec<{ outcome: string }>('SELECT outcome FROM schedule_runs WHERE id = ?', runId)
@@ -383,7 +517,7 @@ export class Scheduler {
       await this.storage.deleteAlarm();
       return;
     }
-    await armAlarm(this.storage, Math.max(bound, this.deps.now() + 1));
+    await armAlarm(this.storage, Math.max(bound, this.deps.now() + MIN_REARM_DELAY_MS));
   }
 }
 
@@ -474,16 +608,7 @@ function localParts(at: number, timezone: string): {
   minute: number;
   second: number;
 } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(at));
+  const parts = localFormatter(timezone).formatToParts(new Date(at));
   const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
   return {
     year: get('year'),
@@ -508,6 +633,22 @@ function addLocalDays(date: LocalDate, days: number): LocalDate {
   };
 }
 
+// Formatter construction dominates localParts; cache one per timezone (immutable, safe to share).
+const LOCAL_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+function localFormatter(timezone: string): Intl.DateTimeFormat {
+  let formatter = LOCAL_FORMATTERS.get(timezone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hourCycle: 'h23',
+    });
+    LOCAL_FORMATTERS.set(timezone, formatter);
+  }
+  return formatter;
+}
+
 function findLocalOccurrence(
   date: LocalDate,
   hour: number,
@@ -520,13 +661,27 @@ function findLocalOccurrence(
   const searchEnd = Date.UTC(date.year, date.month - 1, date.day + 1) + 24 * 60 * 60_000;
   let fallback: number | null = null;
 
-  for (let at = searchStart; at <= searchEnd; at += 60_000) {
-    if (at <= after) continue;
-    const parts = localParts(at, timezone);
-    if (!sameLocalDate(parts, date)) continue;
-    const localMinutes = parts.hour * 60 + parts.minute;
-    if (localMinutes === targetMinutes) return at;
-    if (localMinutes > targetMinutes && fallback === null) fallback = at;
+  // Hour-step to the bracketing hour first, then refine by minute: a flat minute scan over
+  // the 3-day window costs up to 4320 tz computations per call, and the missed-run walk
+  // calls this up to MAX_MISSED_CHAIN times per delivery (isolate-killing CPU). Semantics
+  // are unchanged: same first-match-wins, same first-later-time fallback, same next-day
+  // recursion - only the scan order is coarsened before refinement.
+  for (let hourStart = searchStart; hourStart <= searchEnd; hourStart += 3_600_000) {
+    const hourEnd = Math.min(hourStart + 3_600_000 - 60_000, searchEnd);
+    const first = localParts(hourStart, timezone);
+    const last = localParts(hourEnd, timezone);
+    const spanCoversDate = sameLocalDate(first, date) || sameLocalDate(last, date) ||
+      (new Date(Date.UTC(first.year, first.month - 1, first.day)) < new Date(Date.UTC(date.year, date.month - 1, date.day)) &&
+       new Date(Date.UTC(last.year, last.month - 1, last.day)) > new Date(Date.UTC(date.year, date.month - 1, date.day)));
+    if (!spanCoversDate) continue;
+    for (let at = hourStart; at <= hourEnd; at += 60_000) {
+      if (at <= after) continue;
+      const parts = localParts(at, timezone);
+      if (!sameLocalDate(parts, date)) continue;
+      const localMinutes = parts.hour * 60 + parts.minute;
+      if (localMinutes === targetMinutes) return at;
+      if (localMinutes > targetMinutes && fallback === null) fallback = at;
+    }
   }
 
   return fallback ?? findLocalOccurrence(addLocalDays(date, 1), hour, minute, timezone, after);
