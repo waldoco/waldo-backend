@@ -1421,18 +1421,23 @@ async function sanitiseRequest(
   let toolTurns: { ok: true; payload: unknown } | undefined;
   if (request.tool_turns !== undefined) {
     // A marker string inside tool output text is provider content and proves NOTHING (owner
-    // re-review on #212): tool-loop.ts stringifies dispatcher results, so external web/mail
+    // re-reviews on #212): tool-loop.ts stringifies dispatcher results, so external web/mail
     // text containing "[full output stored as fake-id:" survives inside the string and would
     // match a naive regex. The regex only nominates a CANDIDATE; the store's own typed stat()
-    // is the sole authority on whether the id exists and what span is actually retrievable
-    // (full vs partial). No store on this request - or an id the store does not know - means
-    // no retrieval promise, ever.
-    const storedReceiptOf = (output: string): { id: string; stored_chars: number; original_chars: number; truncated: boolean } | null => {
+    // is the sole authority on whether the id exists, what span is actually retrievable
+    // (full vs partial), and WHICH call the record belongs to. Store ids are predictable
+    // (to-1, to-2, ...), so existence alone is not proof: a marker naming a REAL id written
+    // for a different call must not earn a retrieval promise here. The candidate is honored
+    // only when the store's provenance names this turn's call id; a record without
+    // provenance proves nothing. No store, unknown id, or foreign id: no promise, ever.
+    const storedReceiptOf = (turn: LLMToolTurn): { id: string; stored_chars: number; original_chars: number; truncated: boolean; call_id?: string } | null => {
       const candidate =
-        /"stored_output"\s*:\s*"([^"]+)"/.exec(output)?.[1] ??
-        /\[(?:full|partial) output stored as ([\w-]+):/.exec(output)?.[1];
+        /"stored_output"\s*:\s*"([^"]+)"/.exec(turn.output)?.[1] ??
+        /\[(?:full|partial) output stored as ([\w-]+):/.exec(turn.output)?.[1];
       if (candidate === undefined) return null;
-      return ctx.toolOutputStore?.stat(candidate) ?? null;
+      const stat = ctx.toolOutputStore?.stat(candidate) ?? null;
+      if (stat === null || stat.call_id === undefined || stat.call_id !== turn.call.call_id) return null;
+      return stat;
     };
     const retrievalClause = (stored: { id: string; stored_chars: number; original_chars: number; truncated: boolean } | null): string =>
       stored === null
@@ -1459,7 +1464,7 @@ async function sanitiseRequest(
         call: { call_id: turn.call.call_id, name: turn.call.name, arguments: '{}' },
         output:
           `[waldo: this tool output was omitted by the scribe (${reason}); the tool DID return ${turn.output.length} characters - do not report it as empty. ` +
-          retrievalClause(storedReceiptOf(turn.output)),
+          retrievalClause(storedReceiptOf(turn)),
       };
       const checked = await sanitiseValue([candidate], 'internal_context', turnTaint(turn));
       if (!checked.ok) return { ok: false, error: checked.error };
@@ -1482,7 +1487,7 @@ async function sanitiseRequest(
       // An oversize output keeps its leading text with an explicit receipt appended, so the
       // model can page the rest via read_tool_output - but only when a stored-output id was
       // actually verified in the text; otherwise the receipt says the tail is not retrievable.
-      const stored = storedReceiptOf(turn.output);
+      const stored = storedReceiptOf(turn);
       const head = turn.output.slice(0, Math.max(1_000, 24_000 - turn.call.arguments.length));
       const receipt =
         stored === null
@@ -1513,12 +1518,12 @@ async function sanitiseRequest(
       // Compact the largest turn that carries a verified stored-output id.
       let pick = -1;
       for (let i = 0; i < kept.length; i += 1) {
-        if (storedReceiptOf(kept[i]!.output) === null) continue;
+        if (storedReceiptOf(kept[i]!) === null) continue;
         if (kept[i]!.output.length <= COMPACT_HEAD + 512) continue;
         if (pick === -1 || kept[i]!.output.length > kept[pick]!.output.length) pick = i;
       }
       if (pick === -1) break;
-      const compactedStore = storedReceiptOf(kept[pick]!.output)!;
+      const compactedStore = storedReceiptOf(kept[pick]!)!;
       const compacted: LLMToolTurn = {
         ...kept[pick]!,
         output:

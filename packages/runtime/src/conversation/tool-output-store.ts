@@ -1,10 +1,15 @@
 // Large tool outputs are stored, not inlined: the model gets a head slice plus a reference
 // and reads ranges on demand with read_tool_output. In-memory per responder; outputs are
 // re-derivable by re-calling the tool, so durability adds nothing here.
-export type StoredPut = Readonly<{ id: string; stored_chars: number; original_chars: number; truncated: boolean }>;
+// Provenance (owner re-review on #212 @ 994ca08): store ids are predictable (to-1, to-2, ...),
+// so an existing id proves nothing about WHICH call it belongs to - external text in a later
+// output can name a real id written for an earlier call. The offload boundary therefore records
+// the originating call_id at write time, and stat() returns it; a receipt may promise retrieval
+// only when the record's call_id matches the turn carrying the marker.
+export type StoredPut = Readonly<{ id: string; stored_chars: number; original_chars: number; truncated: boolean; call_id?: string }>;
 
 export type ToolOutputStore = Readonly<{
-  put(output: string): StoredPut;
+  put(output: string, provenance?: { call_id?: string }): StoredPut;
   read(id: string, offset: number, length: number): Readonly<{ text: string; total: number; original_chars: number; truncated: boolean; next_offset: number | null }> | null;
   // Typed store provenance (owner review on #212): the ONLY authority on whether a stored-output
   // id exists and what span is actually retrievable. A marker string inside tool output text is
@@ -26,12 +31,14 @@ export const MAX_STORED_ITEM_CHARS = 65_536;
 export const inMemoryToolOutputStore = (): ToolOutputStore => {
   const outputs = new Map<string, string>();
   const originals = new Map<string, number>();
+  const provenance = new Map<string, string | undefined>();
   let total = 0;
   let next = 0;
   return {
-    put(output) {
+    put(output, prov) {
       next += 1;
       const id = `to-${next}`;
+      provenance.set(id, prov?.call_id);
       // never a silent slice: callers get the stored length and the truncation flag and the
       // receipt/read-back contract must carry them (a claimed full length for a stored prefix
       // is a lie the model will plan against)
@@ -46,14 +53,16 @@ export const inMemoryToolOutputStore = (): ToolOutputStore => {
         total -= outputs.get(oldest)?.length ?? 0;
         outputs.delete(oldest);
         originals.delete(oldest);
+        provenance.delete(oldest);
       }
-      return { id, stored_chars: stored.length, original_chars: output.length, truncated };
+      return { id, stored_chars: stored.length, original_chars: output.length, truncated, ...(prov?.call_id !== undefined ? { call_id: prov.call_id } : {}) };
     },
     stat(id) {
       const stored = outputs.get(id);
       if (stored === undefined) return null;
       const original = originals.get(id) ?? stored.length;
-      return { id, stored_chars: stored.length, original_chars: original, truncated: original > stored.length };
+      const callId = provenance.get(id);
+      return { id, stored_chars: stored.length, original_chars: original, truncated: original > stored.length, ...(callId !== undefined ? { call_id: callId } : {}) };
     },
     read(id, offset, length) {
       const output = outputs.get(id);

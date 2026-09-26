@@ -115,7 +115,7 @@ export type HookRuntimeContext = {
   // provider verifies a stored-output id here before any receipt may promise read_tool_output.
   // Structural shape avoids a hooks->conversation import; inMemoryToolOutputStore satisfies it.
   toolOutputStore?: Readonly<{
-    stat(id: string): Readonly<{ id: string; stored_chars: number; original_chars: number; truncated: boolean }> | null;
+    stat(id: string): Readonly<{ id: string; stored_chars: number; original_chars: number; truncated: boolean; call_id?: string }> | null;
   }>;
 };
 
