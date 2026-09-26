@@ -230,10 +230,11 @@ describe('approval desk - email_send rail', () => {
   const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string; failFirstCard?: boolean; googleError?: Error; pinUnavailable?: boolean; undelivered?: boolean }) => {
     const sent: { method: string; body: Record<string, unknown> }[] = [];
     const sentRaw: string[] = [];
+    const sentRawArgCounts: number[] = [];
     let now = 1_000_000;
     let n = 0;
     const client = {
-      sendRaw: async (raw: string) => { sentRaw.push(raw); if (opts.sendError) throw opts.sendError; return { message_id: 'g1' }; },
+      sendRaw: async (...args: [string, string?]) => { sentRawArgCounts.push(args.length); sentRaw.push(args[0]); if (opts.sendError) throw opts.sendError; return { message_id: 'g1' }; },
       findSentByMessageId: async () => { if (opts.findError) throw opts.findError; return opts.found ?? false; },
     } as unknown as GoogleClient;
     const googleIntents: (string | undefined)[] = [];
@@ -257,8 +258,17 @@ describe('approval desk - email_send rail', () => {
     const { sha256Hex } = await import('../src/connectors/google');
     const proposed = await desk.proposeSendEmail({ ...proposal, ...(opts.messageId !== undefined ? { message_id: opts.messageId } : {}), digest: await sha256Hex(proposal.raw) });
     if (!proposed.ok) throw new Error(`unexpected proposal failure: ${proposed.reason}`);
-    return { desk, id: proposed.id, delivered: proposed.delivered, sent, sentRaw, googleIntents, googleCorrelations, googlePins, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
+    return { desk, id: proposed.id, delivered: proposed.delivered, sent, sentRaw, sentRawArgCounts, googleIntents, googleCorrelations, googlePins, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
+
+  it('omits an absent thread id from the approved send RPC arguments', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-no-thread'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sentRawArgCounts } = await setup(state, {});
+      expect((await desk.decide(id, 'a', 't')).toast).toBe('Sent');
+      expect(sentRawArgCounts).toEqual([1]);
+    });
+  });
 
   it('proposes with Send it / Modify / Not now, sends the exact stored bytes on approve, never undoes, expires', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-1'));

@@ -269,7 +269,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               sql.exec('UPDATE ledger SET connection = ? WHERE id = ?', got.connection, id);
               const client = got.client;
               try {
-                await client.sendRaw(ep.raw, ep.thread_id);
+                // A missing thread id must be omitted entirely. Passing undefined as the
+                // second RPC argument becomes JSON null and the proxy rejects the send.
+                if (ep.thread_id) await client.sendRaw(ep.raw, ep.thread_id);
+                else await client.sendRaw(ep.raw);
                 setStatus(id, 'done');
                 out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
               } catch (error) {
