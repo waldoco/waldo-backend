@@ -178,12 +178,12 @@ describe('OpenAIResponsesAdapter', () => {
     let failure: unknown;
     const adapter = new OpenAIResponsesAdapter({
       apiKey: 'secret-test-key',
-      client: client(async () => { throw new OpenAI.APIError(429, { code: 'insufficient_quota', message: 'secret-test-key billing detail' }, 'secret-test-key billing detail', new Headers()); }),
+      client: client(async () => { throw new OpenAI.APIError(429, { type: 'insufficient_quota', message: 'secret-test-key billing detail' }, 'secret-test-key billing detail', new Headers()); }),
       onErrorMetadata: (value) => { failure = value; },
     });
 
     await expect(adapter.complete(gatewayRequest())).resolves.toEqual({ ok: false, code: 'rate_limited', error: 'OpenAI request failed' });
-    expect(failure).toEqual({ model: OPENAI_GPT_5_NANO_MODEL, status: 429, kind: 'http', code: 'rate_limited', provider_code: 'insufficient_quota' });
+    expect(failure).toEqual({ model: OPENAI_GPT_5_NANO_MODEL, status: 429, kind: 'http', code: 'rate_limited', provider_type: 'insufficient_quota' });
     expect(JSON.stringify(failure)).not.toContain('secret-test-key');
   });
 

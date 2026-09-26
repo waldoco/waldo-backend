@@ -22,6 +22,7 @@ export type OpenAIErrorMetadata = Readonly<{
   model: ModelName;
   status?: number;
   provider_code?: 'insufficient_quota' | 'rate_limit_exceeded';
+  provider_type?: 'insufficient_quota' | 'rate_limit_exceeded' | 'billing_hard_limit_reached' | 'tokens' | 'requests';
   kind: 'http' | 'timeout' | 'network' | 'unknown';
   code: 'auth_failed' | 'not_found' | 'rate_limited' | 'oversize' | 'invalid_args' | 'transient';
 }>;
@@ -111,7 +112,8 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       const status = error instanceof OpenAI.APIError ? error.status : undefined;
       const kind = status !== undefined ? 'http' : error instanceof Error && error.name === 'AbortError' ? 'timeout' : error instanceof OpenAI.APIConnectionError ? 'network' : 'unknown';
       const providerCode = error instanceof OpenAI.APIError && (error.code === 'insufficient_quota' || error.code === 'rate_limit_exceeded') ? error.code : undefined;
-      this.onErrorMetadata?.({ model: input.request.model, ...(status === undefined ? {} : { status }), ...(providerCode === undefined ? {} : { provider_code: providerCode }), kind, code });
+      const providerType = error instanceof OpenAI.APIError && (error.type === 'insufficient_quota' || error.type === 'rate_limit_exceeded' || error.type === 'billing_hard_limit_reached' || error.type === 'tokens' || error.type === 'requests') ? error.type : undefined;
+      this.onErrorMetadata?.({ model: input.request.model, ...(status === undefined ? {} : { status }), ...(providerCode === undefined ? {} : { provider_code: providerCode }), ...(providerType === undefined ? {} : { provider_type: providerType }), kind, code });
       return { ok: false, code, error: 'OpenAI request failed' };
     } finally {
       clearTimeout(timeout);
