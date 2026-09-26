@@ -6,6 +6,8 @@ import {
   type ScheduleEntry,
   type ScheduleKind,
   type SchedulePayloadRefs,
+  nextCronOccurrence,
+  parseCronExpression,
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
@@ -68,6 +70,17 @@ export class Scheduler {
       created_at: at,
       updated_at: at,
     });
+    // Codex #229 hold: a cron expression must fail BEFORE anything is armed. The charset screen
+    // in the schema only bounds characters; parsing happened first at post-fire reschedule, so
+    // an invalid recurrence fired once (an effect) and then threw. Validate at schedule time:
+    // parse + prove at least one occurrence inside the scan bound, before the row exists.
+    if (parsed.recurrence?.type === 'cron') {
+      const cron = parseCronExpression(parsed.recurrence.expression);
+      if (cron === null) throw new Error(`invalid cron recurrence: ${parsed.recurrence.expression}`);
+      if (nextCronOccurrence(cron, parsed.recurrence.timezone, at) === null) {
+        throw new Error(`cron recurrence has no occurrence within scan bound: ${parsed.recurrence.expression}`);
+      }
+    }
     this.sql.exec(
       `INSERT INTO schedule
          (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts,
@@ -412,6 +425,13 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
         recurrence.every_ms +
       phase;
     return next > now ? next : next + recurrence.every_ms;
+  }
+  if (recurrence.type === 'cron') {
+    const schedule = parseCronExpression(recurrence.expression);
+    if (schedule === null) throw new Error(`invalid cron recurrence: ${recurrence.expression}`);
+    const next = nextCronOccurrence(schedule, recurrence.timezone, now);
+    if (next === null) throw new Error(`cron recurrence has no occurrence within scan bound: ${recurrence.expression}`);
+    return next;
   }
   return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
 }
