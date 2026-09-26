@@ -49,6 +49,13 @@ export const scheduleRecurrenceSchema = z.discriminatedUnion('type', [
     time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     timezone: z.string().min(1).max(64),
   }),
+  z.strictObject({
+    type: z.literal('cron'),
+    // Numeric 5-field cron (minute hour day-of-month month day-of-week); parseCronExpression
+    // validates ranges at create time, this screen only keeps the charset bounded.
+    expression: z.string().min(9).max(64).regex(/^[\d*,\/\- ]+$/),
+    timezone: z.string().min(1).max(64),
+  }),
 ]);
 export type ScheduleRecurrence = z.infer<typeof scheduleRecurrenceSchema>;
 

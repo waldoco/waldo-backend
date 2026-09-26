@@ -86,6 +86,7 @@ export const browseActHandler = (
   schema: browseActArgsSchema,
   trigger_allowlist: allowlist('browse_act'),
   autonomy_gated: false,
+  mutates_state: true,
   async handle({ url, task, max_actions }: BrowseActArgs) {
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };

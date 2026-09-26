@@ -70,6 +70,7 @@ export const reminderHandlers = (book: ReminderBook) => [
     schema: setReminderArgsSchema,
     trigger_allowlist: allowlist('set_reminder'),
     autonomy_gated: false,
+    mutates_state: true,
     async handle(args) {
       try {
         return { ok: true, data: await book.set(args), source_taint: null };
@@ -94,6 +95,7 @@ export const reminderHandlers = (book: ReminderBook) => [
     schema: cancelReminderArgsSchema,
     trigger_allowlist: allowlist('cancel_reminder'),
     autonomy_gated: false,
+    mutates_state: true,
     async handle({ id }) {
       return { ok: true, data: { id, cancelled: await book.cancel(id) }, source_taint: null };
     },

@@ -6,6 +6,8 @@ import {
   type ScheduleEntry,
   type ScheduleKind,
   type SchedulePayloadRefs,
+  nextCronOccurrence,
+  parseCronExpression,
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
@@ -68,6 +70,17 @@ export class Scheduler {
       created_at: at,
       updated_at: at,
     });
+    // Codex #229 hold: a cron expression must fail BEFORE anything is armed. The charset screen
+    // in the schema only bounds characters; parsing happened first at post-fire reschedule, so
+    // an invalid recurrence fired once (an effect) and then threw. Validate at schedule time:
+    // parse + prove at least one occurrence inside the scan bound, before the row exists.
+    if (parsed.recurrence?.type === 'cron') {
+      const cron = parseCronExpression(parsed.recurrence.expression);
+      if (cron === null) throw new Error(`invalid cron recurrence: ${parsed.recurrence.expression}`);
+      if (nextCronOccurrence(cron, parsed.recurrence.timezone, at) === null) {
+        throw new Error(`cron recurrence has no occurrence within scan bound: ${parsed.recurrence.expression}`);
+      }
+    }
     this.sql.exec(
       `INSERT INTO schedule
          (id, kind, occurrence_at, due_at, recurrence_json, payload_json, status, attempts,
@@ -125,17 +138,27 @@ export class Scheduler {
           continue;
         }
         const bumped = this.bumpAttempt(fresh.id, now);
+        const runId = this.recordRunStart(bumped, now);
         try {
           const executor = executors[bumped.kind];
-          if (executor === undefined) throw new Error(`no scheduler executor for ${bumped.kind}`);
+          if (executor === undefined) {
+            // Scheduler-handoff failure: the run never reached the executor.
+            this.settleRun(runId, 'failed', 'scheduler_handoff', now);
+            throw new Error(`no scheduler executor for ${bumped.kind}`);
+          }
           await executor(bumped);
           this.complete(bumped, now);
+          this.settleRun(runId, 'ok', null, now);
           dispatched.push(bumped);
         } catch (err) {
           if (isCrashInjectionError(err)) {
+            // No settle: a row stuck in 'running' is the crashed-run evidence.
             throw err;
           }
-          this.applyFailurePolicy(bumped, now);
+          const disposition = this.applyFailurePolicy(bumped, now);
+          if (this.runOutcome(runId) === 'running') {
+            this.settleRun(runId, disposition === 'quarantined' ? 'quarantined' : 'failed', 'run', now);
+          }
           if (shouldPropagateDurabilityInvariant(bumped.kind, err)) {
             throw err;
           }
@@ -205,7 +228,7 @@ export class Scheduler {
     );
   }
 
-  private applyFailurePolicy(entry: ScheduleEntry, now: number): void {
+  private applyFailurePolicy(entry: ScheduleEntry, now: number): 'quarantined' | 'retry' {
     if (scheduleKindCanQuarantine(entry.kind) && entry.attempts >= QUARANTINE_AFTER_ATTEMPTS) {
       this.sql.exec(
         `UPDATE schedule
@@ -218,7 +241,7 @@ export class Scheduler {
         entry.id,
         entry.updated_at,
       );
-      return;
+      return 'quarantined';
     }
     const delay = scheduleKindCanQuarantine(entry.kind)
       ? PRODUCT_RETRY_DELAY_MS * entry.attempts
@@ -233,6 +256,90 @@ export class Scheduler {
       entry.id,
       entry.updated_at,
     );
+    return 'retry';
+  }
+
+  // C4 run history: one row per fire, inserted before dispatch (recordRunStart) and settled
+  // exactly once (settleRun no-ops on an already-settled row, so the no-executor path can
+  // settle before rethrowing). Crash-injection rethrows leave the row 'running' on purpose.
+  private recordRunStart(entry: ScheduleEntry, now: number): string {
+    // The id's run ordinal comes from the append-only history, not schedule.attempts:
+    // policy state resets (schedule upsert, quarantine reap) but history never does, so
+    // a retry after a reset can never collide with a crashed run's row.
+    const [lower, upper] = occurrenceIdRange(entry.id, entry.occurrence_at);
+    const prior = this.sql
+      .exec<{ n: number }>(
+        'SELECT count(*) AS n FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?',
+        entry.id,
+        lower,
+        upper,
+      )
+      .one().n;
+    const ordinal = prior + 1;
+    const runId = `${entry.id}:${entry.occurrence_at}:${ordinal}`;
+    this.sql.exec(
+      `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES (?, ?, ?, ?, ?)`,
+      runId,
+      entry.id,
+      entry.kind,
+      now,
+      ordinal,
+    );
+    return runId;
+  }
+
+  // Heartbeat decision + delivery lifecycle (C2/H1): the tick executor records WHAT it
+  // decided (quiet vs acted) and how the SEND went, on its own running row, separately
+  // from the run outcome. delivery 'pending' means decided-but-unconfirmed: a crash there
+  // leaves outcome 'running' + delivery 'pending', which recovery must re-deliver - never
+  // treat a pending tick as delivered.
+  runningRunId(scheduleId: string, occurrenceAt: number): string | null {
+    const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    const row = this.sql
+      .exec<{ id: string }>(
+        `SELECT id FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND outcome = 'running' ORDER BY id DESC LIMIT 1`,
+        scheduleId,
+        lower,
+        upper,
+      )
+      .toArray()[0];
+    return row?.id ?? null;
+  }
+
+  markHeartbeatDecision(runId: string, result: 'quiet' | 'acted'): void {
+    this.sql.exec(
+      `UPDATE schedule_runs SET heartbeat_result = ? WHERE id = ? AND outcome = 'running'`,
+      result,
+      runId,
+    );
+  }
+
+  markDelivery(runId: string, delivery: 'pending' | 'sent' | 'failed'): void {
+    this.sql.exec(
+      `UPDATE schedule_runs SET delivery = ? WHERE id = ? AND outcome = 'running'`,
+      delivery,
+      runId,
+    );
+  }
+
+  private settleRun(runId: string, outcome: 'ok' | 'failed' | 'quarantined' | 'missed', errorClass: 'run' | 'scheduler_handoff' | 'delivery' | null, now: number): void {
+    this.sql.exec(
+      `UPDATE schedule_runs
+          SET outcome = ?, error_class = ?, settled_at = ?, duration_ms = ? - fired_at
+        WHERE id = ? AND outcome = 'running'`,
+      outcome,
+      errorClass,
+      now,
+      now,
+      runId,
+    );
+  }
+
+  private runOutcome(runId: string): string | null {
+    const row = this.sql
+      .exec<{ outcome: string }>('SELECT outcome FROM schedule_runs WHERE id = ?', runId)
+      .toArray()[0];
+    return row?.outcome ?? null;
   }
 
   private reapQuarantine(now: number): void {
@@ -262,6 +369,16 @@ export class Scheduler {
     }
     await armAlarm(this.storage, Math.max(bound, this.deps.now() + 1));
   }
+}
+
+// workerd SQLite enforces a ~50-byte LIKE/GLOB pattern limit
+// (SQLITE_LIMIT_LIKE_PATTERN_LENGTH), and a real schedule id alone exceeds it
+// ("handoff:<uuid>" plus the occurrence suffix), so occurrence-prefix matching cannot
+// use LIKE. Every run id for an occurrence starts with "<scheduleId>:<occurrenceAt>:"
+// and the next ASCII byte after ':' (0x3A) is ';' (0x3B), so the half-open range
+// [lower, upper) matches exactly that prefix and stays index-friendly.
+function occurrenceIdRange(scheduleId: string, occurrenceAt: number): readonly [string, string] {
+  return [`${scheduleId}:${occurrenceAt}:`, `${scheduleId}:${occurrenceAt};`];
 }
 
 function isCrashInjectionError(err: unknown): boolean {
@@ -308,6 +425,13 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
         recurrence.every_ms +
       phase;
     return next > now ? next : next + recurrence.every_ms;
+  }
+  if (recurrence.type === 'cron') {
+    const schedule = parseCronExpression(recurrence.expression);
+    if (schedule === null) throw new Error(`invalid cron recurrence: ${recurrence.expression}`);
+    const next = nextCronOccurrence(schedule, recurrence.timezone, now);
+    if (next === null) throw new Error(`cron recurrence has no occurrence within scan bound: ${recurrence.expression}`);
+    return next;
   }
   return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
 }

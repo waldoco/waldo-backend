@@ -20,6 +20,27 @@ The agent roster + dev-QA loop below is repo-specific. It sits on top of the uni
 
 Judgment belongs to the model. Do not add regex or other fixed rules for anything that is a judgment call (tone, intent, topic, health vs clinical, what to remember). The harness gives the model context, reasoning room, tools and autonomy. Deterministic rejection is allowed only for hard security and safety boundaries where a reject must be guaranteed: auth, secrets, canaries, owner checks, egress, schema validation, and medication dosing. When you find a fixed rule making a judgment call, file it under `post-mvp-cleanup` or move it to model reasoning with scenario tests.
 
+## Named Invariants (shape every review decision)
+
+1. **The privacy gate never weakens.** Non-owner content (shared, forwarded, group) is untrusted provenance forever; it can inform a turn, never become durable truth about the owner. No PR relaxes this structurally.
+2. **A crash leaves evidence, never silent loss.** Durability beats elegance: schedule runs, admission holds, and failure rows persist so the next pass can recover or audit them.
+3. **Per-owner DO isolation.** One owner's memory, schedule, and session state never crosses into another owner's DO - no shared substrate, no cross-owner reads.
+
+## PR Discipline (required in every PR body or review)
+
+- **Premise verification.** Before calling something a bug, point to the exact line where it manifests and show the fix changes that line's behavior. No fix without a demonstrated failure.
+- **Fix the whole bug class.** A fix covers every sibling call path the same defect touches (e.g. the LIKE-pattern limit fix landed at all 3 match sites, with a regression test using production-shaped ids).
+- **Snapshots at the final boundary only.** `toMatchSnapshot` is allowed only on the final assembled prompt - the user-visible surface where unintended drift is a real regression (`prompt-builder.test.ts` is the current example). Intermediate assembly steps use behavior contracts (`toContain`, ordering, never-contains rules), which stay stable under wording changes. Do not add snapshots to intermediate outputs; mechanical snapshot churn trains reviewers to blind-accept diffs.
+- **Verify every claim.** PR bodies name the verification layer per claim (local suite, typecheck, CI, live probe) with exact heads. No "should work" language.
+
+## Rejected Even When Well-Built
+
+- Speculative infrastructure with no concrete consumer in the same PR or a linked issue.
+- Snapshot/change-detector tests on intermediate assembly outputs (see PR Discipline).
+- Environment variables for non-secret config (config belongs in code or the roster).
+- Regex or fixed rules making judgment calls (see "Judgment belongs to the model" above).
+- Placeholders, stubs, or docs presented as working capability.
+
 ## Available Agents (invoke via Claude Code Agent tool)
 
 ### Planning
