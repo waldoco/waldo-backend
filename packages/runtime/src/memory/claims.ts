@@ -4,7 +4,7 @@ export const CLAIM_KINDS = ['fact', 'preference', 'routine', 'goal', 'followup',
 export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
-export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; status: string; created_at: string; last_seen_at: string; seen_count: number }>;
+export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; origin: string | null; status: string; created_at: string; last_seen_at: string; seen_count: number }>;
 export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
 
 // Sync, content-free fingerprint for exact re-admission blocking: a barrier can prove a
@@ -20,7 +20,7 @@ export const textFingerprint = (text: string): string => {
 };
 export type ConstellationNode = Readonly<{ id: number; domain: string; label: string; summary: string; strength: number; status: string; first_seen: string; last_confirmed: string; supporting_spots: string }>;
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
-type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string }>;
+type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string; origin?: string }>;
 
 // Case-insensitive literal replace: the forgotten text may appear with different casing in
 // other stores, and SQLite replace() alone would leave those variants behind.
@@ -35,6 +35,12 @@ export const claimStore = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)`);
+  // Provenance the model cannot write (OpenClaw origin classes, adapted): set by the
+  // admission gate from the grounding verdict, never by the extractor. NULL on rows that
+  // predate the gate or were written through ungated paths (console, migration legacy).
+  if (!sql.exec("SELECT name FROM pragma_table_info('claims')").toArray().some((col) => (col as { name: string }).name === 'origin')) {
+    sql.exec("ALTER TABLE claims ADD COLUMN origin TEXT");
+  }
   sql.exec('CREATE TABLE IF NOT EXISTS forget_barriers (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, topic_hash TEXT, created_at TEXT NOT NULL)');
   // Durable scrub intent: a claim's purge survives here until every store settles, so a
   // failed purge can resume from the claim row instead of losing the source text.
@@ -63,7 +69,7 @@ export const claimStore = (sql: Sql) => {
     nodes: () => sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes ORDER BY strength DESC').toArray(),
     edges: () => sql.exec<ConstellationEdge>('SELECT * FROM constellation_edges ORDER BY strength DESC').toArray(),
     add(claim: NewClaim, at: string, id?: number): void {
-      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, at, at);
+      sql.exec('INSERT INTO claims (id, kind, text, source, evidence, origin, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id ?? null, claim.kind, claim.text, claim.source, claim.evidence, claim.origin ?? null, at, at);
     },
     seen(id: number, at: string): void {
       sql.exec('UPDATE claims SET seen_count = seen_count + 1, last_seen_at = ? WHERE id = ?', at, id);
@@ -383,6 +389,9 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
   for (const claim of admitted) {
     let source = claim.source === 'inferred' ? 'inferred' : 'stated';
+    // Origin is the gate's provenance column: where the evidence actually lives. The model
+    // proposes; only code writes it (OpenClaw's origin classes - untrusted never promotes).
+    let origin: string | null = null;
     if (grounding !== undefined) {
       const verdict = ground(claim.evidence, grounding);
       if (verdict === 'waldo') {
@@ -393,6 +402,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
         holdReasons.add('self-report');
         continue;
       }
+      origin = verdict === 'owner' ? 'owner' : verdict === 'shared' ? 'untrusted' : 'agent';
       if (source === 'stated' && verdict !== 'owner') {
         // Shared-content taint or ungrounded paraphrase: admitted, but 'stated' is reserved
         // for evidence that grounds in the owner's own words.
@@ -400,7 +410,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
         downgraded += 1;
       }
     }
-    store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim() }, at);
+    store.add({ kind: claim.kind, text: claim.text.trim(), source, evidence: claim.evidence.trim(), origin: origin ?? undefined }, at);
     written += 1;
   }
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
@@ -459,7 +469,9 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string): stri
   const edges = plan.edges.map((edge) => ({ ...edge, from_id: resolve(edge.from), to_id: resolve(edge.to) }))
     .filter((edge): edge is typeof edge & { from_id: number; to_id: number } => edge.from_id !== undefined && edge.to_id !== undefined && all.has(edge.from_id) && all.has(edge.to_id) && edge.from_id !== edge.to_id);
   for (const edge of edges) store.saveEdge({ from_id: edge.from_id, to_id: edge.to_id, relation: edge.relation, strength: edge.strength, evidence_count: edge.evidence_count });
-  const promotable = new Set(store.claims().filter((claim) => claim.kind === 'observation' || claim.kind === 'pattern').map((claim) => claim.id));
+  // Untrusted-origin claims (evidence lived in shared/forwarded content) are excluded
+  // structurally - no amount of recurrence promotes external content into the constellation.
+  const promotable = new Set(store.claims().filter((claim) => (claim.kind === 'observation' || claim.kind === 'pattern') && claim.origin !== 'untrusted').map((claim) => claim.id));
   const promoted = plan.promoted.filter((id) => promotable.has(id));
   for (const id of promoted) store.setStatus(id, 'promoted');
   return `nodes${ids.length} edges${edges.length} promoted${promoted.length}`;
