@@ -577,7 +577,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
-      // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
+      // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) whose lifetime is CONSENT_TTL_MS (google-consent.ts).
       async begin(): Promise<Readonly<{ url: string; nonce: string }> | null> {
         const app = await googleApp();
         return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { surface: 'telegram' }) : null;
