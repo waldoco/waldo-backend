@@ -85,13 +85,14 @@ describe('claims', () => {
       store.add({ kind: 'observation', text: 'Short sleep before long meeting days', source: 'inferred', evidence: 'three weeks' }, AT);
       store.add({ kind: 'goal', text: 'Sleep 7 hours', source: 'stated', evidence: 'said' }, AT);
       const [observed, goal] = [...store.claims()].sort((a, b) => a.id - b.id);
+      store.seen(observed!.id, AT); // recurrence earns promotion: seen_count 2
       const detail = applyPromotion(store, JSON.stringify({
         nodes: [{ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', supporting_spots: [observed!.id] },
           { id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', supporting_spots: [] }],
         edges: [{ from: 'new:1', to: 'new:0', relation: 'tends to precede', strength: 0.5, evidence_count: 3 }],
         promoted: [observed!.id, goal!.id],
       }), AT);
-      expect(detail).toBe('nodes2 edges1 promoted1');
+      expect(detail).toBe('nodes2 edges1 promoted1 rejected1'); // goal: kind-excluded
       expect(store.claims().map((claim) => claim.id)).toEqual([goal!.id]);
       store.forgetNode(store.nodes()[0]!.id);
       expect(store.edges()).toEqual([]);
@@ -240,15 +241,60 @@ describe('claim origin classes (gate provenance)', () => {
         shared: 'some forwarded claim about sleep',
       });
       const byText = new Map(store.claims().map((claim) => [claim.text, claim]));
+      for (const claim of store.claims()) store.seen(claim.id, AT); // both recur, so origin alone differentiates
       const detail = applyPromotion(store, JSON.stringify({
         nodes: [{ id: null, domain: 'sleep', label: 'Sleep', summary: 'Sleep patterns', strength: 0.6, status: 'active', supporting_spots: [] }],
         edges: [],
         promoted: [byText.get('External-content observation')!.id, byText.get('Owner observation')!.id],
       }), AT);
       // Only the owner-origin observation promotes; the untrusted one is excluded structurally.
-      expect(detail).toBe('nodes1 edges0 promoted1');
+      expect(detail).toBe('nodes1 edges0 promoted1 rejected1');
       expect(store.claims().find((claim) => claim.text === 'External-content observation')).toMatchObject({ status: 'active' });
       expect(store.claims('promoted').map((claim) => claim.text)).toEqual(['Owner observation']);
+    });
+  });
+
+  it('a claim seen once can never promote - recurrence is enforced in code, not prompted', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'observation', text: 'Single episode', source: 'stated', evidence: 'said once' }, AT);
+      const once = store.claims()[0]!;
+      const detail = applyPromotion(store, JSON.stringify({
+        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 0.5, status: 'active', supporting_spots: [] }],
+        edges: [],
+        promoted: [once.id],
+      }), AT);
+      expect(detail).toBe('nodes1 edges0 promoted0 rejected1');
+      expect(store.claims()[0]!.status).toBe('active');
+      store.seen(once.id, AT);
+      const second = applyPromotion(store, JSON.stringify({ nodes: [], edges: [], promoted: [once.id] }), AT);
+      expect(second).toBe('nodes0 edges0 promoted1');
+      expect(store.claims('promoted').map((claim) => claim.text)).toEqual(['Single episode']);
+    });
+  });
+
+  it('clamps model-proposed strengths, filters supporting_spots to real claims, floors evidence_count', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'observation', text: 'Real claim', source: 'stated', evidence: 'said' }, AT);
+      const real = store.claims()[0]!;
+      applyPromotion(store, JSON.stringify({
+        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 4.7, status: 'active', supporting_spots: [real.id, 9999] }],
+        edges: [],
+        promoted: [],
+      }), AT);
+      const node = store.nodes()[0]!;
+      expect(node.strength).toBe(1);
+      expect(JSON.parse(node.supporting_spots)).toEqual([real.id]);
+      applyPromotion(store, JSON.stringify({
+        nodes: [{ id: null, domain: 'work', label: 'Y', summary: 'y', strength: -2, status: 'active', supporting_spots: [] }],
+        edges: [{ from: 'new:0', to: String(node.id), relation: 'relates', strength: 9, evidence_count: 0 }],
+        promoted: [],
+      }), AT);
+      const edge = store.edges()[0]!;
+      expect(edge.strength).toBe(1);
+      expect(edge.evidence_count).toBe(1);
+      expect(store.nodes().find((n) => n.label === 'Y')!.strength).toBe(0);
     });
   });
 });
