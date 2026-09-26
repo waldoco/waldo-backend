@@ -17,6 +17,8 @@ import {
   type HookPayload,
   type HookEvent,
   type SessionState,
+  type SanitiseCheck,
+  type SanitiseFailureReason,
   type SourceTaint,
   type ToolHandler,
   type ToolName,
@@ -75,12 +77,18 @@ export type DispatchToolResult = (
       source_taint?: 'external';
       // S4 (CONNECT_FLOW_DESIGN 4.4): typed auth intent for the responder's offerConnect seam.
       connect?: ConnectIntent;
+      // Typed sanitise/offload-guard diagnostic: strict enums only (stage + reason), built
+      // solely from the guard's own check/reason vocabulary - never payload content. Trace
+      // sinks carry it with text capture off, where free-form error is stripped.
+      guard?: GuardDiagnostic;
     }) & {
   // Present only after a trusted handler resolved an adapter result. This remains ephemeral until
   // RunLoopDO atomically writes its bounded checkpoint/receipt; a thrown adapter call leaves the
   // durable intent pending for reconciliation instead.
   trusted_effect?: TrustedToolEffect;
 };
+
+export type GuardDiagnostic = Readonly<{ check: SanitiseCheck; reason: SanitiseFailureReason }>;
 
 export type ToolDispatchErrorReason =
   | 'unknown_tool'
@@ -858,6 +866,9 @@ const offloadResult = (
         `tool result failed the offload guard: ${guarded.check}:${guarded.reason}`,
         guarded.reason === 'oversize' ? 'oversize' : 'forbidden',
         'sanitise_denied',
+        undefined,
+        undefined,
+        { check: guarded.check, reason: guarded.reason },
       ),
     };
   }
@@ -879,8 +890,12 @@ function failDispatch(
   reason: ToolDispatchErrorReason,
   sourceTaint?: SourceTaint,
   connect?: ConnectIntent,
+  guard?: GuardDiagnostic,
 ): DispatchToolResult {
-  const extra = connect === undefined ? {} : { connect };
+  const extra = {
+    ...(connect === undefined ? {} : { connect }),
+    ...(guard === undefined ? {} : { guard }),
+  };
   return sourceTaint === 'external'
     ? { ok: false, call_id: callId, tool, error, code, reason, source_taint: 'external', ...extra }
     : { ok: false, call_id: callId, tool, error, code, reason, ...extra };

@@ -75,6 +75,33 @@ describe('trace privacy canary', () => {
     expect(bodies).toContain('"message":"oversize:tool_result"');
   });
 
+  it('a guard stage:reason diagnostic survives capture-off in the DO trace, console JSON and OTLP - with no free-form text', async () => {
+    // The dispatcher's typed guard diagnostic is enum-only; it must reach every sink with the
+    // capture switch off while the free-form error carrying the same enums plus content dies.
+    const entry: TurnLogEntry = {
+      trace: 't3', hop: 'tool_query_calendar', ms: 4, ok: false,
+      error: `tool result failed the offload guard: canary_token:canary_leak ${MARKER}`,
+      code: 'forbidden:sanitise_denied',
+      guard: 'canary_token:canary_leak',
+    };
+    const gated = gateTraceEntry(entry, false);
+    expect(gated.error).toBeUndefined();
+    expect(gated.guard).toBe('canary_token:canary_leak');
+
+    const sink = noteSink();
+    const book = traceBook(sink.sql);
+    book.record(gated, Date.now());
+    expect(sink.notes[0]).toBe('canary_token:canary_leak');
+
+    const consoleLine = JSON.stringify({ ...gated, text: undefined });
+    expect(consoleLine).toContain('canary_token:canary_leak');
+    expect(consoleLine).not.toContain(MARKER);
+
+    const bodies = await exportBodies([gated, { trace: 't3', hop: 'turn', ms: 10, ok: true }], false);
+    expect(bodies).toContain('canary_token:canary_leak');
+    expect(bodies).not.toContain(MARKER);
+  });
+
   it('producer-to-sinks: a free-form console form id reaches no sink even on a whitelisted hop', async () => {
     // The real producer path: console.ts accepts any id string, and the console_action hop is
     // whitelisted, so the detail builder itself is the only thing between owner-typed text and

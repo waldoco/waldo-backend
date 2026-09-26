@@ -516,6 +516,29 @@ describe('hook registry', () => {
     });
   });
 
+  it('denies canary-shaped PostLLMCall output under external turn taint (provider-ingestion exception stays off egress)', async () => {
+    // After a tool result the run loop merges external taint into the turn context; model
+    // output to send_message must keep the 16-hex shape scan (owner security review of #203).
+    // The string is canary-SHAPED, not a session canary, so only the shape scan can catch it.
+    await expect(
+      runHooks(
+        'PostLLMCall',
+        { event: 'PostLLMCall', response: 'see 19c8a1b2f3d4e5f6 for details', tokens_in: 1, tokens_out: 1 },
+        runtimeCtx({ sourceTaint: 'external', sanitise }),
+      ),
+    ).rejects.toMatchObject({ hook: 'scribe_sanitise', code: 'forbidden' });
+  });
+
+  it('passes harmless PostLLMCall output under external turn taint (the regression is not vacuous)', async () => {
+    await expect(
+      runHooks(
+        'PostLLMCall',
+        { event: 'PostLLMCall', response: 'Your calendar is clear on Friday morning.', tokens_in: 1, tokens_out: 1 },
+        runtimeCtx({ sourceTaint: 'external', sanitise }),
+      ),
+    ).resolves.toMatchObject({ event: 'PostLLMCall' });
+  });
+
   it('recursively rewrites structured PostLLMCall text through the injected Scribe sanitiser', async () => {
     await expect(
       runHooks(

@@ -173,6 +173,8 @@ describe('Canary-guard false positives on provider id shapes (live failure tg-90
       expect(result.reason).toBe('sanitise_denied');
       // the trace-visible error names the exact guard stage/reason as enums - no content
       expect(result.error).toBe('tool result failed the offload guard: canary_token:canary_leak');
+      // ...and the same stage/reason rides as a typed enum-only diagnostic for capture-off sinks
+      expect(result.guard).toEqual({ check: 'canary_token', reason: 'canary_leak' });
     }
     expect(store.read('to-1', 0, 16)).toBeNull();
   });
@@ -185,6 +187,29 @@ describe('Canary-guard false positives on provider id shapes (live failure tg-90
       source_taint: null,
     });
     expect(denied).toMatchObject({ ok: false, check: 'canary_token' });
+  });
+
+  it('GUARD HELD: external-tainted content at an egress destination is still shape-scanned (security review #203)', () => {
+    // A PostLLMCall in a turn that read provider data inherits external taint via the run-loop
+    // taint merge; the provider-ingestion exception (internal_context only) must not reach
+    // egress, or model output that turn would skip the 16-hex shape scan.
+    const denied = sanitise({
+      payload: 'remember 19c8a1b2f3d4e5f6 for later',
+      destination: 'send_message',
+      canary_tokens: [...canaryTokens],
+      source_taint: 'external',
+    });
+    expect(denied).toMatchObject({ ok: false, check: 'canary_token', reason: 'canary_leak' });
+  });
+
+  it('provider ingestion stays exempt: the same 16-hex id passes at internal_context under external taint', () => {
+    const allowed = sanitise({
+      payload: { id: '19c8a1b2f3d4e5f6', subject: 'Invoice' },
+      destination: 'internal_context',
+      canary_tokens: [...canaryTokens],
+      source_taint: 'external',
+    });
+    expect(allowed.ok).toBe(true);
   });
 });
 

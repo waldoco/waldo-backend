@@ -21,6 +21,9 @@ export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnL
     ...entry,
     detail: SAFE_DETAIL_HOPS.has(entry.hop) ? entry.detail : entry.code,
     error: undefined,
+    // The guard diagnostic is strict enum-only at its producer (dispatcher offload guard:
+    // stage + reason from the contracts vocabulary), so it survives capture-off like code does.
+    guard: entry.guard,
   };
 };
 

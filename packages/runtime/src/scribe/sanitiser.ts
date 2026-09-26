@@ -348,14 +348,16 @@ function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
 ): SanitiseFailureReason | undefined {
-  // The generic embedded canary-shape scan (/16 hex chars/) applies only to agent-side
-  // (non-external) content: a canary leak means the AGENT echoed its own system-prompt tokens.
-  // External-tainted payloads are received provider data, where 16-hex tokens are ordinary
-  // identifiers (Gmail message ids are exactly 16 hex chars; Calendar etags are 16 digits) -
-  // the shape scan denied every populated Google read. Exact session-canary matching still runs
-  // for every taint, and model EMISSION stays guarded by the PostLLMCall canary check plus the
-  // send_message sanitise of agent text, so a canary-shaped token still can never be emitted.
-  const embeddedScan = input.source_taint !== 'external';
+  // The generic embedded canary-shape scan (/16 hex chars/) applies to all agent-side
+  // (non-external) content, and to EVERY destination even for external-tainted content, with
+  // one exception: provider ingestion into internal_context. Received provider data carries
+  // ordinary 16-hex identifiers (Gmail message ids are exactly 16 hex chars; Calendar etags
+  // are 16 digits) - the shape scan denied every populated Google read at the offload guard.
+  // Egress keeps the scan regardless of taint: a PostLLMCall in a turn that read provider data
+  // inherits external taint (the run loop merges tool-result taint into the turn context) and
+  // its destination is send_message, so a canary-shaped token can still never be emitted.
+  // Exact session-canary matching runs for every taint and destination.
+  const embeddedScan = !(input.source_taint === 'external' && input.destination === 'internal_context');
   let canaryFound = false;
   let secretFound = containsStructuredSecret(payload, input.destination);
   const result = visitStrings(payload, input.destination, (text) => {
