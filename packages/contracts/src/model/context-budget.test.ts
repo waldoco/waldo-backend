@@ -10,6 +10,7 @@ import {
   ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
   OPENAI_GPT_5_MINI_MODEL,
   OPENAI_GPT_5_NANO_MODEL,
+  OPENAI_GPT_6_LUNA_MODEL,
   WORKERS_AI_GEMMA_4_26B_MODEL,
   modelNameSchema,
 } from './roster';
@@ -35,6 +36,7 @@ describe('deriveContextBudgetChars', () => {
     // above any current wire ceiling, so the derived budget IS the ceiling.
     expect(deriveContextBudgetChars(OPENAI_GPT_5_NANO_MODEL, 32_768)).toBe(32_768);
     expect(deriveContextBudgetChars(OPENAI_GPT_5_MINI_MODEL, 32_768)).toBe(32_768);
+    expect(deriveContextBudgetChars(OPENAI_GPT_6_LUNA_MODEL, 32_768)).toBe(32_768);
     expect(deriveContextBudgetChars(ANTHROPIC_CLAUDE_SONNET_4_6_MODEL, 32_768)).toBe(32_768);
     expect(deriveContextBudgetChars(ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL, 32_768)).toBe(32_768);
     expect(deriveContextBudgetChars(WORKERS_AI_GEMMA_4_26B_MODEL, 32_768)).toBe(32_768);
@@ -46,6 +48,9 @@ describe('deriveContextBudgetChars', () => {
     );
     expect(deriveContextBudgetChars(WORKERS_AI_GEMMA_4_26B_MODEL, 1_000_000)).toBe(
       (131_072 - 8_192 - 8_192) * BUDGET_CHARS_PER_TOKEN,
+    );
+    expect(deriveContextBudgetChars(OPENAI_GPT_6_LUNA_MODEL, 10_000_000)).toBe(
+      (1_050_000 - 128_000 - 8_192) * BUDGET_CHARS_PER_TOKEN,
     );
   });
 

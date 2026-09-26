@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { OPENAI_GPT_5_NANO_MODEL, OPENAI_PROVIDER } from '@waldo/contracts';
 import { browsePageHandler } from '../src/tools/live/browser';
 
 const ctx = {} as never;
@@ -116,7 +117,7 @@ describe('browse_page', () => {
     await browsePageHandler('k', 'p', 'model-key', fetcher).handle(args, ctx);
     const extract = calls.find((c) => c.op === 'extract');
     const start = calls.find((c) => c.op === 'start');
-    expect(String(start?.body.modelName)).toMatch(/^openai\//);
+    expect(start?.body.modelName).toBe(`${OPENAI_PROVIDER}/${OPENAI_GPT_5_NANO_MODEL}`);
     const model = (extract?.body.options as { model: { modelName: string; apiKey: string } }).model;
     expect(model.modelName).toBe(start?.body.modelName);
     expect(model.apiKey).toBe('model-key');

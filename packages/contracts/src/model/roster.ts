@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const OPENAI_GPT_5_NANO_MODEL = 'gpt-5-nano' as const;
 export const OPENAI_GPT_5_MINI_MODEL = 'gpt-5-mini' as const;
+export const OPENAI_GPT_6_LUNA_MODEL = 'gpt-6-luna' as const;
 export const WORKERS_AI_GEMMA_4_26B_MODEL = '@cf/google/gemma-4-26b-a4b-it' as const;
 export const ANTHROPIC_CLAUDE_SONNET_4_6_MODEL = 'claude-sonnet-4-6' as const;
 export const ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL = 'claude-haiku-4-5' as const;
@@ -17,13 +18,14 @@ export const modelNameSchema = z.enum([
   ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
   OPENAI_GPT_5_NANO_MODEL,
   OPENAI_GPT_5_MINI_MODEL,
+  OPENAI_GPT_6_LUNA_MODEL,
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
 
 // The model Waldo chats, remembers and reacts with. Swapping models is this one line when the
 // target is already in the roster with an OpenAI provider; a new model also needs its roster
 // entry above, PROVIDER_OF below and a price in packages/runtime/src/llm/pricing.ts.
-export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_5_NANO_MODEL;
+export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
 
 // The alternative the W7 evals measure against WALDO_CHAT_MODEL. Nothing routes to it in production.
 export const WALDO_EVAL_ALTERNATIVE_MODEL: ModelName = OPENAI_GPT_5_MINI_MODEL;
@@ -44,6 +46,7 @@ export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: 'anthropic',
   [OPENAI_GPT_5_NANO_MODEL]: OPENAI_PROVIDER,
   [OPENAI_GPT_5_MINI_MODEL]: OPENAI_PROVIDER,
+  [OPENAI_GPT_6_LUNA_MODEL]: OPENAI_PROVIDER,
 };
 
 // The documented request ID and exact response identities accepted at the Cloudflare

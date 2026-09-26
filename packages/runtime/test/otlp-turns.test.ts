@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OPENAI_GPT_5_NANO_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_5_NANO_MODEL, OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 import { hopFeature, langfuseOtlpConfig, otlpTurnExporter } from '../src/observability/otlp-turns';
 
@@ -36,6 +36,7 @@ describe('langfuse OTLP config', () => {
 describe('model cost', () => {
   it('prices cached input separately and returns null for unknown models', () => {
     expect(modelCost({ model: OPENAI_GPT_5_NANO_MODEL, input: 2_000_000, cached: 1_000_000, output: 1_000_000 })).toEqual({ input: 0.055, output: 0.4, total: 0.455 });
+    expect(modelCost({ model: OPENAI_GPT_6_LUNA_MODEL, input: 2_000_000, cached: 1_000_000, output: 1_000_000 })).toEqual({ input: 0.11, output: 0.5, total: 0.61 });
     expect(modelCost({ model: 'mystery', input: 1, cached: 0, output: 1 })).toBeNull();
   });
 });
