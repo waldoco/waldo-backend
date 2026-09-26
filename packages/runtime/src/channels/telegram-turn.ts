@@ -3,7 +3,8 @@ import {
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
-import { runToolLoop } from '../conversation/tool-loop';
+import { runToolLoop, type LoopExit } from '../conversation/tool-loop';
+import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
@@ -119,8 +120,30 @@ export const createTelegramResponder = (
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => {
       const trace = traceId;
+      // Subagent orchestration v1: the delegate_task handler is built per turn so the spawn
+      // counter resets each turn and the spawner closes over this turn's LLM step. The child
+      // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
+      // slice; flat by construction - children never get delegate_task.
+      // One shared round budget per submitted turn: the parent loop and every child it spawns
+      // draw from it, so the turn's stated cap is absolute (Codex #224 hold).
+      const turnBudget = { remaining: MAX_TOOL_ROUNDS };
+      const delegate = delegateTaskHandler((task) =>
+        runChildLoop(task, {
+          handlers,
+          budget: turnBudget,
+          ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          controlRound: () => control.round(),
+          complete: (content, tools, turns) =>
+            complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns),
+          onTool: (event) => {
+            log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          },
+        }),
+      );
+      const turnHandlers = withDelegation(handlers, delegate, ownerTurnActive);
       return runToolLoop({
-        handlers,
+        handlers: turnHandlers,
+        budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
@@ -130,7 +153,7 @@ export const createTelegramResponder = (
           const entries = [...request.messages];
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           return complete(trace, 'reply',
-          [messagingSystemPrompt(handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
@@ -148,16 +171,20 @@ export const createTelegramResponder = (
   }, tree);
   let parentId: string | null = null;
   let settling: Promise<unknown> = Promise.resolve();
+  // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
+  // only, never reminder/scheduled machine turns that flow through the same closure.
+  let ownerTurnActive = false;
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, chatId: number, said: string, time: TurnTimer, fromOwner = false) => {
     traceId = id;
+    ownerTurnActive = fromOwner;
     control.begin(fromOwner);
     const publication = await time('joined_path', () => path.submit({
       authenticatedOwnerId: ownerId, invocation,
       context: { ...localTrustedBriefTurnSnapshot(), canary_tokens: CANARIES, replay_context_ref: null },
       userEntry: { id, ownerId, chatId: `telegram-${chatId}`, parentId, threadAnchorId: null, surface: 'telegram', modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
       assistantEntryId: `${id}-reply`,
-    })).finally(() => control.end());
+    })).finally(() => { ownerTurnActive = false; control.end(); });
     await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
     for (const entry of pendingToolOutputs.splice(0)) await toolLedger?.record(entry);
     parentId = publication.leafId;

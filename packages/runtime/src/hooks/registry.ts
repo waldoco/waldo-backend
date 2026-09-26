@@ -51,7 +51,7 @@ import {
   searchEpisodesArgsSchema,
   searchToolsArgsSchema,
   sendMessageArgsSchema,
-  browseActArgsSchema,
+  browseActArgsSchema, delegateTaskArgsSchema,
   browsePageArgsSchema,
   cancelReminderArgsSchema,
   closeLoopArgsSchema,
@@ -172,6 +172,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   set_proactivity: setProactivityArgsSchema,
   browse_page: browsePageArgsSchema,
   browse_act: browseActArgsSchema,
+  delegate_task: delegateTaskArgsSchema,
 });
 
 export const jwtValidateHook: HookHandler<HookRuntimeContext> = {
