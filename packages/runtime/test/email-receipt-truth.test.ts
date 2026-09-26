@@ -9,6 +9,8 @@ import type { EmailSendProposal } from '../src/channels/approvals';
 // mint one.
 const clock = { timezone: 'UTC', now: () => new Date('2026-09-25T10:00:00Z') };
 
+const ctxAt = (started_at: number) => ({ authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at } } }) as never;
+
 const deskWith = () => {
   const proposals: EmailSendProposal[] = [];
   return {
@@ -29,7 +31,7 @@ describe('email receipt truth', () => {
     const { desk, proposals } = deskWith();
     const google = { client: async () => ({}) as never };
     const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
-    const result = await send.handle({ to: ['priya@example.com'], subject: 'Deck', body_markdown: 'Ready Thursday.' } as never);
+    const result = await send.handle({ to: ['priya@example.com'], subject: 'Deck', body_markdown: 'Ready Thursday.' } as never, ctxAt(1000));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const data = result.data as { proposal_id: string; sent: boolean };
@@ -54,18 +56,21 @@ describe('email receipt truth', () => {
     expect(proposals).toHaveLength(0);
   });
 
-  it('derives the Message-ID from the canonical content: a retry of the same email keeps the id, a changed body changes it', async () => {
+  it('scopes the Message-ID to the logical send: same-turn retries keep it, a new request or changed content gets a fresh one', async () => {
     const { desk, proposals } = deskWith();
     const google = { client: async () => ({}) as never };
     const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
-    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never);
-    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never);
-    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B2' } as never);
-    expect(proposals).toHaveLength(3);
-    // same logical email -> same Message-ID, so Sent-mail reconciliation proves exactly-once across retries
+    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never, ctxAt(1000));
+    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never, ctxAt(1000)); // same turn, same content: a retry
+    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never, ctxAt(2000)); // new request, same content
+    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B2' } as never, ctxAt(1000)); // same turn, changed content
+    expect(proposals).toHaveLength(4);
+    // retry of one logical send -> one Message-ID, so Sent-mail reconciliation proves exactly-once
     expect(proposals[0]!.message_id).toBe(proposals[1]!.message_id);
-    // any content change -> a different Message-ID, so distinct emails never alias
+    // same content on a new request -> a NEW Message-ID: an old Sent hit can never alias it
     expect(proposals[0]!.message_id).not.toBe(proposals[2]!.message_id);
+    // changed content in the same turn -> a NEW Message-ID
+    expect(proposals[0]!.message_id).not.toBe(proposals[3]!.message_id);
   });
 
   it('the draft_email description tells the model it creates no approval card', () => {

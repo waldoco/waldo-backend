@@ -134,19 +134,22 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // and hands both to the approval desk. The desk replays the stored bytes on approval
     // (users.messages.send, never drafts.send) and reconciles an ambiguous send through the
     // Message-ID we set, so the model's post-approval state cannot change what goes out.
-    handle: async (args: SendEmailArgs) => {
+    handle: async (args: SendEmailArgs, ctx: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
       const gate = await withGoogle(google, 'mail', async () => null);
       if (!gate.ok) return { ...gate, source_taint: null };
-      // Deterministic Message-ID: derived from the canonical content so a tool-loop retry of
-      // the same logical email carries the SAME id and the desk's Sent-mail reconciliation can
-      // prove exactly-once across retries. A random id here was half the duplicate-mail race.
+      // Idempotency is scoped to the logical send: owner + turn + content. A retry of the same
+      // logical send (same turn, same content) keeps one proposal and one Message-ID, so the
+      // desk's Sent-mail reconciliation proves exactly-once across retries. The same content on
+      // a NEW request or day is a new logical send with its own Message-ID - an old Sent hit
+      // can never mark a later failed send as delivered, and distinct intents never collapse.
       const content_key = await sha256Hex(JSON.stringify({
         to: args.to, cc: args.cc ?? [], bcc: args.bcc ?? [],
         subject: args.subject, body: args.body_markdown, thread: args.reply_to_thread_id ?? null,
       }));
-      const message_id = `<${content_key}@waldo-send>`;
+      const logical_key = `${ctx.authenticatedUserId}:${ctx.session.rate_limit_window.started_at}:${content_key}`;
+      const message_id = `<${await sha256Hex(logical_key)}@waldo-send>`;
       const raw = buildMime({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,

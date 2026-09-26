@@ -227,7 +227,7 @@ describe('approval desk - email_send rail', () => {
     digest: '',
   };
   let idSeq = 0;
-  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string }) => {
+  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string; failFirstCard?: boolean }) => {
     const sent: { method: string; body: Record<string, unknown> }[] = [];
     const sentRaw: string[] = [];
     let now = 1_000_000;
@@ -237,7 +237,16 @@ describe('approval desk - email_send rail', () => {
       findSentByMessageId: async () => { if (opts.findError) throw opts.findError; return opts.found ?? false; },
     } as unknown as GoogleClient;
     const desk = approvalDesk(state.storage.sql, {
-      call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+      call: async (method, body) => {
+        sent.push({ method, body: body as Record<string, unknown> });
+        // A real ambiguous Telegram failure: the FIRST approval card send throws after Telegram
+        // may have applied it server-side; later sends succeed.
+        if (opts.failFirstCard && method === 'sendMessage' && String((body as { text?: string }).text).startsWith('Send this email?')) {
+          opts.failFirstCard = false;
+          throw new Error('telegram send timeout');
+        }
+        return {};
+      },
       owner: 42, google: async () => (opts.connected === false ? null : client), newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
     });
     const { sha256Hex } = await import('../src/connectors/google');
@@ -249,7 +258,7 @@ describe('approval desk - email_send rail', () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-1'));
     await runInDurableObject(stub, async (_i, state) => {
       const { desk, id, sent, sentRaw, tick } = await setup(state, {});
-      expect(sent[0]!.body.text).toBe('Send this email? Send email to a@x.test: "Hello"');
+      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nSubject: Hello\n\nBody text');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`e:${id}`);
@@ -293,44 +302,114 @@ describe('approval desk - email_send rail', () => {
       expect(out1.message).toContain('exactly once');
       expect(ok.sentRaw).toHaveLength(1);
 
+      // A single negative Sent lookup proves NOTHING (index lag / ambiguous network): the
+      // outcome stays unknown and the owner is told to check Sent before any resend.
       const miss = await setup(state, { sendError: new Error('network timeout'), found: false });
       const out2 = await miss.desk.decide(miss.id, 'a', 't');
-      expect(out2.toast).toBe("That didn't send");
-      expect(out2.message).toContain('Nothing was delivered');
+      expect(out2.toast).toBe('Send unconfirmed');
+      expect(out2.message).toContain('may be in your Sent folder');
+      expect(out2.message).not.toContain('Nothing was delivered');
       expect(miss.sentRaw).toHaveLength(1);
+    });
+  });
+
+  it('two concurrent approvals race on the atomic claim: exactly one reaches sendRaw', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-concurrent'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sentRaw, sql } = await setup(state, {});
+      // Start both approvals WITHOUT awaiting the first: both read status open before either
+      // reaches provider I/O. The synchronous open -> sending claim lets exactly one through.
+      const [a, b] = await Promise.all([desk.decide(id, 'a', 't1'), desk.decide(id, 'a', 't2')]);
+      const toasts = [a.toast, b.toast].sort();
+      expect(toasts).toEqual(['Already handled.', 'Sent']);
+      expect(sentRaw).toEqual([proposal.raw]);
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('done');
     });
   });
 
   it('refuses honestly when Google is not connected', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-4'));
     await runInDurableObject(stub, async (_i, state) => {
-      const { desk, id, sentRaw } = await setup(state, { connected: false });
+      const { desk, id, sentRaw, sql } = await setup(state, { connected: false });
       const out = await desk.decide(id, 'a', 't');
       expect(out.toast).toBe('Google is not connected');
       expect(sentRaw).toEqual([]);
+      // claimed but never attempted: the proposal is released back to open for a connected retry
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('open');
     });
   });
 
-  it('a retry of the same email returns the same proposal id, re-sends the same card, and two approvals send exactly once', async () => {
+  it('after an ambiguous Telegram card timeout, the retry returns the same proposal id, re-sends the same card, and two approvals send exactly once', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-retry'));
     await runInDurableObject(stub, async (_i, state) => {
-      const { desk, id, sent, sentRaw, sql } = await setup(state, {});
+      // The first card send really throws (Telegram may have applied it server-side).
+      const first = await setup(state, { failFirstCard: true }).catch((error: unknown) => error);
+      expect(first).toBeInstanceOf(Error); // the ambiguous timeout propagates; no success was claimed
+      // The tool loop retries with identical bytes (same logical send, same Message-ID).
       const { sha256Hex } = await import('../src/connectors/google');
-      // ambiguous timeout after the first card: the tool loop retries with identical bytes
-      const again = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
-      expect(again).toBe(id); // no second proposal, no fresh Message-ID
-      const rows = sql.exec("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'open'").toArray();
-      expect(rows).toHaveLength(1);
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      const sentRaw: string[] = [];
+      const client = {
+        sendRaw: async (raw: string) => { sentRaw.push(raw); return { message_id: 'g1' }; },
+        findSentByMessageId: async () => false,
+      } as unknown as GoogleClient;
+      let n = 0;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => client, newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const id = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
+      const rows = state.storage.sql.exec<{ id: string }>("SELECT id FROM ledger WHERE kind = 'email_send'").toArray();
+      expect(rows).toHaveLength(1); // no second proposal, no fresh Message-ID
+      expect(id).toBe(rows[0]!.id); // the retry returned the SAME row the timed-out propose created
       const cards = sent.filter((m) => m.method === 'sendMessage');
-      expect(cards).toHaveLength(2); // the card is re-sent in case the first timed out
-      expect(JSON.stringify(cards[1]!.body.reply_markup)).toContain(`a:${id}`); // same id behind both cards
+      expect(cards).toHaveLength(1);
+      expect(JSON.stringify(cards[0]!.body.reply_markup)).toContain(`a:${id}`); // the card rides the same id
 
-      // approving BOTH visible cards (same id) sends exactly one email
-      const first = await desk.decide(id, 'a', 't');
-      const second = await desk.decide(id, 'a', 't');
-      expect(first.toast).toBe('Sent');
-      expect(second.toast).toBe('Already handled.');
+      // approving twice (the owner may see the first card too) sends exactly one email
+      const approved = await desk.decide(id, 'a', 't');
+      const duplicate = await desk.decide(id, 'a', 't');
+      expect(approved.toast).toBe('Sent');
+      expect(duplicate.toast).toBe('Already handled.');
       expect(sentRaw).toEqual([proposal.raw]);
+    });
+  });
+
+  it('same-content sends on separate intents never collapse, and an old Sent hit never marks a later failed send delivered', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-distinct'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const sentRaw: string[] = [];
+      let failNext = false;
+      const sentIds: string[] = [];
+      const client = {
+        sendRaw: async (raw: string) => { sentRaw.push(raw); if (failNext) { failNext = false; throw new Error('network timeout'); } return { message_id: 'g1' }; },
+        // Sent contains only the FIRST logical send's Message-ID, like Gmail would after it landed.
+        findSentByMessageId: async (mid: string) => sentIds.includes(mid),
+      } as unknown as GoogleClient;
+      let n = 0;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async () => ({}),
+        owner: 42, google: async () => client, newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const { sha256Hex } = await import('../src/connectors/google');
+      // Two separate intents, identical content, distinct Message-IDs (as the turn-scoped key produces).
+      const first = { ...proposal, message_id: '<turn1@waldo-send>', raw: proposal.raw.replace('<m1@waldo-send>', '<turn1@waldo-send>') };
+      const second = { ...proposal, message_id: '<turn2@waldo-send>', raw: proposal.raw.replace('<m1@waldo-send>', '<turn2@waldo-send>') };
+      const id1 = await desk.proposeSendEmail({ ...first, digest: await sha256Hex(first.raw) });
+      const id2 = await desk.proposeSendEmail({ ...second, digest: await sha256Hex(second.raw) });
+      expect(id2).not.toBe(id1); // distinct intents -> two proposals
+      expect(state.storage.sql.exec("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'open'").toArray()).toHaveLength(2);
+
+      // First intent sends fine and lands in Sent under its own Message-ID.
+      sentIds.push(first.message_id);
+      expect((await desk.decide(id1, 'a', 't')).toast).toBe('Sent');
+      // Second intent: the send errors ambiguously. Reconciliation must NOT match the older
+      // send's Message-ID and falsely report delivered.
+      failNext = true;
+      const out = await desk.decide(id2, 'a', 't');
+      expect(out.toast).toBe('Send unconfirmed'); // an old Sent hit must not mark it delivered
+      expect(out.message).not.toContain('exactly once');
+      expect(sentRaw).toEqual([first.raw, second.raw]);
     });
   });
 
