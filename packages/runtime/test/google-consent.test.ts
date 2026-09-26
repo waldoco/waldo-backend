@@ -238,6 +238,23 @@ describe('google callback in the Worker', () => {
     expect(response.status).toBe(502);
     expect(await response.text()).toContain('could not be connected');
   });
+
+  it('keeps the signed surface on the failure page: a telegram-origin failure routes back to Telegram, a dashboard-origin failure to the console', async () => {
+    const { deps } = setup();
+    const owner = ownerNamespace(async () => { throw new Error('do reset'); });
+    // telegram origin: failure must NOT strand the owner on /console
+    const tg = await begin(deps, '5458446350', 'telegram');
+    const tgResponse = await handleGoogleCallback(callback(`state=${encodeURIComponent(tg.url.searchParams.get('state')!)}&code=c1`), env(owner.ns));
+    expect(tgResponse.status).toBe(502);
+    const tgHtml = await tgResponse.text();
+    expect(tgHtml).toContain('go back to Telegram');
+    expect(tgHtml).not.toContain('Back to your console');
+    // dashboard origin: failure keeps the console back-link
+    const dash = await begin(deps, '5458446350', 'dashboard');
+    const dashResponse = await handleGoogleCallback(callback(`state=${encodeURIComponent(dash.url.searchParams.get('state')!)}&code=c1`), env(owner.ns));
+    expect(dashResponse.status).toBe(502);
+    expect(await dashResponse.text()).toContain('Back to your console');
+  });
 });
 
 describe('connector proxy exchange', () => {

@@ -85,6 +85,8 @@ export const handleGoogleCallback = async (request: Request, env: TelegramWebhoo
     return consentPage(reply.outcome, reply.bot, state.surface);
   } catch (failure) {
     rejected(`owner unreachable: ${failure instanceof Error ? failure.message : String(failure)}`);
-    return consentPage({ kind: 'failed', reason: 'owner unreachable' }, null);
+    // The signed state already proved where this flow started; the failure page must send the
+    // owner back to THAT surface, not drop it and default every failure to the console.
+    return consentPage({ kind: 'failed', reason: 'owner unreachable' }, null, state.surface);
   }
 };
