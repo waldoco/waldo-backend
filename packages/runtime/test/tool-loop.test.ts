@@ -233,3 +233,30 @@ describe('warn-first budget notice and semantic no-progress', () => {
     expect(fetched).toBe(5);
   });
 });
+
+describe('refusals never feed the failure streak', () => {
+  it('refusal-only rounds neither withdraw tools nor reset a genuine failure streak', async () => {
+    let n = 0;
+    const offered: boolean[] = [];
+    const text = await runToolLoop({
+      handlers, ctx, maxSteps: 25,
+      step: async (tools) => {
+        offered.push(tools !== undefined);
+        n += 1;
+        if (!tools) return { text: 'closed.' };
+        // rounds 1-2: same identical call (2nd is refused); round 3: unknown tool (genuine
+        // failure); rounds 4-5: refusals again. If refusals fed the streak, tools would be
+        // withdrawn by round 4-5.
+        if (n <= 2) return { text: '', tool_calls: [call] };
+        if (n === 3) return { text: '', tool_calls: [{ call_id: 'x3', name: 'launch_rocket', arguments: '{"limit":1}' }] };
+        if (n <= 6) return { text: '', tool_calls: [call] };
+        return { text: 'closed.' };
+      },
+    });
+    expect(text).toBe('closed.');
+    // Tools were still offered after two refusal rounds + one genuine failure + three more
+    // refusal rounds: the streak only reached 1, never FAILED_ROUNDS_LIMIT, so the loop never
+    // withdrew tools before the model chose to close.
+    expect(offered).toEqual([true, true, true, true, true, true, true]);
+  });
+});

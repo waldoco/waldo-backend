@@ -78,13 +78,17 @@ export async function runToolLoop(input: Readonly<{
     const response = await input.step(offer ? tools : undefined, turns);
     if (response.tool_calls === undefined) return response.text;
     let anyOk = false;
+    let anyGenuineFailure = false;
     let firstCall = true;
     for (const call of response.tool_calls) {
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
       const stablePair = `${call.name}\u0000${stabilize(call.arguments)}`;
+      // Harness refusals carry a typed code and never feed FAILED_ROUNDS_LIMIT: a refusal is the
+      // harness declining a redundant call, not a tool failure (Hermes tool_guardrails.py:216 -
+      // counting refusals "lets the cheap refusal feed the streak that fires the next, harder one").
       const result = seen.has(key)
-        ? { ok: false, error: 'Same call already made this turn; use its result.' }
+        ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
         : noProgressBlocked.has(stablePair)
           ? { ok: false, error: 'No progress: this call keeps returning the same outcome apart from volatile ids/timestamps; stop retrying it and answer with what you have.', code: 'no_progress' as const }
           : await dispatch(call, input);
@@ -132,8 +136,10 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.guard ? { guard: typed.guard } : {}),
       });
       anyOk ||= result.ok;
+      anyGenuineFailure ||= !result.ok && (result as { code?: string }).code !== 'repeat_refusal' && (result as { code?: string }).code !== 'no_progress';
     }
-    failedRounds = anyOk ? 0 : failedRounds + 1;
+    // A refusal-only round neither feeds nor resets the failure streak: nothing failed.
+    failedRounds = anyOk ? 0 : anyGenuineFailure ? failedRounds + 1 : failedRounds;
   }
 }
 
