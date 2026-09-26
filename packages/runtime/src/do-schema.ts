@@ -67,6 +67,7 @@ export const DO_RUNTIME_SUBSTRATE_TABLES = [
   'held_candidates',
   'schedule',
   'schedule_runs',
+  'heartbeat_notified',
   'runtime_runs',
   'runtime_invocation_v2',
   'runtime_invocation_v2_scribe_audit',

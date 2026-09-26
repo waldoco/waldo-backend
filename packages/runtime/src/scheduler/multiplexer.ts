@@ -306,6 +306,22 @@ export class Scheduler {
     return row?.id ?? null;
   }
 
+  // Terminal delivery state already recorded for this occurrence by an earlier attempt.
+  // DO alarms are at-least-once: 'sent'/'failed' are never re-sent; only a row stuck at
+  // 'pending' (crashed mid-delivery) is recovered by acting again.
+  occurrenceDelivery(scheduleId: string, occurrenceAt: number): 'sent' | 'failed' | null {
+    const [lower, upper] = occurrenceIdRange(scheduleId, occurrenceAt);
+    const row = this.sql
+      .exec<{ delivery: string }>(
+        `SELECT delivery FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ? AND delivery IN ('sent', 'failed') ORDER BY id LIMIT 1`,
+        scheduleId,
+        lower,
+        upper,
+      )
+      .toArray()[0];
+    return (row?.delivery as 'sent' | 'failed' | undefined) ?? null;
+  }
+
   markHeartbeatDecision(runId: string, result: 'quiet' | 'acted'): void {
     this.sql.exec(
       `UPDATE schedule_runs SET heartbeat_result = ? WHERE id = ? AND outcome = 'running'`,

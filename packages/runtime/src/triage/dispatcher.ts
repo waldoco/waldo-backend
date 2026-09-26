@@ -159,6 +159,8 @@ function triageScheduleKind(
       return accept('dreaming_mode', 'alarm_dreaming');
     case 'reminder':
       return reject('unknown_alarm_name', 'owner reminders fire in the Telegram owner object');
+    case 'heartbeat':
+      return reject('unknown_alarm_name', 'the heartbeat tick fires in the Telegram owner object');
     default:
       return assertNever(scheduleKind);
   }
@@ -281,6 +283,8 @@ function alarmNameMatchesScheduleKind(alarmName: string, scheduleKind: ScheduleK
       return alarmName === 'dreaming' || alarmName.startsWith('dreaming:');
     case 'reminder':
       return alarmName.startsWith('reminder:');
+    case 'heartbeat':
+      return alarmName === 'heartbeat-tick' || alarmName.startsWith('heartbeat:');
     default:
       return assertNever(scheduleKind);
   }
