@@ -3,6 +3,7 @@ import {
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
+import { PROBE_STRIPPED_TOOLS } from './probe-turn';
 import { runToolLoop, type LoopExit } from '../conversation/tool-loop';
 import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
@@ -54,6 +55,10 @@ export const createTelegramResponder = (
   // Forget support: redact forgotten claim text from the persisted rolling conversation window
   // (supplied by the owner DO, which owns the KV store). Counts only - never the text.
   redactConversation?: (texts: readonly string[]) => Promise<Readonly<{ rewritten: number; remaining: number }>>,
+  // Staging probe confinement (Codex #230/#231 holds): while a capture-mode /probe-turn runs,
+  // this slot suppresses memory persistence and strips the live provider handlers from the
+  // turn's tool loop and system prompt. Inert for real turns; the DO owns the slot.
+  probeGuard?: { suppressMemory: boolean; stripLiveTools: boolean },
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -120,6 +125,12 @@ export const createTelegramResponder = (
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => {
       const trace = traceId;
+      // Capture-mode probe turns run on the stripped handler set; delegation wraps that
+      // same set so probe confinement applies to children too (children are read-only by
+      // construction, and the strip list is not widened here).
+      const activeHandlers = probeGuard?.stripLiveTools
+        ? handlers.filter((handler) => !PROBE_STRIPPED_TOOLS.includes(handler.name))
+        : handlers;
       // Subagent orchestration v1: the delegate_task handler is built per turn so the spawn
       // counter resets each turn and the spawner closes over this turn's LLM step. The child
       // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
@@ -129,7 +140,7 @@ export const createTelegramResponder = (
       const turnBudget = { remaining: MAX_TOOL_ROUNDS };
       const delegate = delegateTaskHandler((task) =>
         runChildLoop(task, {
-          handlers,
+          handlers: activeHandlers,
           budget: turnBudget,
           ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: () => control.round(),
@@ -140,7 +151,7 @@ export const createTelegramResponder = (
           },
         }),
       );
-      const turnHandlers = withDelegation(handlers, delegate, ownerTurnActive);
+      const turnHandlers = withDelegation(activeHandlers, delegate, ownerTurnActive);
       return runToolLoop({
         handlers: turnHandlers,
         budget: turnBudget,
@@ -200,7 +211,7 @@ export const createTelegramResponder = (
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
       const text = await converse(id, turn.chatId, said, time, true);
       const owner = [turn.text ?? '', ...control.end()].filter(Boolean).join('\n');
-      if (memory) {
+      if (memory && !probeGuard?.suppressMemory) {
         const started = Date.now();
         settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA })
           .then(async (raw) => {
