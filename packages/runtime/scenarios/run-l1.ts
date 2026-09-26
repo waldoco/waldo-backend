@@ -72,17 +72,21 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
 
   const events = scenario.fixtures?.events ?? DEFAULT_EVENTS;
   const connectOffers: ConnectIntent[] = [];
+  const googleClient = {
+    events: async () => ({ items: events, complete: true }),
+    event: async (id: string) => events.find((event) => event.id === id)!,
+    newMail: async () => scenario.fixtures?.mail ?? [],
+    changedEvents: async () => [],
+    draft: async () => ({ draft_id: 'd1' }),
+    createEvent: async () => events[0]!,
+    moveEvent: async () => events[0]!,
+    cancelEvent: async () => undefined,
+  } as unknown as GoogleClient;
   const google = {
-    client: scenario.fixtures?.googleNotConnected ? async () => null : async () => ({
-      events: async () => events,
-      event: async (id: string) => events.find((event) => event.id === id)!,
-      newMail: async () => scenario.fixtures?.mail ?? [],
-      changedEvents: async () => [],
-      draft: async () => ({ draft_id: 'd1' }),
-      createEvent: async () => events[0]!,
-      moveEvent: async () => events[0]!,
-      cancelEvent: async () => undefined,
-    }) as unknown as GoogleClient | null,
+    client: async () => scenario.fixtures?.googleNotConnected ? null : googleClient,
+    mailSender: async () => scenario.fixtures?.googleNotConnected
+      ? { ok: false as const, reason: 'not_connected' as const }
+      : { ok: true as const, client: googleClient, connection: 'scenario-mail', email: 'owner@example.com' },
     connectUrl: async () => null,
   };
   const web = {
@@ -93,7 +97,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: scenario.fixtures?.web ?? [] }, source_taint: 'external' as const }),
   };
-  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodeIndex(sql)), web];
+  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ ok: true as const, id: 'proposal:1', reused: null }), record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodeIndex(sql)), web];
   const responder = createTelegramResponder('scenario-key', undefined, memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, scriptedGateway({ rules: scenario.llm }));
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 

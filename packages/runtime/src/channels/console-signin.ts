@@ -1,6 +1,6 @@
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
-import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { CONSOLE_COOKIE, CONSOLE_PATH, sessionCookie } from './console';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -13,7 +13,7 @@ export const CONSOLE_OTP_VERIFY_LIMIT = 10;
 export const CONSOLE_AUTH_IP_LIMIT = 30;
 export const CONSOLE_AUTH_WINDOW_SECONDS = 15 * 60;
 
-type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit }>;
+type ConsoleEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: DurableObjectNamespace; RESPONSIBILITY_RATE_LIMITER?: RateLimit; WALDO_ENVIRONMENT?: string; WALDO_OWNER_TELEGRAM_ID?: string }>;
 
 const esc = (value: string) => value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
 const page = (body: string, status = 200) => new Response(
@@ -35,9 +35,19 @@ const codeForm = (email: string, phone: string, note = '') => page(`<form method
 // With Supabase configured, the console signs in by invite-gated email code and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
 export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env)): Promise<Response | null> => {
+  // The staging Telegram owner's one-time link and subsequent session belong to its DO.
+  // Keep email sign-in, verification, and global sign-out on the multi-user auth path.
+  const url = new URL(request.url);
+  const emailAuthPath = url.pathname === CONSOLE_SIGNIN_PATH
+    || url.pathname === CONSOLE_VERIFY_PATH
+    || url.pathname === `${CONSOLE_PATH}/signout-all`;
+  if (env.WALDO_ENVIRONMENT === 'staging' && env.WALDO_OWNER_TELEGRAM_ID && env.TELEGRAM_OWNER_DO
+    && !emailAuthPath && (
+      (url.pathname === CONSOLE_PATH && (url.searchParams.has('t') || request.method === 'POST'))
+      || sessionCookie(request) !== null
+    )) return null;
   const owners = env.TELEGRAM_OWNER_DO;
   if (!auth || !owners) return null;
-  const url = new URL(request.url);
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return emailForm();
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {
     const form = await request.formData();

@@ -142,6 +142,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         });
       } catch (error) {
         if (error instanceof FailClosed) {
+          console.warn(JSON.stringify({ event: 'context_fail_closed', phase, code: error.code }));
           return Object.freeze({ ok: false as const, failure: Object.freeze({ code: error.code }) });
         }
         await observeUnexpectedError(deps.unexpected_error_observer, phase, error);

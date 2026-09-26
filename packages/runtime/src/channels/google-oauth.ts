@@ -1,6 +1,6 @@
 import { readConsentState, type ConsentSurface } from '../connectors/google';
 import { CONSOLE_PATH } from './console';
-import type { ConsentOutcome } from '../connectors/google-consent';
+import { CONSENT_TTL_MS, type ConsentOutcome } from '../connectors/google-consent';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
@@ -34,7 +34,7 @@ const returnAction = (surface: ConsentSurface | undefined, bot: string | null): 
 const COPY: Record<ConsentOutcome['kind'], Readonly<{ status: number; title: string; body: string }>> = {
   linked: { status: 200, title: 'Google is connected', body: 'Waldo can now read your calendar and help with mail you approve. You can close this tab.' },
   denied: { status: 400, title: 'Google was not connected', body: 'Access was not granted. Ask Waldo to connect Google whenever you want to try again.' },
-  expired: { status: 410, title: 'This link has expired', body: 'Connect links last 15 minutes. Ask Waldo to connect Google for a fresh one.' },
+  expired: { status: 410, title: 'This link has expired', body: `Connect links last about ${Math.round(CONSENT_TTL_MS / 3_600_000)} hours. Ask Waldo to connect Google for a fresh one.` },
   invalid: { status: 400, title: 'This link is not valid', body: 'It may have been copied incompletely. Ask Waldo to connect Google for a fresh one.' },
   failed: { status: 502, title: 'Google could not be connected', body: 'Google approved access but saving it failed. Ask Waldo to connect Google to try again.' },
 };

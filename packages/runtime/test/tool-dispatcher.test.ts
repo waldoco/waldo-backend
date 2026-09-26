@@ -30,6 +30,9 @@ import {
 } from '../src/tools/dispatcher';
 import type { HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
+import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
+import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
+import { GoogleError } from '../src/connectors/google';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
 
@@ -56,6 +59,117 @@ function dispatcherContext(trigger: TriggerType): ToolDispatcherContext {
 }
 
 describe('ToolDispatcher', () => {
+  it('preserves typed self-mail failures through dispatch without an invalid handler result', async () => {
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p', reused: null }), record: () => undefined };
+    const args = { to: ['self'], subject: 'Probe', body_markdown: 'Probe' };
+    for (const reason of ['not_connected', 'scope_missing', 'ambiguous', 'unavailable', 'profile_mismatch'] as const) {
+      const google: GoogleAccess = { client: async () => null, mailSender: async () => ({ ok: false, reason }) };
+      for (const name of ['draft_email', 'send_email'] as const) {
+        const handler = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === name)!;
+        const result = await dispatchTool({ id: `mail-${name}-${reason}`, name, args }, dispatcherContext('user_message'), { handlers: [handler] });
+        expect(result).toMatchObject({ ok: false, tool: name, reason: 'tool_result_error', code: reason === 'not_connected' || reason === 'scope_missing' ? 'auth_failed' : 'transient' });
+        expect(result).not.toHaveProperty('source_taint');
+        if (reason === 'not_connected' || reason === 'scope_missing') expect(result).toMatchObject({ connect: { feature: 'mail', reason } });
+      }
+    }
+  });
+
+  it('accepts the self-mail mutation receipts with a null success stamp', async () => {
+    const google: GoogleAccess = {
+      client: async () => null,
+      mailSender: async () => ({
+        ok: true, connection: 'conn-1', email: 'owner@example.com',
+        client: { draft: async () => ({ draft_id: 'd-1' }) } as never,
+      }),
+    };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p-1', reused: null }), record: () => undefined };
+    const handlers = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() });
+    for (const name of ['draft_email', 'send_email'] as const) {
+      const result = await dispatchTool(
+        { id: `mail-ok-${name}`, name, args: { to: ['self'], subject: 'Probe', body_markdown: 'Probe' } },
+        dispatcherContext('user_message'), { handlers: handlers.filter((tool) => tool.name === name) },
+      );
+      expect(result).toMatchObject({ ok: true, tool: name, source_taint: null });
+    }
+  });
+
+  it('keeps a hex-shaped provider draft ID out of the sanitised success receipt', async () => {
+    let providerCalls = 0;
+    let recorded: unknown;
+    const google: GoogleAccess = {
+      client: async () => null,
+      mailSender: async () => ({
+        ok: true, connection: 'conn-1', email: 'owner@example.com',
+        client: { draft: async () => { providerCalls++; return { draft_id: 'abcdef1234567890' }; } } as never,
+      }),
+    };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p', reused: null }), record: (_kind: string, _summary: string, payload: unknown) => { recorded = payload; } };
+    const handler = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
+    const result = await dispatchTool(
+      { id: 'hex-draft', name: 'draft_email', args: { to: ['self'], subject: 'Probe', body_markdown: 'Probe' } },
+      dispatcherContext('user_message'), { handlers: [handler] },
+    );
+    expect(providerCalls).toBe(1);
+    expect(recorded).toEqual({ draft_id: 'abcdef1234567890' });
+    expect(result).toMatchObject({ ok: true, tool: 'draft_email', data: { draft_saved: true, sent: false } });
+    expect(JSON.stringify(result)).not.toContain('abcdef1234567890');
+  });
+
+  it('preserves draft provider failure and send preview failure through dispatch', async () => {
+    const google: GoogleAccess = {
+      client: async () => null,
+      mailSender: async () => ({
+        ok: true, connection: 'conn-1', email: 'owner@example.com',
+        client: { draft: async () => { throw new GoogleError(403, 'insufficient scopes'); } } as never,
+      }),
+    };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: false as const, reason: 'preview_oversize' as const, limit: 4096, actual: 5000 }), record: () => undefined };
+    const handlers = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() });
+    const args = { to: ['self'], subject: 'Probe', body_markdown: 'Probe' };
+    const draft = await dispatchTool({ id: 'mail-draft-provider-failure', name: 'draft_email', args }, dispatcherContext('user_message'), { handlers });
+    expect(draft).toMatchObject({ ok: false, reason: 'tool_result_error', code: 'auth_failed', connect: { reason: 'scope_missing', feature: 'mail' } });
+    expect(draft).not.toHaveProperty('source_taint');
+    const send = await dispatchTool({ id: 'mail-send-preview-failure', name: 'send_email', args }, dispatcherContext('user_message'), { handlers });
+    expect(send).toMatchObject({ ok: false, reason: 'tool_result_error', code: 'oversize' });
+    expect(send).not.toHaveProperty('source_taint');
+  });
+  it('accepts externally tainted browser results through the dispatch boundary', async () => {
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/start')) return new Response(JSON.stringify({ success: true, data: { sessionId: 'synthetic-session' } }));
+      if (url.endsWith('/observe')) return new Response(JSON.stringify({ success: true, data: { result: [] } }));
+      if (url.endsWith('/extract')) return new Response(JSON.stringify({ success: true, data: { result: { title: 'Synthetic page' } } }));
+      return new Response(JSON.stringify({ success: true }));
+    }) as typeof fetch;
+    const cases = [
+      { name: 'browse_page' as const, args: { url: 'https://example.com', instruction: 'Read the title' }, handler: browsePageHandler('key', 'project', undefined, fetcher) },
+      { name: 'browse_act' as const, args: { url: 'https://example.com', task: 'Find the title', max_actions: 1 }, handler: browseActHandler('key', 'project', undefined, undefined, undefined, fetcher) },
+    ];
+    for (const { name, args, handler } of cases) {
+      const result = await dispatchTool(
+        { id: `call-${name}`, name, args },
+        { ...dispatcherContext('user_message'), egressAllowlist: ['example.com'] },
+        { handlers: [handler] },
+      );
+      expect(result).toMatchObject({ ok: true, tool: name, source_taint: 'external' });
+    }
+  });
+
+  it('preserves a coded browser failure instead of reporting invalid_handler_result', async () => {
+    for (const handler of [browsePageHandler(undefined, undefined, undefined), browseActHandler(undefined, undefined, undefined)]) {
+      const name = handler.name;
+      const args = name === 'browse_page'
+        ? { url: 'https://example.com', instruction: 'Read the title' }
+        : { url: 'https://example.com', task: 'Find the title', max_actions: 1 };
+      const result = await dispatchTool(
+        { id: `call-${name}-failure`, name, args },
+        { ...dispatcherContext('user_message'), egressAllowlist: ['example.com'] },
+        { handlers: [handler] },
+      );
+      expect(result).toMatchObject({ ok: false, tool: name, code: 'auth_failed', reason: 'tool_result_error', source_taint: 'external' });
+    }
+  });
+
   it('fails closed before handler I/O when a trusted effect has no reconciliation contract', async () => {
     let handled = 0;
     let issued = 0;

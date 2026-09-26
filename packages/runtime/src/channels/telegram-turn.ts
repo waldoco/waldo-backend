@@ -22,9 +22,9 @@ import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { TOOL_LOOP_MAX_ROUNDS } from '../conversation/tool-loop';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
-const MAX_TOOL_ROUNDS = 25;
 const CLINICAL_FALLBACK = {
   text: "I can't advise on that one. A doctor or pharmacist can. If this is an emergency or you feel unsafe, call your local emergency number now.",
   input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, latency_ms: 0,
@@ -94,7 +94,10 @@ export const createTelegramResponder = (
       }),
     }, safety);
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
+    // The provider has already parsed scribe.reason into a closed enum. Preserve it in the
+    // capture-off trace code so Langfuse can distinguish a canary false positive from an
+    // injection or size denial without recording the request or provider result.
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.destination, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },
@@ -119,8 +122,8 @@ export const createTelegramResponder = (
       return runToolLoop({
         handlers,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
-        maxSteps: MAX_TOOL_ROUNDS,
-        ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        maxSteps: TOOL_LOOP_MAX_ROUNDS,
+        ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }), trace },
         step: async (tools, turns) => {
           const added = control.round();
           if (added === null) return { text: STOPPED_REPLY };

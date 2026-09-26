@@ -4,7 +4,10 @@ import { b64url, consentState, googleConsentUrl, type ConsentSurface, type Googl
 // state), its PKCE verifier and its outcome. The callback settles a record once; a repeat callback
 // for the same attempt (browsers and in-app webviews reload) replays that outcome and never
 // exchanges the single-use code again. Callers serialize start and finish per owner.
-export const CONSENT_TTL_MS = 15 * 60_000;
+// TTL (ego-audit S3): 12 hours. Single-use nonce + PKCE verifier held server-side + settle-once
+// replay make a long window cheap, and the link travels only to the owner's own Telegram/console.
+// 15 minutes was hand-picked and died silently when the owner opened the link later.
+export const CONSENT_TTL_MS = 12 * 3_600_000;
 const KEEP_SETTLED_MS = 24 * 60 * 60_000;
 
 export type ConsentGrant = Readonly<{ email?: string; scopes?: readonly string[] | null }>;
@@ -53,6 +56,20 @@ export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: st
 }
 
 export type ConsentCallback = Readonly<{ nonce: string; code?: string | null; error?: string | null }>;
+
+// Wraps a grant exchange with active-session validation: the connect-session ticket must be
+// atomically claimed (true) BEFORE the exchange runs, because the exchange itself writes the
+// proxy/Vault connection. A revoked, expired, unknown, or unreachable ticket makes the
+// callback throw before any token is stored anywhere; a later exchange failure settles a
+// truthful failed outcome, retryable by issuing a fresh connect link. Attempts not minted
+// from a connect session pass null and keep their existing behavior.
+export const sessionGatedExchange = (
+  exchange: ConsentExchange,
+  claim: (() => Promise<boolean>) | null,
+): ConsentExchange => async (code, verifier, redirectUri) => {
+  if (claim !== null && !(await claim())) throw new Error('connect session revoked or expired');
+  return exchange(code, verifier, redirectUri);
+};
 export type ConsentExchange = (code: string, verifier: string, redirectUri: string) => Promise<ConsentGrant | null>;
 
 // fresh is true only for the call that settled the attempt; a replayed callback gets fresh false,

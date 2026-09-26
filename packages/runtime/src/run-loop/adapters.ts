@@ -341,6 +341,7 @@ function createLocalTrustedBriefContextComposer(
           health: null,
           workspace: [],
           tool_outputs: await toolOutputs(),
+          tool_outputs_omitted: 0,
         };
       },
     },

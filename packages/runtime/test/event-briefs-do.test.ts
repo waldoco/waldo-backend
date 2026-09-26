@@ -9,7 +9,7 @@ import { productionDeps } from '../src/seams/deps';
 
 const now = Date.parse('2026-09-23T12:00:00Z');
 const standup: CalendarItem = { id: 'e1', title: 'Design review', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T18:30:00+05:30', all_day: false, description: 'Bring the onboarding mocks', attendees: 4 };
-const calendar = (events: readonly CalendarItem[]) => ({ events: async () => events }) as unknown as GoogleClient;
+const calendar = (events: readonly CalendarItem[]) => ({ events: async () => ({ items: events, complete: true }) }) as unknown as GoogleClient;
 
 describe('pre-event briefs', () => {
   it('frames the event as calendar data with the local start and lead time', () => {

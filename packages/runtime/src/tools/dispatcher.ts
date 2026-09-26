@@ -56,6 +56,9 @@ export type ParseToolCallsResult =
 export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   session: SessionState;
+  // The authenticated turn's correlation id (e.g. tg-<update_id>): handlers thread it into
+  // connector clients so Worker/EF/Langfuse logs join to the turn. Never carries content.
+  trace?: string;
 };
 
 export type DispatchToolResult = (

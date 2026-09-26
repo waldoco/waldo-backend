@@ -34,7 +34,7 @@ export const eventBriefs = (sql: SqlStorage, timezone: string) => {
   return {
     async sweep(client: GoogleClient | null, now: number, send: BriefSender): Promise<number> {
       if (client === null) return 0;
-      const events = await client.events(new Date(now).toISOString(), new Date(now + BRIEF_LEAD_MS).toISOString(), 10, false);
+      const events = (await client.events(new Date(now).toISOString(), new Date(now + BRIEF_LEAD_MS).toISOString(), 10, false)).items;
       let sent = 0;
       for (const event of events) {
         if (event.all_day || Date.parse(event.start) < now) continue;

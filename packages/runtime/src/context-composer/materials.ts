@@ -133,6 +133,9 @@ export async function loadRuntimeContextMaterials(
     'health',
     'workspace',
     'tool_outputs',
+    // Admitted so loaders satisfy the type; the adapter-supplied value is never trusted -
+    // prepareMaterials recomputes the omission count from the actual array below.
+    'tool_outputs_omitted',
   ], 'materials_unavailable');
   if (
     materials.principal_ref !== invocation.verified_authority.principal_ref ||
@@ -208,25 +211,38 @@ export async function loadRuntimeContextMaterials(
     return prepared;
   });
   const toolOutputValues = snapshotArray(materials.tool_outputs);
-  if (toolOutputValues === null || toolOutputValues.length > MAX_TOOL_OUTPUT_FRAGMENTS) {
+  if (toolOutputValues === null) {
     throw new FailClosed('materials_unavailable');
   }
-  const toolOutputs = toolOutputValues.map((fragment) => {
+  // Degrade per item (S1): an over-budget tool_outputs array used to fail the whole compose.
+  // Keep the first MAX_TOOL_OUTPUT_FRAGMENTS and expose the omission count so the prompt can
+  // state it truthfully instead of the turn failing all-or-nothing.
+  const toolOutputsKept = toolOutputValues.slice(0, MAX_TOOL_OUTPUT_FRAGMENTS);
+  let toolOutputsOmitted = toolOutputValues.length - toolOutputsKept.length;
+  const toolOutputs: ContextFragment[] = [];
+  for (const fragment of toolOutputsKept) {
     // Tool outputs may be untainted (internal tools) or external (fetched data); the
     // fragment declares its own taint, so only the kind and scope are constrained.
-    const prepared = prepareMandatoryFragment(
-      fragment,
-      inputs,
-      provenance,
-      snapshot.revision_ref,
-      { source_kind: 'tool_result' },
-      true,
-    );
+    let prepared: ContextFragment;
+    try {
+      prepared = prepareMandatoryFragment(
+        fragment,
+        inputs,
+        provenance,
+        snapshot.revision_ref,
+        { source_kind: 'tool_result' },
+        true,
+      );
+    } catch (error) {
+      if (!(error instanceof FailClosed) || error.code !== 'sanitisation_failed') throw error;
+      toolOutputsOmitted += 1;
+      continue;
+    }
     if (prepared.source.scope !== 'invocation' && prepared.source.scope !== 'principal') {
       throw new FailClosed('provenance_invalid');
     }
-    return prepared;
-  });
+    toolOutputs.push(prepared);
+  }
   const health = snapshotHealthMaterial(materials.health, 'health_context_invalid');
   return Object.freeze({
     principal_ref: invocation.verified_authority.principal_ref,
@@ -241,6 +257,7 @@ export async function loadRuntimeContextMaterials(
     health,
     workspace: Object.freeze([...workspace].sort(compareFragments)),
     tool_outputs: Object.freeze([...toolOutputs].sort(compareFragments)),
+    tool_outputs_omitted: toolOutputsOmitted,
   });
 }
 

@@ -3,23 +3,54 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
-import type { EmailSendProposal } from '../../channels/approvals';
+import { buildMime, GoogleError, googleServes, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import type { EmailSendProposal, ProposeSendEmailResult } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
-  client(feature?: GoogleFeature): Promise<GoogleClient | null>;
+  // correlation is the authenticated turn trace: it lands in the signed proxy body so EF /
+  // Langfuse rows join to this turn. Content never enters it.
+  client(feature?: GoogleFeature, sendIntent?: string, correlation?: string): Promise<GoogleClient | null>;
+  // Selects before a draft or approval is created. self requires exactly one eligible account.
+  mailSender?(self: boolean, forSend: boolean, correlation?: string): Promise<
+    | Readonly<{ ok: true; client: GoogleClient; connection: string; email: string }>
+    | Readonly<{ ok: false; reason: 'not_connected' | 'scope_missing' | 'ambiguous' | 'unavailable' | 'profile_mismatch' }>
+  >;
 }>;
 
 export type EffectDesk = Readonly<{
   propose(proposal: ProposeCalendarChangeArgs): Promise<string>;
-  proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
+  proposeSendEmail(proposal: EmailSendProposal): Promise<ProposeSendEmailResult>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const DAY_MS = 24 * 60 * 60_000;
+export const selectMailSender = <T extends Readonly<{ id: string; email: string; scopes: readonly string[] | null }>>(
+  accounts: readonly T[], failing: Readonly<Record<string, string>>, self: boolean,
+): T | null => {
+  const eligible = accounts.filter((account) =>
+    googleServes(account.scopes, 'mail') &&
+    !failing[account.id] && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(account.email));
+  return eligible.length === 0 || (self && eligible.length !== 1) ? null : eligible[0]!;
+};
+export const verifiedMailProfile = async (client: GoogleClient, expected: string): Promise<string | null> => {
+  const address = await client.profileEmail();
+  return address === expected.toLowerCase() ? address : null;
+};
+const resolveRecipients = (to: readonly string[], selfEmail: string): string[] =>
+  to.map((recipient) => recipient === 'self' ? selfEmail : recipient);
+const mailAuthFailed = (reason: ConnectIntent['reason']): ToolResult<never> => ({
+  ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT,
+  connect: { status: 'auth_required', service: 'google', reason, feature: 'mail' },
+});
+const senderFailure = (reason: 'not_connected' | 'scope_missing' | 'ambiguous' | 'unavailable' | 'profile_mismatch'): ToolResult<never> =>
+  reason === 'not_connected' || reason === 'scope_missing'
+    ? mailAuthFailed(reason)
+    : { ok: false as const, code: 'transient' as const, error: reason === 'ambiguous'
+      ? 'More than one mail account is connected. Choose one account before trying again.'
+      : 'The connected mail account could not be verified right now. Nothing was drafted or proposed.' };
 
 // S4 (CONNECT_FLOW_DESIGN 4.4): auth failures are a typed intent, never a URL in text. The
 // responder sees `connect` and calls the channel's offerConnect seam; the model only ever
@@ -32,8 +63,8 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
-async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
-  const client = await google.client(feature);
+async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>, trace?: string): Promise<ToolResult<T>> {
+  const client = await google.client(feature, undefined, trace);
   if (client === null) return authFailed('not_connected', feature);
   try {
     return { ok: true, data: await work(client), source_taint: 'external' };
@@ -41,7 +72,10 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work:
     // A 403 means this feature's scope was never granted; a 401 means the stored grant is dead.
     if (error instanceof GoogleError && error.status === 403) return authFailed('scope_missing', feature);
     if (error instanceof GoogleError && error.status === 401) return authFailed('reauth_needed', feature);
-    return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
+    // Same stamp as the auth arms (owner live-QA finding on #202, trace tg-904957580): without
+    // 'external' the dispatcher's parseToolResult rejects the failure arm as
+    // invalid_handler_result and the real provider error never surfaces.
+    return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
 
@@ -63,12 +97,16 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
-    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
+    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'calendar', async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
-      return { timezone: clock.timezone, from, to, events: await client.events(from, to, limit, include_declined) };
-    }),
+      const page = await client.events(from, to, limit, include_declined);
+      return {
+        timezone: clock.timezone, from, to, events: page.items,
+        ...(page.complete ? {} : { partial: true, note: 'Only part of this range was fetched; more events exist beyond it. Narrow the range to see the rest.' }),
+      };
+    }, ctx?.trace),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
@@ -76,10 +114,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
-    handle: ({ date_range }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
+    handle: ({ date_range }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       return { since: new Date(since).toISOString(), messages: (await client.newMail(since, 10)).map(quarantineMailItem) };
-    }),
+    }, ctx?.trace),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_tasks',
@@ -87,11 +125,15 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: getTasksArgsSchema,
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
-    handle: ({ status, limit }: GetTasksArgs) => withGoogle(google, 'tasks', async (client) => ({
-      status,
-      tasks: await client.tasks(status, limit),
-      ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
-    })),
+    handle: ({ status, limit }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', async (client) => {
+      const page = await client.tasks(status, limit);
+      return {
+        status,
+        tasks: page.items,
+        ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
+        ...(page.complete ? {} : { partial: true, coverage_note: 'Only part of the task list was fetched; more tasks exist beyond it. Narrow the filter to see the rest.' }),
+      };
+    }, ctx?.trace),
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
@@ -105,28 +147,37 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {
     name: 'draft_email',
-    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves.",
+    description: "Save an email draft in the owner's Gmail. Use recipient 'self' only when the owner explicitly means their own connected Gmail address; never use it for a redacted or unknown address. It is not sent; the owner reviews and sends it themselves. It creates NO approval card and nothing enters the owner's approval queue - when the owner asked to send, or asked to approve first, use send_email instead.",
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
     // The draft receipt is a mutation ack, not provider-controlled content, so the result is
     // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
     // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
-    handle: async (args: DraftEmailArgs) => {
-      const result = await withGoogle(google, 'mail', async (client) => {
+    handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
+      const self = args.to?.includes('self') ?? false;
+      const sender = await google.mailSender?.(self, false, ctx?.trace);
+      if (!sender) return mailAuthFailed('not_connected');
+      if (!sender.ok) return senderFailure(sender.reason);
+      const to = resolveRecipients(args.to, sender.email);
+      const result = await withGoogle({ client: async () => sender.client }, 'mail', async (client) => {
         const draft = await client.draft({
-          to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+          to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
         });
-        desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
-        return { ...draft, sent: false };
-      });
-      return result.ok ? { ...result, source_taint: null } : result;
+        desk.record('email_draft', `Drafted "${args.subject}" to ${to.join(', ')}`, draft);
+        // Provider IDs are opaque and can resemble the sanitiser's secret patterns. Keep the
+        // provider receipt in the private ledger; only a content-free success reaches the model.
+        return { draft_saved: true, sent: false };
+      }, ctx?.trace);
+      if (result.ok) return { ...result, source_taint: null };
+      const { source_taint: _readStamp, ...failure } = result;
+      return failure;
     },
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets Send it / Modify / Not now buttons showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
+    description: "Send an email from the owner's Gmail. Use recipient 'self' only when the owner explicitly means their own connected Gmail address; never use it for a redacted or unknown address. The owner gets Send it / Modify / Not now buttons showing the sending account, exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -134,23 +185,53 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // and hands both to the approval desk. The desk replays the stored bytes on approval
     // (users.messages.send, never drafts.send) and reconciles an ambiguous send through the
     // Message-ID we set, so the model's post-approval state cannot change what goes out.
-    handle: async (args: SendEmailArgs) => {
+    handle: async (args: SendEmailArgs, ctx: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
-      const gate = await withGoogle(google, 'mail', async () => null);
-      if (!gate.ok) return { ...gate, source_taint: null };
-      const message_id = `<${crypto.randomUUID()}@waldo-send>`;
+      const self = args.to?.includes('self') ?? false;
+      const sender = await google.mailSender?.(self, true, ctx.trace);
+      if (!sender) return mailAuthFailed('not_connected');
+      if (!sender.ok) return senderFailure(sender.reason);
+      const to = resolveRecipients(args.to, sender.email);
+      // Idempotency is scoped to the logical send: owner + turn + content. A retry of the same
+      // logical send (same turn, same content) keeps one proposal and one Message-ID, so the
+      // desk's Sent-mail reconciliation proves exactly-once across retries. The same content on
+      // a NEW request or day is a new logical send with its own Message-ID - an old Sent hit
+      // can never mark a later failed send as delivered, and distinct intents never collapse.
+      const content_key = await sha256Hex(JSON.stringify({
+        sender: sender.email.toLowerCase(), to, cc: args.cc ?? [], bcc: args.bcc ?? [],
+        subject: args.subject, body: args.body_markdown, thread: args.reply_to_thread_id ?? null,
+      }));
+      const logical_key = `${ctx.authenticatedUserId}:${ctx.session.rate_limit_window.started_at}:${content_key}`;
+      const message_id = `<${await sha256Hex(logical_key)}@waldo-send>`;
       const raw = buildMime({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+        to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,
       });
-      const proposal_id = await desk.proposeSendEmail({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+      const proposal = await desk.proposeSendEmail({
+        from: sender.email, sender_connection: sender.connection,
+        to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown,
         ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-        message_id, raw, digest: await sha256Hex(raw),
+        message_id, raw, digest: await sha256Hex(raw), content_digest: content_key,
       });
-      return { ok: true, data: { proposal_id, status: 'sent to the owner with Send it / Modify / Not now buttons', sent: false }, source_taint: null };
+      if (!proposal.ok) {
+        // The complete preview (recipients + subject + body) must fit one Telegram message; a
+        // cut preview would let the owner approve content they never saw. Typed and content-free.
+        return {
+          ok: false,
+          code: 'oversize',
+          error: `That email is too long to show the owner in full for approval (${proposal.actual} characters, limit ${proposal.limit}). Ask the owner for a shorter email or offer to save it as a Gmail draft instead, then send from Gmail.`,
+        };
+      }
+      const status = proposal.delivered === false
+        ? 'approval saved, but the approval card could NOT be delivered to the owner right now (channel send was blocked) - do not tell the owner a card appeared; they can act on it from the console Waiting-on-you list'
+        : proposal.reused === 'sending'
+        ? 'a send of this exact email is already in flight from the earlier card - no new card was sent; wait for that one to resolve'
+        : proposal.reused === 'unknown'
+          ? 'not proposed - a previous send of this exact email could not be confirmed and may already be in Sent; the owner got Check Sent / It did not go buttons to resolve it, so it never goes twice'
+          : 'sent to the owner with Send it / Modify / Not now buttons';
+      return { ok: true, data: { proposal_id: proposal.id, status, sent: false }, source_taint: null };
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
 ];

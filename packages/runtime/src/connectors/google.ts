@@ -15,13 +15,24 @@ export const isGoogleFeature = (value: string): value is GoogleFeature => Object
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
   scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
+// Verified scopes only: a legacy account row with scopes null must route the owner to
+// reconsent (the proxy scope gate would deny every call anyway), never serve on blanket trust.
+export const googleServes = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
+  scopes != null && googleHas(scopes, feature);
+
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 
 export type GoogleApp = Readonly<{ clientId: string; clientSecret: string; redirectUri: string }>;
 export type GoogleTokens = Readonly<{ refresh_token: string; email?: string; scopes?: readonly string[] | null }>;
 type Fetch = typeof fetch;
 
-export const b64url = (bytes: Uint8Array) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+// Chunked: String.fromCharCode(...bytes) on a whole MIME throws RangeError well under the 1MB
+// proxy arg bound, so the spread never spans more than 32KB of the input.
+export const b64url = (bytes: Uint8Array) => {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
 
 async function sign(secret: string, payload: string): Promise<string> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(`google-oauth-state:${secret}`), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -124,11 +135,21 @@ export const sha256Hex = async (text: string): Promise<string> => {
 };
 
 export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
+
+// A paginated read with a TRUTHFUL coverage marker: complete=false means the safety page bound
+// was hit with more pages remaining, so the items are a partial answer and the caller must say
+// so (or narrow the request) instead of presenting it as the whole range.
+export type GooglePage<T> = Readonly<{ items: readonly T[]; complete: boolean }>;
+
+// Safety bound on pagination loops. Filtered reads keep fetching while a nextPageToken exists,
+// so this only trips on pathological ranges; when it does, complete=false carries the truth.
+export const GOOGLE_MAX_PAGES = 25;
 export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string }>;
 type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
 
 export type GoogleClient = Readonly<{
-  events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
+  profileEmail(): Promise<string>;
+  events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<GooglePage<CalendarItem>>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
   findSentByMessageId(messageId: string): Promise<boolean>;
@@ -138,7 +159,7 @@ export type GoogleClient = Readonly<{
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
-  tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
+  tasks(status: TaskStatusFilter, limit: number): Promise<GooglePage<TaskItem>>;
 }>;
 
 // health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
@@ -165,6 +186,13 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   const send = async (url: string, method: string, body: unknown, etag?: string) =>
     toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
   return {
+    async profileEmail() {
+      const profile = await call('https://gmail.googleapis.com/gmail/v1/users/me/profile') as { emailAddress?: unknown };
+      if (typeof profile.emailAddress !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.emailAddress)) {
+        throw new Error('Gmail profile has no valid email address');
+      }
+      return profile.emailAddress.toLowerCase();
+    },
     event: async (id) => toItem(await call(`${EVENTS}/${encodeURIComponent(id)}`) as unknown as GoogleEvent),
     createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
     moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),
@@ -172,13 +200,30 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
     async events(from, to, limit, includeDeclined) {
-      const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
-      url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit) }).toString();
-      const json = await call(url.toString()) as { items?: GoogleEvent[] };
-      return (json.items ?? [])
-        .filter((event) => event.status !== 'cancelled')
-        .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
-        .map(toItem);
+      // Filtered pagination (owner review on #202): declined/cancelled events are dropped
+      // BEFORE counting toward the limit, and pages continue until the requested FILTERED
+      // limit is covered or the range is truly exhausted. The old loop counted raw pages
+      // first, so a run of declined events could return an apparently complete empty/partial
+      // answer while matching events sat on later pages. If the safety page bound trips with
+      // more pages remaining, complete=false says the coverage is partial.
+      const kept: GoogleEvent[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < GOOGLE_MAX_PAGES; page += 1) {
+        const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
+        url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit), ...(pageToken ? { pageToken } : {}) }).toString();
+        const json = await call(url.toString()) as { items?: GoogleEvent[]; nextPageToken?: string };
+        kept.push(
+          ...(json.items ?? [])
+            .filter((event) => event.status !== 'cancelled')
+            .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined'),
+        );
+        pageToken = json.nextPageToken;
+        if (!pageToken || kept.length >= limit) break;
+      }
+      // complete means the provider was EXHAUSTED (owner re-review on #202): a nextPageToken
+      // left over - whether the loop stopped on the requested limit or the page bound - means
+      // more matching items may exist beyond what was fetched, so the answer is partial.
+      return { items: kept.slice(0, limit).map(toItem), complete: !pageToken };
     },
     async changedEvents(since, from, to) {
       const url = new URL(EVENTS);
@@ -204,17 +249,38 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       // Google Tasks has no in-progress state: todo and in_progress both read the open list;
       // the handler says so on the result when the owner filtered for in_progress.
       const want = status === 'done' ? 'completed' : 'needsAction';
+      // First-party completed tasks only appear when BOTH showCompleted and showHidden are
+      // true (Google tasks.list hides completed-and-hidden items otherwise); open-only reads
+      // keep both false so deleted/hidden noise stays out.
+      const includeCompleted = status === 'done' || status === 'all';
       url.search = new URLSearchParams({
-        maxResults: String(limit), showHidden: 'false',
-        showCompleted: status === 'done' || status === 'all' ? 'true' : 'false',
+        maxResults: String(limit),
+        showHidden: includeCompleted ? 'true' : 'false',
+        showCompleted: includeCompleted ? 'true' : 'false',
       }).toString();
-      const json = await call(url.toString()) as { items?: GoogleTask[] };
-      return (json.items ?? [])
-        .filter((task) => status === 'all' || task.status === want)
-        .map((task) => ({
+      // Filtered pagination (owner review on #202): the completion filter is applied BEFORE
+      // counting toward the limit and pages continue until the filtered limit is covered or
+      // the list is truly exhausted - one filtered page is not the whole answer.
+      const kept: GoogleTask[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < GOOGLE_MAX_PAGES; page += 1) {
+        const paged = new URL(url.toString());
+        if (pageToken) paged.searchParams.set('pageToken', pageToken);
+        const json = await call(paged.toString()) as { items?: GoogleTask[]; nextPageToken?: string };
+        kept.push(...(json.items ?? []).filter((task) => status === 'all' || task.status === want));
+        pageToken = json.nextPageToken;
+        if (!pageToken || kept.length >= limit) break;
+      }
+      // complete means the provider was EXHAUSTED (owner re-review on #202): a nextPageToken
+      // left over - whether the loop stopped on the requested limit or the page bound - means
+      // more matching items may exist beyond what was fetched, so the answer is partial.
+      return {
+        items: kept.slice(0, limit).map((task) => ({
           id: task.id, title: task.title ?? '(no title)', status: task.status === 'completed' ? 'done' as const : 'todo' as const,
           ...(task.due ? { due: task.due } : {}), ...(task.updated ? { updated: task.updated } : {}),
-        }));
+        })),
+        complete: !pageToken,
+      };
     },
     async draft(input) {
       const raw = b64url(new TextEncoder().encode(buildMime(input)));
@@ -225,9 +291,12 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return { draft_id: json.id, ...(json.message?.id ? { message_id: json.message.id } : {}), ...(json.message?.threadId ? { thread_id: json.message.threadId } : {}) };
     },
     async sendRaw(raw, threadId) {
+      // Gmail messages.send takes base64url MIME in Message.raw (same as drafts.create above).
+      // Callers pass the plain RFC2822 bytes; the encoding happens exactly once, here at the
+      // client boundary, so the approval rail never double-encodes or sends plain text.
       const json = await call('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ raw, ...(threadId ? { threadId } : {}) }),
+        body: JSON.stringify({ raw: b64url(new TextEncoder().encode(raw)), ...(threadId ? { threadId } : {}) }),
       }) as { id: string; threadId?: string };
       return { message_id: json.id, ...(json.threadId ? { thread_id: json.threadId } : {}) };
     },

@@ -5,6 +5,7 @@
 const PATTERNS: readonly RegExp[] = [
   /https?:\/\/accounts\.google\.com\/o\/oauth2[^\s)"'<>]*/gi,
   /https?:\/\/[^\s)"'<>]*\/c\/[A-Za-z0-9_-]{22}(?![A-Za-z0-9_-])[^\s)"'<>]*/g,
+  /https?:\/\/[^\s)"'<>]*\/c\/\?t=[A-Za-z0-9_-]{22}(?![A-Za-z0-9_-])[^\s)"'<>]*/g,
   /https?:\/\/[^\s)"'<>]*\/oauth\/[^\s)"'<>\/]*\/callback[^\s)"'<>]*/gi,
   /https?:\/\/[^\s)"'<>]*[?&](?:state|code|code_challenge)=[^\s)"'<>]*/gi,
 ];

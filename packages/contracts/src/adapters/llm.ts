@@ -39,7 +39,11 @@ export const toolParameters = (schema: z.ZodType): Record<string, unknown> => {
 export const llmToolCallSchema = z.strictObject({
   call_id: z.string().min(1).max(128),
   name: z.string().min(1).max(64),
-  arguments: z.string().max(16_384),
+  // Wire ceiling only (ego-audit S4): a legitimately long tool call - a long email body, a
+  // big doc - must not die in schema validation before any policy sees it. 128 Ki chars is a
+  // pragmatic ceiling, not a proven provider bound: it is far above any real tool call, and
+  // per-destination size POLICY belongs to the scribe (contracts/memory/sanitise.ts).
+  arguments: z.string().max(131_072),
 });
 export type LLMToolCall = z.infer<typeof llmToolCallSchema>;
 
@@ -58,7 +62,11 @@ export const llmRequestSchema = z.strictObject({
   model: modelNameSchema,
   system: z.string().min(1).optional(),
   messages: z.array(llmMessageSchema).min(1),
-  max_tokens: z.int().min(1).max(8192),
+  // Wire ceiling only (ego-audit S5): 128,000 matches the largest published output limit of
+  // a roster provider. It is not a request default - surfaces pin their own (telegram chat
+  // pins 4,096) and the provider adapter reports an oversize finish as 'incomplete'
+  // truthfully. Per-model derivation lands with the roster window table when the roster grows.
+  max_tokens: z.int().min(1).max(128_000),
   temperature: z.number().min(0).max(2),
   // Prompt-cache affinity hint (OpenAI prompt_cache_key): stable per owner, never content,
   // never a credential. Providers without keyed caching ignore it.

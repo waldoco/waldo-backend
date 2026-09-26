@@ -7,7 +7,7 @@ import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, approvalRedirectCode, consoleAccess, consoleActionTraceDetail, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
@@ -26,13 +26,14 @@ import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
-import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
-import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
+import { exchangeGoogleCode, googleClient, googleHas, googleServes, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleClient, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { finishConsent, sessionGatedExchange, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
-import { connectServiceHandler, googleHandlers } from '../tools/live/google';
+import { googleClientPath } from '../connectors/google-account-path';
+import { connectServiceHandler, googleHandlers, selectMailSender, verifiedMailProfile } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
@@ -52,7 +53,6 @@ type RawUpdate = { update_id?: number; callback_query?: CallbackQuery; message?:
 
 // scopes null: granted before per-feature scopes, under the owner's 09-23 broad consent.
 type GoogleAccount = Readonly<{ id: string; email: string; scopes: readonly string[] | null; refresh_token?: string }>;
-const LEGACY_GRANT = null;
 type LinkGrant = Readonly<{ id: string; email: string; scopes: readonly string[] | null }>;
 
 type OwnerRuntime = Readonly<{
@@ -226,10 +226,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (done) this.ctx.storage.kv.put('telegram_unlinked', true);
         return back(done ? 'telegram.unlink' : 'invalid');
       }
-      if (action && ['approval.approve', 'approval.skip', 'approval.undo'].includes(action.action)) {
-        const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u' } as const;
+      if (action && ['approval.approve', 'approval.skip', 'approval.undo', 'approval.reconcile', 'approval.notsent'].includes(action.action)) {
+        const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u', 'approval.reconcile': 'r', 'approval.notsent': 'x' } as const;
         const out = await desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval');
-        return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(out.message.slice(0, 200))}` } });
+        return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${approvalRedirectCode(out.toast)}` } });
       }
       if (action?.action === 'account.delete') {
         const done = admin && doName ? await admin.deleteOwner(doName) : false;
@@ -546,21 +546,71 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const doName = vaultOwner();
         const adopted = vault && doName ? await vault.adopt(doName, legacy).catch(() => null) : null;
         if (vault && !adopted) return;
-        await google.keep(adopted ? { ...adopted, scopes: legacy.scopes ?? LEGACY_GRANT } : { ...legacy, scopes: legacy.scopes ?? LEGACY_GRANT });
+        // Verified scopes or reconsent: a legacy token whose scopes were never recorded is
+        // adopted with an empty scope list, NOT a blanket grant. The proxy scope gate denies
+        // scope_missing either way; storing null here would let the runtime pick the account
+        // for every feature and fail only at the proxy, instead of routing the owner to
+        // reconsent where the real scopes are verified.
+        await google.keep(adopted ? { ...adopted, scopes: legacy.scopes ?? [] } : { ...legacy, scopes: legacy.scopes ?? [] });
         await storage.delete(['google:tokens', 'google:connection']);
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
-      // The first healthy account whose grant covers the feature serves it.
-      async client(feature: GoogleFeature = 'calendar') {
+      async client(feature: GoogleFeature = 'calendar', sendIntent?: string, correlation?: string) {
+        return (await google.clientWithConnection(feature, sendIntent, correlation))?.client ?? null;
+      },
+      async mailSender(self: boolean, forSend: boolean, correlation?: string) {
+        await google.migrate();
+        const failing = await health();
+        const all = await accounts();
+        const selected = selectMailSender(all, failing, self);
+        // A self alias cannot silently choose among multiple connected mailboxes. This check
+        // runs before a Vault/client/provider call.
+        if (!selected) {
+          if (all.length === 0) return { ok: false as const, reason: 'not_connected' as const };
+          if (!all.some((account) => googleServes(account.scopes, 'mail'))) return { ok: false as const, reason: 'scope_missing' as const };
+          if (self && all.filter((account) => selectMailSender([account], failing, true) !== null).length > 1) return { ok: false as const, reason: 'ambiguous' as const };
+          return { ok: false as const, reason: 'unavailable' as const };
+        }
+        // A send proposal must pin the final Vault connection. A local legacy token can
+        // acquire a new connection id when adopted, so do that BEFORE storing the card.
+        const pinned = await google.clientWithConnection('mail', forSend ? 'email_prepare' : undefined, correlation, selected.id);
+        if (!pinned) return { ok: false as const, reason: 'unavailable' as const };
+        try {
+          const email = await verifiedMailProfile(pinned.client, selected.email);
+          if (!email) return { ok: false as const, reason: 'profile_mismatch' as const };
+          return { ok: true as const, ...pinned, email };
+        } catch {
+          return { ok: false as const, reason: 'unavailable' as const };
+        }
+      },
+      // The first healthy account whose grant covers the feature serves it. A pinned
+      // connection restricts selection to that exact account (send reconciliation must check
+      // the Sent folder of the account that actually sent); an unknown pin yields null.
+      async clientWithConnection(feature: GoogleFeature = 'calendar', sendIntent?: string, correlation?: string, pinnedId?: string): Promise<Readonly<{ client: GoogleClient; connection: string }> | null> {
         const app = await googleApp();
         if (!app) return null;
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
-        const fit = all.filter((account) => googleHas(account.scopes, feature));
-        const account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
+        // Only accounts with verified scopes serve a feature: a legacy row with scopes null
+        // never satisfied the proxy scope gate, so it must route to reconsent, not to a call
+        // that 403s after selection.
+        let fit = all.filter((account) => googleServes(account.scopes, feature));
+        if (pinnedId !== undefined) fit = fit.filter((account) => account.id === pinnedId && !failing[account.id]);
+        let account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
-        if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
-        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error)) : null;
+        // Send-path custody gate: sends ride the proxy idempotency claim/store and Vault
+        // custody only; a local-token send migrates into the Vault first, and a send with no
+        // proxy at all is refused rather than sent outside the gate.
+        const path = googleClientPath(account, sendIntent, Boolean(vault && doName));
+        if (path.kind === 'reject_send' || path.kind === 'unavailable') return null;
+        if (path.kind === 'adopt') {
+          const adopted = await vault!.adopt(doName!, { refresh_token: account.refresh_token!, email: account.email, scopes: account.scopes ?? undefined }).catch(() => null);
+          if (!adopted) return null;
+          await google.keep(adopted);
+          account = { id: adopted.id, email: adopted.email, scopes: adopted.scopes };
+        }
+        if (path.kind === 'direct') return { client: googleClient(app, { refresh_token: account.refresh_token!, email: account.email }, fetch, (error) => noteHealth(account.id, error)), connection: account.id };
+        return { client: vault!.client(doName!, account.id, (error) => noteHealth(account.id, error), sendIntent, correlation), connection: account.id };
       },
       async state() {
         await google.migrate();
@@ -577,7 +627,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return true;
       },
       configured: () => Boolean(clientId && clientSecret && stateSecret),
-      // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
+      // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) whose lifetime is CONSENT_TTL_MS (google-consent.ts).
       async begin(): Promise<Readonly<{ url: string; nonce: string }> | null> {
         const app = await googleApp();
         return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { surface: 'telegram' }) : null;
@@ -599,7 +649,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // The channel that issued the link decides where the completion page routes back to.
         await storage.put(`connect_channel:${hash}`, channel);
         log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
-        return `${origin}/c/${ticket}`;
+        return `${origin}/c/?t=${ticket}`;
       },
       async beginSession(ticketHash: string) {
         const app = await googleApp();
@@ -611,7 +661,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const started = Date.now();
         const trace = `oauth:${input.nonce.slice(0, 8)}`;
         const doName = vaultOwner();
-        const { outcome, fresh } = await finishConsent(consentDeps, input, async (code, verifier, redirectUri) => {
+        // Read the connect-session ticket BEFORE the exchange: a revoked or expired ticket must
+        // never store a token. vault.exchange() itself writes the proxy/Vault connection, so
+        // the ticket is claimed atomically before ANY exchange, not just before google.keep().
+        const session = (await consentDeps.store.read())[input.nonce]?.session;
+        const callRpc = signedRpc(env);
+        const claimSession = session === undefined ? null : async (): Promise<boolean> => {
+          if (!callRpc) return false;
+          const done = await callRpc('connect_session_complete', `connsess.complete.${session}`, { p_ticket_hash: session }).catch(() => null);
+          log({ trace: `connect:${session.slice(0, 8)}`, hop: 'connect_completed', ms: 0, ok: done === true });
+          return done === true;
+        };
+        const { outcome, fresh } = await finishConsent(consentDeps, input, sessionGatedExchange(async (code, verifier, redirectUri) => {
           const exchangeStarted = Date.now();
           try {
             const grant = vault && doName
@@ -624,22 +685,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             log({ trace, hop: 'oauth_exchange', ms: Date.now() - exchangeStarted, ok: false, detail: vault ? 'proxy' : 'local', error: error instanceof Error ? error.message : String(error), code: 'provider_error' });
             throw error;
           }
-        });
+        }, claimSession));
         log({ trace, hop: 'oauth_callback', ms: Date.now() - started, ok: outcome.kind === 'linked', detail: `${outcome.kind}${fresh ? '' : ' (replayed)'}`, ...(outcome.kind === 'failed' ? { error: outcome.reason } : {}) });
         if (fresh && outcome.kind === 'linked') {
           log({ trace, hop: 'google_linked', ms: 0, ok: true, detail: `${outcome.scopes.length} scopes` });
-          const session = (await consentDeps.store.read())[input.nonce]?.session;
-          const callRpc = signedRpc(env);
-          if (session && callRpc) {
-            const done = await callRpc('connect_session_complete', `connsess.complete.${session}`, { p_ticket_hash: session }).catch(() => null);
-            log({ trace: `connect:${session.slice(0, 8)}`, hop: 'connect_completed', ms: 0, ok: done === true });
-          }
         }
         return { outcome, fresh, bot: await botUsername() };
       },
     };
     const desk = approvalDesk(storage.sql, {
-      call, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
+      call, owner, google: (sendIntent?: string, correlation?: string, pinnedConnection?: string) => google.clientWithConnection(sendIntent ? 'mail' : 'calendar', sendIntent, correlation, pinnedConnection), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
       timezone: clock.timezone, log,
       browserSubmit: (proposal) => executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
     });
