@@ -3,7 +3,8 @@ import {
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
-import { runToolLoop } from '../conversation/tool-loop';
+import { runToolLoop, type LoopExit } from '../conversation/tool-loop';
+import { CHILD_TOOL_NAMES, delegateTaskHandler, SUBAGENT_MAX_ROUNDS, SUBAGENT_SYSTEM_PROMPT } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
@@ -116,8 +117,25 @@ export const createTelegramResponder = (
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => {
       const trace = traceId;
+      // Subagent orchestration v1 (owner-delegated spec decisions 2026-09-26): the delegate_task
+      // handler is built per turn so the spawn counter resets each turn and the spawner closes
+      // over this turn's LLM step. The child runs a nested tool loop on the read-only subset
+      // (CHILD_TOOL_NAMES) with its own round slice; flat by construction - children never get
+      // delegate_task.
+      const delegate = delegateTaskHandler(async (task) => {
+        let exit: LoopExit = 'completed';
+        const text = await runToolLoop({
+          handlers: handlers.filter((handler) => (CHILD_TOOL_NAMES as readonly string[]).includes(handler.name)),
+          maxSteps: SUBAGENT_MAX_ROUNDS,
+          ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          onSettle: (settled) => { exit = settled; },
+          step: (tools, turns) =>
+            complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content: task }], undefined, undefined, tools, turns),
+        });
+        return { exit, text };
+      });
       return runToolLoop({
-        handlers,
+        handlers: [...handlers, delegate],
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },

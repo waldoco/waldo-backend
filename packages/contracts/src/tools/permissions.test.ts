@@ -33,7 +33,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 42 canonical tools, in order', () => {
+  it('is exactly the 43 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -77,6 +77,7 @@ describe('toolName', () => {
       'connect_service',
       'browse_page',
       'browse_act',
+      'delegate_task',
     ]);
   });
 
@@ -183,6 +184,7 @@ describe('TOOL_PERMISSIONS', () => {
         'web_search',
         'browse_page',
         'browse_act',
+        'delegate_task',
         'read_document',
         'call_mcp_tool',
         'write_task',
@@ -224,11 +226,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 41 of 42', () => {
+  it('grants no trigger the full surface — user_message tops out at 42 of 43', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(41);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(42);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
