@@ -140,20 +140,28 @@ function resolveLocalMinute(
     guess += targetUtc - localAsUtc;
   }
   // DST gap/overlap only: scan the whole local day (covers every UTC offset).
+  // Two passes, and the gap fallback is anchored to the gap, not to `after`: the shifted
+  // occurrence is the first valid local minute past the gap (e.g. 03:00 for a 02:30 target on
+  // spring-forward). Anchoring to `after` instead would re-enter this path after the shifted
+  // fire and return the next arbitrary minute (03:01, 03:02, ...) - repeated firing all day
+  // (Codex #229 hold). When the shifted minute has already passed, the day is done: null.
   const dayStart = Date.UTC(date.year, date.month - 1, date.day);
-  let fallback: number | null = null;
+  let exact: number | null = null; // first exact occurrence after `after` (overlap: first)
+  let gapShift: number | null = null; // first existing local minute past the target, if the target never exists
   for (let at = dayStart - 13 * 3_600_000; at < dayStart + 38 * 3_600_000; at += 60_000) {
-    if (at <= after) continue;
     const local = localParts(at, timezone);
     if (local.year !== date.year || local.month !== date.month || local.day !== date.day) continue;
     const localMinutes = local.hour * 60 + local.minute;
-    if (localMinutes === target) return at;
-    if (localMinutes > target) {
-      fallback = at;
-      break;
+    if (localMinutes === target) {
+      if (at > after) { exact = at; break; }
+      continue;
     }
+    if (gapShift === null && localMinutes > target) gapShift = at;
   }
-  return fallback;
+  if (exact !== null) return exact;
+  if (gapShift === null) return null; // target exists but all its occurrences passed (exact was before `after`)
+  // The target minute never occurred this day (gap): the shifted occurrence stands, once.
+  return gapShift > after ? gapShift : null;
 }
 
 function dayMatches(schedule: CronSchedule, year: number, month: number, day: number): boolean {

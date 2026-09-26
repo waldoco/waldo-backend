@@ -62,6 +62,23 @@ describe('nextCronOccurrence', () => {
     expect(at).toBe(Date.parse('2026-09-26T12:30:00Z')); // 18:00 IST same day
   });
 
+  it('spring-forward gap fires once at the first valid minute, then moves to the next day (Codex #229)', () => {
+    // 2026-03-08 America/New_York: 02:00-02:59 does not exist (06:59Z=01:59 EST, 07:00Z=03:00 EDT).
+    const beforeGap = Date.parse('2026-03-08T06:00:00Z'); // 01:00 EST
+    const shifted = nextCronOccurrence(parse('30 2 * * *'), 'America/New_York', beforeGap);
+    expect(shifted).toBe(Date.parse('2026-03-08T07:00:00Z')); // 03:00 EDT, exactly once
+    // Recomputing after the shifted fire must NOT return 03:01, 03:02, ... - the day is done.
+    const next = nextCronOccurrence(parse('30 2 * * *'), 'America/New_York', shifted!);
+    expect(next).toBe(Date.parse('2026-03-09T06:30:00Z')); // 2026-03-09 02:30 EDT
+  });
+
+  it('a passed ordinary minute does not gap-shift (control)', () => {
+    // 09:00 exists every day; after it passes, the next occurrence is tomorrow, never 09:01.
+    const after = Date.parse('2026-09-26T12:00:00Z'); // 17:30 IST
+    const at = nextCronOccurrence(parse('30 9 * * *'), 'Asia/Kolkata', after);
+    expect(at).toBe(Date.parse('2026-09-27T04:00:00Z')); // 09:30 IST next day
+  });
+
   it('steps minutes within the hour', () => {
     // 17:30 IST Saturday; */20 lands 17:40 IST.
     const at = nextCronOccurrence(parse('*/20 * * * *'), 'Asia/Kolkata', nowUtc);

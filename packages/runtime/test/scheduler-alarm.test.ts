@@ -433,3 +433,25 @@ describe('scheduler alarm multiplexer', () => {
     });
   });
 });
+
+describe('cron recurrence create-time validation (Codex #229)', () => {
+  it('an invalid cron expression is rejected at schedule() - no armed row, no first fire', async () => {
+    const stub = freshStub();
+    await runInDurableObject(stub, async (_instance, state) => {
+      const nowRef = { value: Date.parse('2026-09-26T12:00:00Z') };
+      const scheduler = new Scheduler(state.storage.sql, state.storage, fixedDeps(nowRef));
+      await expect(
+        scheduler.schedule({
+          id: 'bad-cron',
+          kind: 'brief',
+          occurrenceAt: nowRef.value,
+          dueAt: nowRef.value,
+          payloadRefs: { id: 'bad-cron', user_id: 'bad-cron:user' },
+          recurrence: { type: 'cron', expression: '99 * * * *', timezone: 'Asia/Kolkata' },
+        }),
+      ).rejects.toThrow('invalid cron recurrence');
+      const rows = state.storage.sql.exec('SELECT id FROM schedule').toArray();
+      expect(rows).toEqual([]);
+    });
+  });
+});
