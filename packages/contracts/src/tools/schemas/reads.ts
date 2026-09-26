@@ -10,8 +10,11 @@ import { sourceTaintSchema } from '../../memory/sanitise';
 // a smuggled extra argument a parse failure, not a silent pass-through (ADR-0029).
 
 // Instants, not strings: iso8601 admits non-UTC offsets, so lexicographic order can lie.
+const isoInstant = iso8601Schema.describe(
+  'ISO 8601 datetime with seconds and an explicit UTC offset, e.g. 2026-09-26T00:00:00+05:30',
+);
 const dateRangeSchema = z
-  .strictObject({ from: iso8601Schema, to: iso8601Schema })
+  .strictObject({ from: isoInstant, to: isoInstant })
   .refine((r) => Date.parse(r.from) <= Date.parse(r.to), {
     error: 'date_range must not end before it starts',
     path: ['to'],
