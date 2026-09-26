@@ -168,8 +168,8 @@ function renderToolOutputs(toolOutputs: readonly ContextFragment[], omitted = 0)
   if (omitted > 0) {
     lines.push(
       omitted === 1
-        ? '- 1 more tool result omitted (context budget).'
-        : `- ${omitted} more tool results omitted (context budget).`,
+        ? '- 1 tool result omitted (context budget or safety check).'
+        : `- ${omitted} tool results omitted (context budget or safety check).`,
     );
   }
   return [
