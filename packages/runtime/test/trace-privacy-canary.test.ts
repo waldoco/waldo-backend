@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { gateTraceEntry } from './trace-privacy';
-import { otlpTurnExporter, type TraceContext } from './otlp-turns';
-import { traceBook } from '../channels/harness';
-import type { TurnLogEntry } from '../channels/telegram-listener';
+import { gateTraceEntry, resolveCaptureText } from '../src/observability/trace-privacy';
+import { otlpTurnExporter, type TraceContext } from '../src/observability/otlp-turns';
+import { traceBook } from '../src/channels/harness';
+import type { TurnLogEntry } from '../src/channels/telegram-listener';
 
 // Synthetic marker that must never survive the privacy gate: if any sink leaks free-form
 // detail, error or text while the capture switch is off, this string shows up in the output.
@@ -78,5 +78,25 @@ describe('trace privacy canary', () => {
     expect(safe.detail).toBe('3 sent');
     const free = gateTraceEntry({ trace: 't', hop: 'event_brief', ms: 0, ok: true, detail: MARKER }, false);
     expect(free.detail).toBeUndefined();
+  });
+});
+
+describe('staging release gate: production can never export text', () => {
+  it('capture switch + staging/development allows text; production ignores the switch entirely', () => {
+    // staging: capture on exports text (the debugging path)
+    expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'staging' })).toBe(true);
+    expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'development' })).toBe(true);
+    // production: the switch is inert - a misconfigured prod deploy fails safe, types/counts only
+    expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'production' })).toBe(false);
+    // capture off anywhere: never
+    expect(resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'false', WALDO_ENVIRONMENT: 'staging' })).toBe(false);
+    expect(resolveCaptureText({})).toBe(false);
+    // a production entry gated by the resolver still strips free-form text end-to-end
+    const entry = gateTraceEntry(
+      { trace: 't', hop: 'model_reply', ms: 1, ok: false, error: `provider raw ${MARKER}`, detail: `free-form ${MARKER}`, code: 'provider_error' } as TurnLogEntry,
+      resolveCaptureText({ LANGFUSE_CAPTURE_TEXT: 'true', WALDO_ENVIRONMENT: 'production' }),
+    );
+    expect(entry.error).toBeUndefined();
+    expect(entry.detail).toBe('provider_error');
   });
 });

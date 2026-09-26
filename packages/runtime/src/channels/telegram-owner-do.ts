@@ -10,7 +10,7 @@ import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
-import { gateTraceEntry } from '../observability/trace-privacy';
+import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { durableConversationStore, scrubConversationHistory } from './conversation-store';
@@ -415,10 +415,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const exportTurn = otlp ? otlpTurnExporter(otlp, {
       environment: this.env.WALDO_ENVIRONMENT ?? 'development', release: this.env.WALDO_RELEASE ?? 'unknown',
       channel, userId: owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`, sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
-      captureText: this.env.LANGFUSE_CAPTURE_TEXT === 'true',
+      captureText: resolveCaptureText(this.env),
     }) : undefined;
     const traces = traceBook(this.ctx.storage.sql);
-    const captureText = this.env.LANGFUSE_CAPTURE_TEXT === 'true';
+    const captureText = resolveCaptureText(this.env);
     const log = (entry: TurnLogEntry) => {
       // Owner attribution lands on every surface: the DO trace table, the wrangler tail, and Langfuse.
       // The gate runs once here so free-form detail/error text reaches none of the sinks while

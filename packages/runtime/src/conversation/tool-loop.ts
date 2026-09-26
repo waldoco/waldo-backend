@@ -96,7 +96,7 @@ export async function runToolLoop(input: Readonly<{
 async function dispatch(
   call: LLMToolCall,
   input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
-): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; connect?: ConnectIntent }>> {
+): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
   let args: unknown;
@@ -106,7 +106,10 @@ async function dispatch(
     return { ok: false, error: 'Arguments were not valid JSON.' };
   }
   const result = await dispatchTool({ id: call.call_id, name: name.data, args }, input.ctx, { handlers: input.handlers, ...(input.offload === undefined ? {} : { offload: input.offload }) });
-  if (result.ok) return { ok: true, data: result.data };
+  // The untrusted marker crosses the model boundary on BOTH arms: a successful external result
+  // keeps source_taint 'external' in the JSON the model reads, so provider text never presents
+  // as internal truth (security review 2026-09-26); the failure arm keeps it for the same reason.
+  if (result.ok) return { ok: true, data: result.data, ...(result.source_taint ? { source_taint: result.source_taint } : {}) };
   // Keep the dispatcher's typed code/reason so spans carry the machine-readable failure, not
   // just the human-facing message.
   const typed = result as { code?: string; reason?: string };
@@ -115,6 +118,7 @@ async function dispatch(
     error: result.error,
     ...(typed.code ? { code: typed.code } : {}),
     ...(typed.reason ? { reason: typed.reason } : {}),
+    ...(result.source_taint ? { source_taint: result.source_taint } : {}),
     ...(result.connect ? { connect: result.connect } : {}),
   };
 }

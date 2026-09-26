@@ -23,3 +23,9 @@ export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnL
     error: undefined,
   };
 };
+
+// The staging release gate, in code: free-form text may be exported ONLY outside production.
+// WALDO_ENVIRONMENT 'production' disables text capture no matter what LANGFUSE_CAPTURE_TEXT
+// says, so a misconfigured prod deploy fails safe (types/counts only), never open.
+export const resolveCaptureText = (env: Readonly<{ LANGFUSE_CAPTURE_TEXT?: string; WALDO_ENVIRONMENT?: string }>): boolean =>
+  env.LANGFUSE_CAPTURE_TEXT === 'true' && (env.WALDO_ENVIRONMENT ?? 'development') !== 'production';
