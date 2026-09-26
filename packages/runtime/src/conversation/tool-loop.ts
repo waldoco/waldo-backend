@@ -23,7 +23,7 @@ export type ToolLoopStep = (
   turns: readonly LLMToolTurn[],
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string; guard?: string }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string; guard?: string; taint: 'external' | null }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -78,6 +78,10 @@ export async function runToolLoop(input: Readonly<{
   onTool?: (event: ToolLoopEvent) => void;
   // Fired once, just before the loop returns, with the truthful exit classification.
   onSettle?: (exit: LoopExit) => void;
+  // Shared tool-round budget across a parent turn and its children (subagent orchestration
+  // spec): when present, every offered round in EVERY loop holding the same object decrements
+  // it, so a turn's stated round cap is absolute - children can never dispatch past it.
+  budget?: { remaining: number };
   // S4 (CONNECT_FLOW_DESIGN 4.4): a tool's typed auth intent is acted on by the responder via
   // the channel's offerConnect seam. Fired at most once per (service, reason) per turn.
   onConnect?: (intent: ConnectIntent) => Promise<boolean>;
@@ -99,10 +103,12 @@ export async function runToolLoop(input: Readonly<{
   let failedRounds = 0;
   let exit: LoopExit = 'completed';
   for (let round = 0; ; round += 1) {
-    const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT;
+    const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT
+      && (input.budget === undefined || input.budget.remaining > 0);
     if (!offer && tools.length > 0 && exit === 'completed') {
-      exit = round >= input.maxSteps ? 'budget_exhausted' : 'withdrawn';
+      exit = round >= input.maxSteps || (input.budget !== undefined && input.budget.remaining <= 0) ? 'budget_exhausted' : 'withdrawn';
     }
+    if (offer && input.budget !== undefined) input.budget.remaining -= 1;
     const response = await input.step(offer ? tools : undefined, turns);
     if (response.tool_calls === undefined) {
       input.onSettle?.(exit);
@@ -139,6 +145,14 @@ export async function runToolLoop(input: Readonly<{
           if (!mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never)) seen.delete(seenKey);
         }
       }
+      // Turn taint accumulation (ADR-0049): a result stamped external taints the rest of the
+      // turn, so a later privileged call in this loop - including one shaped by a subagent's
+      // delegate_task handback - is refused direct execution by the autonomy gate. The do.ts
+      // trusted path seeds the same field from committed checkpoints; this loop owns the
+      // per-round derivation for conversational turns.
+      if ((result as { source_taint?: 'external' | null }).source_taint === 'external') {
+        (input.ctx as { toolArgSourceTaint?: unknown }).toolArgSourceTaint = 'external';
+      }
       if (!noProgressBlocked.has(stablePair)) {
         const triple = `${stablePair}\u0000${stabilize(JSON.stringify(result))}`;
         const hits = (noProgressTriples.get(triple) ?? 0) + 1;
@@ -168,6 +182,7 @@ export async function runToolLoop(input: Readonly<{
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
         call, ok: result.ok, ms: Date.now() - started, output,
+        taint: (result as { source_taint?: 'external' | null }).source_taint ?? null,
         ...(failure ? { error: failure } : {}),
         ...(typed?.code ? { code: typed.code } : {}),
         ...(typed?.reason ? { reason: typed.reason } : {}),

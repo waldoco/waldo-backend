@@ -13,7 +13,7 @@ import {
   type WebSearchArgs,
 } from '@waldo/contracts';
 import { runToolLoop, type LoopExit } from '../src/conversation/tool-loop';
-import { CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_ROUNDS, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT } from '../src/conversation/subagent';
+import { CHILD_TOOL_NAMES, delegateTaskHandler, runChildLoop, SUBAGENT_MAX_ROUNDS, SUBAGENT_MAX_SPAWNS_PER_TURN, SUBAGENT_SYSTEM_PROMPT, withDelegation } from '../src/conversation/subagent';
 import { dispatchTool, type ToolDispatcherContext } from '../src/tools/dispatcher';
 import { sanitise } from '../src/scribe/sanitiser';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
@@ -228,6 +228,7 @@ describe('runChildLoop turn control', () => {
     const result = await runChildLoop('research topic', {
       handlers: [handler('web_search')],
       ctx: childCtx(),
+      budget: { remaining: 50 },
       controlRound: () => {
         const s = steering;
         steering = null; // second round observes the stop
@@ -261,6 +262,7 @@ describe('runChildLoop turn control', () => {
     const result = await runChildLoop('research topic', {
       handlers: [handler('web_search')],
       ctx: childCtx(),
+      budget: { remaining: 50 },
       controlRound: () => {
         const s = steering;
         steering = null;
@@ -288,5 +290,54 @@ describe('delegate_task prompt/tool parity (S3)', () => {
     ] as readonly { name: string }[];
     const ceiling = [...handlers.map((h) => h.name)];
     expect(ceiling.filter((name) => name === 'delegate_task')).toHaveLength(1);
+  });
+});
+
+describe('Codex #224 holds (regressions)', () => {
+  it('withDelegation offers delegate_task on owner chat turns only', () => {
+    const base = [stubRead('web_search')];
+    const delegate = stubRead('delegate_task');
+    expect(withDelegation(base, delegate, true).map((h) => h.name)).toEqual(['web_search', 'delegate_task']);
+    expect(withDelegation(base, delegate, false).map((h) => h.name)).toEqual(['web_search']);
+  });
+
+  it('child rounds draw down the parent turn budget - a child can never dispatch past the turn cap', async () => {
+    // Parent has 2 rounds left; the child wants an unbounded research loop.
+    const budget = { remaining: 2 };
+    let completions = 0;
+    let exit: LoopExit = 'completed';
+    await runToolLoop({
+      handlers: [stubRead('web_search')],
+      ctx, maxSteps: 25, budget,
+      onSettle: (settled) => { exit = settled; },
+      step: async (tools) => {
+        completions += 1;
+        if (!tools) return { text: 'closed without tools.' };
+        return { text: '', tool_calls: [{ call_id: `c${completions}`, name: 'web_search', arguments: `{"q":"page ${completions}"}` }] };
+      },
+    });
+    expect(completions).toBe(3); // 2 offered rounds + 1 closing step
+    expect(exit).toBe('budget_exhausted');
+    expect(budget.remaining).toBe(0);
+  });
+
+  it('child loop observes the shared budget: 2 remaining rounds cap a 10-round slice', async () => {
+    const budget = { remaining: 2 };
+    let offered = 0;
+    const result = await runChildLoop('research topic', {
+      handlers: [stubRead('web_search')],
+      ctx,
+      budget,
+      controlRound: () => '',
+      onTool: () => {},
+      complete: async (_content, tools) => {
+        if (!tools) return { text: 'child closes.' };
+        offered += 1;
+        return { text: '', tool_calls: [{ call_id: `k${offered}`, name: 'web_search', arguments: `{"q":"q${offered}"}` }] };
+      },
+    });
+    expect(offered).toBe(2);
+    expect(budget.remaining).toBe(0);
+    expect(result.exit).toBe('budget_exhausted');
   });
 });

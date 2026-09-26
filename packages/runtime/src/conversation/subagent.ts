@@ -7,9 +7,9 @@ import { runToolLoop, type LoopExit, type ToolLoopEvent, type ToolLoopStep } fro
 // structural, not a counter. Turn-scoped only until the P2 heartbeat lands: a child runs inside
 // the parent's turn and hands back before the turn ends.
 
-// Budget: 10-round slice per child, max 3 spawns per turn. Waldo's 25-round turn cap needs an
-// absolute floor, not a ratio of a larger parent budget. Worst case 25 + 3x10 = 55 rounds per
-// owner turn, bounded.
+// Budget: 10-round slice per child, max 3 spawns per turn, and every child round draws down the
+// PARENT turn's shared budget object - so Waldo's 25-round turn cap is absolute across parent and
+// children (a child can never dispatch past it), and 10 remains the per-child slice ceiling.
 export const SUBAGENT_MAX_ROUNDS = 10;
 export const SUBAGENT_MAX_SPAWNS_PER_TURN = 3;
 
@@ -54,6 +54,8 @@ export type ChildLoopInput = Readonly<{
   controlRound: () => string | null;
   // The turn's LLM step, pre-bound with trace/purpose/system prompt by the channel.
   complete: (content: string, tools: readonly unknown[] | undefined, turns: readonly LLMToolTurn[]) => ReturnType<ToolLoopStep>;
+  // The parent turn's shared round budget; the child's rounds decrement it too.
+  budget: { remaining: number };
   // Trace/ledger sink shared with the parent turn; child hops are tagged subagent_tool_*.
   onTool: (event: ToolLoopEvent) => void;
 }>;
@@ -68,6 +70,7 @@ export const runChildLoop = async (task: string, input: ChildLoopInput): Promise
   const text = await runToolLoop({
     handlers: input.handlers.filter((handler) => (CHILD_TOOL_NAMES as readonly string[]).includes(handler.name)) as never,
     maxSteps: SUBAGENT_MAX_ROUNDS,
+    budget: input.budget,
     ctx: input.ctx,
     onSettle: (settled) => { exit = settled; },
     step: async (tools, turns) => {
@@ -83,6 +86,15 @@ export const runChildLoop = async (task: string, input: ChildLoopInput): Promise
   });
   return { exit: stopped ? 'stopped' : exit, text };
 };
+
+// delegate_task is offered on owner chat turns only (Codex #224 hold): machine-triggered turns
+// (reminders, scheduled prompts, consolidation) share the same completion closure, so the offer
+// must be keyed on the turn's origin, not on which closure built it.
+export const withDelegation = <H>(
+  handlers: readonly H[],
+  delegate: H,
+  ownerTurn: boolean,
+): readonly H[] => (ownerTurn ? [...handlers, delegate] : handlers);
 
 export const delegateTaskHandler = (
   spawn: SubagentSpawner,
