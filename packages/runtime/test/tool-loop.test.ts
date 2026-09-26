@@ -330,6 +330,44 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     expect(outputs.some((o) => o.includes('No progress'))).toBe(false);
   });
 
+  it('a desk-routed mutation (mutates_state, not autonomy-gated) also opens a new epoch', async () => {
+    // Codex review: the live handlers mutate through the effect desk, not the privilege gate,
+    // so keying the reset on autonomy_gated alone left the claimed behavior dormant.
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    const deskMutation = {
+      name: 'send_message' as const,
+      description: 'Desk-routed mutation stub (like the live handlers).',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: false,
+      mutates_state: true as const,
+      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    };
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      // send_message passes through the dispatcher's approval hook regardless of the
+      // autonomy gate; this stub approves in-loop and no real send occurs.
+      handlers: [web, deskMutation as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools) return { text: 'done.' };
+        if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'b'.repeat(64) + '"}' }] };
+        if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
+        return { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(searched).toBe(4);
+    expect(outputs.some((o) => o.includes('No progress'))).toBe(false);
+  });
+
   it('an identical read after a landed mutation dispatches again (new state epoch resets read dedupe)', async () => {
     let searched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => {

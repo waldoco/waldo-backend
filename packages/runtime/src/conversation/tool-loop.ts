@@ -80,10 +80,12 @@ export async function runToolLoop(input: Readonly<{
   const noProgressBlocked = new Set<string>();
   // Mutation-resets-streak: a state change landing between repeats makes the next identical
   // call a new experiment, not a loop. Waldo's mutation class is the autonomy-gated/privileged
-  // set (ADR-0049: direct external mutation or send). A successful gated call clears both
+  // set (ADR-0049: direct external mutation or send) plus desk-routed state mutations
+  // (mutates_state: the live handlers are desk-routed, not privilege-gated). A successful
+  // gated or mutating call clears both
   // no-progress maps and read-side exact-call dedupe (a new state epoch); duplicate protection
   // for mutations themselves is retained, so a write or send can never be re-fired by a reset.
-  const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated).map((h) => h.name));
+  const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated || h.mutates_state).map((h) => h.name));
   let failedRounds = 0;
   for (let round = 0; ; round += 1) {
     const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT;

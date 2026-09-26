@@ -68,6 +68,7 @@ export const loopHandlers = (book: LoopBook) => [
     schema: openLoopArgsSchema,
     trigger_allowlist: allowlist('open_loop'),
     autonomy_gated: false,
+    mutates_state: true,
     async handle(args) {
       return { ok: true, data: book.open(args), source_taint: null };
     },
@@ -78,6 +79,7 @@ export const loopHandlers = (book: LoopBook) => [
     schema: closeLoopArgsSchema,
     trigger_allowlist: allowlist('close_loop'),
     autonomy_gated: false,
+    mutates_state: true,
     async handle({ id, outcome }) {
       return { ok: true, data: { id, closed: book.close(id, outcome) }, source_taint: null };
     },
@@ -88,6 +90,7 @@ export const loopHandlers = (book: LoopBook) => [
     schema: setProactivityArgsSchema,
     trigger_allowlist: allowlist('set_proactivity'),
     autonomy_gated: false,
+    mutates_state: true,
     async handle(args) {
       return { ok: true, data: book.setProactivity(args), source_taint: null };
     },
