@@ -21,7 +21,7 @@ export type ToolLoopStep = (
   turns: readonly LLMToolTurn[],
 ) => Promise<Readonly<{ text: string; tool_calls?: readonly LLMToolCall[]; output_items?: readonly Record<string, unknown>[] }>>;
 
-export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string }>;
+export type ToolLoopEvent = Readonly<{ call: LLMToolCall; ok: boolean; ms: number; output: string; error?: string; code?: string; reason?: string; guard?: string }>;
 
 export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']): LLMTool[] =>
   handlers.map((handler) => ({
@@ -79,13 +79,14 @@ export async function runToolLoop(input: Readonly<{
       // The typed code/reason ride the span as their own fields so a failed hop stays
       // diagnosable from the trace or tail even when the capture switch gates free-form error
       // text off; error keeps the human-facing message for capture-on.
-      const typed = result.ok ? undefined : (result as { code?: string; reason?: string });
+      const typed = result.ok ? undefined : (result as { code?: string; reason?: string; guard?: string });
       const failure = result.ok ? undefined : result.error ?? (typed?.code ? `${typed.code}${typed.reason ? `:${typed.reason}` : ''}` : undefined);
       input.onTool?.({
         call, ok: result.ok, ms: Date.now() - started, output,
         ...(failure ? { error: failure } : {}),
         ...(typed?.code ? { code: typed.code } : {}),
         ...(typed?.reason ? { reason: typed.reason } : {}),
+        ...(typed?.guard ? { guard: typed.guard } : {}),
       });
       anyOk ||= result.ok;
     }
@@ -96,7 +97,7 @@ export async function runToolLoop(input: Readonly<{
 async function dispatch(
   call: LLMToolCall,
   input: Readonly<{ handlers: DispatchToolOptions<ToolDispatcherContext>['handlers']; ctx: ToolDispatcherContext; offload?: ToolOutputStore }>,
-): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>> {
+): Promise<Readonly<{ ok: boolean; data?: unknown; error?: string; code?: string; reason?: string; guard?: string; source_taint?: 'external' | null; connect?: ConnectIntent }>> {
   const name = toolNameSchema.safeParse(call.name);
   if (!name.success) return { ok: false, error: `Unknown tool ${call.name}.` };
   let args: unknown;
@@ -118,6 +119,8 @@ async function dispatch(
     error: result.error,
     ...(typed.code ? { code: typed.code } : {}),
     ...(typed.reason ? { reason: typed.reason } : {}),
+    // Enum-only guard stage:reason - the trace-visible diagnostic when capture is off.
+    ...(result.guard ? { guard: `${result.guard.check}:${result.guard.reason}` } : {}),
     ...(result.source_taint ? { source_taint: result.source_taint } : {}),
     ...(result.connect ? { connect: result.connect } : {}),
   };

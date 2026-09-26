@@ -100,12 +100,13 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       attr('langfuse.observation.metadata.feature', hopFeature(entry.hop)),
       attr('langfuse.observation.metadata.trace_key', entry.trace),
       ...(entry.detail ? [attr('langfuse.observation.metadata.detail', entry.detail)] : []),
+      ...(entry.guard ? [attr('langfuse.observation.metadata.guard', entry.guard)] : []),
       ...(entry.owner ? [attr('langfuse.observation.metadata.owner', entry.owner)] : []),
       ...generation(entry),
       ...io(entry),
       ...extra,
     ],
-    status: entry.ok ? { code: 1 } : { code: 2, message: entry.error ?? entry.code ?? 'failed' },
+    status: entry.ok ? { code: 1 } : { code: 2, message: entry.error ?? ([entry.code, entry.guard].filter(Boolean).join(' ') || 'failed') },
   });
 
   const post = (spans: readonly object[]) => send(config.endpoint, {

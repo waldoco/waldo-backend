@@ -1,4 +1,16 @@
+import { sanitiseCheckSchema, sanitiseFailureReasonSchema } from '@waldo/contracts';
 import type { TurnLogEntry } from '../channels/telegram-listener';
+
+// The sink boundary validates the guard diagnostic itself: only a finite check:reason enum
+// pair survives capture-off. A malformed caller cannot smuggle free-form provider text past
+// the error/detail gate by writing it into guard (owner security review, #203 round 2).
+const GUARD_DIAGNOSTIC = new RegExp(
+  `^(?:${sanitiseCheckSchema.options.join('|')}):(?:${sanitiseFailureReasonSchema.options.join('|')})$`,
+);
+// typeof first: RegExp.test coerces non-strings, so an object whose toString() yields a valid
+// enum pair could otherwise pass the gate and serialize private fields into the sinks.
+const validGuard = (guard: unknown): string | undefined =>
+  typeof guard === 'string' && GUARD_DIAGNOSTIC.test(guard) ? guard : undefined;
 
 // Hops whose detail strings are verified content-free: fixed strings, enums, counts and
 // integer ids only (console ids pass through consoleActionTraceDetail first). Everything else (model reasons, provider error messages, payloads) is free-form
@@ -21,6 +33,9 @@ export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnL
     ...entry,
     detail: SAFE_DETAIL_HOPS.has(entry.hop) ? entry.detail : entry.code,
     error: undefined,
+    // The guard diagnostic is enum-only and validated HERE at the gate, not trusted from the
+    // producer: an invalid value is dropped before any sink sees it.
+    guard: validGuard(entry.guard),
   };
 };
 

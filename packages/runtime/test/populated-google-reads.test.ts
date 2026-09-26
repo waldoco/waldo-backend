@@ -78,6 +78,141 @@ describe('Populated google reads (live failure tg-904957558/560 class)', () => {
   });
 });
 
+describe('Canary-guard false positives on provider id shapes (live failure tg-904957565/567 class)', () => {
+  // Gmail message/thread ids are exactly 16 hex chars; Calendar etags are 16 digits. Both trip
+  // the generic embedded canary-shape scan, denying every populated read at the offload guard.
+  const providerEvents = Array.from({ length: 25 }, (_, i) => ({
+    id: `evt-${i}`,
+    etag: `"${String(3521710920934700 + i)}"`,
+    summary: `Sync ${i}`,
+    start: `2026-09-2${i % 9}T10:00:00+05:30`,
+    end: `2026-09-2${i % 9}T11:00:00+05:30`,
+    description: `Agenda and notes. `.repeat(40),
+    attendees: [`a${i}@example.com`],
+  }));
+  const providerMail = Array.from({ length: 10 }, (_, i) => ({
+    id: `19c8a1b2f3d4e5f${i.toString(16)}`,
+    thread_id: `19c8a1b2f3d4e6f${i.toString(16)}`,
+    from: `Sender ${i} <sender${i}@example.com>`,
+    subject: `Update ${i}`,
+    snippet: `Body text. `.repeat(60),
+    at: `2026-09-24T0${i}:15:00Z`,
+  }));
+
+  it('populated calendar with 16-digit etags passes the offload guard and stores', async () => {
+    const [calendar] = googleHandlers(googleWith(providerEvents, []), desk, clock);
+    const offload = inMemoryToolOutputStore();
+    const result = await dispatchTool(
+      { id: 'cp1', name: 'query_calendar', args: {} },
+      ctx('user_message'),
+      { handlers: [calendar!], offload },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) expect((result.data as { stored_output?: string }).stored_output).toBeDefined();
+  });
+
+  it('populated gmail with 16-hex message ids passes the offload guard and stores', async () => {
+    const [, mail] = googleHandlers(googleWith([], providerMail), desk, clock);
+    const offload = inMemoryToolOutputStore();
+    const result = await dispatchTool(
+      { id: 'cp2', name: 'get_communication', args: {} },
+      ctx('user_message'),
+      { handlers: [mail!], offload },
+    );
+    // Under the offload threshold the result stays inline; either way the guard must not deny it.
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const data = result.data as { stored_output?: string; messages?: unknown[] };
+      expect(data.stored_output !== undefined || (data.messages?.length ?? 0) > 0).toBe(true);
+    }
+  });
+
+  it('a harmless result past the 32,768-char internal_context budget still offloads (no hidden size denial)', async () => {
+    // The offload guard skips destination size caps by design; pin that at the dispatcher seam
+    // so a decode-budget regression cannot silently deny large legitimate reads again.
+    const bigEvents = Array.from({ length: 30 }, (_, i) => ({
+      id: `evt-big-${i}`,
+      summary: `Planning ${i}`,
+      start: '2026-09-26T10:00:00+05:30',
+      end: '2026-09-26T11:00:00+05:30',
+      description: 'Agenda and notes with detail. '.repeat(80),
+      attendees: [`person${i}@example.com`],
+    }));
+    const rawChars = JSON.stringify(bigEvents).length;
+    expect(rawChars).toBeGreaterThan(32_768);
+    const [calendar] = googleHandlers(googleWith(bigEvents, []), desk, clock);
+    const offload = inMemoryToolOutputStore();
+    const result = await dispatchTool(
+      { id: 'cp4', name: 'query_calendar', args: {} },
+      ctx('user_message'),
+      { handlers: [calendar!], offload },
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const data = result.data as { stored_output?: string; total_chars?: number };
+      expect(data.stored_output).toBeDefined();
+      expect(data.total_chars).toBeGreaterThan(32_768);
+    }
+  });
+
+  it('GUARD HELD: an actual session canary embedded in provider content is still denied at offload', async () => {
+    const events = [
+      ...providerEvents.slice(0, 5),
+      { ...providerEvents[0]!, id: 'evt-x', description: `${'z'.repeat(20_000)} ${canaryTokens[0]}` },
+    ];
+    const [calendar] = googleHandlers(googleWith(events, []), desk, clock);
+    const store = inMemoryToolOutputStore();
+    const result = await dispatchTool(
+      { id: 'cp3', name: 'query_calendar', args: {} },
+      ctx('user_message'),
+      { handlers: [calendar!], offload: store },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('forbidden');
+      expect(result.reason).toBe('sanitise_denied');
+      // the trace-visible error names the exact guard stage/reason as enums - no content
+      expect(result.error).toBe('tool result failed the offload guard: canary_token:canary_leak');
+      // ...and the same stage/reason rides as a typed enum-only diagnostic for capture-off sinks
+      expect(result.guard).toEqual({ check: 'canary_token', reason: 'canary_leak' });
+    }
+    expect(store.read('to-1', 0, 16)).toBeNull();
+  });
+
+  it('GUARD HELD: the generic canary-shape scan still denies agent-side text at send_message', async () => {
+    const denied = sanitise({
+      payload: 'remember 19c8a1b2f3d4e5f6 for later',
+      destination: 'send_message',
+      canary_tokens: [...canaryTokens],
+      source_taint: null,
+    });
+    expect(denied).toMatchObject({ ok: false, check: 'canary_token' });
+  });
+
+  it('GUARD HELD: external-tainted content at an egress destination is still shape-scanned (security review #203)', () => {
+    // A PostLLMCall in a turn that read provider data inherits external taint via the run-loop
+    // taint merge; the provider-ingestion exception (internal_context only) must not reach
+    // egress, or model output that turn would skip the 16-hex shape scan.
+    const denied = sanitise({
+      payload: 'remember 19c8a1b2f3d4e5f6 for later',
+      destination: 'send_message',
+      canary_tokens: [...canaryTokens],
+      source_taint: 'external',
+    });
+    expect(denied).toMatchObject({ ok: false, check: 'canary_token', reason: 'canary_leak' });
+  });
+
+  it('provider ingestion stays exempt: the same 16-hex id passes at internal_context under external taint', () => {
+    const allowed = sanitise({
+      payload: { id: '19c8a1b2f3d4e5f6', subject: 'Invoice' },
+      destination: 'internal_context',
+      canary_tokens: [...canaryTokens],
+      source_taint: 'external',
+    });
+    expect(allowed.ok).toBe(true);
+  });
+});
+
 describe('Fix targets', () => {
   it('populated calendar succeeds with the offload store wired: stored_output + head + read_with', async () => {
     const [calendar] = googleHandlers(googleWith(populatedEvents, []), desk, clock);
