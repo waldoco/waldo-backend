@@ -35,7 +35,10 @@ export type SubagentResult =
   | Readonly<{ ok: true; data: { status: 'completed'; summary: string }; source_taint: 'external' }>
   | Readonly<{ ok: false; error: string; code: 'rejected'; source_taint: 'external' }>;
 
-export type SubagentSpawner = (task: string) => Promise<Readonly<{ exit: LoopExit; text: string }>>;
+// 'stopped' is the owner-stop classification: distinct from a failure-streak withdrawal, and
+// never reported as a success - the parent receives a failed receipt naming the stop.
+export type ChildExit = LoopExit | 'stopped';
+export type SubagentSpawner = (task: string) => Promise<Readonly<{ exit: ChildExit; text: string }>>;
 
 // The handler is built per turn: the spawn counter resets every turn, and the spawner closure
 // carries the turn's LLM step. The child hands the parent a truthful status: completed -> ok
@@ -59,8 +62,9 @@ export type ChildLoopInput = Readonly<{
 // round slice. Turn control applies INSIDE the child: /stop or steering is observed between
 // child rounds, not only at handback. Steering text is appended to the child task; a stop ends
 // the child immediately with a truthful stopped note.
-export const runChildLoop = async (task: string, input: ChildLoopInput): Promise<Readonly<{ exit: LoopExit; text: string }>> => {
+export const runChildLoop = async (task: string, input: ChildLoopInput): Promise<Readonly<{ exit: ChildExit; text: string }>> => {
   let exit: LoopExit = 'completed';
+  let stopped = false;
   const text = await runToolLoop({
     handlers: input.handlers.filter((handler) => (CHILD_TOOL_NAMES as readonly string[]).includes(handler.name)) as never,
     maxSteps: SUBAGENT_MAX_ROUNDS,
@@ -68,13 +72,16 @@ export const runChildLoop = async (task: string, input: ChildLoopInput): Promise
     onSettle: (settled) => { exit = settled; },
     step: async (tools, turns) => {
       const added = input.controlRound();
-      if (added === null) return { text: 'Stopped by the owner mid-task.' };
+      if (added === null) {
+        stopped = true;
+        return { text: 'Stopped by the owner mid-task.' };
+      }
       const content = added ? `${task}\n\nOwner mid-task steering: ${added}` : task;
       return input.complete(content, tools, turns);
     },
     onTool: input.onTool,
   });
-  return { exit, text };
+  return { exit: stopped ? 'stopped' : exit, text };
 };
 
 export const delegateTaskHandler = (
@@ -104,9 +111,11 @@ export const delegateTaskHandler = (
       if (exit === 'completed') {
         return { ok: true as const, data: { status: 'completed' as const, summary: text }, source_taint: 'external' as const };
       }
+      // Every non-completed exit is a failed round with its truthful classification; an owner
+      // stop is never a success receipt.
       return {
         ok: false as const,
-        error: `Subagent ${exit === 'budget_exhausted' ? 'ran out of its round budget' : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text.slice(0, 500)}`,
+        error: `Subagent ${exit === 'stopped' ? 'was stopped by the owner mid-task' : exit === 'budget_exhausted' ? 'ran out of its round budget' : 'had its tools withdrawn after repeated failures'}. Partial answer: ${text.slice(0, 500)}`,
         code: 'rejected' as const,
         source_taint: 'external' as const,
       };

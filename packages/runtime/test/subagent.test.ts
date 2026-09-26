@@ -233,17 +233,26 @@ describe('runChildLoop turn control', () => {
         steering = null; // second round observes the stop
         return s;
       },
+      onTool: () => {},
       complete: async (_content, tools) => {
         completions += 1;
         if (completions === 1) {
-          return { text: '', tool_calls: [{ id: 'c1', name: 'web_search', arguments: '{"query":"q"}' }] };
+          return { text: '', tool_calls: [{ call_id: 'c1', name: 'web_search', arguments: '{"query":"q"}' }] };
         }
         throw new Error('complete must not run after the owner stop');
       },
     });
-    // The stop ends the child with the truthful stopped note; the loop itself settled cleanly.
-    expect(result).toEqual({ exit: 'completed', text: 'Stopped by the owner mid-task.' });
+    // The stop ends the child with the truthful stopped note, classified 'stopped' - never a
+    // success, so the parent receives a failed/stopped receipt.
+    expect(result).toEqual({ exit: 'stopped', text: 'Stopped by the owner mid-task.' });
     expect(completions).toBe(1);
+  });
+
+  it('an owner stop hands the parent a failed receipt, never a false success', async () => {
+    const handler = delegateTaskHandler(async () => ({ exit: 'stopped', text: 'Stopped by the owner mid-task.' }));
+    const result = await handler.handle({ task: 'research topic' }, {} as never);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('stopped by the owner mid-task');
   });
 
   it('owner steering text reaches the next child round via the task content', async () => {
@@ -257,9 +266,11 @@ describe('runChildLoop turn control', () => {
         steering = null;
         return s;
       },
+      onTool: () => {},
       complete: async (content) => {
         seen.push(content);
-        return { text: 'done', tool_calls: [] };
+        // tool_calls undefined closes the loop; an empty array would start another round.
+        return { text: 'done' };
       },
     });
     expect(result.exit).toBe('completed');
