@@ -16,6 +16,7 @@ import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-lin
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { handleConsole } from './channels/console-signin';
+import { ownerDirectory } from './identity/owner-directory';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
 import {
@@ -132,7 +133,13 @@ export default {
       if (signedIn) return signedIn;
     }
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
-      return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(env.WALDO_OWNER_TELEGRAM_ID)).fetch(request);
+      // Telegram ingress can resolve to a directory-owned DO name rather than the
+      // Telegram subject. The one-time link must land on that same DO to redeem.
+      const route = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID).catch(() => null);
+      if (!route) return new Response('owner unavailable', { status: 503 });
+      const forwarded = new Request(request);
+      forwarded.headers.set('x-waldo-do-name', route.doName);
+      return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(route.doName)).fetch(forwarded);
     }
     if (new URL(request.url).pathname.startsWith(CONNECT_LINK_PREFIX)) {
       return handleConnectTicket(request, env);
