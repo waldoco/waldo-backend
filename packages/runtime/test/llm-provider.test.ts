@@ -26,6 +26,9 @@ import {
   type TrustedProviderEffect,
 } from '../src/llm/provider';
 import { createUnavailableSkillBudget } from '../src/skills/budget';
+import { runToolLoop } from '../src/conversation/tool-loop';
+import type { ToolDispatcherContext } from '../src/tools/dispatcher';
+import { googleHandlers } from '../src/tools/live/google';
 import type { CountResult, ResolvedSkillBudget, SkillBudgetFactory } from '../src/skills/budget';
 import type { HookRegistry, HookRuntimeContext } from '../src/hooks/registry';
 import { evaluateMedicalClaim } from '../src/scribe/medical-gate';
@@ -1789,6 +1792,120 @@ describe('sanitiseRequest structural degradation', () => {
     );
     expect(result.ok).toBe(true);
     expect(gateway.requests[0]!.request.system).toBeUndefined();
+  });
+
+  it('populated external tool turns pass preflight at null conversation taint (per-part provenance)', async () => {
+    // Live tg-904957573 repro: Gmail JSON with realistic 16-hex ids + three valid unrelated
+    // session canaries; the next llm_reply preflight must not deny it as canary_leak.
+    const gmailJson = JSON.stringify({
+      ok: true, source_taint: 'external',
+      data: { since: '2026-08-26T00:00:00.000Z', messages: [
+        { id: '19c8a1b2f3d4e5f6', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-24T10:00:00.000Z' },
+        { id: 'a1b2c3d4e5f6a7b8', from: 'c@d.e', subject: 'yo', snippet: 'snop', at: '2026-09-25T10:00:00.000Z' },
+      ] },
+    });
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'how many emails since aug 26?' }],
+          tool_turns: [{ call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: gmailJson }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    const sent = gateway.requests[0]!.request.tool_turns as { output: string }[];
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.output).toContain('19c8a1b2f3d4e5f6');
+  });
+
+  it('a tool turn carrying a REAL session canary still hard-denies at preflight', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [{ call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: 'leaked 1111111111111111 inside tool output' }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.scribe?.reason).toBe('canary_leak');
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('owner messages keep the full scan: a 16-hex shape in a trusted message still denies', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'what about 19c8a1b2f3d4e5f6 ?' }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.scribe?.reason).toBe('canary_leak');
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('real runToolLoop -> provider preflight: populated Gmail tool turns no longer kill the next llm call', async () => {
+    const access = {
+      client: async () => ({
+        newMail: async () => [
+          { id: '19c8a1b2f3d4e5f6', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-24T10:00:00.000Z' },
+          { id: 'a1b2c3d4e5f6a7b8', from: 'c@d.e', subject: 'yo', snippet: 'snop', at: '2026-09-25T10:00:00.000Z' },
+        ],
+      }),
+    };
+    const desk = { propose: async () => 'p1', proposeSendEmail: async () => ({ ok: true as const, id: 'p1', reused: null }), record: () => undefined };
+    const clock = { timezone: 'Asia/Kolkata', now: () => new Date('2026-09-26T05:00:00Z') };
+    const handlers = googleHandlers(access as never, desk as never, clock as never);
+    const gateway = new ScriptedGateway((request) => ({
+      ok: true,
+      data: response(request.request.model, request.request.tool_turns === undefined
+        ? '{"tool_calls":[{"call_id":"c1","name":"get_communication","arguments":"{}"}]}'
+        : '{"text":"2 messages since Aug 26."}'),
+    }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const turnCtx = () => runtimeCtx({
+      trigger: 'user_message',
+      session: buildSessionState({ trigger: 'user_message', canary_tokens: canaryTokens, started_at: 1_700_000_000_000 }),
+    });
+    const text = await runToolLoop({
+      handlers, ctx: turnCtx() as ToolDispatcherContext, maxSteps: 4,
+      step: async (_tools, turns) => {
+        const result = await provider.complete({
+          trigger: 'user_message',
+          renderRequest: () => ({
+            messages: [{ role: 'user' as const, content: 'count my mail since aug 26' }],
+            ...(turns.length ? { tool_turns: [...turns] } : {}),
+            max_tokens: 512, temperature: 0.3,
+          }),
+        }, turnCtx());
+        if (!result.ok) throw new Error(`preflight denied the populated turn: ${result.halted_by ?? ''} ${result.scribe?.reason ?? result.reason}`);
+        const parsed = JSON.parse(result.response.text) as { text?: string; tool_calls?: { call_id: string; name: string; arguments: string }[] };
+        return parsed.tool_calls?.length ? { text: '', tool_calls: parsed.tool_calls } : { text: parsed.text ?? '' };
+      },
+    });
+    expect(text).toBe('2 messages since Aug 26.');
+    const followUp = gateway.requests[1]!.request.tool_turns as { output: string }[];
+    expect(followUp[0]!.output).toContain('19c8a1b2f3d4e5f6');
+    expect(followUp[0]!.output).toContain('a1b2c3d4e5f6a7b8');
   });
 
   it('drops tool turns that trip a structural scribe deny', async () => {

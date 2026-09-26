@@ -12,6 +12,7 @@ import {
   sanitiseInputSchema,
   sanitiseResultSchema,
   sourceTaintSchema,
+  type SourceTaint,
   routingPolicySchema,
   llmRequestSchema,
   llmResponseSchema,
@@ -1326,12 +1327,13 @@ async function sanitiseRequest(
   const sanitiseValue = async (
     payload: unknown,
     destination: 'system_prompt' | 'internal_context',
+    taint: SourceTaint = sourceTaint.data,
   ): Promise<{ ok: true; payload: unknown } | { ok: false; error: HookHaltError }> => {
     const input = sanitiseInputSchema.safeParse({
       payload,
       destination,
       canary_tokens: canaryTokens,
-      source_taint: sourceTaint.data,
+      source_taint: taint,
     });
     if (!input.success) {
       return {
@@ -1351,7 +1353,7 @@ async function sanitiseRequest(
           ),
         };
       }
-      if (result.source_taint !== sourceTaint.data) {
+      if (result.source_taint !== taint) {
         return {
           ok: false,
           error: new HookHaltError('llm_provider', 'scribe sanitiser changed taint', 'transient'),
@@ -1401,14 +1403,30 @@ async function sanitiseRequest(
       error: new HookHaltError('llm_provider', 'sanitised messages invalid', 'transient'),
     };
   }
-  let toolTurns = request.tool_turns === undefined ? undefined : await sanitiseValue(request.tool_turns, 'internal_context');
-  if (toolTurns !== undefined && !toolTurns.ok && softScribe(toolTurns.error)) toolTurns = undefined;
-  if (toolTurns !== undefined && !toolTurns.ok) return { ...toolTurns, scribeDestination: 'internal_context' };
+  // Per-part provenance: each tool turn is external-origin (provider/tool JSON), so it is
+  // sanitised with taint 'external' at internal_context - the exact session-canary, injection
+  // and PII checks still run, but the embedded canary-SHAPE scan is scoped out for external
+  // content (PostToolUse parity), so realistic provider ids (Gmail 16-hex message ids) no
+  // longer false-positive the next LLM preflight. System and owner messages keep the
+  // conversation's own taint; a hard deny on ANY turn still fails the request closed.
+  let toolTurnsPayload: unknown[] | undefined = undefined;
+  if (request.tool_turns !== undefined) {
+    const kept: unknown[] = [];
+    for (const turn of request.tool_turns) {
+      const part = await sanitiseValue(turn, 'internal_context', 'external');
+      if (!part.ok) {
+        if (softScribe(part.error)) continue; // structural deny: drop this turn, keep the rest
+        return { ...part, scribeDestination: 'internal_context' };
+      }
+      kept.push(part.payload);
+    }
+    toolTurnsPayload = kept.length > 0 ? kept : undefined;
+  }
   const parsed = llmRequestSchema.safeParse({
     ...request,
     system: system?.payload,
     messages: messages.payload,
-    tool_turns: toolTurns?.payload,
+    tool_turns: toolTurnsPayload,
   });
   return parsed.success
     ? { ok: true, request: parsed.data }
