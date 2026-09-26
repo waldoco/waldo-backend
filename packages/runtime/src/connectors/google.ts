@@ -178,10 +178,20 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
     async events(from, to, limit, includeDeclined) {
-      const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
-      url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit) }).toString();
-      const json = await call(url.toString()) as { items?: GoogleEvent[] };
-      return (json.items ?? [])
+      // Google may return a SHORT page (fewer than maxResults) with a nextPageToken; a single
+      // fetch silently under-reports the range. Follow pages until the requested limit is
+      // covered or the range is exhausted (bounded at 5 pages).
+      const collected: GoogleEvent[] = [];
+      let pageToken: string | undefined;
+      for (let page = 0; page < 5 && collected.length < limit; page += 1) {
+        const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
+        url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit), ...(pageToken ? { pageToken } : {}) }).toString();
+        const json = await call(url.toString()) as { items?: GoogleEvent[]; nextPageToken?: string };
+        collected.push(...(json.items ?? []));
+        pageToken = json.nextPageToken;
+        if (!pageToken) break;
+      }
+      return collected.slice(0, limit)
         .filter((event) => event.status !== 'cancelled')
         .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
         .map(toItem);

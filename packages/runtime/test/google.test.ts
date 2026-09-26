@@ -233,6 +233,30 @@ describe('gmail send rail bytes', () => {
   });
 });
 
+describe('calendar pagination', () => {
+  it('follows nextPageToken on a short page so the requested range is fully covered', async () => {
+    const seen: string[] = [];
+    const paged = ((url: string | URL) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      const token = new URL(u).searchParams.get('pageToken');
+      if (token === null) return Promise.resolve(Response.json({
+        items: [{ id: 'e1', summary: 'One', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' } }],
+        nextPageToken: 'p2',
+      }));
+      return Promise.resolve(Response.json({
+        items: [{ id: 'e2', summary: 'Two', start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T21:00:00+05:30' } }],
+      }));
+    }) as typeof fetch;
+    const client = googleClient(app, { refresh_token: 'rt' }, paged);
+    const events = await client.events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
+    expect(events.map((event) => event.id)).toEqual(['e1', 'e2']);
+    expect(seen).toHaveLength(3); // token + page 1 + page 2
+    expect(seen[2]).toContain('pageToken=p2');
+  });
+});
+
 describe('get_tasks', () => {
   it('client lists default-list tasks, maps status, and filters done items unless asked', async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
