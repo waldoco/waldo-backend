@@ -102,6 +102,30 @@ describe('trace privacy canary', () => {
     expect(bodies).not.toContain(MARKER);
   });
 
+  it('a malformed guard value (free-form text) is dropped at the gate and reaches no sink, capture off', async () => {
+    // The gate is the boundary: even if a caller stuffs provider text into guard, capture-off
+    // output must exclude it from the DO trace, console JSON and OTLP (owner review #203 r2).
+    const entry: TurnLogEntry = {
+      trace: 't4', hop: 'tool_get_communication', ms: 4, ok: false,
+      code: 'forbidden:sanitise_denied',
+      guard: `canary_token:canary_leak ${MARKER}`,
+    };
+    const gated = gateTraceEntry(entry, false);
+    expect(gated.guard).toBeUndefined();
+
+    const sink = noteSink();
+    const book = traceBook(sink.sql);
+    book.record(gated, Date.now());
+    expect(sink.notes[0]).toBe('forbidden:sanitise_denied');
+    expect(sink.notes.join('\n')).not.toContain(MARKER);
+
+    const consoleLine = JSON.stringify({ ...gated, text: undefined });
+    expect(consoleLine).not.toContain(MARKER);
+
+    const bodies = await exportBodies([gated, { trace: 't4', hop: 'turn', ms: 10, ok: true }], false);
+    expect(bodies).not.toContain(MARKER);
+  });
+
   it('producer-to-sinks: a free-form console form id reaches no sink even on a whitelisted hop', async () => {
     // The real producer path: console.ts accepts any id string, and the console_action hop is
     // whitelisted, so the detail builder itself is the only thing between owner-typed text and
