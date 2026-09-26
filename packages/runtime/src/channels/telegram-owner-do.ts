@@ -7,7 +7,7 @@ import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
@@ -18,7 +18,7 @@ import { egressGuardedCaller } from './egress-guard';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
-import { applyDayPlan, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
+import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, updateBook, type UpdateBook } from './update-cards';
@@ -721,7 +721,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const calendar = await readCalendar(dayWindow(now, clock.timezone), clock.timezone, await google.client(), false);
         const said = dayPlanInput({ localNow: localIso(now, clock.timezone), calendar, cards, proactivity: proactivityLine(loops.proactivity()) });
         const applied = await applyDayPlan(scheduler, plans, clock.timezone, now, parseDayPlan(await responder.planDay(trace, said), cards));
-        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: applied.map((plan) => `${plan.card}=${plan.time ?? 'skip'}`).join('; ') });
+        // Count only - the planned times are the owner's schedule, not trace content.
+        log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: true, detail: dayPlanTraceDetail(applied) });
       } catch (error) {
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
       }
@@ -881,7 +882,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             await applyDayPlan(scheduler, plans, clock.timezone, now, [{ card: card.id, time: value, reason: action === 'card.pin' ? 'pinned by you' : 'set by you for today' }], action === 'card.pin');
           }
         }
-        log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: `${action} ${id}`.trim() });
+        // consoleActionTraceDetail strips the free-form form id before it can reach the
+        // gated trace sinks; only integer target ids survive next to the enum action.
+        log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: true, detail: consoleActionTraceDetail(action, id) });
         return true;
       },
       googleConnectUrl: (feature, channel) => google.connectUrl(feature, channel),

@@ -1,7 +1,7 @@
 import type { TurnLogEntry } from '../channels/telegram-listener';
 
-// Hops whose detail strings are verified content-free: fixed strings, enums, counts and card
-// ids only. Everything else (model reasons, provider error messages, payloads) is free-form
+// Hops whose detail strings are verified content-free: fixed strings, enums, counts and
+// integer ids only (console ids pass through consoleActionTraceDetail first). Everything else (model reasons, provider error messages, payloads) is free-form
 // content and must not reach the trace sinks while the capture switch is off.
 const SAFE_DETAIL_HOPS = new Set([
   'stop', 'steer', 'connect_offer', 'google_token_migrated', 'memory_backup',

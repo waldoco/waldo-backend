@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { gateTraceEntry, resolveCaptureText } from '../src/observability/trace-privacy';
 import { otlpTurnExporter, type TraceContext } from '../src/observability/otlp-turns';
 import { traceBook } from '../src/channels/harness';
+import { consoleActionTraceDetail } from '../src/channels/console';
+import { dayPlanTraceDetail } from '../src/channels/day-cards';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 
 // Synthetic marker that must never survive the privacy gate: if any sink leaks free-form
@@ -71,6 +73,53 @@ describe('trace privacy canary', () => {
     expect(bodies).toContain('oversize:tool_result');
     expect(bodies).not.toContain(MARKER);
     expect(bodies).toContain('"message":"oversize:tool_result"');
+  });
+
+  it('producer-to-sinks: a free-form console form id reaches no sink even on a whitelisted hop', async () => {
+    // The real producer path: console.ts accepts any id string, and the console_action hop is
+    // whitelisted, so the detail builder itself is the only thing between owner-typed text and
+    // the DO trace table, the wrangler console line and the OTLP exporter.
+    const entry: TurnLogEntry = {
+      trace: `console:${Date.now()}`, hop: 'console_action', ms: 0, ok: true,
+      detail: consoleActionTraceDetail('timezone.set', MARKER),
+    };
+    const gated = gateTraceEntry(entry, false);
+    expect(gated.detail).toBe('timezone.set');
+
+    const bodies = await exportBodies([gated], false);
+    expect(bodies).not.toContain(MARKER);
+
+    const sink = noteSink();
+    const book = traceBook(sink.sql);
+    book.record(gated, Date.now());
+    expect(sink.notes.join('\n')).not.toContain(MARKER);
+
+    const consoleLines = JSON.stringify({ ...gated, text: undefined });
+    expect(consoleLines).not.toContain(MARKER);
+  });
+
+  it('producer-to-sinks: day_plan detail keeps the count, never the owner\'s planned times', async () => {
+    const entry: TurnLogEntry = {
+      trace: 't-day', hop: 'day_plan', ms: 0, ok: true,
+      detail: dayPlanTraceDetail([{ card: 'morning' as never, time: MARKER, reason: 'x' }]),
+    };
+    const gated = gateTraceEntry(entry, false);
+    expect(gated.detail).toBe('1 planned');
+
+    const bodies = await exportBodies([gated], false);
+    expect(bodies).not.toContain(MARKER);
+    const sink = noteSink();
+    traceBook(sink.sql).record(gated, Date.now());
+    expect(sink.notes.join('\n')).not.toContain(MARKER);
+    expect(JSON.stringify({ ...gated, text: undefined })).not.toContain(MARKER);
+  });
+
+  it('consoleActionTraceDetail keeps integer target ids and drops everything else', () => {
+    expect(consoleActionTraceDetail('spot.dismiss', '2')).toBe('spot.dismiss 2');
+    expect(consoleActionTraceDetail('spot.dismiss', `2 ${MARKER}`)).toBe('spot.dismiss');
+    expect(consoleActionTraceDetail('timezone.set', MARKER)).toBe('timezone.set');
+    expect(consoleActionTraceDetail('card.pin', 'card.morning')).toBe('card.pin');
+    expect(consoleActionTraceDetail('google.disconnect', '')).toBe('google.disconnect');
   });
 
   it('keeps verified count/enum detail for whitelisted hops while gating free-form detail', () => {
