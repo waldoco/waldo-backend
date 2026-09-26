@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
-import { claimStore, profile } from '../memory/claims';
+import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
 import { armHeartbeat, heartbeatTick } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
@@ -14,9 +14,9 @@ import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turn
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
-import { durableConversationStore, scrubConversationHistory } from './conversation-store';
+import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller } from './egress-guard';
-import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
@@ -77,7 +77,7 @@ type OwnerRuntime = Readonly<{
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
-  act(action: ConsoleAction): Promise<boolean>;
+  act(action: ConsoleAction): Promise<boolean | string>;
   googleConnectUrl(feature: GoogleFeature, channel?: 'telegram' | 'console'): Promise<string | null>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
@@ -252,7 +252,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;
-      return back(done && action ? action.action : 'invalid');
+      // A string result is a NOTICES key (e.g. an honest partial-failure receipt); boolean keeps the old path.
+      return back(typeof done === 'string' ? done : done && action ? action.action : 'invalid');
     }
     if (url.pathname !== CONSOLE_PATH) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
@@ -731,7 +732,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect,
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; })
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -913,7 +914,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           sessionUntil: localIso(session.expires, clock.timezone).slice(0, 16).replace('T', ' '), sessionCount: (await consoleAccess(this.ctx.storage).list()).length, approvals: desk.pending(Date.now()), usage: traces.usageRows(), csrf: session.csrf, notice,
           google: { accounts: linked, connectAvailable: google.configured() },
           telegram: { linked: telegramLinked(identity), unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
-          profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)),
+          profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
             const row = planned.get(card.id);
@@ -934,19 +935,41 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
           identity.put('timezone', value);
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
-          const claim = memory.claims().find((row) => row.id === spotId);
+          // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
+          // must be able to select it. Dismiss/confirm stay active-only.
+          const claim = memory.claims().find((row) => row.id === spotId)
+            ?? (action === 'spot.forget' ? memory.claims('purging').find((row) => row.id === spotId) : undefined);
           if (!claim) return false;
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
           else if (action === 'spot.confirm') memory.confirm(spotId, 'owner, console', new Date(now).toISOString());
           else {
-            memory.forget(spotId);
-            memory.barrier(claim.text, new Date(now).toISOString());
+            const result = memory.purge([spotId], new Date(now).toISOString());
+            let kvRemaining = 0;
+            if (result.texts.length) {
+              // KV stores are part of the verdict: the SQL stores being clean is not the whole
+              // settlement. The tool-output ledger collapses any surviving summary to the
+              // marker, so a touched row is a redacted row there.
+              kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
+              await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
+            }
+            if (result.failed.length || Object.keys(result.remaining).length || kvRemaining > 0) {
+              const detail = [...result.failed, ...Object.keys(result.remaining), ...(kvRemaining ? ['conversation'] : [])].join(',');
+              log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: `spot.forget purge_incomplete: ${detail}` });
+              // NOT settled: the claim row stays 'purging' with its marker, so this stated
+              // try-again path can select it and resume from the intact source text.
+              return 'spot.forget.incomplete';
+            }
+            // SQL and KV both verified clean: settle removes the source row and marker.
+            memory.settle([spotId]);
           }
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);
           if (!node) return false;
           memory.forgetNode(spotId);
           memory.barrier(node.label, new Date(now).toISOString());
+          const conv = await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
+          await redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN);
+          if (conv.remaining > 0) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

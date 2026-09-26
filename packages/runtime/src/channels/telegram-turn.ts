@@ -52,6 +52,9 @@ export const createTelegramResponder = (
   // L1 scenario harness: a scripted gateway replaces the OpenAI adapter so scenarios drive the
   // real pipeline without a live model. Production callers omit it.
   gateway?: LLMGatewayAdapter,
+  // Forget support: redact forgotten claim text from the persisted rolling conversation window
+  // (supplied by the owner DO, which owns the KV store). Counts only - never the text.
+  redactConversation?: (texts: readonly string[]) => Promise<Readonly<{ rewritten: number; remaining: number }>>,
   // Staging probe confinement (Codex #230/#231 holds): while a capture-mode /probe-turn runs,
   // this slot suppresses memory persistence and strips the live provider handlers from the
   // turn's tool loop and system prompt. Inert for real turns; the DO owns the slot.
@@ -211,7 +214,16 @@ export const createTelegramResponder = (
       if (memory && !probeGuard?.suppressMemory) {
         const started = Date.now();
         settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA })
-          .then((raw) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`) }))
+          .then(async (raw) => {
+            let purged: readonly string[] = [];
+            let purgeIds: readonly number[] = [];
+            const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; });
+            const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+            // Settle only once the KV conversation/ledger stores verify clean too; a KV
+            // survivor leaves the claim 'purging' so a later retry can still find it.
+            if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
+            log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}` });
+          })
           .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' }));
       }
       return text;
@@ -232,12 +244,22 @@ export const createTelegramResponder = (
       await settling;
       if (!memory) return 'no memory';
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
-      return applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`);
+      let purged: readonly string[] = [];
+      let purgeIds: readonly number[] = [];
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; });
+      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
+      return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
     async migrate(trace, input) {
       if (!memory) return 'no memory';
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
-      return applyClaimOps(memory, raw, new Date().toISOString());
+      let purged: readonly string[] = [];
+      let purgeIds: readonly number[] = [];
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; });
+      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
+      return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
     async promote(trace) {
       await settling;

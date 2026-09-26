@@ -48,7 +48,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Every migration takes a backup first, is idempotent, and leaves the old data in place until a later cleanup.
 - Schema changes on existing Durable Object storage are additive (new table, `ADD COLUMN`) and tolerate the column already existing.
 - Invariants are enforced in the database where possible (primary keys, CHECK, UNIQUE), not only in code.
-- Deletes that the owner asked for are real, and anything kept afterwards (a do-not-relearn note) is disclosed.
+- Deletes that the owner asked for are real across EVERY store - the primary record, the search index, backups, frozen legacy tables, and graph references - proven by a fresh-state re-scan that reports any survivor by store name. Anything kept afterwards (a do-not-relearn barrier) is disclosed.
 - A commit that adds a Supabase migration updates the canonical lists (`verify-supabase-migrations.mjs` and `supabase/fixtures/assert-canonical-migration-history.sql`) in the same commit; gates.sh runs the check locally so drift fails before push.
 - Attribution and audit writes name their exact row by primary key; never re-query a set ('every used invite for this email') when the row was just in hand.
 - Both canonical migration lists stay in sync statically: `guard-migration-fixture-sync.mjs` compares them in gates.sh, because the SQL fixture itself only runs Mac-side and its drift is invisible in sandbox gates.
@@ -105,6 +105,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
+| 2026-09-26 | Forget deleted the claim row but left the forgotten text live in five stores: the episodes FTS index (search_episodes could resurface it), memory_backups payloads, the frozen legacy spots and core_file_revisions tables, and constellation nodes kept quoting it and referencing its id in supporting_spots; the console forget path added a re-admission barrier while the model-facing path did not. Found by the forget-coverage audit: red-first survivor scan showed {episodes:1, backups:1, spots:1, revisions:1, nodes:1} after a forget | Memory / trust boundaries | forget-coverage.test.ts: marker planted in all six stores, forgotten through the real applyClaimOps path, fresh-state scan asserts zero everywhere, node stops quoting the claim and drops its id, barrier blocks re-admission, absent legacy tables skip cleanly, result reports purged vs purge-incomplete:<stores> | Deletes that the owner asked for are real across every store, proven by a fresh-state re-scan |
 | 2026-09-23 | Post-turn memory and spot writers raced the next turn | Concurrency | settle-before-next-turn test (W0, 96c7683) | Concurrency: writes settle before the next turn |
 | 2026-09-23 | An approval could be applied after its time had passed, or over an edited event | Time, concurrency | approval expiry and etag tests (96c7683) | Time: past-scheduled outcome; Concurrency: version check |
 | 2026-09-24 | Console sign-in link was spent by Telegram's link preview, so every link showed "used or expired" | Tokens | `console.test.ts` sign-in page test; token redeemed by POST only (8167bbf) | Tokens: one-time tokens spent only by a POST |

@@ -51,3 +51,39 @@ export const scrubConversationHistory = async (storage: KeyValueStorage): Promis
   await storage.put('scrub:v1', true);
   return Object.keys(writes).length;
 };
+
+// Forget support: redact forgotten claim text from the persisted rolling window in place.
+// Entries keep their keys, order, conv-count and conv-leaf, so unrelated history and the tree
+// structure are untouched. Matching is case-insensitive literal text (same coverage as the sql
+// stores' LIKE checks): a paraphrase of the forgotten fact in hot context is NOT caught - the
+// forget barrier covers model behavior for those. The returned counts are all a trace may log.
+export const redactConversationEntries = async (
+  storage: KeyValueStorage,
+  texts: readonly string[],
+  marker: string,
+): Promise<Readonly<{ rewritten: number; remaining: number }>> => {
+  const needles = [...new Set(texts.map((text) => text.trim()).filter(Boolean))];
+  if (needles.length === 0) return { rewritten: 0, remaining: 0 };
+  const patterns = needles.map((needle) => new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'));
+  const rows = await storage.list<ConversationEntry>({ prefix: 'conv:' });
+  let rewritten = 0;
+  for (const [key, entry] of rows) {
+    let model = entry.modelPayload;
+    let app = entry.appPayload;
+    for (const pattern of patterns) {
+      model = model.replace(pattern, marker);
+      app = app.replace(pattern, marker);
+    }
+    if (model !== entry.modelPayload || app !== entry.appPayload) {
+      await storage.put(key, { ...entry, modelPayload: model, appPayload: app });
+      rewritten += 1;
+    }
+  }
+  const after = rewritten > 0 ? await storage.list<ConversationEntry>({ prefix: 'conv:' }) : rows;
+  let remaining = 0;
+  for (const [, entry] of after) {
+    const hay = `${entry.modelPayload}\n${entry.appPayload}`.toLowerCase();
+    if (needles.some((needle) => hay.includes(needle.toLowerCase()))) remaining += 1;
+  }
+  return { rewritten, remaining };
+};

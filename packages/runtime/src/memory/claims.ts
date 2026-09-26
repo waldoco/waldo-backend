@@ -5,16 +5,47 @@ export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
 export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; status: string; created_at: string; last_seen_at: string; seen_count: number }>;
-export type ForgetBarrier = Readonly<{ id: number; topic: string; created_at: string }>;
+export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
+
+// Sync, content-free fingerprint for exact re-admission blocking: a barrier can prove a
+// candidate claim IS the forgotten text without storing the text itself (crypto.subtle is
+// async and the claim store is sync). Exact-match only; paraphrases are the documented limit.
+export const textFingerprint = (text: string): string => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `fnv1a:${hash.toString(16)}`;
+};
 export type ConstellationNode = Readonly<{ id: number; domain: string; label: string; summary: string; strength: number; status: string; first_seen: string; last_confirmed: string; supporting_spots: string }>;
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
 type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string }>;
+
+// Case-insensitive literal replace: the forgotten text may appear with different casing in
+// other stores, and SQLite replace() alone would leave those variants behind.
+const ciRedact = (value: string, needle: string, marker: string): string =>
+  needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
+
+export const FORGOTTEN = '[forgotten]';
+const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char}`);
+const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
 
 export const claimStore = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)`);
-  sql.exec('CREATE TABLE IF NOT EXISTS forget_barriers (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, created_at TEXT NOT NULL)');
+  sql.exec('CREATE TABLE IF NOT EXISTS forget_barriers (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, topic_hash TEXT, created_at TEXT NOT NULL)');
+  // Durable scrub intent: a claim's purge survives here until every store settles, so a
+  // failed purge can resume from the claim row instead of losing the source text.
+  sql.exec('CREATE TABLE IF NOT EXISTS purge_pending (claim_id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL)');
+  if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
+    sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
+  }
+  // Legacy barriers carried the raw topic text and no hash. Barriers go back to the model in
+  // every memory pass, so redact the legacy topic to the marker - forgotten text must never
+  // re-enter a prompt. Hash matching is unaffected (legacy rows have no hash to match).
+  sql.exec('UPDATE forget_barriers SET topic = ? WHERE topic_hash IS NULL AND topic != ?', FORGOTTEN, FORGOTTEN);
   sql.exec('CREATE TABLE IF NOT EXISTS memory_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created_at TEXT NOT NULL)');
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL, strength REAL NOT NULL,
@@ -43,7 +74,12 @@ export const claimStore = (sql: Sql) => {
       sql.exec('DELETE FROM claims WHERE id = ?', id);
     },
     barrier(topic: string, at: string): void {
-      sql.exec('INSERT INTO forget_barriers (topic, created_at) VALUES (?, ?)', topic, at);
+      // forget_topic is model-supplied free text, and barriers go back to the model in every
+      // memory pass: persisting the words would be the leak returning. Store the marker +
+      // fingerprint only (the fingerprint is what blocks re-admission), and dedupe on it.
+      const hash = textFingerprint(topic.trim());
+      const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
+      if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
     },
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,
     backup(reason: string, payload: unknown, at: string): void {
@@ -67,6 +103,123 @@ export const claimStore = (sql: Sql) => {
     forgetNode(id: number): void {
       sql.exec('DELETE FROM constellation_edges WHERE from_id = ? OR to_id = ?', id, id);
       sql.exec('DELETE FROM constellation_nodes WHERE id = ?', id);
+    },
+    // Forget is cleanup across every store, not one row: the claim leaves claims, its text
+    // leaves the search index, backups, and frozen legacy tables (redacted, preserving
+    // unrelated content), constellation nodes stop quoting it and stop referencing its id,
+    // and a barrier blocks re-admission. Fresh-state verification reports what survived.
+    purge(ids: readonly number[], at: string): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[] } {
+      const forgotten = ids.length
+        ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
+        : [];
+      const texts = [...new Set(forgotten.map((claim) => claim.text.trim()).filter(Boolean))];
+      const failed: string[] = [];
+      const attempt = (store: string, op: () => void) => {
+        try { op(); } catch { failed.push(store); }
+      };
+      const idList = forgotten.map((claim) => claim.id);
+      const notPurging = idList.length ? ` AND id NOT IN (${idList.map(() => '?').join(',')})` : '';
+      const existingHashes = new Set(sql.exec<{ topic_hash: string | null }>('SELECT topic_hash FROM forget_barriers').toArray().map((row) => row.topic_hash));
+      for (const claim of forgotten) {
+        // Durable intent FIRST, claim text LAST: a failed purge leaves the claim row (status
+        // 'purging') and this marker behind, so a retry resumes from the source instead of
+        // finding the text already gone. The claim leaves the active set immediately.
+        attempt('pending', () => sql.exec('INSERT OR IGNORE INTO purge_pending (claim_id, fingerprint, created_at) VALUES (?, ?, ?)', claim.id, textFingerprint(claim.text.trim()), at));
+        attempt('claims_mark', () => sql.exec("UPDATE claims SET status = 'purging' WHERE id = ?", claim.id));
+        // The barrier carries the fingerprint and the marker, NEVER the text: barriers go back
+        // to the model in every memory pass, so raw text here would be the leak returning.
+        attempt('barrier', () => {
+          const hash = textFingerprint(claim.text.trim());
+          if (!existingHashes.has(hash)) {
+            sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
+            existingHashes.add(hash);
+          }
+        });
+      }
+      const hasEpisodes = tableExists(sql, 'episodes');
+      const hasSpots = tableExists(sql, 'spots');
+      const hasRevisions = tableExists(sql, 'core_file_revisions');
+      // SQLite LIKE is case-insensitive but replace() is case-sensitive: a casing variant of
+      // the forgotten text would match the predicate yet survive the redaction. Fetch the
+      // matching rows and redact in JS with a case-insensitive literal replace instead.
+      for (const text of texts) {
+        const like = `%${likeEscape(text)}%`;
+        const ci = (value: string) => ciRedact(value, text, FORGOTTEN);
+        // Episodes and spots are append-only history: rows are redacted in place, never
+        // deleted, so the record's shape survives while the forgotten text does not.
+        if (hasEpisodes) attempt('episodes', () => {
+          for (const row of sql.exec<{ rid: number; text: string }>(`SELECT rowid AS rid, text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.text);
+            if (redacted !== row.text) sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', redacted, row.rid);
+          }
+        });
+        attempt('memory_backups', () => {
+          for (const row of sql.exec<{ rid: number; payload: string }>(`SELECT id AS rid, payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.payload);
+            if (redacted !== row.payload) sql.exec('UPDATE memory_backups SET payload = ? WHERE id = ?', redacted, row.rid);
+          }
+        });
+        if (hasSpots) attempt('legacy_spots', () => {
+          for (const row of sql.exec<{ rid: number; text: string; evidence: string }>(`SELECT id AS rid, text, evidence FROM spots WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, like, like).toArray()) {
+            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence);
+            if (redactedText !== row.text || redactedEvidence !== row.evidence) sql.exec('UPDATE spots SET text = ?, evidence = ? WHERE id = ?', redactedText, redactedEvidence, row.rid);
+          }
+        });
+        if (hasRevisions) attempt('legacy_core_files', () => {
+          for (const row of sql.exec<{ f: string; rev: number; content: string }>(`SELECT file AS f, revision AS rev, content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.content);
+            if (redacted !== row.content) sql.exec('UPDATE core_file_revisions SET content = ? WHERE file = ? AND revision = ?', redacted, row.f, row.rev);
+          }
+        });
+        // Other claims may quote the forgotten text in their own text or evidence.
+        attempt('surviving_claims', () => {
+          for (const row of sql.exec<{ rid: number; text: string; evidence: string }>(`SELECT id AS rid, text, evidence FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, like, like, ...idList).toArray()) {
+            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence);
+            if (redactedText !== row.text || redactedEvidence !== row.evidence) sql.exec('UPDATE claims SET text = ?, evidence = ? WHERE id = ?', redactedText, redactedEvidence, row.rid);
+          }
+        });
+        attempt('constellation_nodes', () => {
+          for (const row of sql.exec<{ id: number; label: string; summary: string }>(`SELECT id, label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray()) {
+            const redactedLabel = ci(row.label); const redactedSummary = ci(row.summary);
+            if (redactedLabel !== row.label || redactedSummary !== row.summary) sql.exec('UPDATE constellation_nodes SET label = ?, summary = ? WHERE id = ?', redactedLabel, redactedSummary, row.id);
+          }
+        });
+      }
+      attempt('constellation_refs', () => {
+        for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
+          const spots = JSON.parse(node.supporting_spots) as number[];
+          const kept = spots.filter((id) => !ids.includes(id));
+          if (kept.length !== spots.length) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
+        }
+      });
+      const remaining: Record<string, number> = {};
+      for (const text of texts) {
+        const like = `%${likeEscape(text)}%`;
+        const add = (store: string, n: number) => { if (n > 0) remaining[store] = (remaining[store] ?? 0) + n; };
+        // The purged claims themselves still hold their text until settle below - exclude them.
+        add('claims', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, like, like, ...idList).one().n);
+        if (hasEpisodes) add('episodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
+        add('memory_backups', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like, ).one().n);
+        if (hasSpots) add('legacy_spots', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
+        if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
+        add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
+      }
+      // No deletion here: settlement is a separate step (settle()) the caller runs only after
+      // the ASYNC KV stores (conversation, tool-output ledger) verify clean too. Deleting the
+      // source on SQL verification alone would orphan a KV failure: the UI says incomplete
+      // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
+      // and pending marker remain, so every retry path still works.
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed };
+    },
+
+    // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
+    // Idempotent: already-deleted rows are no-ops. Only 'purging' rows are removed, so a
+    // claim re-admitted after a failed attempt is never swept away by a late settle.
+    settle(ids: readonly number[]): void {
+      for (const id of ids) {
+        sql.exec("DELETE FROM claims WHERE id = ? AND status = 'purging'", id);
+        sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id);
+      }
     },
   };
 };
@@ -100,10 +253,10 @@ export const memoryPrompt = (store: ClaimStore): string => {
   ].join('\n');
 };
 
-const barrierPrompt = (store: ClaimStore): string => {
+export const barrierPrompt = (store: ClaimStore): string => {
   const barriers = store.barriers();
   return barriers.length === 0 ? 'The owner has asked Waldo to forget nothing so far.'
-    : `The owner asked Waldo to forget these. Never add a claim about them, even if older conversation mentions them:\n${barriers.map((barrier) => `<forgotten id="${barrier.id}">${fence(barrier.topic)}</forgotten>`).join('\n')}`;
+    : `The owner asked Waldo to forget these. Never add a claim about them, even if older conversation mentions them:\n${barriers.map((barrier) => `<forgotten id="${barrier.id}">${barrier.topic === FORGOTTEN ? 'a removed item' : fence(barrier.topic)}</forgotten>`).join('\n')}`;
 };
 
 const CLAIM_RULES = [
@@ -161,21 +314,35 @@ export const nightlyInput = (store: ClaimStore, day: string): string =>
 
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed'): string => {
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void): string => {
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
   const known = new Set(store.claims().map((claim) => claim.id));
+  // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
+  const forgettable = new Set([...known, ...store.claims('purging').map((claim) => claim.id)]);
   const nodes = new Set(store.nodes().map((node) => node.id));
   const topic = ops.forget_topic?.trim();
   if (topic) store.barrier(topic, at);
-  const held = ops.add.filter((claim) => claim.touches_forgotten);
+  const barrierHashes = new Set(store.barriers().map((barrier) => barrier.topic_hash).filter(Boolean));
+  const held = ops.add.filter((claim) => claim.touches_forgotten || barrierHashes.has(textFingerprint(claim.text.trim())));
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
   for (const claim of admitted) store.add({ kind: claim.kind, text: claim.text.trim(), source: claim.source === 'inferred' ? 'inferred' : 'stated', evidence: claim.evidence.trim() }, at);
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id))) store.setStatus(id, 'dismissed');
-  for (const id of ops.forget_claims.filter((id) => known.has(id))) store.forget(id);
+  const forgetIds = ops.forget_claims.filter((id) => forgettable.has(id));
+  const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
+  if (purge && purge.texts.length > 0) {
+    if (onPurged === undefined) {
+      // No KV consumer: SQL verification is the whole settlement, so settle now. A caller
+      // WITH a KV store settles itself once its redaction verifies (see telegram-turn).
+      if (purge.ready) store.settle(forgetIds);
+    } else {
+      onPurged(purge.texts, purge.ready ? forgetIds : []);
+    }
+  }
   for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);
-  return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}`;
+  const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
+  return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [

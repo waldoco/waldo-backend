@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, applyPromotion, claimStore, exchangeInput, memoryPrompt, nightlyInput, profile } from '../src/memory/claims';
+import { applyClaimOps, applyPromotion, claimStore, exchangeInput, memoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 
 let sequence = 0;
@@ -28,7 +28,10 @@ describe('claims', () => {
       applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT);
       expect(store.claims()).toEqual([]);
       expect(store.claims('dismissed').map((claim) => claim.id)).toEqual([gym!.id]);
-      expect(store.barriers().map((barrier) => barrier.topic)).toEqual(['lunch habits']);
+      // No barrier keeps raw words - the model-supplied topic label would ride every model
+      // prompt too. Marker + exact-match fingerprint is all that remains of either row.
+      expect(store.barriers().map((barrier) => barrier.topic)).toEqual([FORGOTTEN, FORGOTTEN]);
+      expect(store.barriers().map((barrier) => barrier.topic_hash)).toEqual([textFingerprint('lunch habits'), textFingerprint('Skips lunch on meeting-heavy days')]);
     });
   });
 
@@ -53,7 +56,10 @@ describe('claims', () => {
         { kind: 'fact', text: 'Lives in Bengaluru', source: 'stated', evidence: '"I live in Bengaluru"', touches_forgotten: false },
       ] }), AT)).toContain('+1 held1');
       expect(store.claims().map((claim) => claim.text)).toEqual(['Lives in Bengaluru']);
-      expect(nightlyInput(store, 'owner: hi')).toContain('<forgotten id="1">the owner\'s ex</forgotten>');
+      // The barrier prompt carries the marker only: the forgotten words never return to the model.
+      const input = nightlyInput(store, 'owner: hi');
+      expect(input).toContain('<forgotten id="1">a removed item</forgotten>');
+      expect(input).not.toContain("owner's ex");
     });
   });
 

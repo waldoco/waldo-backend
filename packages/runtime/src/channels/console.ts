@@ -116,8 +116,9 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'telegram.unlink': 'Telegram unlinked. Waldo will not message it again until you link an account.',
   'timezone.set': 'Time zone saved. Cards and reminders follow it from now on.',
   'spot.confirm': 'Confirmed. It now counts as something you said.',
-  'spot.forget': 'Forgotten and deleted. Waldo keeps a short do-not-relearn note so it does not pick it up again.',
-  'node.forget': 'Pattern forgotten, along with its links. Waldo keeps a short do-not-relearn note.',
+  'spot.forget': 'Removed from long-term memory and blocked from relearning. The current chat may still mention it until the conversation moves on.',
+  'spot.forget.incomplete': 'Forget is incomplete: part of memory storage could not be updated, so the text may still be in that store. The trace log records which store failed; try again or ask in chat.',
+  'node.forget': 'Pattern hidden from memory views and its name blocked from relearning. The spots behind it stay - forget those too to remove them. The current chat may still mention it until the conversation moves on.',
   'card.today': 'Card time set for today.',
   'card.pin': 'Card pinned. Waldo will use this time every day.',
   'card.unpin': 'Pin cleared. Waldo plans this card again.',
@@ -147,6 +148,7 @@ export type ConsoleView = Readonly<{
   barriers: number;
   spots: readonly Claim[];
   retiredSpots: readonly Claim[];
+  forgettingSpots: readonly Claim[];
   nodes: readonly ConstellationNode[];
   edges: readonly ConstellationEdge[];
   cards: readonly ConsoleCard[];
@@ -239,6 +241,11 @@ const constellation = (view: ConsoleView) => {
 };
 
 const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'In constellation' : 'Dismissed', spot.status === 'promoted' ? 'teal' : 'muted')}</div>`).join('')}</details>`;
+
+// A claim stuck mid-scrub (status 'purging') must stay visible with a working retry path -
+// the 'spot.forget.incomplete' notice tells the owner to try again, so the row and its Forget
+// action cannot just vanish. act() already selects purging rows for spot.forget.
+const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'red')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
   const when = card.time ?? 'Skipped today';
@@ -333,7 +340,7 @@ ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view))}
 ${section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Everything here reflects real state.', checklist(view))}
 ${section('connections', 'Connections', 'What Waldo can reach, and the switches to change it. Items marked not built yet are on the plan but not wired.', connectors(view))}
-${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + retired(view))}
+${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + forgetting(view) + retired(view))}
 ${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}
 ${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view))}
 ${section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view))}
