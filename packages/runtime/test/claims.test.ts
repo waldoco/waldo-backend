@@ -131,3 +131,79 @@ describe('memory migration', () => {
     });
   });
 });
+describe('claim admission gate (slice 4)', () => {
+  it('a stated claim grounded in the owner\'s own words keeps its condition and its source', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const owner = 'I take coffee black on weekdays but like a cappuccino on weekends';
+      const summary = applyClaimOps(store, ops({ add: [
+        { kind: 'preference', text: 'Coffee black on weekdays; cappuccino on weekends', source: 'stated', evidence: '"I take coffee black on weekdays but like a cappuccino on weekends"', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, { owner, waldo: 'Noted, black on weekdays it is.' });
+      expect(summary).toBe('+1 held0 seen0 confirmed0 dismissed0 forgot0');
+      expect(store.claims()[0]).toMatchObject({ source: 'stated', text: 'Coffee black on weekdays; cappuccino on weekends' });
+    });
+  });
+
+  it('evidence grounded only in Waldo\'s own reply is a self-report: held, audited, never written', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const summary = applyClaimOps(store, ops({ add: [
+        { kind: 'event', text: 'Waldo sent the email to Sam', source: 'stated', evidence: '"I sent the email to Sam"', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, { owner: 'did you send it?', waldo: 'Done - I sent the email to Sam just now' });
+      expect(summary).toContain('+0 held1(self-report)');
+      expect(store.claims()).toEqual([]);
+      const holds = store.holds();
+      expect(holds).toHaveLength(1);
+      expect(holds[0]).toMatchObject({ kind: 'event', reason: 'self-report', fingerprint: textFingerprint('Waldo sent the email to Sam') });
+      // The audit row never carries the held text: a hold can quote forgotten or waldo-side
+      // words, and persisting them would re-create the leak the hold prevented.
+      expect(Object.keys(holds[0]!).sort()).toEqual(['created_at', 'fingerprint', 'id', 'kind', 'reason']);
+    });
+  });
+
+  it('shared/forwarded content taints a stated claim down to inferred', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const summary = applyClaimOps(store, ops({ add: [
+        { kind: 'preference', text: 'Owner avoids carbs', source: 'stated', evidence: '"eat fat, not carbs, six days a week"', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, { owner: 'look at this', shared: 'Keto article: eat fat, not carbs, six days a week' });
+      expect(summary).toContain('downgraded1');
+      expect(store.claims()[0]).toMatchObject({ source: 'inferred', text: 'Owner avoids carbs' });
+    });
+  });
+
+  it('an ungrounded paraphrase is admitted as inferred, never blessed stated', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const summary = applyClaimOps(store, ops({ add: [
+        { kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: 'mentioned living in Mumbai', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, { owner: 'yeah I moved back to Mumbai last month' });
+      expect(summary).toContain('downgraded1');
+      expect(store.claims()[0]).toMatchObject({ source: 'inferred' });
+    });
+  });
+
+  it('a quoted span grounds even when the evidence carries a citation prefix', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const summary = applyClaimOps(store, ops({ add: [
+        { kind: 'fact', text: 'Moved back to Mumbai', source: 'stated', evidence: 'owner, tg-12: "moved back to Mumbai last month"', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, { owner: 'yeah I moved back to Mumbai last month' });
+      expect(summary).toBe('+1 held0 seen0 confirmed0 dismissed0 forgot0');
+      expect(store.claims()[0]).toMatchObject({ source: 'stated' });
+    });
+  });
+
+  it('a forgotten-topic hold is audited by fingerprint only, never by text', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.barrier('the Berlin trip', AT);
+      const summary = applyClaimOps(store, ops({ add: [
+        { kind: 'event', text: 'the Berlin trip', source: 'stated', evidence: '"Berlin was great"', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, { owner: 'Berlin was great' });
+      expect(summary).toContain('held1(forgotten)');
+      expect(store.claims()).toEqual([]);
+      expect(store.holds()[0]).toMatchObject({ reason: 'forgotten', fingerprint: textFingerprint('the Berlin trip') });
+    });
+  });
+});
