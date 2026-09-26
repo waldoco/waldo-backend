@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 export const OPENAI_GPT_5_NANO_MODEL = 'gpt-5-nano' as const;
 export const OPENAI_GPT_5_MINI_MODEL = 'gpt-5-mini' as const;
+export const WORKERS_AI_GEMMA_4_26B_MODEL = '@cf/google/gemma-4-26b-a4b-it' as const;
+export const ANTHROPIC_CLAUDE_SONNET_4_6_MODEL = 'claude-sonnet-4-6' as const;
+export const ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL = 'claude-haiku-4-5' as const;
 export const OPENAI_PROVIDER = 'openai' as const;
 
 // The only internal model IDs Waldo routes to. Workers AI keeps the documented @cf/<vendor>
@@ -9,9 +12,9 @@ export const OPENAI_PROVIDER = 'openai' as const;
 // superseded `gemma-4-27b` are intentionally absent — the PreLLMCall hook rejects any ID
 // outside this set.
 export const modelNameSchema = z.enum([
-  '@cf/google/gemma-4-26b-a4b-it',
-  'claude-sonnet-4-6',
-  'claude-haiku-4-5',
+  WORKERS_AI_GEMMA_4_26B_MODEL,
+  ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
+  ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
   OPENAI_GPT_5_NANO_MODEL,
   OPENAI_GPT_5_MINI_MODEL,
 ]);
@@ -36,9 +39,9 @@ export const providerSchema = z.enum(['workers_ai', 'anthropic', OPENAI_PROVIDER
 export type Provider = z.infer<typeof providerSchema>;
 
 export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
-  '@cf/google/gemma-4-26b-a4b-it': 'workers_ai',
-  'claude-sonnet-4-6': 'anthropic',
-  'claude-haiku-4-5': 'anthropic',
+  [WORKERS_AI_GEMMA_4_26B_MODEL]: 'workers_ai',
+  [ANTHROPIC_CLAUDE_SONNET_4_6_MODEL]: 'anthropic',
+  [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: 'anthropic',
   [OPENAI_GPT_5_NANO_MODEL]: OPENAI_PROVIDER,
   [OPENAI_GPT_5_MINI_MODEL]: OPENAI_PROVIDER,
 };

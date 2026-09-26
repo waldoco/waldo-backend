@@ -174,6 +174,12 @@ export const sanitiseInputSchema = z.strictObject({
   destination: sanitiseDestinationSchema,
   canary_tokens: canaryTokensSchema,
   source_taint: sourceTaintSchema,
+  // Owner-ratified 2026-09-26: dynamic per-model context budgets. Optional TIGHTEN-ONLY override
+  // for this destination policy's max_chars - the scribe applies min(policy.max_chars, override),
+  // so a caller can only shrink the budget below the pinned wire ceiling, never loosen it.
+  // Derived per request-model by deriveContextBudgetChars (model/context-budget.ts); callers
+  // without a model in scope omit it and keep the wire ceiling exactly as today.
+  max_chars_override: z.int().positive().optional(),
 });
 export type SanitiseInput = z.infer<typeof sanitiseInputSchema>;
 
