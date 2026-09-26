@@ -1420,6 +1420,17 @@ async function sanitiseRequest(
       }
       kept.push(part.payload);
     }
+    // Aggregate pass: per-turn provenance must not drop batch-level checks. Injection scoring
+    // aggregates rule matches across the full tool batch (two individually allowed fragments
+    // deny together) and internal_context carries a total character cap, so the combined kept
+    // turns are re-sanitised with the same external taint. Hard denies fail closed; an
+    // oversize batch sheds its oldest turns until it fits (each turn already passed alone).
+    while (kept.length > 0) {
+      const combined = await sanitiseValue(kept, 'internal_context', 'external');
+      if (combined.ok) break;
+      if (!softScribe(combined.error)) return { ...combined, scribeDestination: 'internal_context' };
+      kept.shift();
+    }
     toolTurnsPayload = kept.length > 0 ? kept : undefined;
   }
   const parsed = llmRequestSchema.safeParse({
