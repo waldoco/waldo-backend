@@ -172,7 +172,9 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           source_taint: null,
         };
       }
-      const status = proposal.reused === 'sending'
+      const status = proposal.delivered === false
+        ? 'approval saved, but the approval card could NOT be delivered to the owner right now (channel send was blocked) - do not tell the owner a card appeared; they can act on it from the console Waiting-on-you list'
+        : proposal.reused === 'sending'
         ? 'a send of this exact email is already in flight from the earlier card - no new card was sent; wait for that one to resolve'
         : proposal.reused === 'unknown'
           ? 'not proposed - a previous send of this exact email could not be confirmed and may already be in Sent; the owner got Check Sent / It did not go buttons to resolve it, so it never goes twice'

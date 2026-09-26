@@ -227,7 +227,7 @@ describe('approval desk - email_send rail', () => {
     digest: '', content_digest: 'cd1',
   };
   let idSeq = 0;
-  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string; failFirstCard?: boolean; googleError?: Error; pinUnavailable?: boolean }) => {
+  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string; failFirstCard?: boolean; googleError?: Error; pinUnavailable?: boolean; undelivered?: boolean }) => {
     const sent: { method: string; body: Record<string, unknown> }[] = [];
     const sentRaw: string[] = [];
     let now = 1_000_000;
@@ -242,6 +242,8 @@ describe('approval desk - email_send rail', () => {
     const desk = approvalDesk(state.storage.sql, {
       call: async (method, body) => {
         sent.push({ method, body: body as Record<string, unknown> });
+        // Egress gate blocks the send: the gate resolves undefined (no channel receipt).
+        if (opts.undelivered) return undefined;
         // A real ambiguous Telegram failure: the FIRST approval card send throws after Telegram
         // may have applied it server-side; later sends succeed.
         if (opts.failFirstCard && method === 'sendMessage' && String((body as { text?: string }).text).startsWith('Send this email?')) {
@@ -255,7 +257,7 @@ describe('approval desk - email_send rail', () => {
     const { sha256Hex } = await import('../src/connectors/google');
     const proposed = await desk.proposeSendEmail({ ...proposal, ...(opts.messageId !== undefined ? { message_id: opts.messageId } : {}), digest: await sha256Hex(proposal.raw) });
     if (!proposed.ok) throw new Error(`unexpected proposal failure: ${proposed.reason}`);
-    return { desk, id: proposed.id, sent, sentRaw, googleIntents, googleCorrelations, googlePins, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
+    return { desk, id: proposed.id, delivered: proposed.delivered, sent, sentRaw, googleIntents, googleCorrelations, googlePins, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
   it('proposes with Send it / Modify / Not now, sends the exact stored bytes on approve, never undoes, expires', async () => {
@@ -594,6 +596,67 @@ describe('approval desk - email_send rail', () => {
       // owner declaration past the TTL still closes the row
       expect((await desk.decide(id, 'x', 't')).toast).toBe('Marked as not sent');
       expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('failed');
+    });
+  });
+
+  it('a gated (blocked) card send keeps the row but never claims a visible card', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-undelivered'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, delivered, sql } = await setup(state, { undelivered: true });
+      // the FIRST proposal kept the row but reported no visible card (no channel receipt)
+      expect(delivered).toBe(false);
+      const again = await desk.proposeSendEmail({ ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) });
+      expect(again.ok).toBe(true);
+      if (again.ok) {
+        expect(again.reused).toBe('open');
+        expect(again.id).toBe(id);
+      }
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('open');
+    });
+  });
+
+  it('a stale sending claim is owner-visible and reconciliable without a duplicate send', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-stale-sending'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sql, sentRaw, tick } = await setup(state, {});
+      // simulate a crashed send: claimed with a stamped claim time, no provider call happened
+      sql.exec("UPDATE ledger SET status = 'sending', decided_at = ? WHERE id = ?", 1_000_000, id);
+      tick(6 * 60_000); // past the 5-minute claim lease
+      expect(desk.pending(1_000_000 + 6 * 60_000).some((item) => item.id === id && item.state === 'unknown')).toBe(true);
+      const recheck = await desk.decide(id, 'r', 't');
+      expect(recheck.toast).toBe('Not in Sent yet');
+      expect(recheck.buttons).toEqual([['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]]);
+      expect(sentRaw).toHaveLength(0); // reconciliation NEVER issues a provider send
+      expect((await desk.decide(id, 'x', 't')).toast).toBe('Marked as not sent');
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('failed');
+    });
+  });
+
+  it('a fresh sending claim (inside the lease) rejects r/x - a live send is not reconciled away', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-fresh-sending'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, tick } = await setup(state, {});
+      state.storage.sql.exec("UPDATE ledger SET status = 'sending', decided_at = ? WHERE id = ?", 1_000_000, id);
+      tick(60_000); // well inside the lease
+      expect(desk.pending(1_000_000 + 60_000).some((item) => item.id === id)).toBe(false);
+      expect((await desk.decide(id, 'r', 't')).toast).toBe('Already handled.');
+      expect((await desk.decide(id, 'x', 't')).toast).toBe('Already handled.');
+    });
+  });
+
+  it('ledger() never carries email body or Bcc into unrelated model context', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-ledger-privacy'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id } = await setup(state, {});
+      const text = desk.ledger([]);
+      expect(text).toContain('an email send approval (waiting on you)');
+      expect(text).not.toContain('Hello'); // subject
+      expect(text).not.toContain(proposal.body);
+      expect(text).not.toContain('a@x.test'); // recipient
+      await desk.decide(id, 's', 't');
+      const after = desk.ledger([]);
+      expect(after).not.toContain(proposal.body);
+      expect(after).not.toContain('a@x.test');
     });
   });
 

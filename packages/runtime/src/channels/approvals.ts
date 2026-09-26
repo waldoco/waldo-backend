@@ -9,6 +9,11 @@ type Undo = { op: 'cancel'; id: string } | { op: 'move'; id: string; start: stri
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; connection: string | null };
 
 export const UNDO_WINDOW_MS = 10 * 60_000;
+// A 'sending' claim older than this is crash-suspect (the DO restarted mid-send): the send
+// path's network calls are bounded far below this. Stale claims become owner-visible and
+// reconciliable (r/x) WITHOUT a duplicate provider send - a live claim within the lease is
+// untouched.
+export const SENDING_LEASE_MS = 5 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
 type Stored = ProposeCalendarChangeArgs & { seen_etag?: string };
@@ -39,7 +44,11 @@ export type EmailSendProposal = Readonly<{
 // mint nothing - an in-flight or unreconciled send of the same email must not get a second
 // proposal the owner could approve into a duplicate.
 export type ProposeSendEmailResult =
-  | Readonly<{ ok: true; id: string; reused: 'open' | 'sending' | 'unknown' | null }>
+  // delivered:false = the row exists and dedupe blocks duplicates, but the channel send was
+  // gated/dropped, so no visible card may be claimed (the console Waiting-on-you list can
+  // still act on it). A delivery claim requires a channel send receipt, never a resolved
+  // undefined from the egress gate.
+  | Readonly<{ ok: true; id: string; reused: 'open' | 'sending' | 'unknown' | null; delivered?: boolean }>
   // The COMPLETE card (message + recipients + subject + body) must fit one Telegram message:
   // a truncated preview would let "Send it" approve content the owner never saw. Typed and
   // content-free: only the limit and the actual length, never the body.
@@ -94,8 +103,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
   const setStatus = (id: string, status: string, undo: Undo | null = null) =>
     sql.exec('UPDATE ledger SET status = ?, undo_json = ?, decided_at = ? WHERE id = ?', status, undo ? JSON.stringify(undo) : null, deps.now(), id);
-  const say = (text: string, buttons?: readonly [string, string][]) =>
-    deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) });
+  // delivered = the channel returned a send receipt. The egress gate resolves undefined on a
+  // blocked send (rebound channel, unlinked owner); that is NOT a visible card.
+  const say = async (text: string, buttons?: readonly [string, string][]): Promise<boolean> =>
+    (await deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) })) !== undefined;
 
   const describeBrowser = (p: BrowserSubmitProposal) => {
     const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
@@ -149,8 +160,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const decide = async (id: string, action: 'a' | 's' | 'e' | 'u' | 'r' | 'x', trace: string): Promise<ApprovalDecision> => {
     const started = deps.now();
     const entry = row(id);
-    const expected = action === 'u' ? 'done' : action === 'r' || action === 'x' ? 'unknown' : 'open';
-    if (!entry || entry.status !== expected) return { toast: 'Already handled.', message: 'Already handled.' };
+    if (!entry) return { toast: 'Already handled.', message: 'Already handled.' };
+    // r/x accept 'unknown' rows and STALE 'sending' claims (a DO restart can strand one
+    // forever; reconciliation never issues a provider send, so this cannot duplicate).
+    const staleClaim = entry.status === 'sending' && entry.decided_at !== null && deps.now() - entry.decided_at > SENDING_LEASE_MS;
+    const expected = action === 'u' ? 'done' : action === 'r' || action === 'x' ? (entry.status === 'unknown' || staleClaim ? entry.status : 'unknown') : 'open';
+    if (entry.status !== expected) return { toast: 'Already handled.', message: 'Already handled.' };
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
@@ -218,7 +233,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           // Atomic claim BEFORE any provider I/O: exactly one concurrent approval crosses
           // open -> sending; the other reads the flipped row and is Already handled. The
           // UPDATE is synchronous in the DO, so two interleaved approvals cannot both pass.
-          const claimed = sql.exec("UPDATE ledger SET status = 'sending' WHERE id = ? AND status = 'open'", id).rowsWritten === 1;
+          const claimed = sql.exec("UPDATE ledger SET status = 'sending', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id).rowsWritten === 1;
           if (!claimed) {
             out = { toast: 'Already handled.', message: 'Already handled.' };
           } else {
@@ -352,8 +367,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
-      return { ok: true, id, reused: null };
+      const delivered = await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      return { ok: true, id, reused: null, delivered };
     },
     async propose(p) {
       const id = `p${deps.newId()}`;
@@ -372,7 +387,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
       // Unreconciled sends are owner-visible pending work: they block same-content re-entry,
       // so hiding them would leave a legitimate email blocked with no way to see why.
-      const unknown = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'unknown' ORDER BY created_at").toArray();
+      const unknown = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND (status = 'unknown' OR (status = 'sending' AND decided_at IS NOT NULL AND decided_at <= ?)) ORDER BY created_at", now - SENDING_LEASE_MS).toArray();
       const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
       return [
         ...open.map((r) => ({ id: r.id, summary: r.summary, state: 'open' as const, undoable: false })),
@@ -392,13 +407,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
+      // ledger() feeds UNRELATED later model context: email summaries carry the full body and
+      // Bcc, so they render as bounded metadata here. The complete immutable payload stays on
+      // the row and on the owner-facing approval card/console (payload_json, pending()).
+      const brief = (r: LedgerRow) => (r.kind === 'email_send' ? 'an email send approval' : r.summary);
       const lines = [
         'Open',
-        ...(open.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
+        ...(open.length ? open.map((r) => `- ${brief(r)} (waiting on you)`) : ['- nothing waiting on you']),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',
-        ...(done.length ? done.map((r) => `- ${r.status}: ${r.summary}`) : ['- nothing yet']),
+        ...(done.length ? done.map((r) => `- ${r.status}: ${brief(r)}`) : ['- nothing yet']),
       ];
       return lines.join('\n');
     },
