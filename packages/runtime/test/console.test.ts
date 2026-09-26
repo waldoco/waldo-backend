@@ -111,6 +111,17 @@ describe('owner console', () => {
     expect(html).toContain('value="approval.approve"');
     expect(html).toContain('value="approval.skip"');
     expect(html).toContain(`value="p1"`);
+    const unconfirmed = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p7', summary: 'Send Hello to a@x.test', state: 'unknown' as const, undoable: false }] });
+    // An unreconciled send must never render as a green Done: explicit Send unconfirmed chip,
+    // recovery guidance, and both resolution actions - a false success receipt is the bug.
+    expect(unconfirmed).toContain('Send unconfirmed');
+    expect(unconfirmed).toContain('Check Sent');
+    expect(unconfirmed).toContain('I checked Sent - not there');
+    expect(unconfirmed).toContain('value="approval.reconcile"');
+    expect(unconfirmed).toContain('value="approval.notsent"');
+    const unknownRow = unconfirmed.split('\n').filter((l) => l.includes('p7') || l.includes('Send Hello')).join('\n');
+    expect(unknownRow).not.toContain('>Done<');
+
     const withUndo = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p9', summary: 'Moved Gym', state: 'done' as const, undoable: true }] });
     expect(withUndo).toContain('value="approval.undo"');
     const noneLeft = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [] });

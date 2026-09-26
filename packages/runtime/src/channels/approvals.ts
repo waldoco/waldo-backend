@@ -134,7 +134,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   };
 
   // The two deliberate ways out of an unreconciled send, offered on every 'unknown' surface.
-  const unresolvedButtons = (id: string): readonly [string, string][] => [['Check Sent', `r:${id}`], ['It did not go', `x:${id}`]];
+  // The declaration button says what the owner actually did: they looked in Sent themselves.
+  // A negative Sent SEARCH stays inconclusive; only the owner's own check releases the block.
+  const unresolvedButtons = (id: string): readonly [string, string][] => [['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]];
 
   const decide = async (id: string, action: 'a' | 's' | 'e' | 'u' | 'r' | 'x', trace: string): Promise<ApprovalDecision> => {
     const started = deps.now();
@@ -179,14 +181,18 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             setStatus(id, 'failed');
             out = { toast: 'Marked as not sent', message: `You confirmed it did not go, so I closed this one: ${describeEmail(ep)}. Ask me to send a fresh one whenever you are ready.` };
           } else {
-            const client = await deps.google();
+            // Mail feature is explicit: a bare deps.google() selects a CALENDAR-scoped
+            // connection in the owner-DO wiring, so a mail-only grant could never reconcile
+            // and a multi-account owner could search the wrong mailbox. The send intent id
+            // routes feature=mail; it gates idempotency only on sendRaw, so reuse here is safe.
+            const client = await deps.google(`email_send:${id}`);
             if (client === null) {
               out = { toast: 'Google is not connected', message: 'I could not check Sent because Google is not connected.', buttons: unresolvedButtons(id) };
             } else {
               const found = await client.findSentByMessageId(ep.message_id).then((hit) => hit, () => null);
               if (found === true) {
                 setStatus(id, 'done');
-                out = { toast: 'Sent', message: `Gmail confirms it went out exactly once: ${describeEmail(ep)}. Nothing more to do.` };
+                out = { toast: 'Found in Sent', message: `I found it in your Sent folder: ${describeEmail(ep)}. Marking it sent - I will not send it again.` };
               } else {
                 out = { toast: 'Not in Sent yet', message: `I still cannot see it in Sent. Gmail's index can lag a few minutes - check Sent yourself, then either ask me to check again or mark it as not sent.`, buttons: unresolvedButtons(id) };
               }
@@ -237,7 +243,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
                 }
                 if (landed === true) {
                   setStatus(id, 'done');
-                  out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` };
+                  // A matching Sent item proves the provider accepted it, not exactly-once
+                  // final delivery (Google cautions a send 200 is no such guarantee); the
+                  // receipt says what was actually proven and that we will not send again.
+                  out = { toast: 'Found in Sent', message: `I found it in your Sent folder: ${describeEmail(ep)}. Marking it sent - I will not send it again.` };
                 } else {
                   setStatus(id, 'unknown');
                   out = { toast: 'Send unconfirmed', message: `I could not confirm whether that email went out (${cause}). It may be in your Sent folder - check there before asking me to resend, so it never goes twice.`, buttons: unresolvedButtons(id) };

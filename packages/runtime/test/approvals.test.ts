@@ -311,8 +311,9 @@ describe('approval desk - email_send rail', () => {
     await runInDurableObject(stub, async (_i, state) => {
       const ok = await setup(state, { sendError: new Error('network timeout'), found: true });
       const out1 = await ok.desk.decide(ok.id, 'a', 't');
-      expect(out1.toast).toBe('Sent');
-      expect(out1.message).toContain('exactly once');
+      expect(out1.toast).toBe('Found in Sent');
+      expect(out1.message).toContain('in your Sent folder');
+      expect(out1.message).not.toContain('exactly once'); // a Sent hit proves a matching item, never exactly-once delivery
       expect(ok.sentRaw).toHaveLength(1);
 
       // A single negative Sent lookup proves NOTHING (index lag / ambiguous network): the
@@ -545,17 +546,19 @@ describe('approval desk - email_send rail', () => {
   it('an unreconciled send is owner-visible in pending() and resolves via Check Sent or It did not go', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-unknown-resolve'));
     await runInDurableObject(stub, async (_i, state) => {
-      const { desk, id } = await setup(state, { sendError: new Error('network timeout'), found: false });
+      const { desk, id, googleIntents } = await setup(state, { sendError: new Error('network timeout'), found: false });
       const out = await desk.decide(id, 'a', 't');
       expect(out.toast).toBe('Send unconfirmed');
-      expect(out.buttons).toEqual([['Check Sent', `r:${id}`], ['It did not go', `x:${id}`]]);
+      expect(out.buttons).toEqual([['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]]);
       // owner-visible: unknown rows are listed as pending work
       expect(desk.pending(1_000_000).some((item) => item.id === id && item.state === 'unknown')).toBe(true);
-      // deliberate reconciliation: not found -> stays unknown, never claims non-delivery
+      // deliberate reconciliation goes through the MAIL connection: the intent id is non-empty
+      // so the owner-DO wiring selects feature=mail, never a calendar-scoped account
       const miss = await desk.decide(id, 'r', 't');
       expect(miss.toast).toBe('Not in Sent yet');
-      expect(miss.buttons).toEqual([['Check Sent', `r:${id}`], ['It did not go', `x:${id}`]]);
+      expect(miss.buttons).toEqual([['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]]);
       expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('unknown');
+      expect(googleIntents[googleIntents.length - 1]).toBe(`email_send:${id}`);
       // owner declares it did not go -> closed, and a fresh same-content proposal mints a new card
       const closed = await desk.decide(id, 'x', 't');
       expect(closed.toast).toBe('Marked as not sent');
@@ -588,8 +591,9 @@ describe('approval desk - email_send rail', () => {
       expect((await desk.decide(proposed.id, 'r', 't')).toast).toBe('Not in Sent yet');
       found = true; // Gmail's index catches up
       const resolved = await desk.decide(proposed.id, 'r', 't');
-      expect(resolved.toast).toBe('Sent');
-      expect(resolved.message).toContain('exactly once');
+      expect(resolved.toast).toBe('Found in Sent');
+      expect(resolved.message).toContain('in your Sent folder');
+      expect(resolved.message).not.toContain('exactly once');
       expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', proposed.id).toArray()[0]!.status).toBe('done');
     });
   });

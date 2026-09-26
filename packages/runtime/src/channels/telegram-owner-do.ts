@@ -227,8 +227,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (done) this.ctx.storage.kv.put('telegram_unlinked', true);
         return back(done ? 'telegram.unlink' : 'invalid');
       }
-      if (action && ['approval.approve', 'approval.skip', 'approval.undo'].includes(action.action)) {
-        const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u' } as const;
+      if (action && ['approval.approve', 'approval.skip', 'approval.undo', 'approval.reconcile', 'approval.notsent'].includes(action.action)) {
+        const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u', 'approval.reconcile': 'r', 'approval.notsent': 'x' } as const;
         const out = await desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval');
         return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(out.message.slice(0, 200))}` } });
       }
