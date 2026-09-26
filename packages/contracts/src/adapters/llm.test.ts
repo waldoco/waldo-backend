@@ -84,9 +84,11 @@ describe('llmRequest', () => {
     );
   });
 
-  it('rejects max_tokens outside 1..8192', () => {
+  it('rejects max_tokens outside 1..128000 (wire ceiling, S5)', () => {
     expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 0 }).success).toBe(false);
-    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 8_193 }).success).toBe(false);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 8_192 }).success).toBe(true);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 32_768 }).success).toBe(true);
+    expect(llmRequestSchema.safeParse({ ...baseRequest, max_tokens: 128_001 }).success).toBe(false);
   });
 
   it('rejects temperature outside 0..2', () => {
