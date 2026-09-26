@@ -237,7 +237,7 @@ describe('get_tasks', () => {
   });
 
   it('handler is registered, returns tasks, and notes the in-progress mapping honestly', async () => {
-    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ id: 'p', reused: null }), record: () => {} };
     const access: GoogleAccess = { client: async () => googleClient(app, { refresh_token: 'rt' }, fakeFetch([])) };
     const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks');
     expect(handler).toBeDefined();
@@ -249,7 +249,7 @@ describe('get_tasks', () => {
   });
 
   it('handler returns the typed connect intent when Google is not connected', async () => {
-    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ id: 'p', reused: null }), record: () => {} };
     const access: GoogleAccess = { client: async () => null };
     const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks')!;
     const result = await handler.handle({ status: 'todo', limit: 20 });
