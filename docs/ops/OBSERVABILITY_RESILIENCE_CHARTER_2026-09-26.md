@@ -45,11 +45,15 @@ Labels: [observed-waldo] = verified in code at fc1c7098 or live traces on 2026-0
       metadata and a worker log line. Top priority: unblocks all future RCA.
   R2. Retry-after-aware bounded retry: parse Retry-After on 429 in both adapters; exponential
       backoff with jitter (1s/2s/4s, cap ~8s); max 2-3 same-step retries; transient classes
-      only (429/5xx/network) - never auth/invalid/oversize (OpenHands lesson).
+      only (429 rate_limit_exceeded/5xx/network) - never auth/invalid/oversize (OpenHands
+      lesson). Owner ruling: `insufficient_quota` / billing states are a DISTINCT NON-RETRYABLE
+      class - retrying a billing wall is waste; fail fast, surface to developer telemetry, and
+      the user gets generic copy per constraint 1.
   R3. At least one cross-provider fallback step in the user_message route so a single-provider
       rate limit cannot wall the bot.
-  R4. Degraded floor on rate-limit exhaustion: generic user copy per constraint 1, plus an
-      optional DO-alarm queued retry so the turn survives the rate-limit window.
+  R4. Degraded floor on rate-limit exhaustion: generic user copy per constraint 1. Owner
+      ruling: the DO-alarm queued retry is DEFERRED until exactly-once reply idempotency is
+      proven - a queued retry that can double-send is worse than a clean failure.
 
 ### 2. Tool execution failures
 - Today [observed-waldo]: tool hops log ok:false with a closed typed-code union; tool_* spans
@@ -61,8 +65,10 @@ Labels: [observed-waldo] = verified in code at fc1c7098 or live traces on 2026-0
   orchestrating span as a sibling of the generation that requested it; names stay
   low-cardinality, model never in names (langfuse.com/docs/observability/best-practices).
 - Fixes [recommendation]:
-  R8. Bounded `error_class` on every failed tool span (class + first 120 chars through the
-      egress-guard redactor) so tool failures are classifiable with capture off (S7a).
+  R8. Bounded `error_class` on every failed tool span so tool failures are classifiable with
+      capture off (S7a). Owner ruling (18:08 UTC+5:30 correction): with capture off, export ONLY
+      typed classes and allowlisted static messages - never arbitrary slices of tool error text,
+      redacted or not.
   R9. Per-tool failure classification + tool-failure budget in the loop (queued MED lands here).
   R10. Registry-miss guard: a tool absent from the schema map fails the deploy-time check, not
        the runtime call.
@@ -126,9 +132,10 @@ Labels: [observed-waldo] = verified in code at fc1c7098 or live traces on 2026-0
 - Fixes [recommendation]:
   R19. Deploy step always passes WALDO_ENVIRONMENT + WALDO_RELEASE=<sha>; CI fails the deploy
        job without them.
-  R20. Boot-time config validation: required secrets/vars checked at worker init, missing ones
-       produce one loud typed log line + a fail-closed health signal, not scattered runtime
-       errors.
+  R20. Boot-time config validation: REQUIRED secrets/vars checked at worker init fail CLOSED -
+       one loud typed log line + a fail-closed health signal, not scattered runtime errors.
+       Missing OPTIONAL integrations must never block healthy replies (owner ruling): the
+       integration degrades to a typed unavailable code and the turn proceeds.
 
 ### 9. Auth / integration failures (Google connect, token expiry)
 - Today [observed-waldo]: connect-offer / oauth_exchange / google_token_migrated hops are on the
@@ -148,11 +155,13 @@ Labels: [observed-waldo] = verified in code at fc1c7098 or live traces on 2026-0
        back off - observability about observability, rate-limited.
 
 ## Build order proposal (owner's sequencing call decides)
-1. R1 + R8 + R19/R20 (see everything, pin every trace to a commit) - smallest, highest RCA value.
-2. R2 + R3 + R4 (the rate-limit wall itself; R4 copy per constraint 1).
-3. R11 + R12 (ingress durability, closes verified #167/#168 holds).
-4. R6 + R16 + R17 + R22 (control-plane and pipeline self-coverage).
-5. R9/R10 + R14/R15 + R18 + R21 (class-by-class hardening).
+Owner-adopted order with gates (2026-09-26 18:08 IST):
+1. #226 + R1/R6/R19 - and PROVE every attempt and terminal outcome lands in CF logs + Langfuse,
+   including the export-failure path, before moving on.
+2. R2 + R3 (insufficient_quota non-retryable per R2's owner ruling).
+3. R4 generic graceful reply only; alarm-queued retry stays deferred per R4.
+4. R11 + R12 ingress durability (closes verified #167/#168 holds).
+5. Remaining hardening: R8 (as edited), R9/R10, R14/R15, R16, R17, R18, R20 (as edited), R21, R22.
 
 ## Sources
 - LangGraph fault tolerance + RetryPolicy: https://docs.langchain.com/oss/python/langgraph/fault-tolerance , https://reference.langchain.com/python/langgraph/types/RetryPolicy
