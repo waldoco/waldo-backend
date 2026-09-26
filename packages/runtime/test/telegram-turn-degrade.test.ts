@@ -39,4 +39,16 @@ describe('poisoned history degrade', () => {
       responder.respond({ updateId: 3, chatId: 7, text: POISON } as never, (_name, run) => run()),
     ).rejects.toThrow('scribe_sanitise');
   });
+
+  it('records the typed preflight reason for capture-off sinks', async () => {
+    const entries: Array<{ hop: string; code?: string }> = [];
+    const responder = createTelegramResponder('test-key', undefined, undefined, (entry) => {
+      entries.push(entry);
+    });
+    await expect(
+      responder.respond({ updateId: 4, chatId: 7, text: 'check 19c8a1b2f3d4e5f6' } as never, (_name, run) => run()),
+    ).rejects.toThrow('scribe_sanitise');
+    const llm = entries.find((entry) => entry.hop === 'llm_reply');
+    expect(llm?.code).toBe('forbidden:scribe_sanitise:internal_context:canary_leak');
+  });
 });
