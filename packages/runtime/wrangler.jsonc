@@ -2,11 +2,12 @@
   "name": "waldo-runtime",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-16",
-  // Invocation logs include full request URLs. Keep structured console hop logs, but do not
-  // persist automatic URLs while connect tickets live in /c/<ticket> and OAuth callbacks
-  // carry code/state in the query. Enable traces only after issue #205's privacy gate.
+  // Custom log metadata can include request URLs too. Strip OAuth query strings at the
+  // platform boundary; keep automatic traces off until /c/<ticket> path links are retired
+  // and the redaction is proven with a synthetic canary (issue #205).
   "observability": {
     "enabled": true,
+    "redact_query_string": true,
     "logs": { "enabled": true, "invocation_logs": false },
     "traces": { "enabled": false }
   },
@@ -37,6 +38,7 @@
       "name": "waldo-runtime-staging",
       "observability": {
         "enabled": true,
+        "redact_query_string": true,
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },
