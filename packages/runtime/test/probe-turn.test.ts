@@ -80,3 +80,34 @@ describe('newProbeCapture', () => {
     expect(second).toEqual({ ok: true, result: { message_id: 0 } });
   });
 });
+
+describe('probe capture confinement (Codex #230/#231 holds)', () => {
+  it('PROBE_STRIPPED_TOOLS covers every live provider handler (drift guard)', async () => {
+    const { PROBE_STRIPPED_TOOLS } = await import('../src/channels/probe-turn');
+    const { googleHandlers } = await import('../src/tools/live/google');
+    const { browsePageHandler, browseActHandler } = await import('../src/tools/live/browser');
+    const { callMcpToolHandler } = await import('../src/tools/live/mcp');
+    const google = googleHandlers(
+      { client: async () => { throw new Error('no client in test'); }, connectUrl: async () => null } as never,
+      { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined } as never,
+      { timezone: 'UTC', now: () => new Date(0) },
+    );
+    const liveNames = [
+      ...google.map((h) => h.name),
+      browsePageHandler('k', 'p', 'm').name,
+      browseActHandler('k', 'p', 'm', () => undefined, async () => 'p').name,
+      callMcpToolHandler(undefined).name,
+      'connect_service',
+    ];
+    for (const name of liveNames) {
+      expect(PROBE_STRIPPED_TOOLS, `live handler ${name} must be stripped from capture-mode probes`).toContain(name);
+    }
+  });
+
+  it('the strip set never includes read-only owner-context tools (probes stay useful)', async () => {
+    const { PROBE_STRIPPED_TOOLS } = await import('../src/channels/probe-turn');
+    for (const keep of ['get_context', 'web_search', 'read_memory', 'search_episodes']) {
+      expect(PROBE_STRIPPED_TOOLS).not.toContain(keep);
+    }
+  });
+});

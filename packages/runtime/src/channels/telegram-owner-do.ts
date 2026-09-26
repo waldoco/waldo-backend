@@ -36,7 +36,7 @@ import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
-import { newProbeCapture, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
+import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { callMcpToolHandler } from '../tools/live/mcp';
 import { createTelegramFileDownloader } from './telegram-media';
@@ -63,6 +63,7 @@ type OwnerRuntime = Readonly<{
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
   probeCapture: ProbeCaptureSlot;
+  probeGuard: { suppressMemory: boolean; stripLiveTools: boolean };
   desk: ApprovalDesk;
   ledger(): string;
   updates: UpdateBook;
@@ -335,14 +336,25 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const live = payload.live === undefined ? false : payload.live;
     if (typeof live !== 'boolean') return new Response('bad request', { status: 400 });
+    // Codex #230 hold: the endpoint had no rate limit. 20 probes/minute per owner DO, counted in
+    // DO storage so the limit survives worker eviction and applies after token verification.
+    const window = Math.floor(Date.now() / PROBE_RATE_WINDOW_MS);
+    const rl = (await this.ctx.storage.get<{ window: number; count: number }>('probe_rl')) ?? { window, count: 0 };
+    const count = rl.window === window ? rl.count + 1 : 1;
+    if (count > PROBE_RATE_LIMIT_PER_MINUTE) return new Response('probe rate limit exceeded', { status: 429 });
+    await this.ctx.storage.put('probe_rl', { window, count });
     const result = await this.serial(async () => {
-      const { listener, owner, probeCapture, ready } = this.setup('telegram');
+      const { listener, owner, probeCapture, probeGuard, ready } = this.setup('telegram');
       await ready;
       if (!listener) return { trace: null as string | null, outcome: 'unlinked' as const, captured: null };
       const seq = ((await this.ctx.storage.get<number>('probe_seq')) ?? 0) - 1;
       await this.ctx.storage.put('probe_seq', seq);
       const capture = live ? null : newProbeCapture();
       probeCapture.current = capture;
+      // Capture mode confines the synthetic owner turn: no memory persistence, no live provider
+      // tools. live:true is the explicit receipt-probe opt-in and keeps the full surface.
+      probeGuard.suppressMemory = !live;
+      probeGuard.stripLiveTools = !live;
       try {
         const outcome = await listener.handle({
           updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, text: text.trim(),
@@ -350,6 +362,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return { trace: `tg-${seq}` as string | null, outcome, captured: capture === null ? null : capture.calls };
       } finally {
         probeCapture.current = null;
+        probeGuard.suppressMemory = false;
+        probeGuard.stripLiveTools = false;
       }
     });
     return Response.json(result);
@@ -504,6 +518,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Staging probe capture: while a capture-mode /probe-turn runs inside the serial queue,
     // outbound Telegram calls land in the probe response instead of the Bot API. Inert otherwise.
     const probeCapture: ProbeCaptureSlot = { current: null };
+    // Codex #230/#231 holds: confinement slot for capture-mode probe turns (memory persistence
+    // and live provider tools stay unreachable from synthetic owner-authority text).
+    const probeGuard = { suppressMemory: false, stripLiveTools: false };
     const routedCall: typeof call = (method, request) =>
       probeCapture.current === null ? call(method, request) : probeCapture.current.record(method, request);
     const api = createTelegramOwnerApi(routedCall);
@@ -870,7 +887,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
+    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
       view: async (session, notice) => {
         const linked = await google.state();
         const now = Date.now();

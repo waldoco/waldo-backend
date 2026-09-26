@@ -27,6 +27,35 @@ export const newProbeCapture = (): ProbeCapture => {
 };
 const MAX_PROBE_TEXT = 4_000;
 
+// Codex #230/#231 holds: a probe turn presents synthetic text with owner authority, so capture
+// mode must confine what that authority can touch. The probe guard is a slot on the owner
+// runtime: while one serialized capture-mode probe runs it suppresses memory persistence and
+// strips the live provider handlers from the turn. live:true clears both (explicit receipt
+// probes only). Real turns never touch the slot.
+export type ProbeGuard = { suppressMemory: boolean; stripLiveTools: boolean };
+
+// Live provider surfaces a synthetic probe must never reach in capture mode: Google reads and
+// writes (private data), the browser tools (arbitrary external effects), the MCP bridge, and
+// the connect flow. Kept: get_context, web_search (synthetic queries, our own API), memory and
+// episode reads of the staging DO, reminders/loops.
+export const PROBE_STRIPPED_TOOLS: readonly string[] = [
+  'query_calendar',
+  'get_communication',
+  'get_tasks',
+  'propose_calendar_change',
+  'draft_email',
+  'send_email',
+  'browse_page',
+  'browse_act',
+  'call_mcp_tool',
+  'connect_service',
+];
+
+// DO-side rate limit for the probe endpoint (Codex hold: the route had none). Per-minute
+// window, 20 probes per window per owner DO - generous for suites, tight against a leaked token.
+export const PROBE_RATE_LIMIT_PER_MINUTE = 20;
+export const PROBE_RATE_WINDOW_MS = 60_000;
+
 export type ProbeTurnEnv = Readonly<{
   WALDO_ENVIRONMENT?: string;
   WALDO_PROBE_TOKEN?: string;
