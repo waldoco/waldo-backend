@@ -41,12 +41,16 @@ export const verifiedMailProfile = async (client: GoogleClient, expected: string
 };
 const resolveRecipients = (to: readonly string[], selfEmail: string): string[] =>
   to.map((recipient) => recipient === 'self' ? selfEmail : recipient);
-const senderFailure = (reason: 'not_connected' | 'scope_missing' | 'ambiguous' | 'unavailable' | 'profile_mismatch', send: boolean) =>
+const mailAuthFailed = (reason: ConnectIntent['reason']): ToolResult<never> => ({
+  ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT,
+  connect: { status: 'auth_required', service: 'google', reason, feature: 'mail' },
+});
+const senderFailure = (reason: 'not_connected' | 'scope_missing' | 'ambiguous' | 'unavailable' | 'profile_mismatch'): ToolResult<never> =>
   reason === 'not_connected' || reason === 'scope_missing'
-    ? { ...authFailed(reason, 'mail'), source_taint: send ? null : 'external' as const }
+    ? mailAuthFailed(reason)
     : { ok: false as const, code: 'transient' as const, error: reason === 'ambiguous'
       ? 'More than one mail account is connected. Choose one account before trying again.'
-      : 'The connected mail account could not be verified right now. Nothing was drafted or proposed.', source_taint: send ? null : 'external' as const };
+      : 'The connected mail account could not be verified right now. Nothing was drafted or proposed.' };
 
 // S4 (CONNECT_FLOW_DESIGN 4.4): auth failures are a typed intent, never a URL in text. The
 // responder sees `connect` and calls the channel's offerConnect seam; the model only ever
@@ -153,8 +157,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
       const self = args.to?.includes('self') ?? false;
       const sender = await google.mailSender?.(self, false, ctx?.trace);
-      if (!sender) return authFailed('not_connected', 'mail');
-      if (!sender.ok) return senderFailure(sender.reason, false);
+      if (!sender) return mailAuthFailed('not_connected');
+      if (!sender.ok) return senderFailure(sender.reason);
       const to = resolveRecipients(args.to, sender.email);
       const result = await withGoogle({ client: async () => sender.client }, 'mail', async (client) => {
         const draft = await client.draft({
@@ -164,7 +168,9 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         desk.record('email_draft', `Drafted "${args.subject}" to ${to.join(', ')}`, draft);
         return { ...draft, sent: false };
       }, ctx?.trace);
-      return result.ok ? { ...result, source_taint: null } : result;
+      if (result.ok) return { ...result, source_taint: null };
+      const { source_taint: _readStamp, ...failure } = result;
+      return failure;
     },
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
@@ -182,8 +188,8 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // handlers): no client -> typed connect intent, no half-proposed card.
       const self = args.to?.includes('self') ?? false;
       const sender = await google.mailSender?.(self, true, ctx.trace);
-      if (!sender) return { ...authFailed('not_connected', 'mail'), source_taint: null };
-      if (!sender.ok) return senderFailure(sender.reason, true);
+      if (!sender) return mailAuthFailed('not_connected');
+      if (!sender.ok) return senderFailure(sender.reason);
       const to = resolveRecipients(args.to, sender.email);
       // Idempotency is scoped to the logical send: owner + turn + content. A retry of the same
       // logical send (same turn, same content) keeps one proposal and one Message-ID, so the
@@ -214,7 +220,6 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           ok: false,
           code: 'oversize',
           error: `That email is too long to show the owner in full for approval (${proposal.actual} characters, limit ${proposal.limit}). Ask the owner for a shorter email or offer to save it as a Gmail draft instead, then send from Gmail.`,
-          source_taint: null,
         };
       }
       const status = proposal.delivered === false

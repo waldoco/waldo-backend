@@ -31,6 +31,8 @@ import {
 import type { HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
 import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
+import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
+import { GoogleError } from '../src/connectors/google';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
 
@@ -57,6 +59,58 @@ function dispatcherContext(trigger: TriggerType): ToolDispatcherContext {
 }
 
 describe('ToolDispatcher', () => {
+  it('preserves typed self-mail failures through dispatch without an invalid handler result', async () => {
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p', reused: null }), record: () => undefined };
+    const args = { to: ['self'], subject: 'Probe', body_markdown: 'Probe' };
+    for (const reason of ['not_connected', 'scope_missing', 'ambiguous', 'unavailable', 'profile_mismatch'] as const) {
+      const google: GoogleAccess = { client: async () => null, mailSender: async () => ({ ok: false, reason }) };
+      for (const name of ['draft_email', 'send_email'] as const) {
+        const handler = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === name)!;
+        const result = await dispatchTool({ id: `mail-${name}-${reason}`, name, args }, dispatcherContext('user_message'), { handlers: [handler] });
+        expect(result).toMatchObject({ ok: false, tool: name, reason: 'tool_result_error', code: reason === 'not_connected' || reason === 'scope_missing' ? 'auth_failed' : 'transient' });
+        expect(result).not.toHaveProperty('source_taint');
+        if (reason === 'not_connected' || reason === 'scope_missing') expect(result).toMatchObject({ connect: { feature: 'mail', reason } });
+      }
+    }
+  });
+
+  it('accepts the self-mail mutation receipts with a null success stamp', async () => {
+    const google: GoogleAccess = {
+      client: async () => null,
+      mailSender: async () => ({
+        ok: true, connection: 'conn-1', email: 'owner@example.com',
+        client: { draft: async () => ({ draft_id: 'd-1' }) } as never,
+      }),
+    };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p-1', reused: null }), record: () => undefined };
+    const handlers = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() });
+    for (const name of ['draft_email', 'send_email'] as const) {
+      const result = await dispatchTool(
+        { id: `mail-ok-${name}`, name, args: { to: ['self'], subject: 'Probe', body_markdown: 'Probe' } },
+        dispatcherContext('user_message'), { handlers: handlers.filter((tool) => tool.name === name) },
+      );
+      expect(result).toMatchObject({ ok: true, tool: name, source_taint: null });
+    }
+  });
+
+  it('preserves draft provider failure and send preview failure through dispatch', async () => {
+    const google: GoogleAccess = {
+      client: async () => null,
+      mailSender: async () => ({
+        ok: true, connection: 'conn-1', email: 'owner@example.com',
+        client: { draft: async () => { throw new GoogleError(403, 'insufficient scopes'); } } as never,
+      }),
+    };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: false as const, reason: 'preview_oversize' as const, limit: 4096, actual: 5000 }), record: () => undefined };
+    const handlers = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() });
+    const args = { to: ['self'], subject: 'Probe', body_markdown: 'Probe' };
+    const draft = await dispatchTool({ id: 'mail-draft-provider-failure', name: 'draft_email', args }, dispatcherContext('user_message'), { handlers });
+    expect(draft).toMatchObject({ ok: false, reason: 'tool_result_error', code: 'auth_failed', connect: { reason: 'scope_missing', feature: 'mail' } });
+    expect(draft).not.toHaveProperty('source_taint');
+    const send = await dispatchTool({ id: 'mail-send-preview-failure', name: 'send_email', args }, dispatcherContext('user_message'), { handlers });
+    expect(send).toMatchObject({ ok: false, reason: 'tool_result_error', code: 'oversize' });
+    expect(send).not.toHaveProperty('source_taint');
+  });
   it('accepts externally tainted browser results through the dispatch boundary', async () => {
     const fetcher = (async (input: RequestInfo | URL) => {
       const url = String(input);
