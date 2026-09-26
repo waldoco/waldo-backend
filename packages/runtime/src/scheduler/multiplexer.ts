@@ -250,14 +250,25 @@ export class Scheduler {
   // exactly once (settleRun no-ops on an already-settled row, so the no-executor path can
   // settle before rethrowing). Crash-injection rethrows leave the row 'running' on purpose.
   private recordRunStart(entry: ScheduleEntry, now: number): string {
-    const runId = `${entry.id}:${entry.occurrence_at}:${entry.attempts}`;
+    // The id's run ordinal comes from the append-only history, not schedule.attempts:
+    // policy state resets (schedule upsert, quarantine reap) but history never does, so
+    // a retry after a reset can never collide with a crashed run's row.
+    const prior = this.sql
+      .exec<{ n: number }>(
+        'SELECT count(*) AS n FROM schedule_runs WHERE schedule_id = ? AND id LIKE ?',
+        entry.id,
+        `${entry.id}:${entry.occurrence_at}:%`,
+      )
+      .one().n;
+    const ordinal = prior + 1;
+    const runId = `${entry.id}:${entry.occurrence_at}:${ordinal}`;
     this.sql.exec(
       `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES (?, ?, ?, ?, ?)`,
       runId,
       entry.id,
       entry.kind,
       now,
-      entry.attempts,
+      ordinal,
     );
     return runId;
   }
