@@ -31,3 +31,25 @@ begin
     where ticket_hash = p_ticket_hash and status = 'clicked';
   return found;
 end $$;
+
+-- Crossed-clock guard (owner re-review): a CLICKED ticket is an OAuth flow in flight. When the
+-- owner reopens the link after the resolve window, report expired truthfully, but do NOT rewrite
+-- the row - only an unclicked (issued) ticket transitions to expired. The pending callback then
+-- still settles through connect_session_complete, authorized by the single-use state nonce.
+create or replace function waldo.connect_session_resolve(p_ticket_hash text, p_at bigint, p_sig text) returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_row waldo.connect_sessions; v_do text;
+begin
+  if not waldo.router_signed('connsess.resolve.' || p_ticket_hash, p_at, p_sig) then raise exception 'unsigned router call' using errcode = '42501'; end if;
+  select * into v_row from waldo.connect_sessions where ticket_hash = p_ticket_hash;
+  if not found then return null; end if;
+  if v_row.status in ('completed', 'revoked') then return jsonb_build_object('status', v_row.status); end if;
+  if v_row.status = 'expired' or v_row.expires_at <= now() then
+    if v_row.status = 'issued' then update waldo.connect_sessions set status = 'expired' where id = v_row.id; end if;
+    return jsonb_build_object('status', 'expired');
+  end if;
+  select do_name into v_do from waldo.owners where id = v_row.owner_id and state = 'active';
+  if v_do is null then return jsonb_build_object('status', 'revoked'); end if;
+  update waldo.connect_sessions set status = 'clicked', clicked_at = coalesce(clicked_at, now()) where id = v_row.id;
+  return jsonb_build_object('status', 'ok', 'do_name', v_do, 'provider', v_row.provider, 'session', v_row.id);
+end $$;

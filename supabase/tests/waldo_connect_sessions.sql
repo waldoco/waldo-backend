@@ -1,6 +1,6 @@
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(16);
+select plan(19);
 delete from vault.secrets where name = 'waldo_router_hmac';
 select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
@@ -42,6 +42,16 @@ select waldo.connect_session_issue('do-a', 'google', 'console', 'hash5', pg_temp
 select waldo.connect_session_resolve('hash5', pg_temp.at(), pg_temp.sig('connsess.resolve.hash5'));
 update waldo.connect_sessions set expires_at = now() - interval '1 second' where ticket_hash = 'hash5';
 select is(waldo.connect_session_complete('hash5', pg_temp.at(), pg_temp.sig('connsess.complete.hash5')), true, 'a clicked ticket completes even after its resolve window closes');
+
+-- crossed-clock (owner re-review): click near expiry, REOPEN the link after the window, then the
+-- in-flight callback lands. The second resolve reads expired to the owner but leaves the row
+-- clicked, so the pending flow still settles.
+select waldo.connect_session_issue('do-a', 'google', 'console', 'hash6', pg_temp.at(), pg_temp.sig('connsess.issue.do-a.google.console.hash6'));
+select waldo.connect_session_resolve('hash6', pg_temp.at(), pg_temp.sig('connsess.resolve.hash6'));
+update waldo.connect_sessions set expires_at = now() - interval '1 second' where ticket_hash = 'hash6';
+select is(waldo.connect_session_resolve('hash6', pg_temp.at(), pg_temp.sig('connsess.resolve.hash6'))->>'status', 'expired', 'a reopened clicked ticket past its window reads expired to the owner');
+select is((select status from waldo.connect_sessions where ticket_hash = 'hash6'), 'clicked', 'the crossed-clock resolve leaves the row clicked, not expired');
+select is(waldo.connect_session_complete('hash6', pg_temp.at(), pg_temp.sig('connsess.complete.hash6')), true, 'the in-flight flow still completes after the crossed-clock resolve');
 
 select * from finish();
 rollback;
