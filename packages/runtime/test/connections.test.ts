@@ -11,6 +11,17 @@ const at = 1_790_000_000;
 
 describe('google proxy', () => {
   const proxyOf = (fetcher: ReturnType<typeof vi.fn>) => googleProxy(env, fetcher as unknown as typeof fetch, () => at * 1000)!;
+
+  it('routes profileEmail through the signed, mail-scoped proxy with no arguments', async () => {
+    const calls: string[] = [];
+    const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+      calls.push(String(init.body));
+      return Response.json({ data: 'owner@example.com' });
+    });
+    expect(await proxyOf(fetcher).client('do-a', 'c-1').profileEmail()).toBe('owner@example.com');
+    expect(JSON.parse(calls[0]!)).toMatchObject({ op: 'call', method: 'profileEmail', connection: 'c-1', args: [] });
+    expect(JSON.parse(calls[0]!)).not.toHaveProperty('intent');
+  });
   const sent = (fetcher: ReturnType<typeof vi.fn>, call = 0) => fetcher.mock.calls[call] as [string, RequestInit];
 
   it('is off without Supabase', () => {
@@ -102,7 +113,7 @@ describe('google health', () => {
 describe('incremental Google access', () => {
   it('a mail tool on a calendar-only grant reports a scope_missing intent for mail, not a retry and not a URL', async () => {
     const client = { draft: async () => { throw new GoogleError(403, 'google 403: insufficient scopes'); } } as unknown as GoogleClient;
-    const google = { client: async () => client, mailSender: async () => ({ client, connection: 'conn-1', email: 'owner@example.com' }) };
+    const google = { client: async () => client, mailSender: async () => ({ ok: true as const, client, connection: 'conn-1', email: 'owner@example.com' }) };
     const draft = googleHandlers(google, { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p', reused: null }), record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
     const result = await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never);
     expect(result).toMatchObject({

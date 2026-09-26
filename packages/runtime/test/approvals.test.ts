@@ -296,7 +296,7 @@ describe('approval desk - email_send rail', () => {
         to: ['owner@example.com'], content_digest: 'self-pin',
       });
       if (!proposed.ok) throw new Error('proposal unexpectedly failed');
-      expect(run.sent.at(-1)?.body.text).toContain('From: owner@example.com\nTo: owner@example.com');
+      expect(run.sent.at(-1)?.body.text).toContain('Sending account: owner@example.com\nTo: owner@example.com');
       const out = await run.desk.decide(proposed.id, 'a', 't');
       expect(out.toast).toBe('Account unavailable');
       expect(run.googlePins.at(-1)).toBe('conn-revoked');
@@ -485,13 +485,21 @@ describe('approval desk - email_send rail', () => {
       if (!retry.ok) throw new Error('unexpected proposal failure');
       expect(retry.reused).toBe('unknown');
       expect(retry.id).toBe(id);
+      // A row minted before mailbox-identity digests existed must still block a reconnect
+      // from proposing the same bytes with the new digest format.
+      const upgraded = await desk.proposeSendEmail({
+        ...proposal, from: 'owner@example.com', sender_connection: 'new-connection',
+        content_digest: 'new-mailbox-aware-digest', message_id: '<turn3@waldo-send>',
+        digest: await sha256Hex(proposal.raw),
+      });
+      expect(upgraded).toMatchObject({ ok: true, reused: 'unknown', id });
       const rows = state.storage.sql.exec("SELECT id FROM ledger WHERE kind = 'email_send'").toArray();
       expect(rows).toHaveLength(1);
       // No new approval card (no Send it buttons the owner could approve into a duplicate) -
       // but the owner IS told how to resolve the unreconciled send: one resolution message
       // carrying Check Sent / It did not go buttons, per the recovery-gap fix.
       const after = sent.filter((m) => m.method === 'sendMessage');
-      expect(after).toHaveLength(cardsBefore + 1);
+      expect(after).toHaveLength(cardsBefore + 2);
       const resolution = after[after.length - 1]!.body as { text: string; reply_markup?: { inline_keyboard: { text: string; callback_data: string }[][] } };
       expect(resolution.text).toContain('still unconfirmed');
       expect(resolution.reply_markup?.inline_keyboard[0]?.map((b) => b.callback_data)).toEqual([`r:${id}`, `x:${id}`]);

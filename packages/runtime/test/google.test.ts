@@ -72,6 +72,20 @@ describe('googleServes (verified scopes or reconsent)', () => {
 });
 
 describe('google client', () => {
+  it('reads the authoritative Gmail mailbox profile and rejects missing addresses', async () => {
+    const seen: string[] = [];
+    const fetchProfile = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+      return Response.json({ emailAddress: 'Owner@Example.com' });
+    }) as typeof fetch;
+    expect(await googleClient(app, { refresh_token: 'rt' }, fetchProfile).profileEmail()).toBe('owner@example.com');
+    expect(seen.at(-1)).toBe('https://gmail.googleapis.com/gmail/v1/users/me/profile');
+    const missing = (async (input: RequestInfo | URL) => String(input).includes('oauth2.googleapis.com')
+      ? Response.json({ access_token: 'at' }) : Response.json({})) as typeof fetch;
+    await expect(googleClient(app, { refresh_token: 'rt' }, missing).profileEmail()).rejects.toThrow('no valid email');
+  });
   it('exchanges the code with its PKCE verifier and the exact redirect URI', async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     const tokenFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

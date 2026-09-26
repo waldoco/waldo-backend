@@ -33,7 +33,7 @@ import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
 import { googleClientPath } from '../connectors/google-account-path';
-import { connectServiceHandler, googleHandlers, selectMailSender } from '../tools/live/google';
+import { connectServiceHandler, googleHandlers, selectMailSender, verifiedMailProfile } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
@@ -558,17 +558,30 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       async client(feature: GoogleFeature = 'calendar', sendIntent?: string, correlation?: string) {
         return (await google.clientWithConnection(feature, sendIntent, correlation))?.client ?? null;
       },
-      async mailSender(self: boolean, correlation?: string): Promise<Readonly<{ client: GoogleClient; connection: string; email: string }> | null> {
+      async mailSender(self: boolean, forSend: boolean, correlation?: string) {
         await google.migrate();
         const failing = await health();
-        const selected = selectMailSender(await accounts(), failing, self);
+        const all = await accounts();
+        const selected = selectMailSender(all, failing, self);
         // A self alias cannot silently choose among multiple connected mailboxes. This check
         // runs before a Vault/client/provider call.
-        if (!selected) return null;
-        const pinned = await google.clientWithConnection('mail', undefined, correlation, selected.id);
-        return pinned && pinned.connection === selected.id
-          ? { ...pinned, email: selected.email }
-          : null;
+        if (!selected) {
+          if (all.length === 0) return { ok: false as const, reason: 'not_connected' as const };
+          if (!all.some((account) => googleServes(account.scopes, 'mail'))) return { ok: false as const, reason: 'scope_missing' as const };
+          if (self && all.filter((account) => selectMailSender([account], failing, true) !== null).length > 1) return { ok: false as const, reason: 'ambiguous' as const };
+          return { ok: false as const, reason: 'unavailable' as const };
+        }
+        // A send proposal must pin the final Vault connection. A local legacy token can
+        // acquire a new connection id when adopted, so do that BEFORE storing the card.
+        const pinned = await google.clientWithConnection('mail', forSend ? 'email_prepare' : undefined, correlation, selected.id);
+        if (!pinned) return { ok: false as const, reason: 'unavailable' as const };
+        try {
+          const email = await verifiedMailProfile(pinned.client, selected.email);
+          if (!email) return { ok: false as const, reason: 'profile_mismatch' as const };
+          return { ok: true as const, ...pinned, email };
+        } catch {
+          return { ok: false as const, reason: 'unavailable' as const };
+        }
       },
       // The first healthy account whose grant covers the feature serves it. A pinned
       // connection restricts selection to that exact account (send reconciliation must check
@@ -582,7 +595,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // never satisfied the proxy scope gate, so it must route to reconsent, not to a call
         // that 403s after selection.
         let fit = all.filter((account) => googleServes(account.scopes, feature));
-        if (pinnedId !== undefined) fit = fit.filter((account) => account.id === pinnedId);
+        if (pinnedId !== undefined) fit = fit.filter((account) => account.id === pinnedId && !failing[account.id]);
         let account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
         // Send-path custody gate: sends ride the proxy idempotency claim/store and Vault

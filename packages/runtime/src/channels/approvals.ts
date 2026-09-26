@@ -118,7 +118,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // cut: proposeSendEmail fails with a typed oversize instead of sending a partial preview.
   const TELEGRAM_MESSAGE_LIMIT = 4096;
   const describeEmail = (p: EmailSendProposal) => {
-    const lines = [...(p.from ? [`From: ${p.from}`] : []), `To: ${p.to.join(', ')}`];
+    const lines = [...(p.from ? [`Sending account: ${p.from}`] : []), `To: ${p.to.join(', ')}`];
     if (p.cc?.length) lines.push(`Cc: ${p.cc.join(', ')}`);
     if (p.bcc?.length) lines.push(`Bcc: ${p.bcc.join(', ')}`);
     lines.push(`Subject: ${p.subject}`, '');
@@ -358,7 +358,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         try { stored = JSON.parse(r.payload_json) as EmailSendProposal; } catch { continue; }
         if (stored === null || stored.message_id === undefined) continue;
         const sameLogicalSend = stored.message_id === payload.message_id;
-        const sameUnresolvedContent = r.status === 'unknown' && stored.content_digest !== undefined && stored.content_digest === payload.content_digest;
+        const sameUnresolvedContent = r.status === 'unknown' && (
+          (stored.content_digest !== undefined && stored.content_digest === payload.content_digest) ||
+          // Pre-mailbox-identity unknown rows have no verified sender. Block the same content
+          // conservatively across a reconnect instead of risking a duplicate provider send.
+          (!stored.from && JSON.stringify([stored.to, stored.cc ?? [], stored.bcc ?? [], stored.subject, stored.body, stored.thread_id ?? null]) ===
+            JSON.stringify([payload.to, payload.cc ?? [], payload.bcc ?? [], payload.subject, payload.body, payload.thread_id ?? null]))
+        );
         if (!sameLogicalSend && !sameUnresolvedContent) continue;
         if (r.status === 'open') {
           await say(`Send this email? ${r.summary}`, [['Send it', `a:${r.id}`], ['Modify', `e:${r.id}`], ['Not now', `s:${r.id}`]]);

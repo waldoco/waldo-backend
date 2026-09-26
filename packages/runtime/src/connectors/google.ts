@@ -148,6 +148,7 @@ export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'd
 type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
 
 export type GoogleClient = Readonly<{
+  profileEmail(): Promise<string>;
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<GooglePage<CalendarItem>>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
@@ -185,6 +186,13 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   const send = async (url: string, method: string, body: unknown, etag?: string) =>
     toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
   return {
+    async profileEmail() {
+      const profile = await call('https://gmail.googleapis.com/gmail/v1/users/me/profile') as { emailAddress?: unknown };
+      if (typeof profile.emailAddress !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.emailAddress)) {
+        throw new Error('Gmail profile has no valid email address');
+      }
+      return profile.emailAddress.toLowerCase();
+    },
     event: async (id) => toItem(await call(`${EVENTS}/${encodeURIComponent(id)}`) as unknown as GoogleEvent),
     createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
     moveEvent: (id, start, end, etag) => send(`${EVENTS}/${encodeURIComponent(id)}`, 'PATCH', { start: { dateTime: start }, end: { dateTime: end } }, etag),

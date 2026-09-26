@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { googleHandlers } from '../src/tools/live/google';
 import type { EmailSendProposal } from '../src/channels/approvals';
-import { selectMailSender } from '../src/tools/live/google';
+import { selectMailSender, verifiedMailProfile } from '../src/tools/live/google';
 import { draftEmailArgsSchema, sendEmailArgsSchema } from '@waldo/contracts';
 
 // Live failure tg-904957562: the model substituted draft_email for send_email, then claimed a
@@ -49,12 +49,19 @@ describe('email receipt truth', () => {
     expect(draftEmailArgsSchema.safeParse({ to: ['self'], subject: 'S', body_markdown: 'B' }).success).toBe(true);
     expect(sendEmailArgsSchema.safeParse({ to: ['[REDACTED_EMAIL]'], subject: 'S', body_markdown: 'B' }).success).toBe(false);
     expect(draftEmailArgsSchema.safeParse({ to: ['[REDACTED_EMAIL]'], subject: 'S', body_markdown: 'B' }).success).toBe(false);
+    expect(sendEmailArgsSchema.safeParse({ to: ['self'], subject: 'Safe\r\nBcc: x@evil.test', body_markdown: 'B' }).success).toBe(false);
+  });
+
+  it('requires a Gmail profile address matching the selected mailbox before an alias is resolved', async () => {
+    expect(await verifiedMailProfile({ profileEmail: async () => 'owner@example.com' } as never, 'Owner@Example.com')).toBe('owner@example.com');
+    expect(await verifiedMailProfile({ profileEmail: async () => 'other@example.com' } as never, 'owner@example.com')).toBeNull();
   });
 
   it('resolves self in a draft but never creates an approval card', async () => {
     const { desk, proposals } = deskWith();
     const drafted: unknown[] = [];
     const google = { client: async () => null, mailSender: async () => ({
+      ok: true as const,
       client: { draft: async (input: unknown) => { drafted.push(input); return { id: 'd-1' }; } } as never,
       connection: 'conn-1', email: 'owner@example.com',
     }) };
@@ -70,7 +77,7 @@ describe('email receipt truth', () => {
     let providerCalls = 0;
     const google = {
       client: async () => { providerCalls++; return null; },
-      mailSender: async () => null,
+      mailSender: async () => ({ ok: false as const, reason: 'ambiguous' as const }),
     };
     const tools = googleHandlers(google, desk, clock);
     const args = { to: ['self'], subject: 'S', body_markdown: 'B' } as never;
@@ -80,10 +87,22 @@ describe('email receipt truth', () => {
     expect(proposals).toEqual([]);
   });
 
+  it('returns a typed mail connect or reconsent intent for zero or missing-scope accounts', async () => {
+    const { desk, proposals } = deskWith();
+    let reason: 'not_connected' | 'scope_missing' = 'not_connected';
+    const google = { client: async () => null, mailSender: async () => ({ ok: false as const, reason }) };
+    const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
+    const args = { to: ['self'], subject: 'S', body_markdown: 'B' } as never;
+    expect(await send.handle(args, ctxAt(1000))).toMatchObject({ ok: false, code: 'auth_failed', connect: { feature: 'mail', reason: 'not_connected' } });
+    reason = 'scope_missing';
+    expect(await send.handle(args, ctxAt(1000))).toMatchObject({ ok: false, code: 'auth_failed', connect: { feature: 'mail', reason: 'scope_missing' } });
+    expect(proposals).toEqual([]);
+  });
+
   it('shows resolved To and pinned From in a send proposal; sender changes the dedupe key', async () => {
     const { desk, proposals } = deskWith();
     let sender = { email: 'owner@example.com', connection: 'conn-1' };
-    const google = { client: async () => null, mailSender: async () => ({ client: {} as never, ...sender }) };
+    const google = { client: async () => null, mailSender: async () => ({ ok: true as const, client: {} as never, ...sender }) };
     const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
     const args = { to: ['self'], subject: 'S', body_markdown: 'B' } as never;
     expect((await send.handle(args, ctxAt(1000))).ok).toBe(true);
@@ -93,9 +112,24 @@ describe('email receipt truth', () => {
     expect(proposals[1]).toMatchObject({ from: 'other@example.com', sender_connection: 'conn-2', to: ['other@example.com'] });
     expect(proposals[0]!.content_digest).not.toBe(proposals[1]!.content_digest);
   });
+
+  it('keeps the content digest stable across a reconnect to the same verified mailbox', async () => {
+    const { desk, proposals } = deskWith();
+    let connection = 'old-connection';
+    const google = { client: async () => null, mailSender: async () => ({ ok: true as const, client: {} as never, connection, email: 'owner@example.com' }) };
+    const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
+    const args = { to: ['self'], subject: 'S', body_markdown: 'B' } as never;
+    await send.handle(args, ctxAt(1000));
+    connection = 'new-connection';
+    await send.handle(args, ctxAt(1000));
+    expect(proposals).toHaveLength(2);
+    expect(proposals[0]!.content_digest).toBe(proposals[1]!.content_digest);
+    expect(proposals[0]!.message_id).toBe(proposals[1]!.message_id);
+    expect(proposals[0]!.sender_connection).not.toBe(proposals[1]!.sender_connection);
+  });
   it('send_email returns the desk-issued proposal_id and the exact content the card binds', async () => {
     const { desk, proposals } = deskWith();
-    const google = { client: async () => ({}) as never, mailSender: async () => ({ client: {} as never, connection: 'conn-1', email: 'owner@example.com' }) };
+    const google = { client: async () => ({}) as never, mailSender: async () => ({ ok: true as const, client: {} as never, connection: 'conn-1', email: 'owner@example.com' }) };
     const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
     const result = await send.handle({ to: ['priya@example.com'], subject: 'Deck', body_markdown: 'Ready Thursday.' } as never, ctxAt(1000));
     expect(result.ok).toBe(true);
@@ -113,7 +147,7 @@ describe('email receipt truth', () => {
 
   it('draft_email can never mint an approval receipt: no proposal_id, no queue entry', async () => {
     const { desk, proposals } = deskWith();
-    const google = { client: async () => ({ draft: async () => ({ id: 'd-1' }) }) as never, mailSender: async () => ({ client: { draft: async () => ({ id: 'd-1' }) } as never, connection: 'conn-1', email: 'owner@example.com' }) };
+    const google = { client: async () => ({ draft: async () => ({ id: 'd-1' }) }) as never, mailSender: async () => ({ ok: true as const, client: { draft: async () => ({ id: 'd-1' }) } as never, connection: 'conn-1', email: 'owner@example.com' }) };
     const draft = googleHandlers(google, desk, clock).find((tool) => tool.name === 'draft_email')!;
     const result = await draft.handle({ to: ['priya@example.com'], subject: 'Deck', body_markdown: 'Ready Thursday.' } as never);
     expect(result.ok).toBe(true);
@@ -124,7 +158,7 @@ describe('email receipt truth', () => {
 
   it('scopes the Message-ID to the logical send: same-turn retries keep it, a new request or changed content gets a fresh one', async () => {
     const { desk, proposals } = deskWith();
-    const google = { client: async () => ({}) as never, mailSender: async () => ({ client: {} as never, connection: 'conn-1', email: 'owner@example.com' }) };
+    const google = { client: async () => ({}) as never, mailSender: async () => ({ ok: true as const, client: {} as never, connection: 'conn-1', email: 'owner@example.com' }) };
     const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
     await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never, ctxAt(1000));
     await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never, ctxAt(1000)); // same turn, same content: a retry

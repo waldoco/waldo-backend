@@ -13,7 +13,10 @@ export type GoogleAccess = Readonly<{
   // Langfuse rows join to this turn. Content never enters it.
   client(feature?: GoogleFeature, sendIntent?: string, correlation?: string): Promise<GoogleClient | null>;
   // Selects before a draft or approval is created. self requires exactly one eligible account.
-  mailSender?(self: boolean, correlation?: string): Promise<Readonly<{ client: GoogleClient; connection: string; email: string }> | null>;
+  mailSender?(self: boolean, forSend: boolean, correlation?: string): Promise<
+    | Readonly<{ ok: true; client: GoogleClient; connection: string; email: string }>
+    | Readonly<{ ok: false; reason: 'not_connected' | 'scope_missing' | 'ambiguous' | 'unavailable' | 'profile_mismatch' }>
+  >;
 }>;
 
 export type EffectDesk = Readonly<{
@@ -32,8 +35,18 @@ export const selectMailSender = <T extends Readonly<{ id: string; email: string;
     !failing[account.id] && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(account.email));
   return eligible.length === 0 || (self && eligible.length !== 1) ? null : eligible[0]!;
 };
+export const verifiedMailProfile = async (client: GoogleClient, expected: string): Promise<string | null> => {
+  const address = await client.profileEmail();
+  return address === expected.toLowerCase() ? address : null;
+};
 const resolveRecipients = (to: readonly string[], selfEmail: string): string[] =>
   to.map((recipient) => recipient === 'self' ? selfEmail : recipient);
+const senderFailure = (reason: 'not_connected' | 'scope_missing' | 'ambiguous' | 'unavailable' | 'profile_mismatch', send: boolean) =>
+  reason === 'not_connected' || reason === 'scope_missing'
+    ? { ...authFailed(reason, 'mail'), source_taint: send ? null : 'external' as const }
+    : { ok: false as const, code: 'transient' as const, error: reason === 'ambiguous'
+      ? 'More than one mail account is connected. Choose one account before trying again.'
+      : 'The connected mail account could not be verified right now. Nothing was drafted or proposed.', source_taint: send ? null : 'external' as const };
 
 // S4 (CONNECT_FLOW_DESIGN 4.4): auth failures are a typed intent, never a URL in text. The
 // responder sees `connect` and calls the channel's offerConnect seam; the model only ever
@@ -138,9 +151,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
     // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
     handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
-      const self = args.to.includes('self');
-      const sender = await google.mailSender?.(self, ctx?.trace);
-      if (!sender) return self ? { ok: false, code: 'transient', error: 'I could not identify exactly one connected mail account for self. Choose one account before trying again.', source_taint: null } : authFailed('not_connected', 'mail');
+      const self = args.to?.includes('self') ?? false;
+      const sender = await google.mailSender?.(self, false, ctx?.trace);
+      if (!sender) return authFailed('not_connected', 'mail');
+      if (!sender.ok) return senderFailure(sender.reason, false);
       const to = resolveRecipients(args.to, sender.email);
       const result = await withGoogle({ client: async () => sender.client }, 'mail', async (client) => {
         const draft = await client.draft({
@@ -155,7 +169,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. Use recipient 'self' only when the owner explicitly means their own connected Gmail address; never use it for a redacted or unknown address. The owner gets Send it / Modify / Not now buttons showing From, exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
+    description: "Send an email from the owner's Gmail. Use recipient 'self' only when the owner explicitly means their own connected Gmail address; never use it for a redacted or unknown address. The owner gets Send it / Modify / Not now buttons showing the sending account, exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -166,11 +180,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: SendEmailArgs, ctx: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
-      const self = args.to.includes('self');
-      const sender = await google.mailSender?.(self, ctx.trace);
-      if (!sender) return self
-        ? { ok: false, code: 'transient', error: 'I could not identify exactly one connected mail account for self. Choose one account before trying again.', source_taint: null }
-        : { ...authFailed('not_connected', 'mail'), source_taint: null };
+      const self = args.to?.includes('self') ?? false;
+      const sender = await google.mailSender?.(self, true, ctx.trace);
+      if (!sender) return { ...authFailed('not_connected', 'mail'), source_taint: null };
+      if (!sender.ok) return senderFailure(sender.reason, true);
       const to = resolveRecipients(args.to, sender.email);
       // Idempotency is scoped to the logical send: owner + turn + content. A retry of the same
       // logical send (same turn, same content) keeps one proposal and one Message-ID, so the
@@ -178,7 +191,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // a NEW request or day is a new logical send with its own Message-ID - an old Sent hit
       // can never mark a later failed send as delivered, and distinct intents never collapse.
       const content_key = await sha256Hex(JSON.stringify({
-        sender: sender.connection, to, cc: args.cc ?? [], bcc: args.bcc ?? [],
+        sender: sender.email.toLowerCase(), to, cc: args.cc ?? [], bcc: args.bcc ?? [],
         subject: args.subject, body: args.body_markdown, thread: args.reply_to_thread_id ?? null,
       }));
       const logical_key = `${ctx.authenticatedUserId}:${ctx.session.rate_limit_window.started_at}:${content_key}`;

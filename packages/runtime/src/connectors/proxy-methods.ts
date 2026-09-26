@@ -4,7 +4,7 @@
 // scope-gate feature and its arg bounds below, or it does not ship.
 import { GOOGLE_FEATURE_SCOPES, type GoogleFeature } from './google.ts';
 
-export const PROXY_METHODS = ['events', 'draft', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'tasks', 'sendRaw', 'findSentByMessageId'] as const;
+export const PROXY_METHODS = ['events', 'draft', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'tasks', 'sendRaw', 'findSentByMessageId', 'profileEmail'] as const;
 export type ProxyMethod = (typeof PROXY_METHODS)[number];
 
 // Scope gate: the stored grant must cover the method's feature before the proxy spends the
@@ -12,6 +12,7 @@ export type ProxyMethod = (typeof PROXY_METHODS)[number];
 export const PROXY_METHOD_FEATURE: Readonly<Record<ProxyMethod, GoogleFeature>> = {
   events: 'calendar', event: 'calendar', createEvent: 'calendar', moveEvent: 'calendar', cancelEvent: 'calendar', changedEvents: 'calendar',
   draft: 'mail', newMail: 'mail', sendRaw: 'mail', findSentByMessageId: 'mail',
+  profileEmail: 'mail',
   tasks: 'tasks',
 };
 
@@ -28,6 +29,8 @@ export const validateProxyArgs = (method: ProxyMethod, args: unknown): string | 
   if (!Array.isArray(args)) return 'args must be an array';
   if (JSON.stringify(args).length > GENERIC_ARGS_LIMIT) return 'args too large';
   switch (method) {
+    case 'profileEmail':
+      return args.length === 0 ? null : 'profileEmail takes no arguments';
     case 'sendRaw': {
       const [raw, threadId] = args as unknown[];
       if (!isBoundedString(raw, RAW_MIME_LIMIT)) return 'sendRaw needs bounded raw MIME bytes';

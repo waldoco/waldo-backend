@@ -6,16 +6,17 @@ import { googleHas } from '../src/connectors/google';
 // rail (sendRaw/findSentByMessageId) must pass both sides or they are not wired end-to-end.
 describe('connector proxy method allowlist', () => {
   it('carries tasks, sendRaw and findSentByMessageId alongside the existing methods', () => {
-    for (const method of ['tasks', 'sendRaw', 'findSentByMessageId', 'events', 'draft', 'newMail']) {
+    for (const method of ['tasks', 'sendRaw', 'findSentByMessageId', 'profileEmail', 'events', 'draft', 'newMail']) {
       expect(PROXY_METHODS).toContain(method);
     }
-    expect(PROXY_METHODS).toHaveLength(11);
+    expect(PROXY_METHODS).toHaveLength(12);
   });
 
   it('gates every method on the feature its grant must cover', () => {
     expect(PROXY_METHOD_FEATURE.tasks).toBe('tasks');
     expect(PROXY_METHOD_FEATURE.sendRaw).toBe('mail');
     expect(PROXY_METHOD_FEATURE.findSentByMessageId).toBe('mail');
+    expect(PROXY_METHOD_FEATURE.profileEmail).toBe('mail');
     // a calendar-only grant cannot ride the send rail
     expect(googleHas(['https://www.googleapis.com/auth/calendar.events'], PROXY_METHOD_FEATURE.sendRaw)).toBe(false);
     expect(googleHas(['https://www.googleapis.com/auth/tasks'], 'tasks')).toBe(true);
@@ -27,6 +28,11 @@ describe('connector proxy method allowlist', () => {
     expect(validateProxyArgs('sendRaw', [123])).toBe('sendRaw needs bounded raw MIME bytes');
     expect(validateProxyArgs('sendRaw', ['ok', 'x'.repeat(513)])).toBe('sendRaw thread id must be a short string');
     expect(validateProxyArgs('sendRaw', ['ok', 't-1'])).toBeNull();
+  });
+
+  it('requires a zero-argument Gmail profile read', () => {
+    expect(validateProxyArgs('profileEmail', [])).toBeNull();
+    expect(validateProxyArgs('profileEmail', ['other'])).not.toBeNull();
   });
 
   it('bounds findSentByMessageId and tasks args', () => {
