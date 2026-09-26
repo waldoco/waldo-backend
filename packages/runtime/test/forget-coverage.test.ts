@@ -107,6 +107,37 @@ describe('forget coverage', () => {
     });
   });
 
+  it('KV-survivor retry: a purge is not settled until the caller KV stores verify clean', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const claimId = Number(
+        sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
+      );
+      // The chat/console path hands onPurged to applyClaimOps: SQL verifies (ready ids), the
+      // caller KV redaction reports a survivor, so settle is skipped - the source must stay.
+      let readyIds: readonly number[] = [];
+      applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
+      }), AT, 'owner, test', (_texts, ids) => { readyIds = ids; });
+      expect(readyIds).toEqual([claimId]); // SQL clean, KV pending
+      // KV survivor: caller does NOT settle. The claim and its marker survive for retry.
+      expect(store.claims('purging').map((claim) => claim.id)).toEqual([claimId]);
+      expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM purge_pending WHERE claim_id = ?', claimId).one().n).toBe(1);
+      expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM claims WHERE id = ?', claimId).one().n).toBe(1);
+      // Retry (KV now clean): purge again (idempotent on already-redacted SQL), then settle.
+      const retry = applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
+      }), AT, 'owner, retry', (_texts, ids) => { readyIds = ids; });
+      expect(retry).toContain('purged');
+      store.settle(readyIds);
+      expect(store.claims()).toEqual([]);
+      expect(store.claims('purging')).toEqual([]);
+      expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM purge_pending').one().n).toBe(0);
+      // Settle is idempotent and never sweeps a re-admitted active row.
+      store.settle([claimId]);
+    });
+  });
+
   it('case-variant quoting is redacted too: LIKE matches it, so redaction must as well', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);

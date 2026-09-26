@@ -876,8 +876,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             if (result.failed.length || Object.keys(result.remaining).length || kvRemaining > 0) {
               const detail = [...result.failed, ...Object.keys(result.remaining), ...(kvRemaining ? ['conversation'] : [])].join(',');
               log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: `spot.forget purge_incomplete: ${detail}` });
+              // NOT settled: the claim row stays 'purging' with its marker, so this stated
+              // try-again path can select it and resume from the intact source text.
               return 'spot.forget.incomplete';
             }
+            // SQL and KV both verified clean: settle removes the source row and marker.
+            memory.settle([spotId]);
           }
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);

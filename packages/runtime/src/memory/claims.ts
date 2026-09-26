@@ -108,7 +108,7 @@ export const claimStore = (sql: Sql) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string): { removed: number; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[] } {
+    purge(ids: readonly number[], at: string): { ready: boolean; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[] } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
@@ -204,19 +204,22 @@ export const claimStore = (sql: Sql) => {
         if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
         add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
       }
-      // Settle LAST, after verification: the claim row and its pending marker are removed only
-      // when every store is clean AND the survivor scan is empty. Any failure or survivor
-      // leaves both behind, so 'try again' is honest - a retry finds the source text intact
-      // and the already-redacted stores are idempotent no-ops.
-      if (failed.length === 0 && Object.keys(remaining).length === 0) {
-        for (const claim of forgotten) {
-          attempt('claims', () => {
-            sql.exec('DELETE FROM claims WHERE id = ?', claim.id);
-            sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', claim.id);
-          });
-        }
+      // No deletion here: settlement is a separate step (settle()) the caller runs only after
+      // the ASYNC KV stores (conversation, tool-output ledger) verify clean too. Deleting the
+      // source on SQL verification alone would orphan a KV failure: the UI says incomplete
+      // but the retry could no longer find the claim. Until settle() runs, the 'purging' row
+      // and pending marker remain, so every retry path still works.
+      return { ready: failed.length === 0 && Object.keys(remaining).length === 0, remaining, texts, failed };
+    },
+
+    // Final step of a purge, run only once SQL AND the caller's KV stores verify clean.
+    // Idempotent: already-deleted rows are no-ops. Only 'purging' rows are removed, so a
+    // claim re-admitted after a failed attempt is never swept away by a late settle.
+    settle(ids: readonly number[]): void {
+      for (const id of ids) {
+        sql.exec("DELETE FROM claims WHERE id = ? AND status = 'purging'", id);
+        sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', id);
       }
-      return { removed: failed.length === 0 && Object.keys(remaining).length === 0 ? forgotten.length : 0, remaining, texts, failed };
     },
   };
 };
@@ -311,7 +314,7 @@ export const nightlyInput = (store: ClaimStore, day: string): string =>
 
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[]) => void): string => {
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void): string => {
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
   const known = new Set(store.claims().map((claim) => claim.id));
   // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
@@ -328,7 +331,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.dismiss.filter((id) => known.has(id))) store.setStatus(id, 'dismissed');
   const forgetIds = ops.forget_claims.filter((id) => forgettable.has(id));
   const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
-  if (purge && purge.texts.length > 0) onPurged?.(purge.texts);
+  if (purge && purge.texts.length > 0) {
+    if (onPurged === undefined) {
+      // No KV consumer: SQL verification is the whole settlement, so settle now. A caller
+      // WITH a KV store settles itself once its redaction verifies (see telegram-turn).
+      if (purge.ready) store.settle(forgetIds);
+    } else {
+      onPurged(purge.texts, purge.ready ? forgetIds : []);
+    }
+  }
   for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
   return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;

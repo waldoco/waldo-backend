@@ -176,8 +176,12 @@ export const createTelegramResponder = (
         settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA })
           .then(async (raw) => {
             let purged: readonly string[] = [];
-            const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts) => { purged = texts; });
+            let purgeIds: readonly number[] = [];
+            const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; });
             const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+            // Settle only once the KV conversation/ledger stores verify clean too; a KV
+            // survivor leaves the claim 'purging' so a later retry can still find it.
+            if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
             log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}` });
           })
           .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' }));
@@ -201,16 +205,20 @@ export const createTelegramResponder = (
       if (!memory) return 'no memory';
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
       let purged: readonly string[] = [];
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts) => { purged = texts; });
+      let purgeIds: readonly number[] = [];
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; });
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
     async migrate(trace, input) {
       if (!memory) return 'no memory';
       const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
       let purged: readonly string[] = [];
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts) => { purged = texts; });
+      let purgeIds: readonly number[] = [];
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; });
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
     async promote(trace) {
