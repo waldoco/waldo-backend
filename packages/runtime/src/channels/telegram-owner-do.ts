@@ -37,6 +37,7 @@ import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
+import { waInboxFilter, waInboxMark, waInboxRelease } from './whatsapp-inbox';
 import { callMcpToolHandler } from '../tools/live/mcp';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
@@ -165,8 +166,23 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       this.runtimes = {};
     }
     const value = JSON.parse(body) as { messages?: { id?: string; from?: string; type?: string; text?: { body?: string } }[] };
-    const { updates, seq } = whatsappIngressUpdates(value.messages ?? [], subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
-    for (const update of updates) await this.serial(() => this.turn(update, 'whatsapp'));
+    // Durable inbox dedupe: replays of an already-processed provider event are no-ops, and a
+    // message is tombstoned only after its turn completes - a crash mid-batch leaves the
+    // unprocessed ones eligible for the next redelivery.
+    const fresh = waInboxFilter(value.messages ?? [], this.ctx.storage.kv, Date.now());
+    const { updates, providerIds, seq } = whatsappIngressUpdates(fresh, subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
+    for (const [i, update] of updates.entries()) {
+      const providerId = providerIds[i];
+      try {
+        await this.serial(() => this.turn(update, 'whatsapp'));
+      } catch (error) {
+        // The failed message AND every never-attempted one get their claims released - the
+        // redelivery retries exactly those; processed tombstones stay.
+        for (const pendingId of providerIds.slice(i)) if (pendingId) waInboxRelease(this.ctx.storage.kv, pendingId);
+        throw error;
+      }
+      if (providerId) waInboxMark(this.ctx.storage.kv, providerId, Date.now());
+    }
     await this.ctx.storage.put('wa_seq', seq);
     return new Response('ok');
   }
