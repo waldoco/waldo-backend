@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
+import { buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
 import { capToolOutput, NO_PROGRESS_LIMIT, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
@@ -286,5 +286,170 @@ describe('refusals never feed the failure streak', () => {
     // refusal rounds: the streak only reached 1, never FAILED_ROUNDS_LIMIT, so the loop never
     // withdrew tools before the model chose to close.
     expect(offered).toEqual([true, true, true, true, true, true, true]);
+  });
+});
+
+describe('mutation-resets-streak (Hermes progress evidence)', () => {
+  it('a successful mutation clears no-progress tracking, so a repeated read is a new experiment', async () => {
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    };
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      // send_message is autonomy-gated, so the dispatcher's autonomy_gate_check hook needs a
+      // hasApproval source in ctx. This stub approves in-loop, matching the dispatcherContext
+      // shape in tool-dispatcher.test.ts; no real send occurs - the handler below is a stub.
+      handlers: [web, send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools) return { text: 'done.' };
+        // 3 searches differing only in a volatile cursor token: exact-dup never fires, but the
+        // stabilized triple repeats, so the pair is blocked after the 3rd result. Then a
+        // successful mutation lands - new state, new experiment - and the SAME search must
+        // dispatch again instead of refusing.
+        if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'a'.repeat(64) + '"}' }] };
+        if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
+        return { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(searched).toBe(4);
+    expect(outputs.some((o) => o.includes('No progress'))).toBe(false);
+  });
+
+  it('a desk-routed mutation (mutates_state, not autonomy-gated) also opens a new epoch', async () => {
+    // Codex review: the live handlers mutate through the effect desk, not the privilege gate,
+    // so keying the reset on autonomy_gated alone left the claimed behavior dormant.
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    const deskMutation = {
+      name: 'send_message' as const,
+      description: 'Desk-routed mutation stub (like the live handlers).',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: false,
+      mutates_state: true as const,
+      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    };
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      // send_message passes through the dispatcher's approval hook regardless of the
+      // autonomy gate; this stub approves in-loop and no real send occurs.
+      handlers: [web, deskMutation as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools) return { text: 'done.' };
+        if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'b'.repeat(64) + '"}' }] };
+        if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
+        return { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(searched).toBe(4);
+    expect(outputs.some((o) => o.includes('No progress'))).toBe(false);
+  });
+
+  it('an identical read after a landed mutation dispatches again (new state epoch resets read dedupe)', async () => {
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    };
+    let n = 0;
+    const outputs: string[] = [];
+    const SAME = '{"query":"exactly the same search"}';
+    const text = await runToolLoop({
+      handlers: [web, send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools) return { text: 'done.' };
+        // Same read twice: the second is an exact duplicate and must refuse. A successful gated
+        // mutation lands, opening a new state epoch; the SAME read args must then dispatch again.
+        if (n <= 2) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: SAME }] };
+        if (n === 3) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'b'.repeat(64) + '"}' }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 's3', name: 'web_search', arguments: SAME }] };
+        return { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(searched).toBe(2);
+    expect(outputs[1]).toContain('Same call already made this turn');
+    expect(outputs.some((o) => o.includes('"queued":true'))).toBe(true);
+  });
+
+  it('a landed mutation never re-enables duplicate mutations (write/send dedupe is retained)', async () => {
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    const SEND_ARGS = '{"channel":"telegram","content":"hi","idempotency_key":"' + 'c'.repeat(64) + '"}';
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      handlers: [send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        // First send dispatches and lands; the reset it triggers must NOT clear mutation dedupe,
+        // so the identical second send still refuses.
+        return tools && n <= 2 ? { text: '', tool_calls: [{ call_id: `m${n}`, name: 'send_message', arguments: SEND_ARGS }] } : { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(sent).toBe(1);
+    expect(outputs[1]).toContain('Same call already made this turn');
+  });
+
+  it('without an intervening mutation the 4th repeat is refused (control)', async () => {
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    let n = 0;
+    const outputs: string[] = [];
+    await runToolLoop({
+      handlers: [web], ctx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        return tools && n <= 4 ? { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] } : { text: 'done.' };
+      },
+    });
+    expect(searched).toBe(3);
+    expect(outputs[outputs.length - 1]).toContain('No progress');
   });
 });

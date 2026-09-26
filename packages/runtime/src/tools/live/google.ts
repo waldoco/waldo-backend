@@ -99,6 +99,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: proposeCalendarChangeArgsSchema,
     trigger_allowlist: allowlist('propose_calendar_change'),
     autonomy_gated: false,
+    mutates_state: true,
     async handle(args: ProposeCalendarChangeArgs) {
       return { ok: true, data: { proposal_id: await desk.propose(args), status: 'sent to the owner with Do it / Modify / Not now buttons', applied: false }, source_taint: null };
     },
@@ -109,6 +110,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
+    mutates_state: true,
     // The draft receipt is a mutation ack, not provider-controlled content, so the result is
     // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
     // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
@@ -130,6 +132,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
+    mutates_state: true,
     // The tool only proposes: it canonicalizes the MIME bytes, binds them with a sha256 digest
     // and hands both to the approval desk. The desk replays the stored bytes on approval
     // (users.messages.send, never drafts.send) and reconciles an ambiguous send through the

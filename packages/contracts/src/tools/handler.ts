@@ -172,6 +172,11 @@ export interface ToolHandler<Args, Result, Ctx> {
   schema: z.ZodType<Args>;
   trigger_allowlist: readonly TriggerType[];
   autonomy_gated: boolean;
+  // mutates_state marks calls whose success changes state a repeated identical read would
+  // observe: desk proposals, external writes/sends, internal state changes. The tool loop
+  // keys its no-progress epoch reset on autonomy_gated || mutates_state so live mutation
+  // handlers (which are desk-routed, not privilege-gated) still open a new epoch.
+  mutates_state?: true;
   handle(args: Args, ctx: Ctx): Promise<ToolResult<Result>>;
   idempotentOnKey?: true;
   executeOrReconcile?(
