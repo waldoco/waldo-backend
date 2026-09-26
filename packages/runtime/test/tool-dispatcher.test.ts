@@ -93,6 +93,28 @@ describe('ToolDispatcher', () => {
     }
   });
 
+  it('keeps a hex-shaped provider draft ID out of the sanitised success receipt', async () => {
+    let providerCalls = 0;
+    let recorded: unknown;
+    const google: GoogleAccess = {
+      client: async () => null,
+      mailSender: async () => ({
+        ok: true, connection: 'conn-1', email: 'owner@example.com',
+        client: { draft: async () => { providerCalls++; return { draft_id: 'abcdef1234567890' }; } } as never,
+      }),
+    };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p', reused: null }), record: (_kind: string, _summary: string, payload: unknown) => { recorded = payload; } };
+    const handler = googleHandlers(google, desk, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
+    const result = await dispatchTool(
+      { id: 'hex-draft', name: 'draft_email', args: { to: ['self'], subject: 'Probe', body_markdown: 'Probe' } },
+      dispatcherContext('user_message'), { handlers: [handler] },
+    );
+    expect(providerCalls).toBe(1);
+    expect(recorded).toEqual({ draft_id: 'abcdef1234567890' });
+    expect(result).toMatchObject({ ok: true, tool: 'draft_email', data: { draft_saved: true, sent: false } });
+    expect(JSON.stringify(result)).not.toContain('abcdef1234567890');
+  });
+
   it('preserves draft provider failure and send preview failure through dispatch', async () => {
     const google: GoogleAccess = {
       client: async () => null,

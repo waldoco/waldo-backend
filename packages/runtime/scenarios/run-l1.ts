@@ -72,17 +72,21 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
 
   const events = scenario.fixtures?.events ?? DEFAULT_EVENTS;
   const connectOffers: ConnectIntent[] = [];
+  const googleClient = {
+    events: async () => ({ items: events, complete: true }),
+    event: async (id: string) => events.find((event) => event.id === id)!,
+    newMail: async () => scenario.fixtures?.mail ?? [],
+    changedEvents: async () => [],
+    draft: async () => ({ draft_id: 'd1' }),
+    createEvent: async () => events[0]!,
+    moveEvent: async () => events[0]!,
+    cancelEvent: async () => undefined,
+  } as unknown as GoogleClient;
   const google = {
-    client: scenario.fixtures?.googleNotConnected ? async () => null : async () => ({
-      events: async () => ({ items: events, complete: true }),
-      event: async (id: string) => events.find((event) => event.id === id)!,
-      newMail: async () => scenario.fixtures?.mail ?? [],
-      changedEvents: async () => [],
-      draft: async () => ({ draft_id: 'd1' }),
-      createEvent: async () => events[0]!,
-      moveEvent: async () => events[0]!,
-      cancelEvent: async () => undefined,
-    }) as unknown as GoogleClient | null,
+    client: async () => scenario.fixtures?.googleNotConnected ? null : googleClient,
+    mailSender: async () => scenario.fixtures?.googleNotConnected
+      ? { ok: false as const, reason: 'not_connected' as const }
+      : { ok: true as const, client: googleClient, connection: 'scenario-mail', email: 'owner@example.com' },
     connectUrl: async () => null,
   };
   const web = {

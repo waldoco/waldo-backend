@@ -166,7 +166,9 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
         });
         desk.record('email_draft', `Drafted "${args.subject}" to ${to.join(', ')}`, draft);
-        return { ...draft, sent: false };
+        // Provider IDs are opaque and can resemble the sanitiser's secret patterns. Keep the
+        // provider receipt in the private ledger; only a content-free success reaches the model.
+        return { draft_saved: true, sent: false };
       }, ctx?.trace);
       if (result.ok) return { ...result, source_taint: null };
       const { source_taint: _readStamp, ...failure } = result;
