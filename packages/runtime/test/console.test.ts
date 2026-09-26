@@ -175,4 +175,15 @@ describe('owner console', () => {
     expect(html.indexOf('The Brief')).toBeLessThan(html.indexOf('Check-in'));
     expect(renderConsole({ ...view, google: { accounts: [], connectAvailable: false } })).toContain('OAuth app keys are not set');
   });
+
+  it('a spot stuck mid-forget stays visible with a working Retry action', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('Forget in progress (1)');
+    expect(html).toContain('Old phone number ending 4123');
+    expect(html).toContain('Retry forget');
+    // The Retry form posts the same spot.forget action with the purging row's id, which
+    // act() selects from claims('purging').
+    expect(html).toMatch(/name="id" value="7"/);
+    expect(html).toContain('Removal incomplete');
+  });
 });

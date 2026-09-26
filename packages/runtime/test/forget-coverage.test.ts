@@ -138,6 +138,29 @@ describe('forget coverage', () => {
     });
   });
 
+  it('rendered console keeps a KV-survivor row visible with a Retry forget action', async () => {
+    const { renderConsole } = await import('../src/channels/console');
+    const { SAMPLE_CONSOLE_VIEW } = await import('./fixtures/console-sample');
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const claimId = Number(
+        sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
+      );
+      // Force the KV-survivor state: SQL verifies clean, the caller KV step never settles.
+      applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
+      }), AT, 'owner, test', () => undefined);
+      expect(store.claims('purging').map((claim) => claim.id)).toEqual([claimId]);
+      // The console view the owner sees: the purging row renders with a Retry action and is
+      // absent from the active spots list.
+      const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: store.claims(), forgettingSpots: store.claims('purging') });
+      expect(html).toContain('Forget in progress (1)');
+      expect(html).toContain(CLAIM_TEXT);
+      expect(html).toContain('Retry forget');
+      expect(html).toContain(`name="id" value="${claimId}"`);
+    });
+  });
+
   it('case-variant quoting is redacted too: LIKE matches it, so redaction must as well', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
