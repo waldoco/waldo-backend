@@ -32,6 +32,7 @@ import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
+import { googleClientPath } from '../connectors/google-account-path';
 import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
@@ -557,10 +558,21 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
         const fit = all.filter((account) => googleHas(account.scopes, feature));
-        const account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
+        let account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
-        if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
-        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error), sendIntent) : null;
+        // Send-path custody gate: sends ride the proxy idempotency claim/store and Vault
+        // custody only; a local-token send migrates into the Vault first, and a send with no
+        // proxy at all is refused rather than sent outside the gate.
+        const path = googleClientPath(account, sendIntent, Boolean(vault && doName));
+        if (path.kind === 'reject_send' || path.kind === 'unavailable') return null;
+        if (path.kind === 'adopt') {
+          const adopted = await vault!.adopt(doName!, { refresh_token: account.refresh_token!, email: account.email, scopes: account.scopes ?? undefined }).catch(() => null);
+          if (!adopted) return null;
+          await google.keep(adopted);
+          account = { id: adopted.id, email: adopted.email, scopes: adopted.scopes };
+        }
+        if (path.kind === 'direct') return googleClient(app, { refresh_token: account.refresh_token!, email: account.email }, fetch, (error) => noteHealth(account.id, error));
+        return vault!.client(doName!, account.id, (error) => noteHealth(account.id, error), sendIntent);
       },
       async state() {
         await google.migrate();
