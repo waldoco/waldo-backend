@@ -5,7 +5,19 @@ export const CLAIM_SOURCES = ['stated', 'confirmed', 'inferred'] as const;
 export const EDGE_RELATIONS = ['tends to precede', 'worsens', 'improves', 'co-occurs with'] as const;
 
 export type Claim = Readonly<{ id: number; kind: string; text: string; source: string; evidence: string; status: string; created_at: string; last_seen_at: string; seen_count: number }>;
-export type ForgetBarrier = Readonly<{ id: number; topic: string; created_at: string }>;
+export type ForgetBarrier = Readonly<{ id: number; topic: string; topic_hash: string | null; created_at: string }>;
+
+// Sync, content-free fingerprint for exact re-admission blocking: a barrier can prove a
+// candidate claim IS the forgotten text without storing the text itself (crypto.subtle is
+// async and the claim store is sync). Exact-match only; paraphrases are the documented limit.
+export const textFingerprint = (text: string): string => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `fnv1a:${hash.toString(16)}`;
+};
 export type ConstellationNode = Readonly<{ id: number; domain: string; label: string; summary: string; strength: number; status: string; first_seen: string; last_confirmed: string; supporting_spots: string }>;
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
 type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string }>;
@@ -18,7 +30,10 @@ export const claimStore = (sql: Sql) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS claims (
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)`);
-  sql.exec('CREATE TABLE IF NOT EXISTS forget_barriers (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, created_at TEXT NOT NULL)');
+  sql.exec('CREATE TABLE IF NOT EXISTS forget_barriers (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, topic_hash TEXT, created_at TEXT NOT NULL)');
+  if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
+    sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
+  }
   sql.exec('CREATE TABLE IF NOT EXISTS memory_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created_at TEXT NOT NULL)');
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL, strength REAL NOT NULL,
@@ -47,7 +62,7 @@ export const claimStore = (sql: Sql) => {
       sql.exec('DELETE FROM claims WHERE id = ?', id);
     },
     barrier(topic: string, at: string): void {
-      sql.exec('INSERT INTO forget_barriers (topic, created_at) VALUES (?, ?)', topic, at);
+      sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', topic, textFingerprint(topic.trim()), at);
     },
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,
     backup(reason: string, payload: unknown, at: string): void {
@@ -76,31 +91,43 @@ export const claimStore = (sql: Sql) => {
     // leaves the search index, backups, and frozen legacy tables (redacted, preserving
     // unrelated content), constellation nodes stop quoting it and stop referencing its id,
     // and a barrier blocks re-admission. Fresh-state verification reports what survived.
-    purge(ids: readonly number[], at: string): { removed: number; remaining: Record<string, number>; texts: readonly string[] } {
+    purge(ids: readonly number[], at: string): { removed: number; remaining: Record<string, number>; texts: readonly string[]; failed: readonly string[] } {
       const forgotten = ids.length
         ? sql.exec<Claim>(`SELECT * FROM claims WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).toArray()
         : [];
       const texts = [...new Set(forgotten.map((claim) => claim.text.trim()).filter(Boolean))];
+      const failed: string[] = [];
+      const attempt = (store: string, op: () => void) => {
+        try { op(); } catch { failed.push(store); }
+      };
       for (const claim of forgotten) {
-        sql.exec('DELETE FROM claims WHERE id = ?', claim.id);
-        sql.exec('INSERT INTO forget_barriers (topic, created_at) VALUES (?, ?)', claim.text, at);
+        attempt('claims', () => sql.exec('DELETE FROM claims WHERE id = ?', claim.id));
+        // The barrier carries the fingerprint and the marker, NEVER the text: barriers go back
+        // to the model in every memory pass, so raw text here would be the leak returning.
+        attempt('barrier', () => sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, textFingerprint(claim.text.trim()), at));
       }
       const hasEpisodes = tableExists(sql, 'episodes');
       const hasSpots = tableExists(sql, 'spots');
       const hasRevisions = tableExists(sql, 'core_file_revisions');
       for (const text of texts) {
         const like = `%${likeEscape(text)}%`;
-        if (hasEpisodes) sql.exec(`DELETE FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like);
-        sql.exec(`UPDATE memory_backups SET payload = replace(payload, ?, ?) WHERE payload LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like);
-        if (hasSpots) sql.exec(`DELETE FROM spots WHERE text LIKE ? ESCAPE '\\'`, like);
-        if (hasRevisions) sql.exec(`UPDATE core_file_revisions SET content = replace(content, ?, ?) WHERE content LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like);
-        sql.exec(`UPDATE constellation_nodes SET label = replace(label, ?, ?), summary = replace(summary, ?, ?) WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like);
+        // Episodes and spots are append-only history: rows are redacted in place, never
+        // deleted, so the record's shape survives while the forgotten text does not.
+        if (hasEpisodes) attempt('episodes', () => sql.exec(`UPDATE episodes SET text = replace(text, ?, ?) WHERE text LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like));
+        attempt('memory_backups', () => sql.exec(`UPDATE memory_backups SET payload = replace(payload, ?, ?) WHERE payload LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like));
+        if (hasSpots) attempt('legacy_spots', () => sql.exec(`UPDATE spots SET text = replace(text, ?, ?), evidence = replace(evidence, ?, ?) WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
+        if (hasRevisions) attempt('legacy_core_files', () => sql.exec(`UPDATE core_file_revisions SET content = replace(content, ?, ?) WHERE content LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like));
+        // Other claims may quote the forgotten text in their own text or evidence.
+        attempt('surviving_claims', () => sql.exec(`UPDATE claims SET text = replace(text, ?, ?), evidence = replace(evidence, ?, ?) WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
+        attempt('constellation_nodes', () => sql.exec(`UPDATE constellation_nodes SET label = replace(label, ?, ?), summary = replace(summary, ?, ?) WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
       }
-      for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
-        const spots = JSON.parse(node.supporting_spots) as number[];
-        const kept = spots.filter((id) => !ids.includes(id));
-        if (kept.length !== spots.length) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
-      }
+      attempt('constellation_refs', () => {
+        for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
+          const spots = JSON.parse(node.supporting_spots) as number[];
+          const kept = spots.filter((id) => !ids.includes(id));
+          if (kept.length !== spots.length) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
+        }
+      });
       const remaining: Record<string, number> = {};
       for (const text of texts) {
         const like = `%${likeEscape(text)}%`;
@@ -112,7 +139,7 @@ export const claimStore = (sql: Sql) => {
         if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
         add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
       }
-      return { removed: forgotten.length, remaining, texts };
+      return { removed: forgotten.length, remaining, texts, failed };
     },
   };
 };
@@ -146,10 +173,10 @@ export const memoryPrompt = (store: ClaimStore): string => {
   ].join('\n');
 };
 
-const barrierPrompt = (store: ClaimStore): string => {
+export const barrierPrompt = (store: ClaimStore): string => {
   const barriers = store.barriers();
   return barriers.length === 0 ? 'The owner has asked Waldo to forget nothing so far.'
-    : `The owner asked Waldo to forget these. Never add a claim about them, even if older conversation mentions them:\n${barriers.map((barrier) => `<forgotten id="${barrier.id}">${fence(barrier.topic)}</forgotten>`).join('\n')}`;
+    : `The owner asked Waldo to forget these. Never add a claim about them, even if older conversation mentions them:\n${barriers.map((barrier) => `<forgotten id="${barrier.id}">${barrier.topic === FORGOTTEN ? 'a removed item' : fence(barrier.topic)}</forgotten>`).join('\n')}`;
 };
 
 const CLAIM_RULES = [
@@ -213,7 +240,8 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   const nodes = new Set(store.nodes().map((node) => node.id));
   const topic = ops.forget_topic?.trim();
   if (topic) store.barrier(topic, at);
-  const held = ops.add.filter((claim) => claim.touches_forgotten);
+  const barrierHashes = new Set(store.barriers().map((barrier) => barrier.topic_hash).filter(Boolean));
+  const held = ops.add.filter((claim) => claim.touches_forgotten || barrierHashes.has(textFingerprint(claim.text.trim())));
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
   for (const claim of admitted) store.add({ kind: claim.kind, text: claim.text.trim(), source: claim.source === 'inferred' ? 'inferred' : 'stated', evidence: claim.evidence.trim() }, at);
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
@@ -223,7 +251,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
   if (purge && purge.texts.length > 0) onPurged?.(purge.texts);
   for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);
-  const leftover = purge ? Object.keys(purge.remaining) : [];
+  const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
   return `+${admitted.length} held${held.length} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 

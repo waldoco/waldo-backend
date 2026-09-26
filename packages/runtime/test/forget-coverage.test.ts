@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { episodeIndex } from '../src/channels/episodes';
-import { applyClaimOps, claimStore } from '../src/memory/claims';
+import { applyClaimOps, barrierPrompt, claimStore, FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { durableConversationStore, redactConversationEntries } from '../src/channels/conversation-store';
 
 let sequence = 0;
@@ -59,14 +59,78 @@ describe('forget coverage', () => {
       expect(survivors(sql)).toEqual({
         claims: 0, episodes_fts: 0, memory_backups: 0, legacy_spots: 0, legacy_core_files: 0, constellation_nodes: 0,
       });
+      // Append-only contract: the episode row was redacted in place, never deleted.
+      expect(episodes.count()).toBe(1);
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).not.toContain(MARKER);
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toContain(FORGOTTEN);
+      // Exact re-admission of the forgotten text is held by the fingerprint, even if the model
+      // fails to flag touches_forgotten.
+      const relearn = applyClaimOps(store, JSON.stringify({
+        add: [{ kind: 'fact', text: CLAIM_TEXT, source: 'stated', evidence: 'owner said so again', touches_forgotten: false }],
+        seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null,
+      }), AT);
+      expect(relearn).toContain('held1');
+      expect(store.claims()).toEqual([]);
       // The node survives (it is not forgotten) but no longer quotes the claim or references its id.
       const node = store.nodes().find((row) => row.id === nodeId);
       expect(node).toBeDefined();
       expect(JSON.parse(node!.supporting_spots)).not.toContain(claimId);
-      // The barrier blocks re-admission of the forgotten text.
-      expect(store.barriers().map((row) => row.topic)).toContain(CLAIM_TEXT);
+      // The barrier blocks re-admission WITHOUT keeping the text: the topic is the marker and
+      // the fingerprint is the exact-match guard. Anything else would leak the text back into
+      // every model prompt (barriers ride every memory pass).
+      expect(store.barriers().map((row) => row.topic)).not.toContain(CLAIM_TEXT);
+      expect(store.barriers().map((row) => row.topic)).toContain(FORGOTTEN);
+      expect(store.barriers().map((row) => row.topic_hash)).toContain(textFingerprint(CLAIM_TEXT.trim()));
+      expect(barrierPrompt(store)).not.toContain(MARKER);
       // Honest reporting: the result says what was purged across stores.
       expect(result).toContain('purged');
+    });
+  });
+
+  it("a surviving claim's own text and evidence are redacted when they quote the forgotten text", async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const forgottenId = Number(
+        sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
+      );
+      const otherId = Number(
+        sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'confirmed', ?, ?, ?) RETURNING id`,
+          'Owner likes morning runs', `chat: "Owner uses the ${MARKER} code word"`, AT, AT).one().id,
+      );
+      applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
+      }), AT);
+      const other = store.claims().find((claim) => claim.id === otherId)!;
+      expect(other.text).toBe('Owner likes morning runs'); // unrelated claim text survives untouched
+      expect(other.evidence).not.toContain(MARKER); // its quote of the forgotten text is redacted
+      expect(other.evidence).toContain(FORGOTTEN);
+    });
+  });
+
+  it('a failed store is named in the receipt and every other store is still cleaned', async () => {
+    await withSql((rawSql) => {
+      // Force one store to fail: UPDATEs against episodes throw. Purge must continue with the
+      // rest and report the failure instead of losing it or aborting half-cleaned silently.
+      const sql = new Proxy(rawSql, {
+        get: (target, prop, receiver) => {
+          if (prop !== 'exec') return Reflect.get(target, prop, receiver);
+          return (query: string, ...args: unknown[]) =>
+            query.startsWith('UPDATE episodes') ? (() => { throw new Error('fts locked'); })() : target.exec(query, ...(args as never[]));
+        },
+      }) as SqlStorage;
+      const store = claimStore(sql);
+      const claimId = Number(
+        rawSql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
+      );
+      const episodes = episodeIndex(rawSql);
+      episodes.add('entry-1', 'owner', `remember: ${CLAIM_TEXT}`, Date.parse(AT));
+      const result = applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
+      }), AT);
+      expect(result).toContain('purge-incomplete');
+      expect(result).toContain('episodes(failed)');
+      expect(store.claims()).toEqual([]); // claims cleanup still happened
+      expect(rawSql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE episodes MATCH ?`, `"${MARKER}"`).one().n).toBe(1); // the failed store honestly still holds it
     });
   });
 
@@ -88,6 +152,8 @@ describe('forget coverage', () => {
     });
   });
 });
+
+import { redactToolOutputLedger, toolOutputLedger } from '../src/conversation/tool-output-ledger';
 
 const withStorage = <T>(fn: (storage: DurableObjectStorage) => T | Promise<T>) =>
   runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`forget-conv-${sequence++}`)), (_instance, state) => fn(state.storage));
@@ -150,6 +216,21 @@ describe('forget coverage - rolling conversation window', () => {
       expect(result.rewritten).toBe(0);
       const { entries } = await conv.load();
       expect(entries[0]!.modelPayload).toContain('zephyr');
+    });
+  });
+  it('forget redacts recent tool-output summaries quoting the text, keeping keys, order and taint', async () => {
+    await withStorage(async (storage) => {
+      const ledger = toolOutputLedger(storage);
+      await ledger.record({ tool: 'gmail_read', ok: true, at: 1, taint: 'external', summary: `mail mentions ${MARKER} twice: ${MARKER}` });
+      await ledger.record({ tool: 'web_search', ok: true, at: 2, taint: 'external', summary: 'unrelated hits' });
+      const touched = await redactToolOutputLedger(storage, [MARKER], FORGOTTEN);
+      expect(touched).toBe(1);
+      const recent = await ledger.recent();
+      expect(recent).toHaveLength(2);
+      expect(recent[0]!.text).not.toContain(MARKER);
+      expect(recent[0]!.text).toContain(FORGOTTEN);
+      expect(recent[0]!.source.source_taint).toBe('external'); // taint stamps survive redaction
+      expect(recent[1]!.text).toContain('unrelated hits'); // unrelated output intact
     });
   });
 });

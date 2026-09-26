@@ -51,3 +51,23 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
     }));
   },
 });
+
+// Forget coverage: a claim's exact text can be quoted inside a kept tool-output summary, so
+// purge redacts the ring in place (same literal match as the conversation store; paraphrases
+// remain the documented limit). Rows keep their keys, order and taint stamps.
+export const redactToolOutputLedger = async (storage: KeyValueStorage, texts: readonly string[], marker: string): Promise<number> => {
+  const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
+  let touched = 0;
+  const writes: Record<string, unknown> = {};
+  for (const [key, entry] of rows) {
+    if (key === 'toolout-count') continue;
+    let summary = entry.summary;
+    for (const text of texts) summary = summary.split(text).join(marker);
+    if (summary !== entry.summary) {
+      writes[key] = { ...entry, summary };
+      touched += 1;
+    }
+  }
+  if (Object.keys(writes).length) await storage.put(writes);
+  return touched;
+};

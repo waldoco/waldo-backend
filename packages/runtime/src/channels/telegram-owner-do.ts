@@ -14,7 +14,7 @@ import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller } from './egress-guard';
-import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
@@ -71,7 +71,7 @@ type OwnerRuntime = Readonly<{
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
   view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
-  act(action: ConsoleAction): Promise<boolean>;
+  act(action: ConsoleAction): Promise<boolean | string>;
   googleConnectUrl(feature: GoogleFeature, channel?: 'telegram' | 'console'): Promise<string | null>;
   google: Readonly<{
     finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>>;
@@ -243,7 +243,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         return new Response('Signed out. Send /console to Waldo on Telegram to sign in again.', { headers: { 'set-cookie': `${CONSOLE_COOKIE}=; Path=${CONSOLE_PATH}; Max-Age=0` } });
       }
       const done = action ? await this.serial(() => act(action)) : false;
-      return back(done && action ? action.action : 'invalid');
+      // A string result is a NOTICES key (e.g. an honest partial-failure receipt); boolean keeps the old path.
+      return back(typeof done === 'string' ? done : done && action ? action.action : 'invalid');
     }
     if (url.pathname !== CONSOLE_PATH) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
@@ -656,7 +657,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       });
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
-      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN),
+      { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD === '1', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; }),
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -852,7 +853,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           else if (action === 'spot.confirm') memory.confirm(spotId, 'owner, console', new Date(now).toISOString());
           else {
             const result = memory.purge([spotId], new Date(now).toISOString());
-            if (result.texts.length) await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN);
+            if (result.texts.length) {
+              await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN);
+              await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
+            }
+            if (result.failed.length || Object.keys(result.remaining).length) {
+              log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: `spot.forget purge_incomplete: ${[...result.failed, ...Object.keys(result.remaining)].join(',')}` });
+              return 'spot.forget.incomplete';
+            }
           }
         } else if (action === 'node.forget') {
           const node = memory.nodes().find((row) => row.id === spotId);
@@ -860,6 +868,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           memory.forgetNode(spotId);
           memory.barrier(node.label, new Date(now).toISOString());
           await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
+          await redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN);
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

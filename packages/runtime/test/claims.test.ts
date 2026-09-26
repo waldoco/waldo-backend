@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { applyClaimOps, applyPromotion, claimStore, exchangeInput, memoryPrompt, nightlyInput, profile } from '../src/memory/claims';
+import { applyClaimOps, applyPromotion, claimStore, exchangeInput, memoryPrompt, nightlyInput, profile , FORGOTTEN, textFingerprint } from '../src/memory/claims';
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 
 let sequence = 0;
@@ -28,7 +28,10 @@ describe('claims', () => {
       applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT);
       expect(store.claims()).toEqual([]);
       expect(store.claims('dismissed').map((claim) => claim.id)).toEqual([gym!.id]);
-      expect(store.barriers().map((barrier) => barrier.topic)).toEqual(['lunch habits', 'Skips lunch on meeting-heavy days']);
+      // purge barriers never keep the forgotten text (it would ride every model prompt); the neutral
+      // forget_topic label and the exact-match fingerprint are what remain.
+      expect(store.barriers().map((barrier) => barrier.topic)).toEqual(['lunch habits', FORGOTTEN]);
+      expect(store.barriers().map((barrier) => barrier.topic_hash)).toEqual([textFingerprint('lunch habits'), textFingerprint('Skips lunch on meeting-heavy days')]);
     });
   });
 
