@@ -1,5 +1,5 @@
 import {
-  PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, WALDO_CHAT_MODEL,
+  PROVIDER_OF, TOOL_PERMISSIONS, triggerTypeSchema, browseActArgsSchema, browsePageArgsSchema, OPENAI_GPT_5_NANO_MODEL,
   type ToolHandler, type ToolName, type BrowsePageArgs, type BrowseActArgs,
 } from '@waldo/contracts';
 import type { ToolDispatcherContext } from '../dispatcher';
@@ -8,7 +8,8 @@ import type { BrowserSubmitProposal } from '../../channels/approvals';
 // Stagehand v3 hosted HTTP API (openapi v3.1.0, browserbase/stagehand packages/server-v3).
 // Plain fetch - no SDK, no Node host. Keys stay server-side; session ids never reach model text.
 const BASE = 'https://api.stagehand.browserbase.com';
-const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
+// Stagehand's model compatibility is independent of Waldo's conversation model.
+const MODEL = `${PROVIDER_OF[OPENAI_GPT_5_NANO_MODEL]}/${OPENAI_GPT_5_NANO_MODEL}`;
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 

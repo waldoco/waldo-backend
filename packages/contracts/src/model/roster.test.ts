@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOUDFLARE_CHAT_COMPLETIONS_MODEL_IDS,
   OPENAI_GPT_5_NANO_MODEL,
+  OPENAI_GPT_6_LUNA_MODEL,
+  WALDO_CHAT_MODEL,
   modelNameSchema,
   PROVIDER_OF,
   ROSTER,
@@ -9,7 +11,7 @@ import {
 
 describe('modelName', () => {
   it('accepts the canonical roster ids', () => {
-    expect(modelNameSchema.options).toHaveLength(5);
+    expect(modelNameSchema.options).toHaveLength(6);
     for (const id of modelNameSchema.options) {
       expect(modelNameSchema.parse(id)).toBe(id);
     }
@@ -36,6 +38,8 @@ describe('roster', () => {
     expect(PROVIDER_OF['claude-sonnet-4-6']).toBe('anthropic');
     expect(PROVIDER_OF['claude-haiku-4-5']).toBe('anthropic');
     expect(PROVIDER_OF[OPENAI_GPT_5_NANO_MODEL]).toBe('openai');
+    expect(PROVIDER_OF[OPENAI_GPT_6_LUNA_MODEL]).toBe('openai');
+    expect(WALDO_CHAT_MODEL).toBe(OPENAI_GPT_6_LUNA_MODEL);
   });
 
   it('owns exact Cloudflare request and response identities for every internal model', () => {

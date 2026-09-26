@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import OpenAI from 'openai';
 import {
   OPENAI_GPT_5_NANO_MODEL,
+  OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
   type LLMRequest,
 } from '@waldo/contracts';
@@ -151,6 +152,28 @@ describe('OpenAIResponsesAdapter', () => {
       ok: false, code: 'oversize', error: 'OpenAI output incomplete: max_output_tokens',
     });
     expect(sent).toMatchObject({ max_output_tokens: 32, reasoning: { effort: 'low', summary: 'auto' } });
+  });
+
+  it('sends the pinned Luna chat model with low reasoning effort', async () => {
+    let sent: unknown;
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'test-key',
+      client: client(async (body: unknown) => {
+        sent = body;
+        return { id: 'resp_luna', output_text: 'READY', output: [], usage: { input_tokens: 4, output_tokens: 2 } } as never;
+      }),
+    });
+    const base = gatewayRequest();
+    const request = {
+      ...base,
+      request: { ...base.request, model: OPENAI_GPT_6_LUNA_MODEL },
+      route: { ...base.route, primary: { ...base.route.primary, model: OPENAI_GPT_6_LUNA_MODEL } },
+      step: { ...base.step, model: OPENAI_GPT_6_LUNA_MODEL },
+    };
+    await expect(adapter.complete(request)).resolves.toMatchObject({
+      ok: true, data: { model: OPENAI_GPT_6_LUNA_MODEL, text: 'READY' },
+    });
+    expect(sent).toMatchObject({ model: OPENAI_GPT_6_LUNA_MODEL, reasoning: { effort: 'low', summary: 'auto' } });
   });
 
   it('fails explicitly when the key is missing', async () => {
