@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { b64url, readConsentState } from '../src/connectors/google';
-import { CONSENT_TTL_MS, finishConsent, startConsent, type ConsentFlow, type ConsentGrant } from '../src/connectors/google-consent';
+import { CONSENT_TTL_MS, finishConsent, sessionGatedExchange, startConsent, type ConsentFlow, type ConsentGrant } from '../src/connectors/google-consent';
 import { consentPage, handleGoogleCallback, GOOGLE_FINISH_PATH } from '../src/channels/google-oauth';
 import { googleProxy } from '../src/connectors/connections';
 
@@ -24,6 +24,68 @@ const begin = async (deps: Parameters<typeof startConsent>[0], owner = '54584463
   const { url, nonce } = await startConsent(deps, app, SECRET, owner, { surface });
   return { url: new URL(url), nonce };
 };
+
+describe('session-gated exchange (revoked/expired connect ticket)', () => {
+  const grant: ConsentGrant = { email: 'owner@example.com', scopes: ['scope.calendar'] };
+
+  it('claims the session BEFORE the exchange runs, and never exchanges when the ticket is revoked', async () => {
+    const order: string[] = [];
+    const exchange = sessionGatedExchange(async () => { order.push('exchange'); return grant; }, async () => { order.push('claim'); return false; });
+    await expect(exchange('code', 'verifier', app.redirectUri)).rejects.toThrow('connect session revoked or expired');
+    expect(order).toEqual(['claim']); // claim first; the revoked ticket stopped the vault write
+  });
+
+  it('an active ticket claims first, then exchanges and returns the grant', async () => {
+    const order: string[] = [];
+    const exchange = sessionGatedExchange(async () => { order.push('exchange'); return grant; }, async () => { order.push('claim'); return true; });
+    await expect(exchange('code', 'verifier', app.redirectUri)).resolves.toEqual(grant);
+    expect(order).toEqual(['claim', 'exchange']);
+  });
+
+  it('attempts without a connect session exchange directly (no claim)', async () => {
+    const order: string[] = [];
+    const exchange = sessionGatedExchange(async () => { order.push('exchange'); return grant; }, null);
+    await expect(exchange('code', 'verifier', app.redirectUri)).resolves.toEqual(grant);
+    expect(order).toEqual(['exchange']);
+  });
+
+  it('revoked ticket through the full callback: settles failed, exchange never runs, nothing stored', async () => {
+    const { deps, memory } = setup();
+    const { nonce } = await startConsent(deps, app, SECRET, '5458446350', { session: 'revokedhash' });
+    let exchanged = 0;
+    const { outcome, fresh } = await finishConsent(deps, { nonce, code: 'authcode' },
+      sessionGatedExchange(async () => { exchanged += 1; return grant; }, async () => false));
+    expect(fresh).toBe(true);
+    expect(outcome).toEqual({ kind: 'failed', reason: 'connect session revoked or expired' });
+    expect(exchanged).toBe(0);
+    expect(memory.flows()[nonce]!.settled).toEqual({ kind: 'failed', reason: 'connect session revoked or expired' });
+    // A replayed callback (browser reload) replays the failed outcome and still never exchanges.
+    const replay = await finishConsent(deps, { nonce, code: 'authcode' },
+      sessionGatedExchange(async () => { exchanged += 1; return grant; }, async () => true));
+    expect(replay.fresh).toBe(false);
+    expect(exchanged).toBe(0);
+  });
+
+  it('reissue race: a reissued (superseded) ticket claims false, so the stale callback cannot store', async () => {
+    const { deps } = setup();
+    const { nonce } = await startConsent(deps, app, SECRET, '5458446350', { session: 'oldticket' });
+    // Control plane answers like a reissued flow: the old ticket is no longer active.
+    let exchanged = 0;
+    const { outcome } = await finishConsent(deps, { nonce, code: 'authcode' },
+      sessionGatedExchange(async () => { exchanged += 1; return grant; }, async () => false));
+    expect(outcome.kind).toBe('failed');
+    expect(exchanged).toBe(0);
+  });
+
+  it('exchange failure after a successful claim settles a truthful failed state', async () => {
+    const { deps, memory } = setup();
+    const { nonce } = await startConsent(deps, app, SECRET, '5458446350', { session: 'goodticket' });
+    const { outcome } = await finishConsent(deps, { nonce, code: 'authcode' },
+      sessionGatedExchange(async () => { throw new Error('google 500'); }, async () => true));
+    expect(outcome).toEqual({ kind: 'failed', reason: 'google 500' });
+    expect(memory.flows()[nonce]!.settled?.kind).toBe('failed');
+  });
+});
 
 describe('google consent attempt', () => {
   it('records the connect-session ticket hash on the attempt when started from a /c/ link (S3)', async () => {

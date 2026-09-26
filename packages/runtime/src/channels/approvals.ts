@@ -6,9 +6,14 @@ export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 type Undo = { op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string };
-type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null };
+type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; connection: string | null };
 
 export const UNDO_WINDOW_MS = 10 * 60_000;
+// A 'sending' claim older than this is crash-suspect (the DO restarted mid-send): the send
+// path's network calls are bounded far below this. Stale claims become owner-visible and
+// reconciliable (r/x) WITHOUT a duplicate provider send - a live claim within the lease is
+// untouched.
+export const SENDING_LEASE_MS = 5 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
 
 type Stored = ProposeCalendarChangeArgs & { seen_etag?: string };
@@ -30,17 +35,34 @@ const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 export type EmailSendProposal = Readonly<{
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
   subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string;
+  // sha256 over the content fields only (no Message-ID): stable across turns for identical
+  // content, so an unreconciled 'unknown' send can block a same-content re-entry.
+  content_digest: string;
 }>;
 
-export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
-export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>;
+// proposeSendEmail reuse outcomes: 'open' re-sends the existing card; 'sending'/'unknown'
+// mint nothing - an in-flight or unreconciled send of the same email must not get a second
+// proposal the owner could approve into a duplicate.
+export type ProposeSendEmailResult =
+  // delivered:false = the row exists and dedupe blocks duplicates, but the channel send was
+  // gated/dropped, so no visible card may be claimed (the console Waiting-on-you list can
+  // still act on it). A delivery claim requires a channel send receipt, never a resolved
+  // undefined from the egress gate.
+  | Readonly<{ ok: true; id: string; reused: 'open' | 'sending' | 'unknown' | null; delivered?: boolean }>
+  // The COMPLETE card (message + recipients + subject + body) must fit one Telegram message:
+  // a truncated preview would let "Send it" approve content the owner never saw. Typed and
+  // content-free: only the limit and the actual length, never the body.
+  | Readonly<{ ok: false; reason: 'preview_oversize'; limit: number; actual: number }>;
+
+export type ApprovalDecision = Readonly<{ toast: string; message: string; buttons?: readonly [string, string][] }>;
+export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done' | 'unknown'; undoable: boolean }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
-  proposeSendEmail(payload: EmailSendProposal): Promise<string>;
+  proposeSendEmail(payload: EmailSendProposal): Promise<ProposeSendEmailResult>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
-  decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
+  decide(id: string, action: 'a' | 's' | 'e' | 'u' | 'r' | 'x', trace: string): Promise<ApprovalDecision>;
   pending(now: number): readonly ApprovalItem[];
   ledger(reminders: readonly Readonly<{ note: string; at: string; repeat: string }>[]): string;
 }>;
@@ -51,7 +73,11 @@ export type ApprovalDesk = Readonly<{
 export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   call: TelegramCall;
   owner: number;
-  google(): Promise<GoogleClient | null>;
+  // sendIntent binds the proxy send idempotency gate to the approved proposal: the email rail
+  // passes its approval entry id, so a replayed approval can never fire a second provider send.
+  // Returns the client AND the opaque connection that will serve it; pinnedConnection
+  // restricts selection to the account that handled the original approved send.
+  google(sendIntent?: string, correlation?: string, pinnedConnection?: string): Promise<Readonly<{ client: GoogleClient; connection: string }> | null>;
   newId(): string;
   now(): number;
   timezone: string;
@@ -61,6 +87,12 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
+  // Account pinning (#202): the opaque connection id that handled an approved send is stored
+  // here, so reconciliation checks THAT SAME account. It never appears in owner text or logs.
+  // Check the column instead of blanket-catching the ALTER: a real migration error must fail
+  // loudly here, not later in the send path.
+  const hasConnection = sql.exec("PRAGMA table_info(ledger)").toArray().some((col) => (col as { name?: string }).name === 'connection');
+  if (!hasConnection) sql.exec('ALTER TABLE ledger ADD COLUMN connection TEXT');
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const describe = (p: ProposeCalendarChangeArgs) => {
     const name = p.title ? `"${p.title}"` : 'the event';
@@ -71,14 +103,27 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const row = (id: string) => sql.exec<LedgerRow>('SELECT * FROM ledger WHERE id = ?', id).toArray()[0];
   const setStatus = (id: string, status: string, undo: Undo | null = null) =>
     sql.exec('UPDATE ledger SET status = ?, undo_json = ?, decided_at = ? WHERE id = ?', status, undo ? JSON.stringify(undo) : null, deps.now(), id);
-  const say = (text: string, buttons?: [string, string][]) =>
-    deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) });
+  // delivered = the channel returned a send receipt. The egress gate resolves undefined on a
+  // blocked send (rebound channel, unlinked owner); that is NOT a visible card.
+  const say = async (text: string, buttons?: readonly [string, string][]): Promise<boolean> =>
+    (await deps.call('sendMessage', { chat_id: deps.owner, text, ...(buttons ? { reply_markup: { inline_keyboard: [buttons.map(([label, data]) => ({ text: label, callback_data: data }))] } } : {}) })) !== undefined;
 
   const describeBrowser = (p: BrowserSubmitProposal) => {
     const binding = Object.entries(p.binding).map(([k, v]) => `${k}: ${v}`).join(', ');
     return `${p.action.description} on ${p.url}${binding ? ` (${binding})` : ''}`;
   };
-  const describeEmail = (p: EmailSendProposal) => `Send email to ${p.to.join(', ')}: "${p.subject}"`;
+  // The card is the approval surface: it must show the COMPLETE recipients, subject and body
+  // the digest binds, or "Send it" approves content the owner never inspected. Nothing is ever
+  // cut: proposeSendEmail fails with a typed oversize instead of sending a partial preview.
+  const TELEGRAM_MESSAGE_LIMIT = 4096;
+  const describeEmail = (p: EmailSendProposal) => {
+    const lines = [`To: ${p.to.join(', ')}`];
+    if (p.cc?.length) lines.push(`Cc: ${p.cc.join(', ')}`);
+    if (p.bcc?.length) lines.push(`Bcc: ${p.bcc.join(', ')}`);
+    lines.push(`Subject: ${p.subject}`, '');
+    lines.push(p.body);
+    return lines.join('\n');
+  };
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
@@ -107,15 +152,27 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     else await client.moveEvent(undo.id, undo.start, undo.end);
   };
 
-  const decide = async (id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision> => {
+  // The two deliberate ways out of an unreconciled send, offered on every 'unknown' surface.
+  // The declaration button says what the owner actually did: they looked in Sent themselves.
+  // A negative Sent SEARCH stays inconclusive; only the owner's own check releases the block.
+  const unresolvedButtons = (id: string): readonly [string, string][] => [['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]];
+
+  const decide = async (id: string, action: 'a' | 's' | 'e' | 'u' | 'r' | 'x', trace: string): Promise<ApprovalDecision> => {
     const started = deps.now();
     const entry = row(id);
-    const expected = action === 'u' ? 'done' : 'open';
-    if (!entry || entry.status !== expected) return { toast: 'Already handled.', message: 'Already handled.' };
+    if (!entry) return { toast: 'Already handled.', message: 'Already handled.' };
+    // r/x accept 'unknown' rows and STALE 'sending' claims (a DO restart can strand one
+    // forever; reconciliation never issues a provider send, so this cannot duplicate).
+    const staleClaim = entry.status === 'sending' && entry.decided_at !== null && deps.now() - entry.decided_at > SENDING_LEASE_MS;
+    const expected = action === 'u' ? 'done' : action === 'r' || action === 'x' ? (entry.status === 'unknown' || staleClaim ? entry.status : 'unknown') : 'open';
+    if (entry.status !== expected) return { toast: 'Already handled.', message: 'Already handled.' };
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
       let out: ApprovalDecision;
-      if (action !== 'u' && action !== 's' && expired(entry, proposal)) {
+      // The 12h TTL bounds PROPOSALS (open rows) only. An 'unknown' row is an unreconciled
+      // EFFECT, not a proposal: expiring r/x would let a possibly-delivered send stop blocking
+      // a duplicate proposal without ever being reconciled (live review blocker, #202).
+      if (action !== 'u' && action !== 's' && entry.status === 'open' && expired(entry, proposal)) {
         setStatus(id, 'expired');
         out = { toast: 'This proposal expired', message: `That proposal expired, so nothing happened: ${describeAny(entry)}. Ask me again if you still want it.` };
       } else if (action === 's') {
@@ -141,36 +198,104 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const ep = JSON.parse(entry.payload_json) as EmailSendProposal;
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
-        } else {
-          const client = await deps.google();
-          if (client === null) {
-            out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
-          } else if (await sha256Hex(ep.raw) !== ep.digest) {
+        } else if (action === 'r' || action === 'x') {
+          // Owner-visible resolution of an unreconciled send. 'r' re-checks Sent deliberately;
+          // only a positive hit proves delivery. 'x' is the owner's own declaration that it did
+          // not go (they checked Sent themselves), which closes the row and unblocks a fresh
+          // proposal. A negative search NEVER resolves the row on its own - index lag is real.
+          if (action === 'x') {
             setStatus(id, 'failed');
-            out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
+            out = { toast: 'Marked as not sent', message: `You confirmed it did not go, so I closed this one: ${describeEmail(ep)}. Ask me to send a fresh one whenever you are ready.` };
           } else {
-            try {
-              await client.sendRaw(ep.raw, ep.thread_id);
-              setStatus(id, 'done');
-              out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
-            } catch (error) {
-              const landed = await client.findSentByMessageId(ep.message_id).catch(() => false);
-              if (landed) {
+            // Mail feature is explicit: a bare deps.google() selects a CALENDAR-scoped
+            // connection in the owner-DO wiring, so a mail-only grant could never reconcile
+            // and a multi-account owner could search the wrong mailbox. The send intent id
+            // routes feature=mail; it gates idempotency only on sendRaw, so reuse here is safe.
+            // Reconcile against the SAME pinned connection that handled the approved send;
+            // searching a different account would check the wrong Sent folder.
+            const pinned = row(id)?.connection ?? undefined;
+            const got = await deps.google(`email_send:${id}`, trace, pinned);
+            if (got === null) {
+              out = pinned
+                ? { toast: 'Account unavailable', message: 'The Google account that handled this send is unavailable, so I still cannot confirm it. Reconnect it or check Sent yourself, then mark it accordingly.', buttons: unresolvedButtons(id) }
+                : { toast: 'Google is not connected', message: 'I could not check Sent because Google is not connected.', buttons: unresolvedButtons(id) };
+            } else {
+              const found = await got.client.findSentByMessageId(ep.message_id).then((hit) => hit, () => null);
+              if (found === true) {
                 setStatus(id, 'done');
-                out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` };
+                out = { toast: 'Found in Sent', message: `I found it in your Sent folder: ${describeEmail(ep)}. Marking it sent - I will not send it again.` };
               } else {
-                setStatus(id, 'failed');
-                out = { toast: "That didn't send", message: `The email did not send (${error instanceof Error ? error.message : String(error)}). Nothing was delivered - ask me to send it again.` };
+                out = { toast: 'Not in Sent yet', message: `I still cannot see it in Sent. Gmail's index can lag a few minutes - check Sent yourself, then either ask me to check again or mark it as not sent.`, buttons: unresolvedButtons(id) };
+              }
+            }
+          }
+        } else {
+          // Atomic claim BEFORE any provider I/O: exactly one concurrent approval crosses
+          // open -> sending; the other reads the flipped row and is Already handled. The
+          // UPDATE is synchronous in the DO, so two interleaved approvals cannot both pass.
+          const claimed = sql.exec("UPDATE ledger SET status = 'sending', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id).rowsWritten === 1;
+          if (!claimed) {
+            out = { toast: 'Already handled.', message: 'Already handled.' };
+          } else {
+            // Everything up to sendRaw is pre-I/O: if the client build (Vault adopt, token
+            // refresh) or the digest hash throws, NO provider call happened, so the claim is
+            // released back to 'open' instead of stranding the row as 'sending' forever.
+            let got: Readonly<{ client: GoogleClient; connection: string }> | null = null;
+            let digestOk = false;
+            try {
+              // The approval id is the send idempotency intent for the proxy gate: a replayed
+              // approval replays as the same intent and can never fire a second provider send.
+              got = await deps.google(`email_send:${id}`, trace);
+              digestOk = got !== null && (await sha256Hex(ep.raw)) === ep.digest;
+            } catch (error) {
+              setStatus(id, 'open');
+              throw error;
+            }
+            if (got === null) {
+              setStatus(id, 'open'); // claimed but never attempted: release it for a connected retry
+              out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
+            } else if (!digestOk) {
+              setStatus(id, 'failed');
+              out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
+            } else {
+              // Pin the exact connection that will perform the send BEFORE any provider I/O,
+              // so reconciliation (here or from 'r') checks the same account's Sent.
+              sql.exec('UPDATE ledger SET connection = ? WHERE id = ?', got.connection, id);
+              const client = got.client;
+              try {
+                await client.sendRaw(ep.raw, ep.thread_id);
+                setStatus(id, 'done');
+                out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
+              } catch (error) {
+                // Typed outcome, never a guess: ONLY a positive Sent-mail reconciliation proves
+                // delivery. A negative or unavailable lookup proves nothing (index lag,
+                // ambiguous network), so the outcome stays unknown - claiming "nothing was
+                // delivered" would invite a duplicate resend.
+                const cause = error instanceof Error ? error.message : String(error);
+                let landed: boolean | null = null;
+                if (typeof ep.message_id === 'string' && ep.message_id.length > 0) {
+                  landed = await client.findSentByMessageId(ep.message_id).then((found) => found, () => null);
+                }
+                if (landed === true) {
+                  setStatus(id, 'done');
+                  // A matching Sent item proves the provider accepted it, not exactly-once
+                  // final delivery (Google cautions a send 200 is no such guarantee); the
+                  // receipt says what was actually proven and that we will not send again.
+                  out = { toast: 'Found in Sent', message: `I found it in your Sent folder: ${describeEmail(ep)}. Marking it sent - I will not send it again.` };
+                } else {
+                  setStatus(id, 'unknown');
+                  out = { toast: 'Send unconfirmed', message: `I could not confirm whether that email went out (${cause}). It may be in your Sent folder - check there before asking me to resend, so it never goes twice.`, buttons: unresolvedButtons(id) };
+                }
               }
             }
           }
         }
       } else {
-        const client = await deps.google();
-        if (client === null) {
+        const got = await deps.google();
+        if (got === null) {
           out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
         } else if (action === 'a') {
-          const undo = await apply(client, proposal);
+          const undo = await apply(got.client, proposal);
           if (undo === 'stale') {
             setStatus(id, 'stale');
             out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
@@ -179,7 +304,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
           }
         } else if (entry.undo_json && entry.decided_at !== null && deps.now() - entry.decided_at <= UNDO_WINDOW_MS) {
-          await revert(client, JSON.parse(entry.undo_json) as Undo);
+          await revert(got.client, JSON.parse(entry.undo_json) as Undo);
           setStatus(id, 'undone');
           out = { toast: 'Undone', message: `Undone: ${describe(proposal)}.` };
         } else {
@@ -203,17 +328,53 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return id;
     },
     async proposeSendEmail(payload) {
+      // Fail closed at proposal time when the COMPLETE card cannot fit one Telegram message:
+      // an enabled "Send it" on a truncated preview would approve content the owner never saw.
+      {
+        const card = `Send this email? ${describeEmail(payload)}`;
+        if (card.length > TELEGRAM_MESSAGE_LIMIT) {
+          deps.log({ trace: 'approvals', hop: 'email_preview_oversize', ms: 0, ok: false, code: 'oversize:preview', detail: `preview ${card.length} > ${TELEGRAM_MESSAGE_LIMIT}` });
+          return { ok: false, reason: 'preview_oversize', limit: TELEGRAM_MESSAGE_LIMIT, actual: card.length };
+        }
+      }
+      // Idempotent on the logical send: the Message-ID encodes owner + turn + content, so a
+      // tool-loop retry after an ambiguous card timeout re-sends the SAME proposal's card
+      // instead of minting a second one. A same-content send on a new turn carries a new
+      // Message-ID and is a separate proposal - intents never collapse, and Sent-mail
+      // reconciliation can never match an older send.
+      // Re-entry protection: dedupe scans open AND in-flight/unreconciled rows. A 'sending' or
+      // 'unknown' row with the same Message-ID (same-turn) - or an 'unknown' row with the same
+      // content digest (cross-turn) - blocks a fresh proposal, because approving it could
+      // duplicate a send whose outcome was never proven.
+      const rows = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status IN ('open', 'sending', 'unknown')").toArray();
+      for (const r of rows) {
+        let stored: EmailSendProposal | null = null;
+        try { stored = JSON.parse(r.payload_json) as EmailSendProposal; } catch { continue; }
+        if (stored === null || stored.message_id === undefined) continue;
+        const sameLogicalSend = stored.message_id === payload.message_id;
+        const sameUnresolvedContent = r.status === 'unknown' && stored.content_digest !== undefined && stored.content_digest === payload.content_digest;
+        if (!sameLogicalSend && !sameUnresolvedContent) continue;
+        if (r.status === 'open') {
+          await say(`Send this email? ${r.summary}`, [['Send it', `a:${r.id}`], ['Modify', `e:${r.id}`], ['Not now', `s:${r.id}`]]);
+        }
+        if (r.status === 'unknown') {
+          // Surface the resolution path again: a blocked re-entry must tell the owner how to
+          // close the unreconciled send, not just refuse.
+          await say(`That earlier send is still unconfirmed, so I will not propose the same email again yet. Check Sent, then:`, unresolvedButtons(r.id));
+        }
+        return { ok: true, id: r.id, reused: r.status as 'open' | 'sending' | 'unknown' };
+      }
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
-      return id;
+      const delivered = await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      return { ok: true, id, reused: null, delivered };
     },
     async propose(p) {
       const id = `p${deps.newId()}`;
       const summary = `${describe(p)}. ${p.reason}`;
-      const client = p.event_id ? await deps.google() : null;
-      const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
+      const got = p.event_id ? await deps.google() : null;
+      const seen = got && p.event_id ? (await got.client.event(p.event_id)).etag : undefined;
       const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
       await say(`Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
@@ -224,31 +385,39 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     pending(now) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
+      // Unreconciled sends are owner-visible pending work: they block same-content re-entry,
+      // so hiding them would leave a legitimate email blocked with no way to see why.
+      const unknown = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND (status = 'unknown' OR (status = 'sending' AND decided_at IS NOT NULL AND decided_at <= ?)) ORDER BY created_at", now - SENDING_LEASE_MS).toArray();
       const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
       return [
         ...open.map((r) => ({ id: r.id, summary: r.summary, state: 'open' as const, undoable: false })),
+        ...unknown.map((r) => ({ id: r.id, summary: r.summary, state: 'unknown' as const, undoable: false })),
         ...undoable.map((r) => ({ id: r.id, summary: r.summary, state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS })),
       ];
     },
     async callback(query, trace) {
       const [action = '', id] = (query.data ?? '').split(':');
       const answer = (text: string) => deps.call('answerCallbackQuery', { callback_query_id: query.id, text }).catch(() => undefined);
-      if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u'].includes(action)) return void (await answer('Not available.'));
+      if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u', 'r', 'x'].includes(action)) return void (await answer('Not available.'));
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      const out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace);
+      const out = await decide(id, action as 'a' | 's' | 'e' | 'u' | 'r' | 'x', trace);
       await answer(out.toast);
-      await say(out.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
+      await say(out.message, out.buttons !== undefined ? [...out.buttons] : action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
       const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
+      // ledger() feeds UNRELATED later model context: email summaries carry the full body and
+      // Bcc, so they render as bounded metadata here. The complete immutable payload stays on
+      // the row and on the owner-facing approval card/console (payload_json, pending()).
+      const brief = (r: LedgerRow) => (r.kind === 'email_send' ? 'an email send approval' : r.summary);
       const lines = [
         'Open',
-        ...(open.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
+        ...(open.length ? open.map((r) => `- ${brief(r)} (waiting on you)`) : ['- nothing waiting on you']),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',
-        ...(done.length ? done.map((r) => `- ${r.status}: ${r.summary}`) : ['- nothing yet']),
+        ...(done.length ? done.map((r) => `- ${r.status}: ${brief(r)}`) : ['- nothing yet']),
       ];
       return lines.join('\n');
     },

@@ -9,7 +9,7 @@ import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 import { GoogleError } from '../src/connectors/google';
 
 const clock = { timezone: 'Asia/Calcutta', now: () => new Date('2026-09-24T10:00:00Z') };
-const desk = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
+const desk = { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ ok: true as const, id: 'proposal:1', reused: null }), record: () => undefined };
 
 const TIER2_HANDLERS = ['query_calendar', 'get_communication', 'draft_email', 'send_email', 'get_tasks'];
 
@@ -23,7 +23,7 @@ describe('tier-2 connector contract', () => {
     for (const name of TIER2_HANDLERS) {
       const google: GoogleAccess = { client: async () => null };
       const handler = googleHandlers(google, desk, clock).find((h) => h.name === name)!;
-      const result = await handler.handle({ include_declined: false, limit: 5 } as never);
+      const result = await handler.handle({ include_declined: false, limit: 5 } as never, { authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at: 0 } } } as never);
       expect(result, name).toMatchObject({
         ok: false, code: 'auth_failed',
         connect: { status: 'auth_required', service: 'google', reason: 'not_connected' },
