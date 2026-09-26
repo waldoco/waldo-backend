@@ -7,8 +7,10 @@ import type { TurnLogEntry } from '../channels/telegram-listener';
 const GUARD_DIAGNOSTIC = new RegExp(
   `^(?:${sanitiseCheckSchema.options.join('|')}):(?:${sanitiseFailureReasonSchema.options.join('|')})$`,
 );
-const validGuard = (guard: string | undefined): string | undefined =>
-  guard !== undefined && GUARD_DIAGNOSTIC.test(guard) ? guard : undefined;
+// typeof first: RegExp.test coerces non-strings, so an object whose toString() yields a valid
+// enum pair could otherwise pass the gate and serialize private fields into the sinks.
+const validGuard = (guard: unknown): string | undefined =>
+  typeof guard === 'string' && GUARD_DIAGNOSTIC.test(guard) ? guard : undefined;
 
 // Hops whose detail strings are verified content-free: fixed strings, enums, counts and
 // integer ids only (console ids pass through consoleActionTraceDetail first). Everything else (model reasons, provider error messages, payloads) is free-form
