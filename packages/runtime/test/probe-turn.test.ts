@@ -43,7 +43,7 @@ describe('handleProbeTurn', () => {
     expect(response.status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('do-a');
     expect(fetch).toHaveBeenCalledWith(PROBE_TURN_DO_URL, {
-      method: 'POST', body: JSON.stringify({ text: 'probe ping' }),
+      method: 'POST', body: JSON.stringify({ text: 'probe ping', live: false }),
       headers: {
         'content-type': 'application/json', 'x-waldo-origin': 'https://w.test',
         'x-waldo-telegram-subject': '42', 'x-waldo-timezone': 'Asia/Kolkata',
@@ -52,11 +52,31 @@ describe('handleProbeTurn', () => {
     expect(await response.json()).toEqual({ trace: 'tg--1', outcome: 'answered' });
   });
 
+  it('passes live:true through and rejects a non-boolean live flag', async () => {
+    const { fetch, ns } = namespace();
+    expect((await handleProbeTurn(post('probe-secret', { text: 'receipt check', live: true }), staging(ns), directory)).status).toBe(200);
+    expect(fetch).toHaveBeenCalledWith(PROBE_TURN_DO_URL, expect.objectContaining({ body: JSON.stringify({ text: 'receipt check', live: true }) }));
+    expect((await handleProbeTurn(post('probe-secret', { text: 'x', live: 'yes' }), staging(ns), directory)).status).toBe(400);
+  });
+
   it('falls back to the configured owner subject when the directory has no presence', async () => {
     const { fetch, idFromName, ns } = namespace();
     const empty: OwnerDirectory = { byPresence: async () => null, redeem: async () => null };
     expect((await handleProbeTurn(post('probe-secret'), staging(ns), empty)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('42');
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('newProbeCapture', () => {
+  it('collects calls in order and answers with a Bot-API-shaped success', async () => {
+    const { newProbeCapture } = await import('../src/channels/probe-turn');
+    const capture = newProbeCapture();
+    const first = await capture.record('sendChatAction', { chat_id: 42, action: 'typing' });
+    const second = await capture.record('sendMessage', { chat_id: 42, text: 'reply' });
+    expect(capture.calls.map((c) => c.method)).toEqual(['sendChatAction', 'sendMessage']);
+    expect(capture.calls[1]?.request).toEqual({ chat_id: 42, text: 'reply' });
+    expect(first).toEqual({ ok: true, result: { message_id: 0 } });
+    expect(second).toEqual({ ok: true, result: { message_id: 0 } });
   });
 });

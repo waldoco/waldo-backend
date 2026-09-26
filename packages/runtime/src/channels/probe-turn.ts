@@ -7,6 +7,24 @@ import { sameSecret } from './telegram-webhook';
 export const PROBE_TURN_PATH = '/probe/turn';
 export const PROBE_TURN_DO_URL = 'https://telegram-owner/probe-turn';
 const PROBE_TOKEN_HEADER = 'x-waldo-probe-token';
+
+// Capture mode (the default): outbound Telegram calls are collected into the probe response
+// instead of hitting the Bot API. A slot lives on the owner runtime; probeTurn fills it for
+// the duration of one serialized probe and clears it after, so real turns are never affected.
+export type ProbeCapturedCall = Readonly<{ method: string; request: unknown }>;
+export type ProbeCapture = Readonly<{ calls: ProbeCapturedCall[]; record(method: string, request: unknown): Promise<unknown> }>;
+export type ProbeCaptureSlot = { current: ProbeCapture | null };
+export const newProbeCapture = (): ProbeCapture => {
+  const calls: ProbeCapturedCall[] = [];
+  return {
+    calls,
+    record: (method, request) => {
+      calls.push({ method, request });
+      // Shape mirrors a Bot API success so callers reading result.message_id keep working.
+      return Promise.resolve({ ok: true, result: { message_id: 0 } });
+    },
+  };
+};
 const MAX_PROBE_TEXT = 4_000;
 
 export type ProbeTurnEnv = Readonly<{
@@ -30,15 +48,19 @@ export const handleProbeTurn = async (
   if (!sameSecret(request.headers.get(PROBE_TOKEN_HEADER) ?? '', env.WALDO_PROBE_TOKEN)) {
     return new Response('forbidden', { status: 403 });
   }
-  let text: unknown;
+  let payload: { text?: unknown; live?: unknown };
   try {
-    text = ((await request.json()) as { text?: unknown }).text;
+    payload = (await request.json()) as { text?: unknown; live?: unknown };
   } catch {
     return new Response('bad request', { status: 400 });
   }
+  const text = payload.text;
   if (typeof text !== 'string' || text.trim().length === 0 || text.length > MAX_PROBE_TEXT) {
     return new Response('bad request', { status: 400 });
   }
+  // Capture mode is the default; live:true opts into real Telegram sends for receipt probes.
+  const live = payload.live === undefined ? false : payload.live;
+  if (typeof live !== 'boolean') return new Response('bad request', { status: 400 });
   const subject = env.WALDO_OWNER_TELEGRAM_ID;
   if (!subject) return new Response('owner unavailable', { status: 503 });
   const route = await directory.byPresence('telegram', subject).catch(() => null);
@@ -51,5 +73,5 @@ export const handleProbeTurn = async (
   const timezone = route?.timezone ?? env.WALDO_OWNER_TIMEZONE;
   if (timezone) headers['x-waldo-timezone'] = timezone;
   return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(doName))
-    .fetch(PROBE_TURN_DO_URL, { method: 'POST', body: JSON.stringify({ text: text.trim() }), headers });
+    .fetch(PROBE_TURN_DO_URL, { method: 'POST', body: JSON.stringify({ text: text.trim(), live }), headers });
 };

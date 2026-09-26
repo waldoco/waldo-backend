@@ -36,7 +36,7 @@ import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
-import { PROBE_TURN_DO_URL } from './probe-turn';
+import { newProbeCapture, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { callMcpToolHandler } from '../tools/live/mcp';
 import { createTelegramFileDownloader } from './telegram-media';
@@ -62,6 +62,7 @@ type OwnerRuntime = Readonly<{
   control: TurnControl;
   api: ReturnType<typeof createTelegramOwnerApi>;
   call: ReturnType<typeof createTelegramCaller>;
+  probeCapture: ProbeCaptureSlot;
   desk: ApprovalDesk;
   ledger(): string;
   updates: UpdateBook;
@@ -322,25 +323,34 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   // typing) still fire - the owner's staging chat is the visible receipt surface.
   private async probeTurn(body: string): Promise<Response> {
     if ((this.env.WALDO_ENVIRONMENT ?? 'development') !== 'staging') return new Response('not found', { status: 404 });
-    let text: unknown;
+    let payload: { text?: unknown; live?: unknown };
     try {
-      text = (JSON.parse(body) as { text?: unknown }).text;
+      payload = JSON.parse(body) as { text?: unknown; live?: unknown };
     } catch {
       return new Response('bad request', { status: 400 });
     }
+    const text = payload.text;
     if (typeof text !== 'string' || text.trim().length === 0 || text.length > 4_000) {
       return new Response('bad request', { status: 400 });
     }
+    const live = payload.live === undefined ? false : payload.live;
+    if (typeof live !== 'boolean') return new Response('bad request', { status: 400 });
     const result = await this.serial(async () => {
-      const { listener, owner, ready } = this.setup('telegram');
+      const { listener, owner, probeCapture, ready } = this.setup('telegram');
       await ready;
-      if (!listener) return { trace: null as string | null, outcome: 'unlinked' as const };
+      if (!listener) return { trace: null as string | null, outcome: 'unlinked' as const, captured: null };
       const seq = ((await this.ctx.storage.get<number>('probe_seq')) ?? 0) - 1;
       await this.ctx.storage.put('probe_seq', seq);
-      const outcome = await listener.handle({
-        updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, text: text.trim(),
-      });
-      return { trace: `tg-${seq}` as string | null, outcome };
+      const capture = live ? null : newProbeCapture();
+      probeCapture.current = capture;
+      try {
+        const outcome = await listener.handle({
+          updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, text: text.trim(),
+        });
+        return { trace: `tg-${seq}` as string | null, outcome, captured: capture === null ? null : capture.calls };
+      } finally {
+        probeCapture.current = null;
+      }
     });
     return Response.json(result);
   }
@@ -491,11 +501,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       )),
       (count, method) => log({ trace: 'egress', hop: 'egress_redacted', ms: 0, ok: true, detail: `${method}: ${count} link(s)` }),
     );
-    const api = createTelegramOwnerApi(call);
+    // Staging probe capture: while a capture-mode /probe-turn runs inside the serial queue,
+    // outbound Telegram calls land in the probe response instead of the Bot API. Inert otherwise.
+    const probeCapture: ProbeCaptureSlot = { current: null };
+    const routedCall: typeof call = (method, request) =>
+      probeCapture.current === null ? call(method, request) : probeCapture.current.record(method, request);
+    const api = createTelegramOwnerApi(routedCall);
     // The trace names the attempt by its nonce prefix; the signed URL itself is never logged.
     const deliverConnectLink = async (url: string): Promise<boolean> => {
       const trace = url.includes('/c/') ? 'connect:deliver' : `oauth:${(new URL(url).searchParams.get('state') ?? '').split('.').at(-2)?.slice(0, 8) ?? 'unknown'}`;
-      return call('sendMessage', {
+      return routedCall('sendMessage', {
         chat_id: owner,
         text: 'Tap below to connect your Google account. The link is signed, single-purpose and expires shortly.',
         reply_markup: { inline_keyboard: [[{ text: 'Connect Google', url }]] },
@@ -548,7 +563,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const known = await storage.get<string>('bot_username');
       if (known) return known;
       try {
-        const me = await call('getMe', {}) as { username?: string } | undefined;
+        const me = await routedCall('getMe', {}) as { username?: string } | undefined;
         if (me?.username) await storage.put('bot_username', me.username);
         return me?.username ?? null;
       } catch (error) {
@@ -672,7 +687,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const desk = approvalDesk(storage.sql, {
-      call, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
+      call: routedCall, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
       timezone: clock.timezone, log,
       browserSubmit: (proposal) => executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
     });
@@ -821,7 +836,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (reply && reply !== SKIP_UPDATE) text = reply;
         }
         const id = updates.record(day, now, changes, text);
-        if (text) await call('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } });
+        if (text) await routedCall('sendMessage', { chat_id: owner, text, reply_markup: { inline_keyboard: [[{ text: 'Useful', callback_data: `fb:${id}:u` }, { text: 'Not useful', callback_data: `fb:${id}:n` }]] } });
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: true, detail: `${changes.length} changes; ${text ? 'sent' : canSend ? 'skipped' : 'held for next card'}`, text: { input: changeLines(changes), output: text ?? '' } });
       } catch (error) {
         log({ trace, hop: 'update_card', ms: Date.now() - started, ok: false, error: String(error) });
@@ -855,7 +870,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
+    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
       view: async (session, notice) => {
         const linked = await google.state();
         const now = Date.now();
