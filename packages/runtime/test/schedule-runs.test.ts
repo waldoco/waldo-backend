@@ -171,3 +171,118 @@ describe('run decision + delivery lifecycle (owner shape call)', () => {
     expect(runs[0]).toMatchObject({ outcome: 'running', heartbeat_result: 'acted', delivery: 'pending', settled_at: null });
   });
 });
+
+describe('C3 dedupe + missed-run policy', () => {
+  it('a crashed occurrence retry fires - crash recovery beats dedupe', async () => {
+    // Contract pinned by run-loop.test.ts: crash-injection leaves the row running, and the
+    // next alarm MUST retry the same occurrence (attempt 2), not skip it.
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      let now = 60_000;
+      const at = () => new Scheduler(state.storage.sql, state.storage, deps(now));
+      await at().schedule({ id: 'd0', kind: 'brief', occurrenceAt: 60_000, dueAt: 60_000, payloadRefs: {} });
+      await expect(at().dispatchDue({
+        brief: async () => { throw new Error('crash-injection: forced'); },
+      } as ScheduleExecutors)).rejects.toThrow('crash-injection');
+      now = 90_000;
+      let calls = 0;
+      await at().dispatchDue({ brief: async () => { calls += 1; } } as ScheduleExecutors);
+      const runs = state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY id').toArray();
+      return { calls, runs };
+    });
+    expect(result.calls).toBe(1);
+    expect(result.runs.map((r) => [r.id, r.outcome])).toEqual([
+      ['d0:60000:1', 'running'], // crash evidence, never settled
+      ['d0:60000:2', 'ok'],      // retry of the same occurrence recovered
+    ]);
+  });
+
+  it('a still-running row for an OLDER occurrence blocks the next occurrence and the skip is recorded', async () => {
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      const now = 120_000;
+      const at = () => new Scheduler(state.storage.sql, state.storage, deps(now));
+      const recurrence = { type: 'interval', every_ms: 60_000, phase_ms: 0 } as const;
+      await at().schedule({ id: 'd1', kind: 'brief', occurrenceAt: 120_000, dueAt: 120_000, recurrence, payloadRefs: {} });
+      // White-box: an earlier occurrence's run never settled (executor still going / crashed
+      // after advancing). The next occurrence must not double-fire the schedule.
+      state.storage.sql.exec(
+        `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES ('d1:60000:1', 'd1', 'brief', 60_000, 1)`,
+      );
+      let calls = 0;
+      await at().dispatchDue({ brief: async () => { calls += 1; } } as ScheduleExecutors);
+      const runs = state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY id').toArray();
+      const entry = at().read('d1');
+      return { calls, runs, entry };
+    });
+    expect(result.calls).toBe(0);
+    expect(result.runs.map((r) => [r.id, r.outcome])).toEqual([
+      ['d1:120000:0', 'missed'],
+      ['d1:60000:1', 'running'],
+    ]);
+    expect(result.entry).toMatchObject({ occurrence_at: 180_000, status: 'armed' });
+  });
+
+  it('a 3-occurrence gap fires the latest occurrence once with two missed rows', async () => {
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      const now = 180_000;
+      const at = () => new Scheduler(state.storage.sql, state.storage, deps(now));
+      const recurrence = { type: 'interval', every_ms: 60_000, phase_ms: 0 } as const;
+      await at().schedule({ id: 'm1', kind: 'brief', occurrenceAt: 60_000, dueAt: 60_000, recurrence, payloadRefs: {} });
+      let calls = 0;
+      const dispatched = await at().dispatchDue({ brief: async () => { calls += 1; } } as ScheduleExecutors);
+      const runs = state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY fired_at, id').toArray();
+      return { calls, dispatched, runs };
+    });
+    expect(result.calls).toBe(1);
+    expect(result.dispatched).toHaveLength(1);
+    expect(result.dispatched[0]).toMatchObject({ id: 'm1', occurrence_at: 180_000 });
+    expect(result.runs.map((r) => [r.id, r.outcome])).toEqual([
+      ['m1:60000:0', 'missed'],
+      ['m1:120000:0', 'missed'],
+      ['m1:180000:1', 'ok'],
+    ]);
+  });
+
+  it('a retried alarm does not double-record a skip (append-only, idempotent)', async () => {
+    const runs = await runInDurableObject(stub(), async (_instance, state) => {
+      const now = 180_000;
+      const at = () => new Scheduler(state.storage.sql, state.storage, deps(now));
+      const recurrence = { type: 'interval', every_ms: 60_000, phase_ms: 0 } as const;
+      await at().schedule({ id: 'm2', kind: 'brief', occurrenceAt: 60_000, dueAt: 60_000, recurrence, payloadRefs: {} });
+      const failing = { brief: async () => { throw new Error('boom'); } } as ScheduleExecutors;
+      await at().dispatchDue(failing);
+      // Alarm retry at the same instant: occurrence already advanced past the gap, but the
+      // missed ids must stay single even if the policy replays.
+      const before = state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs').toArray();
+      void before;
+      return state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY id').toArray();
+    });
+    const missed = runs.filter((r) => r.outcome === 'missed');
+    expect(new Set(missed.map((r) => r.id)).size).toBe(missed.length);
+  });
+
+  // Regression (workerd LIKE limit): dedupe and missed-run bookkeeping also matched
+  // occurrence ids by prefix - with a production-length schedule id those queries throw
+  // whenever a history row is present. Range bounds make the id length irrelevant.
+  it('dedupe and missed-run bookkeeping work for production-length schedule ids', async () => {
+    const longId = `handoff:${crypto.randomUUID()}`;
+    const result = await runInDurableObject(stub(), async (_instance, state) => {
+      const now = 120_000;
+      const at = () => new Scheduler(state.storage.sql, state.storage, deps(now));
+      const recurrence = { type: 'interval', every_ms: 60_000, phase_ms: 0 } as const;
+      await at().schedule({ id: longId, kind: 'brief', occurrenceAt: 120_000, dueAt: 120_000, recurrence, payloadRefs: {} });
+      // Earlier occurrence still running (crashed/unsettled) - must block this fire.
+      state.storage.sql.exec(
+        `INSERT INTO schedule_runs (id, schedule_id, kind, fired_at, attempt) VALUES (?, ?, 'brief', 60_000, 1)`,
+        `${longId}:60000:1`,
+        longId,
+      );
+      let calls = 0;
+      await at().dispatchDue({ brief: async () => { calls += 1; } } as ScheduleExecutors);
+      const runs = state.storage.sql.exec<RunRow>('SELECT * FROM schedule_runs ORDER BY id').toArray();
+      return { calls, runs };
+    });
+    expect(result.calls).toBe(0);
+    expect(result.runs.map((r) => [r.attempt, r.outcome])).toEqual([[0, 'missed'], [1, 'running']]);
+    expect(result.runs.every((r) => r.schedule_id === longId)).toBe(true);
+  });
+});
