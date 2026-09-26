@@ -69,7 +69,11 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
-      return { timezone: clock.timezone, from, to, events: await client.events(from, to, limit, include_declined) };
+      const page = await client.events(from, to, limit, include_declined);
+      return {
+        timezone: clock.timezone, from, to, events: page.items,
+        ...(page.complete ? {} : { partial: true, note: 'Only part of this range was fetched; more events exist beyond it. Narrow the range to see the rest.' }),
+      };
     }, ctx?.trace),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
@@ -89,11 +93,15 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: getTasksArgsSchema,
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
-    handle: ({ status, limit }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', async (client) => ({
-      status,
-      tasks: await client.tasks(status, limit),
-      ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
-    }), ctx?.trace),
+    handle: ({ status, limit }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', async (client) => {
+      const page = await client.tasks(status, limit);
+      return {
+        status,
+        tasks: page.items,
+        ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
+        ...(page.complete ? {} : { partial: true, coverage_note: 'Only part of the task list was fetched; more tasks exist beyond it. Narrow the filter to see the rest.' }),
+      };
+    }, ctx?.trace),
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',

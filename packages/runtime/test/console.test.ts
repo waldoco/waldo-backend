@@ -210,4 +210,25 @@ describe('console approval notices stay truthful on failure', () => {
     expect(NOTICES['approval.offline']).not.toContain('Done');
     expect(NOTICES['approval.unavailable']).not.toContain('Done');
   });
+
+  it('expired, changed, skipped and change-request outcomes get their own accurate statuses', () => {
+    // Owner review on #202: these fell into a fallback that claimed "Telegram has the details"
+    // while the console action only redirects. Each outcome now says what actually happened.
+    expect(approvalRedirectCode('This proposal expired')).toBe('approval.expired');
+    expect(NOTICES['approval.expired']).toContain('expired');
+    expect(NOTICES['approval.expired']).toContain('nothing happened');
+    expect(approvalRedirectCode('Email changed')).toBe('approval.changed');
+    expect(approvalRedirectCode('The event changed')).toBe('approval.changed');
+    expect(NOTICES['approval.changed']).toContain('nothing was sent');
+    expect(approvalRedirectCode('Not now')).toBe('approval.skipped');
+    expect(NOTICES['approval.skipped']).toContain('Nothing changed');
+    expect(approvalRedirectCode('Tell me what to change')).toBe('approval.change');
+    expect(approvalRedirectCode("Can't be undone")).toBe('approval.cannotundo');
+  });
+
+  it('no approval notice claims Telegram has details - the console redirect sends nothing there', () => {
+    for (const [code, text] of Object.entries(NOTICES)) {
+      if (code.startsWith('approval.')) expect(text).not.toContain('Telegram');
+    }
+  });
 });

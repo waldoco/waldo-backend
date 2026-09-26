@@ -132,10 +132,17 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'approval.unconfirmed': 'Send unconfirmed. Check Sent, then use Check Sent or mark it not sent.',
   'approval.closed': 'Marked as not sent.',
   'approval.handled': 'Already handled.',
-  'approval.failed': 'That did not work. Check Telegram or try again.',
+  'approval.failed': 'That did not work. Try again.',
   'approval.offline': 'Google is not connected. Reconnect it, then try again.',
   'approval.unavailable': 'The Google account that handled this send is unavailable. Reconnect it or check Sent yourself.',
-  'approval.other': 'Done. Telegram has the details.',
+  'approval.expired': 'That proposal expired, so nothing happened. Ask Waldo again if you still want it.',
+  'approval.changed': 'The details changed after approval, so nothing was sent. Ask Waldo again for a fresh one.',
+  'approval.skipped': 'Skipped. Nothing changed.',
+  'approval.change': 'Nothing changed yet. Tell Waldo what to change.',
+  'approval.cannotundo': 'A sent email cannot be undone. Nothing was reversed.',
+  // Neutral by contract: the console action redirects without any Telegram delivery, so no
+  // status here may claim Telegram has details (owner review on #202).
+  'approval.other': 'Done.',
 };
 
 // Console approval redirects must carry only a fixed outcome code: decision
@@ -151,6 +158,12 @@ const APPROVAL_REDIRECT_CODES: Readonly<Record<string, string>> = {
   'That failed': 'approval.failed',
   'Google is not connected': 'approval.offline',
   'Account unavailable': 'approval.unavailable',
+  'This proposal expired': 'approval.expired',
+  'Email changed': 'approval.changed',
+  'The event changed': 'approval.changed',
+  'Not now': 'approval.skipped',
+  'Tell me what to change': 'approval.change',
+  "Can't be undone": 'approval.cannotundo',
 };
 
 export function approvalRedirectCode(toast: string): string {

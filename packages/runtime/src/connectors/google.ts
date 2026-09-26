@@ -135,11 +135,20 @@ export const sha256Hex = async (text: string): Promise<string> => {
 };
 
 export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
+
+// A paginated read with a TRUTHFUL coverage marker: complete=false means the safety page bound
+// was hit with more pages remaining, so the items are a partial answer and the caller must say
+// so (or narrow the request) instead of presenting it as the whole range.
+export type GooglePage<T> = Readonly<{ items: readonly T[]; complete: boolean }>;
+
+// Safety bound on pagination loops. Filtered reads keep fetching while a nextPageToken exists,
+// so this only trips on pathological ranges; when it does, complete=false carries the truth.
+export const GOOGLE_MAX_PAGES = 25;
 export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string }>;
 type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
 
 export type GoogleClient = Readonly<{
-  events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
+  events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<GooglePage<CalendarItem>>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
   sendRaw(raw: string, threadId?: string): Promise<Readonly<{ message_id: string; thread_id?: string }>>;
   findSentByMessageId(messageId: string): Promise<boolean>;
@@ -149,7 +158,7 @@ export type GoogleClient = Readonly<{
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
-  tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
+  tasks(status: TaskStatusFilter, limit: number): Promise<GooglePage<TaskItem>>;
 }>;
 
 // health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
@@ -183,23 +192,30 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       await call(`${EVENTS}/${encodeURIComponent(id)}`, { method: 'DELETE', headers: match(etag) });
     },
     async events(from, to, limit, includeDeclined) {
-      // Google may return a SHORT page (fewer than maxResults) with a nextPageToken; a single
-      // fetch silently under-reports the range. Follow pages until the requested limit is
-      // covered or the range is exhausted (bounded at 5 pages).
-      const collected: GoogleEvent[] = [];
+      // Filtered pagination (owner review on #202): declined/cancelled events are dropped
+      // BEFORE counting toward the limit, and pages continue until the requested FILTERED
+      // limit is covered or the range is truly exhausted. The old loop counted raw pages
+      // first, so a run of declined events could return an apparently complete empty/partial
+      // answer while matching events sat on later pages. If the safety page bound trips with
+      // more pages remaining, complete=false says the coverage is partial.
+      const kept: GoogleEvent[] = [];
       let pageToken: string | undefined;
-      for (let page = 0; page < 5 && collected.length < limit; page += 1) {
+      let complete = true;
+      for (let page = 0; page < GOOGLE_MAX_PAGES; page += 1) {
         const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
         url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit), ...(pageToken ? { pageToken } : {}) }).toString();
         const json = await call(url.toString()) as { items?: GoogleEvent[]; nextPageToken?: string };
-        collected.push(...(json.items ?? []));
+        kept.push(
+          ...(json.items ?? [])
+            .filter((event) => event.status !== 'cancelled')
+            .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined'),
+        );
         pageToken = json.nextPageToken;
-        if (!pageToken) break;
+        if (!pageToken || kept.length >= limit) break;
+        if (page === GOOGLE_MAX_PAGES - 1) complete = false;
       }
-      return collected.slice(0, limit)
-        .filter((event) => event.status !== 'cancelled')
-        .filter((event) => includeDeclined || event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
-        .map(toItem);
+      if (pageToken && kept.length < limit) complete = false;
+      return { items: kept.slice(0, limit).map(toItem), complete };
     },
     async changedEvents(since, from, to) {
       const url = new URL(EVENTS);
@@ -234,13 +250,29 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         showHidden: includeCompleted ? 'true' : 'false',
         showCompleted: includeCompleted ? 'true' : 'false',
       }).toString();
-      const json = await call(url.toString()) as { items?: GoogleTask[] };
-      return (json.items ?? [])
-        .filter((task) => status === 'all' || task.status === want)
-        .map((task) => ({
+      // Filtered pagination (owner review on #202): the completion filter is applied BEFORE
+      // counting toward the limit and pages continue until the filtered limit is covered or
+      // the list is truly exhausted - one filtered page is not the whole answer.
+      const kept: GoogleTask[] = [];
+      let pageToken: string | undefined;
+      let complete = true;
+      for (let page = 0; page < GOOGLE_MAX_PAGES; page += 1) {
+        const paged = new URL(url.toString());
+        if (pageToken) paged.searchParams.set('pageToken', pageToken);
+        const json = await call(paged.toString()) as { items?: GoogleTask[]; nextPageToken?: string };
+        kept.push(...(json.items ?? []).filter((task) => status === 'all' || task.status === want));
+        pageToken = json.nextPageToken;
+        if (!pageToken || kept.length >= limit) break;
+        if (page === GOOGLE_MAX_PAGES - 1) complete = false;
+      }
+      if (pageToken && kept.length < limit) complete = false;
+      return {
+        items: kept.slice(0, limit).map((task) => ({
           id: task.id, title: task.title ?? '(no title)', status: task.status === 'completed' ? 'done' as const : 'todo' as const,
           ...(task.due ? { due: task.due } : {}), ...(task.updated ? { updated: task.updated } : {}),
-        }));
+        })),
+        complete,
+      };
     },
     async draft(input) {
       const raw = b64url(new TextEncoder().encode(buildMime(input)));

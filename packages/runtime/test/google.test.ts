@@ -87,8 +87,9 @@ describe('google client', () => {
 
   it('reads events without cancelled or declined ones', async () => {
     const calls: { url: string }[] = [];
-    const events = await googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls)).events('2026-09-23T00:00:00Z', '2026-09-24T00:00:00Z', 20, false);
-    expect(events).toEqual([{ id: 'e1', title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, description: 'Leg day' }]);
+    const page = await googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls)).events('2026-09-23T00:00:00Z', '2026-09-24T00:00:00Z', 20, false);
+    expect(page.items).toEqual([{ id: 'e1', title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, description: 'Leg day' }]);
+    expect(page.complete).toBe(true);
     expect(calls[1]!.url).toContain('singleEvents=true');
   });
 
@@ -266,10 +267,42 @@ describe('calendar pagination', () => {
       }));
     }) as typeof fetch;
     const client = googleClient(app, { refresh_token: 'rt' }, paged);
-    const events = await client.events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
-    expect(events.map((event) => event.id)).toEqual(['e1', 'e2']);
+    const page = await client.events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
+    expect(page.items.map((event) => event.id)).toEqual(['e1', 'e2']);
+    expect(page.complete).toBe(true);
     expect(seen).toHaveLength(3); // token + page 1 + page 2
     expect(seen[2]).toContain('pageToken=p2');
+  });
+
+  it('keeps paging past declined/cancelled runs so matching events on later pages are found', async () => {
+    // Owner review on #202: raw-page counting returned an apparently complete empty answer
+    // while matching events sat on later pages. Filters apply BEFORE the limit is counted.
+    const declined = (id: string) => ({ id, summary: 'Busy', status: 'confirmed', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' }, attendees: [{ self: true, responseStatus: 'declined' }] });
+    const paged = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      const token = new URL(u).searchParams.get('pageToken');
+      if (token === null) return Promise.resolve(Response.json({ items: [declined('d1'), declined('d2')], nextPageToken: 'p2' }));
+      return Promise.resolve(Response.json({
+        items: [{ id: 'real1', summary: 'Dentist', status: 'confirmed', start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T21:00:00+05:30' } }],
+      }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, paged).events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
+    expect(page.items.map((event) => event.id)).toEqual(['real1']);
+    expect(page.complete).toBe(true);
+  });
+
+  it('marks coverage partial when the page bound trips with more pages remaining', async () => {
+    let fetches = 0;
+    const endless = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      fetches += 1;
+      return Promise.resolve(Response.json({ items: [], nextPageToken: `p${fetches}` }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, endless).events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
+    expect(page.items).toEqual([]);
+    expect(page.complete).toBe(false);
   });
 });
 
@@ -278,19 +311,34 @@ describe('get_tasks', () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     const client = googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls));
     const open = await client.tasks('todo', 20);
-    expect(open.map((task) => task.id)).toEqual(['t1', 't2']);
-    expect(open[0]).toMatchObject({ title: 'Buy stamps', status: 'todo' });
-    expect(open[1]).toMatchObject({ due: '2026-09-30T00:00:00Z' });
+    expect(open.items.map((task) => task.id)).toEqual(['t1', 't2']);
+    expect(open.complete).toBe(true);
+    expect(open.items[0]).toMatchObject({ title: 'Buy stamps', status: 'todo' });
+    expect(open.items[1]).toMatchObject({ due: '2026-09-30T00:00:00Z' });
     expect(calls.at(-1)!.url).toContain('showCompleted=false');
     expect(calls.at(-1)!.url).toContain('showHidden=false');
     const done = await client.tasks('done', 20);
-    expect(done.map((task) => ({ id: task.id, status: task.status }))).toEqual([{ id: 't3', status: 'done' }]);
+    expect(done.items.map((task) => ({ id: task.id, status: task.status }))).toEqual([{ id: 't3', status: 'done' }]);
     // first-party completed tasks require BOTH flags (Google tasks.list semantics)
     expect(calls.at(-1)!.url).toContain('showCompleted=true');
     expect(calls.at(-1)!.url).toContain('showHidden=true');
     const all = await client.tasks('all', 20);
-    expect(all.map((task) => task.id)).toEqual(['t1', 't2', 't3']);
+    expect(all.items.map((task) => task.id)).toEqual(['t1', 't2', 't3']);
     expect(calls.at(-1)!.url).toContain('showHidden=true');
+  });
+
+  it('keeps paging past filtered-out tasks so matching ones on later pages are found', async () => {
+    // Owner review on #202: one filtered page is not the whole answer.
+    const paged = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      const token = new URL(u).searchParams.get('pageToken');
+      if (token === null) return Promise.resolve(Response.json({ items: [{ id: 'c1', status: 'completed' }, { id: 'c2', status: 'completed' }], nextPageToken: 'p2' }));
+      return Promise.resolve(Response.json({ items: [{ id: 'open1', status: 'needsAction', title: 'Call the bank' }] }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, paged).tasks('todo', 20);
+    expect(page.items.map((task) => task.id)).toEqual(['open1']);
+    expect(page.complete).toBe(true);
   });
 
   it('handler is registered, returns tasks, and notes the in-progress mapping honestly', async () => {

@@ -39,7 +39,7 @@ const populatedMail = Array.from({ length: 10 }, (_, i) => ({
 const googleWith = (events: unknown[], messages: unknown[]): GoogleAccess =>
   ({
     client: async () => ({
-      events: async () => events,
+      events: async () => ({ items: events, complete: true }),
       newMail: async () => messages,
     }),
     status: async () => ({ calendar: true, mail: true }),
