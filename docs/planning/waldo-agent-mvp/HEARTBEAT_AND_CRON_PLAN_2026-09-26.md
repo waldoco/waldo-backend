@@ -115,7 +115,7 @@ C4. Truthful run history surface.
 - Test: a failed run shows its real error class, not a generic "failed".
 
 Order: H1 and C1 are independent; C2 gates C3's owner value; C4 can land any time after H1.
-No vector/graph, no schema churn beyond the recurrence union + kind.
+No vector/graph. Schema churn is limited to the recurrence union + kind changes and the C4 append-only schedule_runs table; no other tables change.
 
 ## 5. Explicitly not in this plan
 
