@@ -3,7 +3,7 @@ import type { ConsoleView } from '../../src/channels/console';
 
 const iso = (d: string) => `2026-09-${d}T00:00:00Z`;
 const spot = (id: number, kind: string, text: string, source: 'stated' | 'confirmed' | 'inferred', evidence: string, seen: number, last: string, status = 'active') =>
-  ({ id, kind, text, source, evidence, status, created_at: iso('20'), last_seen_at: iso(last), seen_count: seen });
+  ({ id, kind, text, source, evidence, origin: null, status, created_at: iso('20'), last_seen_at: iso(last), seen_count: seen });
 const step = (name: string, at: string | null, note: string | null = null, state: 'ok' | 'failed' | 'unseen' = at ? 'ok' : 'unseen') => ({ step: name, state, at, note });
 
 // Made-up console state for render tests and design previews. Not owner data.

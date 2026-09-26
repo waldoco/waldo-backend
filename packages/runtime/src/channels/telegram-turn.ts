@@ -59,7 +59,7 @@ export const createTelegramResponder = (
   // this slot suppresses memory persistence and strips the live provider handlers from the
   // turn's tool loop and system prompt. Inert for real turns; the DO owns the slot.
   probeGuard?: { suppressMemory: boolean; stripLiveTools: boolean },
-): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
+): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
   if (!accepted.ok) throw new Error('fixture admission failed');
@@ -240,13 +240,16 @@ export const createTelegramResponder = (
       pending = undefined;
       return converse(id, chatId, said, time);
     },
-    async consolidate(trace, day) {
+    async consolidate(trace, day, sides) {
       await settling;
       if (!memory) return 'no memory';
       const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: day });
+      // With speaker-split sides the full gate runs at night too (self-report holds, shared
+      // taint, origin classes). Without them the mixed transcript is a fabrication check only.
+      const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; }, grounding);
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
