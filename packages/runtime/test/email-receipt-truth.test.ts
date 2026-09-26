@@ -19,7 +19,7 @@ const deskWith = () => {
       propose: async () => 'p-cal',
       proposeSendEmail: async (payload: EmailSendProposal) => {
         proposals.push(payload);
-        return { id: 'p-real-1', reused: null };
+        return { ok: true as const, id: 'p-real-1', reused: null };
       },
       record: () => undefined,
     },

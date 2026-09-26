@@ -9,7 +9,7 @@ import { googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 import { GoogleError } from '../src/connectors/google';
 
 const clock = { timezone: 'Asia/Calcutta', now: () => new Date('2026-09-24T10:00:00Z') };
-const desk = { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ id: 'proposal:1', reused: null }), record: () => undefined };
+const desk = { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ ok: true as const, id: 'proposal:1', reused: null }), record: () => undefined };
 
 const TIER2_HANDLERS = ['query_calendar', 'get_communication', 'draft_email', 'send_email', 'get_tasks'];
 

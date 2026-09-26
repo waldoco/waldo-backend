@@ -137,7 +137,7 @@ export type ConsoleView = Readonly<{
   now: string;
   sessionUntil: string;
   sessionCount: number;
-  approvals: readonly Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>[];
+  approvals: readonly Readonly<{ id: string; summary: string; state: 'open' | 'done' | 'unknown'; undoable: boolean }>[];
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;

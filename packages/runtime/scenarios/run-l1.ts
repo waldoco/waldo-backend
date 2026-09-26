@@ -93,7 +93,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
     autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: scenario.fixtures?.web ?? [] }, source_taint: 'external' as const }),
   };
-  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ id: 'proposal:1', reused: null }), record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodeIndex(sql)), web];
+  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google as never, { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ ok: true as const, id: 'proposal:1', reused: null }), record: () => undefined }, CLOCK), ...loopHandlers(loops), searchEpisodesHandler(episodeIndex(sql)), web];
   const responder = createTelegramResponder('scenario-key', undefined, memory, log, {}, CLOCK, handlers as never, WALDO_CHAT_MODEL, false, undefined, async (intent: ConnectIntent) => { connectOffers.push(intent); return true; }, scriptedGateway({ rules: scenario.llm }));
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
 

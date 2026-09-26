@@ -160,10 +160,20 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
         message_id, raw, digest: await sha256Hex(raw), content_digest: content_key,
       });
+      if (!proposal.ok) {
+        // The complete preview (recipients + subject + body) must fit one Telegram message; a
+        // cut preview would let the owner approve content they never saw. Typed and content-free.
+        return {
+          ok: false,
+          code: 'oversize',
+          error: `That email is too long to show the owner in full for approval (${proposal.actual} characters, limit ${proposal.limit}). Ask the owner for a shorter email or offer to save it as a Gmail draft instead, then send from Gmail.`,
+          source_taint: null,
+        };
+      }
       const status = proposal.reused === 'sending'
         ? 'a send of this exact email is already in flight from the earlier card - no new card was sent; wait for that one to resolve'
         : proposal.reused === 'unknown'
-          ? 'not proposed - a previous send of this exact email could not be confirmed and may already be in Sent; check Sent before asking again, so it never goes twice'
+          ? 'not proposed - a previous send of this exact email could not be confirmed and may already be in Sent; the owner got Check Sent / It did not go buttons to resolve it, so it never goes twice'
           : 'sent to the owner with Send it / Modify / Not now buttons';
       return { ok: true, data: { proposal_id: proposal.id, status, sent: false }, source_taint: null };
     },
