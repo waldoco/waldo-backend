@@ -43,6 +43,28 @@ export const FAILED_ROUNDS_LIMIT = 3;
 // had two homes). Channel adapters pass this; tests pass their own to exercise the mechanism.
 export const TOOL_LOOP_MAX_ROUNDS = 25;
 
+// Warn-first escalation: a silent hard stop at maxSteps surprises the model mid-plan, so
+// results delivered inside the last WARN_WINDOW_ROUNDS rounds carry an explicit
+// remaining-rounds notice and the model can close in words before tools are withdrawn.
+export const WARN_WINDOW_ROUNDS = 5;
+
+// Semantic no-progress detection: byte-exact dedupe misses the same call re-issued with fresh
+// request ids, cursors or timestamps in args, or answered with fresh ids/timestamps in the
+// result. Volatile spans - ISO-8601 timestamps, uuid-shaped ids, and 20+ char token runs that
+// carry a digit, underscore, or hyphen (cursors, request ids) - are blanked before hashing.
+// Pure-alphabetic long words (ordinary search terms like electroencephalography) survive, so
+// genuinely different calls never collide; small integers (page numbers, amounts) survive too.
+// Once the same stabilized (tool, args, result) triple appears NO_PROGRESS_LIMIT times in a
+// turn, that stabilized (tool, args) pair is refused pre-dispatch for the rest of the turn.
+export const NO_PROGRESS_LIMIT = 3;
+
+// Token shapes only: dates, UUIDs, and 20+ char runs carrying digit/underscore evidence
+// (cursors, ids, keys). Hyphenated natural-language phrases carry no such evidence and must
+// never blank - 'post-traumatic-stress-disorder' and 'large-language-model-evaluation' are
+// distinct searches, not volatile tokens.
+const VOLATILE_SPANS = /(\d{4}-\d{2}-\d{2}[T ][0-9:.]+(?:Z|[+-]\d{2}:?\d{2})?)|([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})|((?=[\w-]*[\d_])[\w-]{20,})/gi;
+const stabilize = (text: string): string => text.replace(VOLATILE_SPANS, '#');
+
 export async function runToolLoop(input: Readonly<{
   step: ToolLoopStep;
   handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'];
@@ -58,19 +80,28 @@ export async function runToolLoop(input: Readonly<{
   const turns: LLMToolTurn[] = [];
   const seen = new Set<string>();
   const offered = new Set<string>();
+  const noProgressTriples = new Map<string, number>();
+  const noProgressBlocked = new Set<string>();
   let failedRounds = 0;
   for (let round = 0; ; round += 1) {
     const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT;
     const response = await input.step(offer ? tools : undefined, turns);
     if (response.tool_calls === undefined) return response.text;
     let anyOk = false;
+    let anyGenuineFailure = false;
     let firstCall = true;
     for (const call of response.tool_calls) {
       const started = Date.now();
       const key = `${call.name}\u0000${call.arguments}`;
+      const stablePair = `${call.name}\u0000${stabilize(call.arguments)}`;
+      // Harness refusals carry a typed code and never feed FAILED_ROUNDS_LIMIT: a refusal is the
+      // harness declining a redundant call, not a tool failure. Counting refusals lets a cheap
+      // refusal feed the streak that fires the next, harder one.
       const result = seen.has(key)
-        ? { ok: false, error: 'Same call already made this turn; use its result.' }
-        : await dispatch(call, input);
+        ? { ok: false, error: 'Same call already made this turn; use its result.', code: 'repeat_refusal' as const }
+        : noProgressBlocked.has(stablePair)
+          ? { ok: false, error: 'No progress: this call keeps returning the same outcome apart from volatile ids/timestamps; stop retrying it and answer with what you have.', code: 'no_progress' as const }
+          : await dispatch(call, input);
       if (!result.ok && result.connect) {
         const offerKey = `${result.connect.service}:${result.connect.reason}`;
         if (!offered.has(offerKey)) {
@@ -80,7 +111,26 @@ export async function runToolLoop(input: Readonly<{
         }
       }
       seen.add(key);
-      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id);
+      if (!noProgressBlocked.has(stablePair)) {
+        const triple = `${stablePair}\u0000${stabilize(JSON.stringify(result))}`;
+        const hits = (noProgressTriples.get(triple) ?? 0) + 1;
+        noProgressTriples.set(triple, hits);
+        if (hits >= NO_PROGRESS_LIMIT) noProgressBlocked.add(stablePair);
+      }
+      const roundsLeft = input.maxSteps - round - 1;
+      // Notes only exist when the cap exceeds the window (the real 25); tiny test caps that
+      // exercise the withdrawal mechanism itself stay note-free. Pressure escalates as the
+      // window closes, and the
+      // roundsLeft 0 notice is the graceful close - the model is told the budget is exhausted
+      // alongside its last tool result, so the final no-tools step comes back as words.
+      const budgetNote = input.maxSteps > WARN_WINDOW_ROUNDS && roundsLeft >= 0 && roundsLeft < WARN_WINDOW_ROUNDS
+        ? roundsLeft === 0
+          ? '\n[budget: tool budget exhausted this turn - no more tool calls; answer now with what you have]'
+          : roundsLeft <= 2
+            ? `\n[budget: ${roundsLeft} tool round${roundsLeft === 1 ? '' : 's'} left this turn - wrap up and answer now]`
+            : `\n[budget: ${roundsLeft} tool rounds left this turn - start wrapping up]`
+        : '';
+      const output = capToolOutput(JSON.stringify(result), input.offload, call.call_id) + budgetNote;
       turns.push({ call, output, ...(firstCall && response.output_items?.length ? { prior_items: [...response.output_items] } : {}) });
       firstCall = false;
       // The typed code/reason ride the span as their own fields so a failed hop stays
@@ -96,8 +146,10 @@ export async function runToolLoop(input: Readonly<{
         ...(typed?.guard ? { guard: typed.guard } : {}),
       });
       anyOk ||= result.ok;
+      anyGenuineFailure ||= !result.ok && (result as { code?: string }).code !== 'repeat_refusal' && (result as { code?: string }).code !== 'no_progress';
     }
-    failedRounds = anyOk ? 0 : failedRounds + 1;
+    // A refusal-only round neither feeds nor resets the failure streak: nothing failed.
+    failedRounds = anyOk ? 0 : anyGenuineFailure ? failedRounds + 1 : failedRounds;
   }
 }
 
