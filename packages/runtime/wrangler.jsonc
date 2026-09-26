@@ -2,7 +2,14 @@
   "name": "waldo-runtime",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-16",
-  "observability": { "enabled": true },
+  // Invocation logs include full request URLs. Keep structured console hop logs, but do not
+  // persist automatic URLs while connect tickets live in /c/<ticket> and OAuth callbacks
+  // carry code/state in the query. Enable traces only after issue #205's privacy gate.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false },
+    "traces": { "enabled": false }
+  },
   // Trace identity. WALDO_ENVIRONMENT must name the deploy target so Langfuse can split
   // staging from production; WALDO_RELEASE is the fallback only - the deploy wrapper
   // (scripts/deploy-runtime.sh) restamps it with the git SHA on every deploy.
@@ -28,6 +35,11 @@
     // guard-wrangler-local-bindings.mjs asserts this block mirrors the top level.
     "staging": {
       "name": "waldo-runtime-staging",
+      "observability": {
+        "enabled": true,
+        "logs": { "enabled": true, "invocation_logs": false },
+        "traces": { "enabled": false }
+      },
       "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased" },
       "durable_objects": {
         "bindings": [
