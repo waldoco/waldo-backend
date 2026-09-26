@@ -246,6 +246,7 @@ function dependencies(): ContextComposerDependencies {
           },
           workspace: [],
           tool_outputs: [],
+          tool_outputs_omitted: 0,
         };
       },
     },
@@ -1794,19 +1795,29 @@ describe('tool_outputs material (BUILD_ORDER 12b)', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('rejects more than 6 tool output fragments', async () => {
+  it('keeps the first 6 tool output fragments and states the omission instead of failing', async () => {
     const base = dependencies();
     const composer = createContextComposer({
       ...base,
       materials: {
         async load(request) {
           const material = await base.materials.load(request);
-          return { ...material, tool_outputs: Array.from({ length: 7 }, (_, i) => toolFragment(`output ${i}`)) };
+          return {
+            ...material,
+            tool_outputs: Array.from({ length: 7 }, (_, i) => ({
+              text: `output ${i}`,
+              source: source(`tool-output-${i}`, { source_kind: 'tool_result', scope: 'invocation', source_taint: 'external' }),
+            })),
+          };
         },
       },
     });
     const result = await composer.compose(trustedEnvelope(), RUNTIME_INPUTS);
-    expect(result.ok).toBe(false);
+    expect(result.ok, result.ok ? undefined : result.failure.code).toBe(true);
+    if (!result.ok) return;
+    expect(result.prompt).toContain('output 0');
+    expect(result.prompt).not.toContain('output 6');
+    expect(result.prompt).toContain('1 more tool result omitted (context budget).');
   });
 
   it('renders the empty state when there are no tool outputs', async () => {
