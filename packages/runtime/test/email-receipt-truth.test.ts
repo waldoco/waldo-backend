@@ -54,6 +54,20 @@ describe('email receipt truth', () => {
     expect(proposals).toHaveLength(0);
   });
 
+  it('derives the Message-ID from the canonical content: a retry of the same email keeps the id, a changed body changes it', async () => {
+    const { desk, proposals } = deskWith();
+    const google = { client: async () => ({}) as never };
+    const send = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
+    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never);
+    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B' } as never);
+    await send.handle({ to: ['a@x.test'], subject: 'S', body_markdown: 'B2' } as never);
+    expect(proposals).toHaveLength(3);
+    // same logical email -> same Message-ID, so Sent-mail reconciliation proves exactly-once across retries
+    expect(proposals[0]!.message_id).toBe(proposals[1]!.message_id);
+    // any content change -> a different Message-ID, so distinct emails never alias
+    expect(proposals[0]!.message_id).not.toBe(proposals[2]!.message_id);
+  });
+
   it('the draft_email description tells the model it creates no approval card', () => {
     const { desk } = deskWith();
     const google = { client: async () => null };
