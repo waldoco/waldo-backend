@@ -253,11 +253,13 @@ export class Scheduler {
     // The id's run ordinal comes from the append-only history, not schedule.attempts:
     // policy state resets (schedule upsert, quarantine reap) but history never does, so
     // a retry after a reset can never collide with a crashed run's row.
+    const [lower, upper] = occurrenceIdRange(entry.id, entry.occurrence_at);
     const prior = this.sql
       .exec<{ n: number }>(
-        'SELECT count(*) AS n FROM schedule_runs WHERE schedule_id = ? AND id LIKE ?',
+        'SELECT count(*) AS n FROM schedule_runs WHERE schedule_id = ? AND id >= ? AND id < ?',
         entry.id,
-        `${entry.id}:${entry.occurrence_at}:%`,
+        lower,
+        upper,
       )
       .one().n;
     const ordinal = prior + 1;
@@ -320,6 +322,16 @@ export class Scheduler {
     }
     await armAlarm(this.storage, Math.max(bound, this.deps.now() + 1));
   }
+}
+
+// workerd SQLite enforces a ~50-byte LIKE/GLOB pattern limit
+// (SQLITE_LIMIT_LIKE_PATTERN_LENGTH), and a real schedule id alone exceeds it
+// ("handoff:<uuid>" plus the occurrence suffix), so occurrence-prefix matching cannot
+// use LIKE. Every run id for an occurrence starts with "<scheduleId>:<occurrenceAt>:"
+// and the next ASCII byte after ':' (0x3A) is ';' (0x3B), so the half-open range
+// [lower, upper) matches exactly that prefix and stays index-friendly.
+function occurrenceIdRange(scheduleId: string, occurrenceAt: number): readonly [string, string] {
+  return [`${scheduleId}:${occurrenceAt}:`, `${scheduleId}:${occurrenceAt};`];
 }
 
 function isCrashInjectionError(err: unknown): boolean {

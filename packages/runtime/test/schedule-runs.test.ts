@@ -80,4 +80,23 @@ describe('schedule_runs history (C4)', () => {
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({ outcome: 'running', settled_at: null });
   });
+
+  // Regression: workerd SQLite rejects LIKE/GLOB patterns over ~50 bytes, and production
+  // schedule ids ("handoff:<uuid>") already exceed that, so the occurrence-prefix bookkeeping
+  // uses range bounds instead. Rows must be present when the count query runs - an empty
+  // table never evaluates the match, which is how the short-id tests missed this.
+  it('derives the run ordinal from history for production-length schedule ids', async () => {
+    const longId = `handoff:${crypto.randomUUID()}`;
+    const runs = await withScheduler(1_000, async (scheduler, readRuns) => {
+      await scheduler.schedule({ id: longId, kind: 'brief', occurrenceAt: 900, dueAt: 900, payloadRefs: {} });
+      await expect(scheduler.dispatchDue({
+        brief: async () => { throw new Error('crash-injection: forced'); },
+      } as ScheduleExecutors)).rejects.toThrow('crash-injection');
+      // Same-occurrence retry after the crash: the ordinal derives from the history rows.
+      await scheduler.dispatchDue({ brief: async () => undefined } as ScheduleExecutors);
+      return readRuns();
+    });
+    expect(runs.map((r) => [r.attempt, r.outcome])).toEqual([[1, 'running'], [2, 'ok']]);
+    expect(runs.every((r) => r.schedule_id === longId)).toBe(true);
+  });
 });
