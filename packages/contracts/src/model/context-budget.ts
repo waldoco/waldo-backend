@@ -15,9 +15,12 @@ import type { ModelName } from './roster';
 // stay as hard wire ceilings; a derived budget may only TIGHTEN below them, never loosen above -
 // fail-closed semantics preserved, and current models keep today's effective behavior.
 
-// Conservative chars-per-token estimate for budget arithmetic. 4 chars/token is the standard
-// English approximation; erring low can only shrink a derived budget, never exceed the real
-// window.
+// Chars-per-token estimate for budget arithmetic. 4 chars/token is the standard English
+// approximation ONLY: non-English or token-heavy text can run denser than 4 chars/token, in
+// which case a char-derived budget can exceed the real token window. This estimate is
+// therefore NOT a proven bound - it is acceptable while derived budgets stay at or below
+// today's fixed ceilings, but any RAISED wire ceiling must switch to actual token counting
+// or a proven bound (owner review on #211).
 export const BUDGET_CHARS_PER_TOKEN = 4 as const;
 
 export const modelContextSpecSchema = z.strictObject({
