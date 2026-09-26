@@ -91,6 +91,21 @@ describe('several Google accounts', () => {
     expect(await readConsentState('s', state.replace('owner.with', 'owner.other'))).toBeNull();
   });
 
+  it('the OAuth state carries the initiating surface through the signature, and a tampered surface fails', async () => {
+    for (const surface of ['telegram', 'whatsapp', 'dashboard', 'app'] as const) {
+      const state = await consentState('s', 'owner.with.dots', 'n1', surface);
+      expect(await readConsentState('s', state)).toEqual({ owner: 'owner.with.dots', nonce: 'n1', surface });
+    }
+    // editing the surface breaks the MAC
+    const state = await consentState('s', 'o', 'n1', 'telegram');
+    expect(await readConsentState('s', state.replace('telegram', 'dashboard'))).toBeNull();
+    // an unknown surface shape fails verification outright
+    const forged = await consentState('s', 'o', 'n1');
+    expect(await readConsentState('s', forged.replace('.n1.', '.evil.'))).toBeNull();
+    // pre-surface states still verify, surface undefined (console fallback on the page)
+    expect(await readConsentState('s', forged)).toEqual({ owner: 'o', nonce: 'n1' });
+  });
+
   it('shows one row per account, each with its own disconnect and health', () => {
     const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: true, accounts: [
       { id: 'c-1', email: 'me@work.test', error: null, mail: true },

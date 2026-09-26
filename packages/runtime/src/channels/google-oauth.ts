@@ -1,4 +1,5 @@
-import { readConsentState } from '../connectors/google';
+import { readConsentState, type ConsentSurface } from '../connectors/google';
+import { CONSOLE_PATH } from './console';
 import type { ConsentOutcome } from '../connectors/google-consent';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import type { TelegramWebhookEnv } from './telegram-webhook';
@@ -6,7 +7,29 @@ import type { TelegramWebhookEnv } from './telegram-webhook';
 export const GOOGLE_FINISH_PATH = '/google/consent';
 export type ConsentReply = Readonly<{ outcome: ConsentOutcome; bot: string | null }>;
 
+// The only deep link the completion page may ever render for app-origin flows. Fixed string,
+// never assembled from input, so no arbitrary return URL can ride the state.
+export const APP_RETURN_DEEP_LINK = 'waldo://oauth/complete';
+
 const escape = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
+
+// Where the completion page sends the owner back. The surface comes from the signed OAuth
+// state; anything missing or unrecognized lands on the console, never on an arbitrary URL.
+const returnAction = (surface: ConsentSurface | undefined, bot: string | null): string => {
+  switch (surface) {
+    case 'telegram':
+      return bot
+        ? `<a class="button" href="https://t.me/${encodeURIComponent(bot)}">Back to Telegram</a>`
+        : '<p class="note">You can go back to Telegram.</p>';
+    case 'whatsapp':
+      return '<p class="note">You can go back to WhatsApp.</p>';
+    case 'app':
+      return `<a class="button" href="${APP_RETURN_DEEP_LINK}">Back to the app</a>`;
+    case 'dashboard':
+    default:
+      return `<a class="button" href="${CONSOLE_PATH}">Back to your console</a>`;
+  }
+};
 
 const COPY: Record<ConsentOutcome['kind'], Readonly<{ status: number; title: string; body: string }>> = {
   linked: { status: 200, title: 'Google is connected', body: 'Waldo can now read your calendar and help with mail you approve. You can close this tab.' },
@@ -17,10 +40,10 @@ const COPY: Record<ConsentOutcome['kind'], Readonly<{ status: number; title: str
 };
 
 // The callback URL carries the authorization code, so the page is never cached, framed or sent as a referrer.
-export const consentPage = (outcome: ConsentOutcome, bot: string | null): Response => {
+export const consentPage = (outcome: ConsentOutcome, bot: string | null, surface?: ConsentSurface): Response => {
   const copy = COPY[outcome.kind];
   const account = outcome.kind === 'linked' && outcome.email ? `<p class="account">${escape(outcome.email)}</p>` : '';
-  const back = bot ? `<a class="button" href="https://t.me/${encodeURIComponent(bot)}">Back to Telegram</a>` : '<p class="note">You can go back to Telegram.</p>';
+  const back = returnAction(surface, bot);
   const mark = outcome.kind === 'linked' ? '&#10003;' : '!';
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${copy.title} - Waldo</title>
 <style>:root{color-scheme:light dark;--bg:#f7f7f5;--card:#fff;--ink:#1c1c1a;--muted:#6b6b66;--ok:#1f7a4d;--bad:#b3261e;--btn:#2a6fdb}
@@ -59,9 +82,11 @@ export const handleGoogleCallback = async (request: Request, env: TelegramWebhoo
       method: 'POST', body: JSON.stringify({ nonce: state.nonce, code: params.get('code'), error }),
     });
     const reply = await response.json() as ConsentReply;
-    return consentPage(reply.outcome, reply.bot);
+    return consentPage(reply.outcome, reply.bot, state.surface);
   } catch (failure) {
     rejected(`owner unreachable: ${failure instanceof Error ? failure.message : String(failure)}`);
-    return consentPage({ kind: 'failed', reason: 'owner unreachable' }, null);
+    // The signed state already proved where this flow started; the failure page must send the
+    // owner back to THAT surface, not drop it and default every failure to the console.
+    return consentPage({ kind: 'failed', reason: 'owner unreachable' }, null, state.surface);
   }
 };

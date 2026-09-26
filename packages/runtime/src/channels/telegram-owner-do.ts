@@ -576,7 +576,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Every call starts a fresh single-use attempt (state nonce + PKCE verifier) valid for 15 minutes.
       async begin(): Promise<Readonly<{ url: string; nonce: string }> | null> {
         const app = await googleApp();
-        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner()) : null;
+        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { surface: 'telegram' }) : null;
       },
       // Chat links are short and first-party: /c/<ticket>. The consent URL is minted at click time
       // (beginSession) and never passes through model-visible text.
@@ -592,12 +592,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           p_do_name: doName, p_provider: 'google', p_channel: channel, p_ticket_hash: hash,
         });
         if (!sessionId) return null;
+        // The channel that issued the link decides where the completion page routes back to.
+        await storage.put(`connect_channel:${hash}`, channel);
         log({ trace: `connect:${hash.slice(0, 8)}`, hop: 'connect_issued', ms: 0, ok: true });
         return `${origin}/c/${ticket}`;
       },
       async beginSession(ticketHash: string) {
         const app = await googleApp();
-        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), ticketHash) : null;
+        const channel = await storage.get<string>(`connect_channel:${ticketHash}`);
+        const surface = channel === 'console' ? 'dashboard' : channel === 'telegram' ? 'telegram' : undefined;
+        return app && stateSecret ? startConsent(consentDeps, app, stateSecret, stateOwner(), { session: ticketHash, ...(surface ? { surface } : {}) }) : null;
       },
       async finish(input: ConsentCallback): Promise<ConsentReply & Readonly<{ fresh: boolean }>> {
         const started = Date.now();
