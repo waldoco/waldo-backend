@@ -30,6 +30,7 @@ import {
 } from '../src/tools/dispatcher';
 import type { HookRegistry } from '../src/hooks/registry';
 import { sanitise } from '../src/scribe/sanitiser';
+import { browseActHandler, browsePageHandler } from '../src/tools/live/browser';
 
 const canaryTokens = ['1111111111111111', '2222222222222222', '3333333333333333'];
 
@@ -56,6 +57,43 @@ function dispatcherContext(trigger: TriggerType): ToolDispatcherContext {
 }
 
 describe('ToolDispatcher', () => {
+  it('accepts externally tainted browser results through the dispatch boundary', async () => {
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/start')) return new Response(JSON.stringify({ success: true, data: { sessionId: 'synthetic-session' } }));
+      if (url.endsWith('/observe')) return new Response(JSON.stringify({ success: true, data: { result: [] } }));
+      if (url.endsWith('/extract')) return new Response(JSON.stringify({ success: true, data: { result: { title: 'Synthetic page' } } }));
+      return new Response(JSON.stringify({ success: true }));
+    }) as typeof fetch;
+    const cases = [
+      { name: 'browse_page' as const, args: { url: 'https://example.com', instruction: 'Read the title' }, handler: browsePageHandler('key', 'project', undefined, fetcher) },
+      { name: 'browse_act' as const, args: { url: 'https://example.com', task: 'Find the title', max_actions: 1 }, handler: browseActHandler('key', 'project', undefined, undefined, undefined, fetcher) },
+    ];
+    for (const { name, args, handler } of cases) {
+      const result = await dispatchTool(
+        { id: `call-${name}`, name, args },
+        { ...dispatcherContext('user_message'), egressAllowlist: ['example.com'] },
+        { handlers: [handler] },
+      );
+      expect(result).toMatchObject({ ok: true, tool: name, source_taint: 'external' });
+    }
+  });
+
+  it('preserves a coded browser failure instead of reporting invalid_handler_result', async () => {
+    for (const handler of [browsePageHandler(undefined, undefined, undefined), browseActHandler(undefined, undefined, undefined)]) {
+      const name = handler.name;
+      const args = name === 'browse_page'
+        ? { url: 'https://example.com', instruction: 'Read the title' }
+        : { url: 'https://example.com', task: 'Find the title', max_actions: 1 };
+      const result = await dispatchTool(
+        { id: `call-${name}-failure`, name, args },
+        { ...dispatcherContext('user_message'), egressAllowlist: ['example.com'] },
+        { handlers: [handler] },
+      );
+      expect(result).toMatchObject({ ok: false, tool: name, code: 'auth_failed', reason: 'tool_result_error', source_taint: 'external' });
+    }
+  });
+
   it('fails closed before handler I/O when a trusted effect has no reconciliation contract', async () => {
     let handled = 0;
     let issued = 0;
