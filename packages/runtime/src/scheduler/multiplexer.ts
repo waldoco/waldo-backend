@@ -14,6 +14,10 @@ import type { Deps } from '../seams/deps';
 import { armAlarm } from './alarm-slot';
 
 const MAX_MISSED_CHAIN = 64;
+// Minimum spacing for an immediate re-arm (next row already due). Live turns are unaffected
+// (due work still fires within DUE_LOOKAHEAD_MS); the pacing lets a long missed-run drain
+// yield the isolate between deliveries instead of starving sibling work back-to-back.
+const MIN_REARM_DELAY_MS = 250;
 const DUE_LOOKAHEAD_MS = 1_000;
 const MAX_DUE_PER_ALARM = 8;
 const PRODUCT_RETRY_DELAY_MS = 30_000;
@@ -147,12 +151,24 @@ export class Scheduler {
         }
         // C3 missed-run policy: after a gap, fire only the latest elapsed occurrence once and
         // record every skipped intermediate occurrence as 'missed' - never a catch-up burst.
-        const chain = this.occurrenceChain(fresh, now);
-        if (chain.length > 1) {
-          for (const missedAt of chain.slice(0, -1)) {
+        const { occurrences, gapRemaining } = this.occurrenceChain(fresh, now);
+        if (gapRemaining) {
+          // Gap larger than one delivery's budget: record the whole walked chunk as missed
+          // (the last walked occurrence stays unfired), advance the cursor, and let the
+          // immediate rearm drain the rest over the next deliveries. Firing here would be a
+          // catch-up burst: occurrences[last] is not the latest elapsed occurrence (C3
+          // no-burst invariant), and the repeat fire retries were wedging the isolate.
+          for (const missedAt of occurrences) {
             this.recordMissed(fresh, missedAt, now);
           }
-          this.pinOccurrence(fresh, chain[chain.length - 1]!, now);
+          this.pinOccurrence(fresh, occurrences[occurrences.length - 1]!, now);
+          continue;
+        }
+        if (occurrences.length > 1) {
+          for (const missedAt of occurrences.slice(0, -1)) {
+            this.recordMissed(fresh, missedAt, now);
+          }
+          this.pinOccurrence(fresh, occurrences[occurrences.length - 1]!, now);
           const repinned = this.read(fresh.id);
           if (repinned === null) continue;
           fresh = repinned;
@@ -410,17 +426,26 @@ export class Scheduler {
   // Bounded walk: a fire records at most MAX_MISSED_CHAIN skipped occurrences. Gaps beyond
   // the cap fire the last walked occurrence - the walk stays O(cap) no matter how stale the
   // stored occurrence is (an unbounded walk over a years-old occurrence kills the isolate).
-  private occurrenceChain(entry: ScheduleEntry, now: number): number[] {
-    if (entry.recurrence === null) return [entry.occurrence_at];
-    const chain = [entry.occurrence_at];
+  private occurrenceChain(entry: ScheduleEntry, now: number): { occurrences: number[]; gapRemaining: boolean } {
+    if (entry.recurrence === null) return { occurrences: [entry.occurrence_at], gapRemaining: false };
+    const occurrences = [entry.occurrence_at];
     let cursor = entry.occurrence_at;
-    while (cursor <= now && chain.length < MAX_MISSED_CHAIN) {
+    while (cursor <= now && occurrences.length < MAX_MISSED_CHAIN) {
       const next = nextOccurrence(entry.recurrence, cursor);
       if (next <= cursor || next > now) break;
-      chain.push(next);
+      occurrences.push(next);
       cursor = next;
     }
-    return chain;
+    // gapRemaining: the walk hit the per-delivery cap AND at least one more elapsed
+    // occurrence exists beyond it. The caller must NOT fire in this state -
+    // occurrences[last] is mid-gap, not the latest. One extra look-ahead keeps the exact
+    // cap-boundary case (gap exactly cap-1 long) on the fire path.
+    let gapRemaining = false;
+    if (cursor <= now && occurrences.length >= MAX_MISSED_CHAIN) {
+      const next = nextOccurrence(entry.recurrence, cursor);
+      gapRemaining = next > cursor && next <= now;
+    }
+    return { occurrences, gapRemaining };
   }
 
   private pinOccurrence(entry: ScheduleEntry, occurrenceAt: number, now: number): void {
@@ -492,7 +517,7 @@ export class Scheduler {
       await this.storage.deleteAlarm();
       return;
     }
-    await armAlarm(this.storage, Math.max(bound, this.deps.now() + 1));
+    await armAlarm(this.storage, Math.max(bound, this.deps.now() + MIN_REARM_DELAY_MS));
   }
 }
 
@@ -583,16 +608,7 @@ function localParts(at: number, timezone: string): {
   minute: number;
   second: number;
 } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(at));
+  const parts = localFormatter(timezone).formatToParts(new Date(at));
   const get = (type: string) => Number(parts.find((part) => part.type === type)?.value);
   return {
     year: get('year'),
@@ -617,6 +633,22 @@ function addLocalDays(date: LocalDate, days: number): LocalDate {
   };
 }
 
+// Formatter construction dominates localParts; cache one per timezone (immutable, safe to share).
+const LOCAL_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+function localFormatter(timezone: string): Intl.DateTimeFormat {
+  let formatter = LOCAL_FORMATTERS.get(timezone);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hourCycle: 'h23',
+    });
+    LOCAL_FORMATTERS.set(timezone, formatter);
+  }
+  return formatter;
+}
+
 function findLocalOccurrence(
   date: LocalDate,
   hour: number,
@@ -629,13 +661,27 @@ function findLocalOccurrence(
   const searchEnd = Date.UTC(date.year, date.month - 1, date.day + 1) + 24 * 60 * 60_000;
   let fallback: number | null = null;
 
-  for (let at = searchStart; at <= searchEnd; at += 60_000) {
-    if (at <= after) continue;
-    const parts = localParts(at, timezone);
-    if (!sameLocalDate(parts, date)) continue;
-    const localMinutes = parts.hour * 60 + parts.minute;
-    if (localMinutes === targetMinutes) return at;
-    if (localMinutes > targetMinutes && fallback === null) fallback = at;
+  // Hour-step to the bracketing hour first, then refine by minute: a flat minute scan over
+  // the 3-day window costs up to 4320 tz computations per call, and the missed-run walk
+  // calls this up to MAX_MISSED_CHAIN times per delivery (isolate-killing CPU). Semantics
+  // are unchanged: same first-match-wins, same first-later-time fallback, same next-day
+  // recursion - only the scan order is coarsened before refinement.
+  for (let hourStart = searchStart; hourStart <= searchEnd; hourStart += 3_600_000) {
+    const hourEnd = Math.min(hourStart + 3_600_000 - 60_000, searchEnd);
+    const first = localParts(hourStart, timezone);
+    const last = localParts(hourEnd, timezone);
+    const spanCoversDate = sameLocalDate(first, date) || sameLocalDate(last, date) ||
+      (new Date(Date.UTC(first.year, first.month - 1, first.day)) < new Date(Date.UTC(date.year, date.month - 1, date.day)) &&
+       new Date(Date.UTC(last.year, last.month - 1, last.day)) > new Date(Date.UTC(date.year, date.month - 1, date.day)));
+    if (!spanCoversDate) continue;
+    for (let at = hourStart; at <= hourEnd; at += 60_000) {
+      if (at <= after) continue;
+      const parts = localParts(at, timezone);
+      if (!sameLocalDate(parts, date)) continue;
+      const localMinutes = parts.hour * 60 + parts.minute;
+      if (localMinutes === targetMinutes) return at;
+      if (localMinutes > targetMinutes && fallback === null) fallback = at;
+    }
   }
 
   return fallback ?? findLocalOccurrence(addLocalDays(date, 1), hour, minute, timezone, after);
