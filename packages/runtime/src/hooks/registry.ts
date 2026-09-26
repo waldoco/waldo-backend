@@ -111,6 +111,12 @@ export type HookRuntimeContext = {
   egressAllowlist?: readonly string[];
   sanitise?: (input: SanitiseInput) => MaybePromise<SanitiseResult>;
   medicalGate?: (text: string) => MaybePromise<HookDecision>;
+  // Typed store provenance from the dispatcher/store boundary (owner review on #212): the
+  // provider verifies a stored-output id here before any receipt may promise read_tool_output.
+  // Structural shape avoids a hooks->conversation import; inMemoryToolOutputStore satisfies it.
+  toolOutputStore?: Readonly<{
+    stat(id: string): Readonly<{ id: string; stored_chars: number; original_chars: number; truncated: boolean; call_id?: string }> | null;
+  }>;
 };
 
 const ok = (): HookResult => ({ ok: true });

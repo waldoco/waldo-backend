@@ -873,7 +873,7 @@ const offloadResult = (
     };
   }
   const text = typeof guarded.payload === 'string' ? guarded.payload : JSON.stringify(guarded.payload);
-  const stored = store.put(text);
+  const stored = store.put(text, { call_id: callId });
   return {
     ok: true,
     // total_chars is the full guarded length; stored_chars + truncated say what is actually
