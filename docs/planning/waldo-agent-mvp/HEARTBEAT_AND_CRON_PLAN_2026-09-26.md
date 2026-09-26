@@ -10,6 +10,10 @@ permission to send, spend, or delete.
 
 Pins: beta-mvp = a796554ef80409c2bbd5d07ce2f1f8e702c5c41f.
 
+STATUS OF THIS DOCUMENT: this is a PLAN. Nothing in section 4 (H1, C1-C4) is implemented. Only
+section 1 rows marked WIRED exist in code at the pinned SHA; every PARTIAL/missing row and every
+numbered slice is proposed work awaiting owner review.
+
 ## 1. What is already wired (source-pinned)
 
 | Piece | State | Evidence |
@@ -23,7 +27,7 @@ Pins: beta-mvp = a796554ef80409c2bbd5d07ce2f1f8e702c5c41f.
 | Kinds registry | WIRED | journal, handoff, pre_activity_spot, brief, pre_brief_sweep, patrol, dreaming, reminder (schedule.ts). Owner-visible today: reminder, brief, patrol-ish day cards. |
 | Reminders | WIRED | channels/reminders.ts reminderBook: set/list/cancel tools, daily repeat via nextAfter. One-shot + daily only. |
 | Day cards / brief sweep / nightly | WIRED | armed via armDayCards/armBriefSweep/armNightly (telegram-owner-do.ts:650). Fixed product cadences, not owner-defined. |
-| Run history fields | WIRED (data) | status, attempts, last_fired_at per entry; not surfaced anywhere owner-visible. |
+| Latest-run state per entry | WIRED (data) | status, attempts, last_fired_at on the schedule row (multiplexer.ts:20-33). This is the CURRENT state of one entry, overwritten each fire - not a per-run history. |
 | Quiet hours | WIRED | loops.ts proactivity (quiet_start/quiet_end) gates briefs and day cards. |
 
 ## 2. What is missing
@@ -44,7 +48,7 @@ For owner-defined cron:
   "one run of schedule X at a time" rule).
 - C-d. No missed-run policy beyond retry/quarantine (e.g. "if the DO was asleep through 3
   occurrences, fire once and note the skip").
-- C-e. No truthful run history surface (the data exists; nothing renders it).
+- C-e. No per-run history at all: the schedule row keeps only latest-run state (status, attempts, last_fired_at), overwritten on every fire. Truthful history needs an append-only run-log table; nothing stores or renders per-run outcomes today. The earlier draft of this plan called the latest-run state "run history" - corrected here.
 
 ## 3. Mature implementations compared (sources from the repo's own vetted research)
 
@@ -102,9 +106,12 @@ C3. Dedupe/concurrency + missed-run policy.
   fires once with two missed rows.
 
 C4. Truthful run history surface.
-- Console "schedules" section: per schedule, last fired, attempts, outcome, next run in owner
-  timezone; per run, the Hermes-style split (run error vs scheduler-handoff error vs delivery
-  error). The data already exists (1); this is a view.
+- New append-only `schedule_runs` table (schedule_id, fired_at, duration_ms, outcome,
+  error_class with the Hermes-style split: run error vs scheduler-handoff error vs delivery
+  error). Every fire writes one row before any side effect, and updates it at settle - a row
+  that never settles IS the crashed-run evidence.
+- Console "schedules" section renders from schedule_runs: per schedule, last fired, attempts,
+  outcome, next run in owner timezone; per run, its real error class.
 - Test: a failed run shows its real error class, not a generic "failed".
 
 Order: H1 and C1 are independent; C2 gates C3's owner value; C4 can land any time after H1.
