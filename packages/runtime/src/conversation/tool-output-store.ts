@@ -6,6 +6,10 @@ export type StoredPut = Readonly<{ id: string; stored_chars: number; original_ch
 export type ToolOutputStore = Readonly<{
   put(output: string): StoredPut;
   read(id: string, offset: number, length: number): Readonly<{ text: string; total: number; original_chars: number; truncated: boolean; next_offset: number | null }> | null;
+  // Typed store provenance (owner review on #212): the ONLY authority on whether a stored-output
+  // id exists and what span is actually retrievable. A marker string inside tool output text is
+  // provider content and proves nothing - callers verify ids here before promising retrieval.
+  stat(id: string): StoredPut | null;
 }>;
 
 // Aggregate budget: input preparation bounds each string and node count, but without a total
@@ -44,6 +48,12 @@ export const inMemoryToolOutputStore = (): ToolOutputStore => {
         originals.delete(oldest);
       }
       return { id, stored_chars: stored.length, original_chars: output.length, truncated };
+    },
+    stat(id) {
+      const stored = outputs.get(id);
+      if (stored === undefined) return null;
+      const original = originals.get(id) ?? stored.length;
+      return { id, stored_chars: stored.length, original_chars: original, truncated: original > stored.length };
     },
     read(id, offset, length) {
       const output = outputs.get(id);

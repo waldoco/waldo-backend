@@ -1420,13 +1420,26 @@ async function sanitiseRequest(
   // shedding, no unverified retrieval promises.
   let toolTurns: { ok: true; payload: unknown } | undefined;
   if (request.tool_turns !== undefined) {
-    // A retrieval claim is made only from a verified stored-output id observed in the turn
-    // text: the tool-loop marker shape and the dispatcher offload JSON both carry it, while
-    // tool-loop.ts can also truncate WITHOUT storing - then the receipt says so instead of
-    // promising read_tool_output (owner review on #209).
-    const storedIdOf = (output: string): string | undefined =>
-      /"stored_output"\s*:\s*"([^"]+)"/.exec(output)?.[1] ??
-      /\[(?:full|partial) output stored as ([\w-]+):/.exec(output)?.[1];
+    // A marker string inside tool output text is provider content and proves NOTHING (owner
+    // re-review on #212): tool-loop.ts stringifies dispatcher results, so external web/mail
+    // text containing "[full output stored as fake-id:" survives inside the string and would
+    // match a naive regex. The regex only nominates a CANDIDATE; the store's own typed stat()
+    // is the sole authority on whether the id exists and what span is actually retrievable
+    // (full vs partial). No store on this request - or an id the store does not know - means
+    // no retrieval promise, ever.
+    const storedReceiptOf = (output: string): { id: string; stored_chars: number; original_chars: number; truncated: boolean } | null => {
+      const candidate =
+        /"stored_output"\s*:\s*"([^"]+)"/.exec(output)?.[1] ??
+        /\[(?:full|partial) output stored as ([\w-]+):/.exec(output)?.[1];
+      if (candidate === undefined) return null;
+      return ctx.toolOutputStore?.stat(candidate) ?? null;
+    };
+    const retrievalClause = (stored: { id: string; stored_chars: number; original_chars: number; truncated: boolean } | null): string =>
+      stored === null
+        ? 'No retrievable copy exists (the output was not stored); ask to narrow the request and re-run the tool.]'
+        : stored.truncated
+          ? `A partial guarded copy is stored as ${stored.id} (first ${stored.stored_chars} of ${stored.original_chars} characters); page THAT part with read_tool_output - the tail was never stored and is NOT retrievable; re-run the tool with narrower arguments if you need it.]`
+          : `The guarded output is stored as ${stored.id}; page it with read_tool_output, or ask to narrow the request.]`;
     // Dispatcher-derived provenance (owner finding on #204): a tool turn's taint comes from
     // the dispatcher's own per-tool contract (EXTERNAL_ORIGIN_TOOLS), not from a blanket
     // assignment - mutation acks keep the run taint, external-origin reads carry 'external'.
@@ -1442,14 +1455,11 @@ async function sanitiseRequest(
       turn: LLMToolTurn,
       reason: string,
     ): Promise<{ ok: true; value: LLMToolTurn } | { ok: false; error: HookHaltError }> => {
-      const storedId = storedIdOf(turn.output);
       const candidate: LLMToolTurn = {
         call: { call_id: turn.call.call_id, name: turn.call.name, arguments: '{}' },
         output:
           `[waldo: this tool output was omitted by the scribe (${reason}); the tool DID return ${turn.output.length} characters - do not report it as empty. ` +
-          (storedId !== undefined
-            ? `The guarded output is stored as ${storedId}; page it with read_tool_output, or ask to narrow the request.]`
-            : 'No retrievable copy exists (the output was not stored); ask to narrow the request and re-run the tool.]'),
+          retrievalClause(storedReceiptOf(turn.output)),
       };
       const checked = await sanitiseValue([candidate], 'internal_context', turnTaint(turn));
       if (!checked.ok) return { ok: false, error: checked.error };
@@ -1472,12 +1482,14 @@ async function sanitiseRequest(
       // An oversize output keeps its leading text with an explicit receipt appended, so the
       // model can page the rest via read_tool_output - but only when a stored-output id was
       // actually verified in the text; otherwise the receipt says the tail is not retrievable.
-      const storedId = storedIdOf(turn.output);
+      const stored = storedReceiptOf(turn.output);
       const head = turn.output.slice(0, Math.max(1_000, 24_000 - turn.call.arguments.length));
       const receipt =
-        storedId !== undefined
-          ? `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. The tool DID return data - do not report it as empty. The guarded output is stored as ${storedId}; page the rest with read_tool_output, or ask to narrow the request.]`
-          : `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. The tool DID return data - do not report it as empty. The remainder was not stored and is NOT retrievable; ask to narrow the request and re-run the tool.]`;
+        stored === null
+          ? `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. The tool DID return data - do not report it as empty. The remainder was not stored and is NOT retrievable; ask to narrow the request and re-run the tool.]`
+          : stored.truncated
+            ? `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. The tool DID return data - do not report it as empty. A partial guarded copy is stored as ${stored.id} (first ${stored.stored_chars} of ${stored.original_chars} characters); page THAT part with read_tool_output - the tail was never stored and is NOT retrievable.]`
+            : `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. The tool DID return data - do not report it as empty. The guarded output is stored as ${stored.id}; page the rest with read_tool_output, or ask to narrow the request.]`;
       const reduced = await sanitiseValue([{ ...turn, output: `${head}${receipt}` }], 'internal_context', turnTaint(turn));
       if (reduced.ok && Array.isArray(reduced.payload) && reduced.payload.length === 1) {
         kept.push(reduced.payload[0] as LLMToolTurn);
@@ -1501,16 +1513,19 @@ async function sanitiseRequest(
       // Compact the largest turn that carries a verified stored-output id.
       let pick = -1;
       for (let i = 0; i < kept.length; i += 1) {
-        if (storedIdOf(kept[i]!.output) === undefined) continue;
+        if (storedReceiptOf(kept[i]!.output) === null) continue;
         if (kept[i]!.output.length <= COMPACT_HEAD + 512) continue;
         if (pick === -1 || kept[i]!.output.length > kept[pick]!.output.length) pick = i;
       }
       if (pick === -1) break;
-      const compactedId = storedIdOf(kept[pick]!.output)!;
+      const compactedStore = storedReceiptOf(kept[pick]!.output)!;
       const compacted: LLMToolTurn = {
         ...kept[pick]!,
         output:
-          `${kept[pick]!.output.slice(0, COMPACT_HEAD)}\n[waldo: this tool output was reduced by the scribe to fit the request budget; showing ${COMPACT_HEAD} characters. The tool DID return data - do not report it as empty. The guarded output is stored as ${compactedId}; page it with read_tool_output, or ask to narrow the request.]`,
+          `${kept[pick]!.output.slice(0, COMPACT_HEAD)}\n[waldo: this tool output was reduced by the scribe to fit the request budget; showing ${COMPACT_HEAD} characters. The tool DID return data - do not report it as empty. ` +
+          (compactedStore.truncated
+            ? `A partial guarded copy is stored as ${compactedStore.id} (first ${compactedStore.stored_chars} of ${compactedStore.original_chars} characters); page THAT part with read_tool_output - the tail was never stored and is NOT retrievable.]`
+            : `The guarded output is stored as ${compactedStore.id}; page it with read_tool_output, or ask to narrow the request.]`),
       };
       const checkedItem = await sanitiseValue([compacted], 'internal_context', turnTaint(kept[pick]!));
       if (!checkedItem.ok) return { ...checkedItem, scribeDestination: 'internal_context' };
