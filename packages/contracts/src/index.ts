@@ -31,6 +31,7 @@ export * from './tools/permissions';
 export * from './tools/handler';
 export * from './tools/schemas/reads';
 export * from './tools/schemas/writes';
+export * from './tools/schemas/delegate';
 export * from './tools/schemas/reminders';
 export * from './tools/schemas/loops';
 export * from './tools/schemas/calendar';

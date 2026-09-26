@@ -54,6 +54,9 @@ export const toolNameSchema = z.enum([
   'connect_service',
   'browse_page',
   'browse_act',
+  // delegate_task 42 (subagent orchestration v1): turn-scoped, owner chat turns only; children
+  // get a narrowed read-only tool set and cannot delegate further (flat, depth 1).
+  'delegate_task',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -149,6 +152,7 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'web_search',
     'browse_page',
     'browse_act',
+    'delegate_task',
     'read_document',
     'call_mcp_tool',
     'write_task',

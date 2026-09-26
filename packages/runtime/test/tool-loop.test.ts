@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
+import { buildSessionState, getContextArgsSchema, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
 import { capToolOutput, NO_PROGRESS_LIMIT, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
@@ -296,13 +296,17 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
       searched += 1;
       return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
     });
-    const send = {
-      name: 'send_message' as const,
-      description: 'Queue a message.',
-      schema: sendMessageArgsSchema,
-      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
-      autonomy_gated: true,
-      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    // The mutation rides a NON-privileged mutates_state handler: after an external-stamped read
+    // the ADR-0049 gate correctly refuses direct execution of any PRIVILEGED_ACTION_TOOLS name,
+    // so a send_message stub can never land post-read in this loop. The epoch reset keys on the
+    // handler's mutates_state/autonomy_gated flags, not the tool name, so this drives the same seam.
+    const mutation = {
+      name: 'get_context' as const,
+      description: 'Non-privileged state-mutation stub.',
+      schema: getContextArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('get_context')),
+      mutates_state: true as const,
+      handle: async () => ({ ok: true as const, data: { settled: true }, source_taint: null }),
     };
     let n = 0;
     const outputs: string[] = [];
@@ -310,7 +314,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
       // send_message is autonomy-gated, so the dispatcher's autonomy_gate_check hook needs a
       // hasApproval source in ctx. This stub approves in-loop, matching the dispatcherContext
       // shape in tool-dispatcher.test.ts; no real send occurs - the handler below is a stub.
-      handlers: [web, send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      handlers: [web, mutation as never], ctx: { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) }, maxSteps: 25,
       onTool: (e) => outputs.push(e.output),
       step: async (tools) => {
         n += 1;
@@ -320,7 +324,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
         // successful mutation lands - new state, new experiment - and the SAME search must
         // dispatch again instead of refusing.
         if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
-        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'a'.repeat(64) + '"}' }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'get_context', arguments: '{}' }] };
         if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
         return { text: 'done.' };
       },
@@ -338,11 +342,14 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
       searched += 1;
       return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
     });
+    // Like the live desk-routed handlers: mutates_state, not autonomy-gated. The name must be a
+    // non-privileged one - the taint gate matches PRIVILEGED_ACTION_TOOLS by name, so a stub named
+    // send_message would be halted post-read even with autonomy_gated false.
     const deskMutation = {
-      name: 'send_message' as const,
+      name: 'get_context' as const,
       description: 'Desk-routed mutation stub (like the live handlers).',
-      schema: sendMessageArgsSchema,
-      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      schema: getContextArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('get_context')),
       autonomy_gated: false,
       mutates_state: true as const,
       handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
@@ -352,13 +359,13 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     const text = await runToolLoop({
       // send_message passes through the dispatcher's approval hook regardless of the
       // autonomy gate; this stub approves in-loop and no real send occurs.
-      handlers: [web, deskMutation as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      handlers: [web, deskMutation as never], ctx: { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) }, maxSteps: 25,
       onTool: (e) => outputs.push(e.output),
       step: async (tools) => {
         n += 1;
         if (!tools) return { text: 'done.' };
         if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
-        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'b'.repeat(64) + '"}' }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'get_context', arguments: '{}' }] };
         if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
         return { text: 'done.' };
       },
@@ -374,19 +381,23 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
       searched += 1;
       return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
     });
-    const send = {
-      name: 'send_message' as const,
-      description: 'Queue a message.',
-      schema: sendMessageArgsSchema,
-      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
-      autonomy_gated: true,
-      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    // The mutation rides a NON-privileged mutates_state handler: after an external-stamped read
+    // the ADR-0049 gate correctly refuses direct execution of any PRIVILEGED_ACTION_TOOLS name,
+    // so a send_message stub can never land post-read in this loop. The epoch reset keys on the
+    // handler's mutates_state/autonomy_gated flags, not the tool name, so this drives the same seam.
+    const mutation = {
+      name: 'get_context' as const,
+      description: 'Non-privileged state-mutation stub.',
+      schema: getContextArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('get_context')),
+      mutates_state: true as const,
+      handle: async () => ({ ok: true as const, data: { settled: true }, source_taint: null }),
     };
     let n = 0;
     const outputs: string[] = [];
     const SAME = '{"query":"exactly the same search"}';
     const text = await runToolLoop({
-      handlers: [web, send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      handlers: [web, mutation as never], ctx: { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) }, maxSteps: 25,
       onTool: (e) => outputs.push(e.output),
       step: async (tools) => {
         n += 1;
@@ -394,7 +405,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
         // Same read twice: the second is an exact duplicate and must refuse. A successful gated
         // mutation lands, opening a new state epoch; the SAME read args must then dispatch again.
         if (n <= 2) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: SAME }] };
-        if (n === 3) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'b'.repeat(64) + '"}' }] };
+        if (n === 3) return { text: '', tool_calls: [{ call_id: 'm1', name: 'get_context', arguments: '{}' }] };
         if (n === 4) return { text: '', tool_calls: [{ call_id: 's3', name: 'web_search', arguments: SAME }] };
         return { text: 'done.' };
       },
@@ -402,7 +413,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     expect(text).toBe('done.');
     expect(searched).toBe(2);
     expect(outputs[1]).toContain('Same call already made this turn');
-    expect(outputs.some((o) => o.includes('"queued":true'))).toBe(true);
+    expect(outputs.some((o) => o.includes('"settled":true'))).toBe(true);
   });
 
   it('a landed mutation never re-enables duplicate mutations (write/send dedupe is retained)', async () => {
@@ -419,7 +430,7 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     let n = 0;
     const outputs: string[] = [];
     const text = await runToolLoop({
-      handlers: [send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      handlers: [send as never], ctx: { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) }, maxSteps: 25,
       onTool: (e) => outputs.push(e.output),
       step: async (tools) => {
         n += 1;
@@ -451,5 +462,71 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     });
     expect(searched).toBe(3);
     expect(outputs[outputs.length - 1]).toContain('No progress');
+  });
+});
+describe('turn taint accumulation (Codex #224 hold)', () => {
+  // An external-stamped result (direct read or a subagent delegate_task handback) taints the
+  // rest of the turn: a later privileged call is refused direct execution by the autonomy gate.
+  it('a privileged call after an external-tainted result is halted by the taint gate', async () => {
+    const web = webSearchHandler('test-key', async (): Promise<Response> =>
+      Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } }));
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    // Fresh session per test: the module-level ctx shares one session object, and a tainted
+    // turn leaves durable checkpoint evidence in it that would bleed into sibling tests.
+    const taintCtx = { ...ctx, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      handlers: [web, send as never], ctx: taintCtx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools) return { text: 'done.' };
+        if (n === 1) return { text: '', tool_calls: [{ call_id: 's1', name: 'web_search', arguments: '{"query":"news"}' }] };
+        if (n === 2) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'c'.repeat(64) + '"}' }] };
+        return { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(taintCtx.toolArgSourceTaint).toBe('external');
+    expect(sent).toBe(0);
+    // The dispatcher collapses an autonomy_gate_check halt to forbidden/approval_denied; the
+    // distinguishing evidence is hasApproval: true yet zero dispatches after the tainted read.
+    expect(outputs[1]).toContain('"code":"forbidden"');
+    expect(outputs[1]).toContain('approval_denied');
+  });
+
+  it('a privileged call before any external content still dispatches (control)', async () => {
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    // Explicit null taint: this file's earlier tests share the module ctx, whose accumulation
+    // now (correctly) taints it; the control needs a provably clean starting witness.
+    const cleanCtx = { ...ctx, sourceTaint: null, toolArgSourceTaint: null, hasApproval: () => true, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) };
+    const ctrlOut: string[] = [];
+    await runToolLoop({
+      handlers: [send as never], ctx: cleanCtx, maxSteps: 25,
+      onTool: (e) => ctrlOut.push(e.output),
+      step: async (tools) => {
+        if (!tools) return { text: 'done.' };
+        return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'd'.repeat(64) + '"}' }] };
+      },
+    });
+    expect(sent).toBe(1);
+    expect(cleanCtx.toolArgSourceTaint).toBeNull();
   });
 });

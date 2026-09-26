@@ -1520,8 +1520,9 @@ describe('ContextComposer', () => {
     expect(second.prompt).toBe(first.prompt);
     expect(second.checkpoint).toEqual(first.checkpoint);
     // The hash re-pins when the composed prompt legitimately changes (send_email joined the
-// user_message ACL ceiling wording, 2026-09-25); determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_c18e13403f5eb1cea5aa3a55b6442a28');
+// user_message ACL ceiling wording, 2026-09-25; delegate_task joined it, 2026-09-26);
+// determinism is proven by first===second above.
+    expect(first.checkpoint.context_ref).toBe('ctx_e71eaf7197df5d3faa4e5ec4bf9baf55');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );
