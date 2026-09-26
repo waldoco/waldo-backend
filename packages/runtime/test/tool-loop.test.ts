@@ -132,7 +132,7 @@ describe('runToolLoop connect intents', () => {
   // The REAL tier-2 handler with no Google connection - the intent comes from production code.
   const failing = googleHandlers(
     { client: async () => null },
-    { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined },
+    { propose: async () => 'p', proposeSendEmail: async () => ({ id: 'p', reused: null }), record: () => undefined },
     { timezone: 'UTC', now: () => new Date() },
   ).find((h) => h.name === 'query_calendar')!;
 

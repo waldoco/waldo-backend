@@ -4,7 +4,7 @@ import {
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
-import type { EmailSendProposal } from '../../channels/approvals';
+import type { EmailSendProposal, ProposeSendEmailResult } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
@@ -14,7 +14,7 @@ export type GoogleAccess = Readonly<{
 
 export type EffectDesk = Readonly<{
   propose(proposal: ProposeCalendarChangeArgs): Promise<string>;
-  proposeSendEmail(proposal: EmailSendProposal): Promise<string>;
+  proposeSendEmail(proposal: EmailSendProposal): Promise<ProposeSendEmailResult>;
   record(kind: string, summary: string, payload: unknown): void;
 }>;
 
@@ -154,13 +154,18 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,
       });
-      const proposal_id = await desk.proposeSendEmail({
+      const proposal = await desk.proposeSendEmail({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown,
         ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-        message_id, raw, digest: await sha256Hex(raw),
+        message_id, raw, digest: await sha256Hex(raw), content_digest: content_key,
       });
-      return { ok: true, data: { proposal_id, status: 'sent to the owner with Send it / Modify / Not now buttons', sent: false }, source_taint: null };
+      const status = proposal.reused === 'sending'
+        ? 'a send of this exact email is already in flight from the earlier card - no new card was sent; wait for that one to resolve'
+        : proposal.reused === 'unknown'
+          ? 'not proposed - a previous send of this exact email could not be confirmed and may already be in Sent; check Sent before asking again, so it never goes twice'
+          : 'sent to the owner with Send it / Modify / Not now buttons';
+      return { ok: true, data: { proposal_id: proposal.id, status, sent: false }, source_taint: null };
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
 ];

@@ -30,14 +30,22 @@ const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 export type EmailSendProposal = Readonly<{
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
   subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string;
+  // sha256 over the content fields only (no Message-ID): stable across turns for identical
+  // content, so an unreconciled 'unknown' send can block a same-content re-entry.
+  content_digest: string;
 }>;
+
+// proposeSendEmail reuse outcomes: 'open' re-sends the existing card; 'sending'/'unknown'
+// mint nothing - an in-flight or unreconciled send of the same email must not get a second
+// proposal the owner could approve into a duplicate.
+export type ProposeSendEmailResult = Readonly<{ id: string; reused: 'open' | 'sending' | 'unknown' | null }>;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
-  proposeSendEmail(payload: EmailSendProposal): Promise<string>;
+  proposeSendEmail(payload: EmailSendProposal): Promise<ProposeSendEmailResult>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
@@ -238,17 +246,28 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // instead of minting a second one. A same-content send on a new turn carries a new
       // Message-ID and is a separate proposal - intents never collapse, and Sent-mail
       // reconciliation can never match an older send.
-      const existing = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'open'").toArray()
-        .find((r) => { try { return (JSON.parse(r.payload_json) as EmailSendProposal).message_id === payload.message_id; } catch { return false; } });
-      if (existing) {
-        await say(`Send this email? ${existing.summary}`, [['Send it', `a:${existing.id}`], ['Modify', `e:${existing.id}`], ['Not now', `s:${existing.id}`]]);
-        return existing.id;
+      // Re-entry protection: dedupe scans open AND in-flight/unreconciled rows. A 'sending' or
+      // 'unknown' row with the same Message-ID (same-turn) - or an 'unknown' row with the same
+      // content digest (cross-turn) - blocks a fresh proposal, because approving it could
+      // duplicate a send whose outcome was never proven.
+      const rows = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status IN ('open', 'sending', 'unknown')").toArray();
+      for (const r of rows) {
+        let stored: EmailSendProposal | null = null;
+        try { stored = JSON.parse(r.payload_json) as EmailSendProposal; } catch { continue; }
+        if (stored === null || stored.message_id === undefined) continue;
+        const sameLogicalSend = stored.message_id === payload.message_id;
+        const sameUnresolvedContent = r.status === 'unknown' && stored.content_digest !== undefined && stored.content_digest === payload.content_digest;
+        if (!sameLogicalSend && !sameUnresolvedContent) continue;
+        if (r.status === 'open') {
+          await say(`Send this email? ${r.summary}`, [['Send it', `a:${r.id}`], ['Modify', `e:${r.id}`], ['Not now', `s:${r.id}`]]);
+        }
+        return { id: r.id, reused: r.status as 'open' | 'sending' | 'unknown' };
       }
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
-      return id;
+      return { id, reused: null };
     },
     async propose(p) {
       const id = `p${deps.newId()}`;

@@ -88,7 +88,7 @@ describe('google client', () => {
 });
 
 describe('google tools', () => {
-  const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
+  const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ id: 'proposal:1', reused: null }), record: () => undefined };
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
     const [query] = googleHandlers(google, proposals, clock);
