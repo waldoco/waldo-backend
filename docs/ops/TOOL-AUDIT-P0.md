@@ -30,7 +30,7 @@ Read probes 1-3 read the owner's REAL provider data; only the write probes (4-6)
 
 1. "what's on my calendar today" → query_calendar populated PASS (proves the populated-read break is gone)
 2. "any new email?" → get_communication populated PASS (the populated-read regression case)
-3. "what are my open tasks" → get_tasks PASS (first live run of this tool)
+3. "what are my open tasks" → get_tasks PASS (first POST-FIX live run - the first live attempt already ran on old release `2754a6c` and failed `transient:invalid_handler_result`, `tg-904957580`; this step is the post-#202 proof and waits for that deploy)
 4. "put a test event 'probe' tomorrow 1-2pm" → propose_calendar_change card; approve from CONSOLE Waiting-on-you; verify event created; then cancel it the same way
 5. "draft an email to myself, subject probe, body probe" → draft_email; verify in Gmail Drafts
 6. "send an email to myself, subject probe, body probe" → send_email card; approve; verify in Sent (Message-ID reconciliation)
