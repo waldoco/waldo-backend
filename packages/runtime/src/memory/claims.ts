@@ -31,6 +31,9 @@ export const claimStore = (sql: Sql) => {
     id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)`);
   sql.exec('CREATE TABLE IF NOT EXISTS forget_barriers (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, topic_hash TEXT, created_at TEXT NOT NULL)');
+  // Durable scrub intent: a claim's purge survives here until every store settles, so a
+  // failed purge can resume from the claim row instead of losing the source text.
+  sql.exec('CREATE TABLE IF NOT EXISTS purge_pending (claim_id INTEGER PRIMARY KEY, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL)');
   if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
     sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
   }
@@ -62,7 +65,12 @@ export const claimStore = (sql: Sql) => {
       sql.exec('DELETE FROM claims WHERE id = ?', id);
     },
     barrier(topic: string, at: string): void {
-      sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', topic, textFingerprint(topic.trim()), at);
+      // forget_topic is model-supplied free text, and barriers go back to the model in every
+      // memory pass: persisting the words would be the leak returning. Store the marker +
+      // fingerprint only (the fingerprint is what blocks re-admission), and dedupe on it.
+      const hash = textFingerprint(topic.trim());
+      const existing = sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers WHERE topic_hash = ?', hash).one().n;
+      if (existing === 0) sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
     },
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,
     backup(reason: string, payload: unknown, at: string): void {
@@ -100,11 +108,24 @@ export const claimStore = (sql: Sql) => {
       const attempt = (store: string, op: () => void) => {
         try { op(); } catch { failed.push(store); }
       };
+      const idList = forgotten.map((claim) => claim.id);
+      const notPurging = idList.length ? ` AND id NOT IN (${idList.map(() => '?').join(',')})` : '';
+      const existingHashes = new Set(sql.exec<{ topic_hash: string | null }>('SELECT topic_hash FROM forget_barriers').toArray().map((row) => row.topic_hash));
       for (const claim of forgotten) {
-        attempt('claims', () => sql.exec('DELETE FROM claims WHERE id = ?', claim.id));
+        // Durable intent FIRST, claim text LAST: a failed purge leaves the claim row (status
+        // 'purging') and this marker behind, so a retry resumes from the source instead of
+        // finding the text already gone. The claim leaves the active set immediately.
+        attempt('pending', () => sql.exec('INSERT OR IGNORE INTO purge_pending (claim_id, fingerprint, created_at) VALUES (?, ?, ?)', claim.id, textFingerprint(claim.text.trim()), at));
+        attempt('claims_mark', () => sql.exec("UPDATE claims SET status = 'purging' WHERE id = ?", claim.id));
         // The barrier carries the fingerprint and the marker, NEVER the text: barriers go back
         // to the model in every memory pass, so raw text here would be the leak returning.
-        attempt('barrier', () => sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, textFingerprint(claim.text.trim()), at));
+        attempt('barrier', () => {
+          const hash = textFingerprint(claim.text.trim());
+          if (!existingHashes.has(hash)) {
+            sql.exec('INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, ?, ?)', FORGOTTEN, hash, at);
+            existingHashes.add(hash);
+          }
+        });
       }
       const hasEpisodes = tableExists(sql, 'episodes');
       const hasSpots = tableExists(sql, 'spots');
@@ -118,7 +139,7 @@ export const claimStore = (sql: Sql) => {
         if (hasSpots) attempt('legacy_spots', () => sql.exec(`UPDATE spots SET text = replace(text, ?, ?), evidence = replace(evidence, ?, ?) WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
         if (hasRevisions) attempt('legacy_core_files', () => sql.exec(`UPDATE core_file_revisions SET content = replace(content, ?, ?) WHERE content LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like));
         // Other claims may quote the forgotten text in their own text or evidence.
-        attempt('surviving_claims', () => sql.exec(`UPDATE claims SET text = replace(text, ?, ?), evidence = replace(evidence, ?, ?) WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
+        attempt('surviving_claims', () => sql.exec(`UPDATE claims SET text = replace(text, ?, ?), evidence = replace(evidence, ?, ?) WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, text, FORGOTTEN, text, FORGOTTEN, like, like, ...idList));
         attempt('constellation_nodes', () => sql.exec(`UPDATE constellation_nodes SET label = replace(label, ?, ?), summary = replace(summary, ?, ?) WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
       }
       attempt('constellation_refs', () => {
@@ -128,6 +149,17 @@ export const claimStore = (sql: Sql) => {
           if (kept.length !== spots.length) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
         }
       });
+      // Settle LAST: the claim row and its pending marker are removed only when every store is
+      // clean. A failure anywhere leaves both behind, so 'try again' is honest - a retry finds
+      // the source text intact and the already-redacted stores are idempotent no-ops.
+      if (failed.length === 0) {
+        for (const claim of forgotten) {
+          attempt('claims', () => {
+            sql.exec('DELETE FROM claims WHERE id = ?', claim.id);
+            sql.exec('DELETE FROM purge_pending WHERE claim_id = ?', claim.id);
+          });
+        }
+      }
       const remaining: Record<string, number> = {};
       for (const text of texts) {
         const like = `%${likeEscape(text)}%`;
@@ -237,6 +269,8 @@ type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolea
 export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[]) => void): string => {
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
   const known = new Set(store.claims().map((claim) => claim.id));
+  // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
+  const forgettable = new Set([...known, ...store.claims('purging').map((claim) => claim.id)]);
   const nodes = new Set(store.nodes().map((node) => node.id));
   const topic = ops.forget_topic?.trim();
   if (topic) store.barrier(topic, at);
@@ -247,7 +281,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id))) store.setStatus(id, 'dismissed');
-  const forgetIds = ops.forget_claims.filter((id) => known.has(id));
+  const forgetIds = ops.forget_claims.filter((id) => forgettable.has(id));
   const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
   if (purge && purge.texts.length > 0) onPurged?.(purge.texts);
   for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);

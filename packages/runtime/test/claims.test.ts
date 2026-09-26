@@ -28,9 +28,9 @@ describe('claims', () => {
       applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT);
       expect(store.claims()).toEqual([]);
       expect(store.claims('dismissed').map((claim) => claim.id)).toEqual([gym!.id]);
-      // purge barriers never keep the forgotten text (it would ride every model prompt); the neutral
-      // forget_topic label and the exact-match fingerprint are what remain.
-      expect(store.barriers().map((barrier) => barrier.topic)).toEqual(['lunch habits', FORGOTTEN]);
+      // No barrier keeps raw words - the model-supplied topic label would ride every model
+      // prompt too. Marker + exact-match fingerprint is all that remains of either row.
+      expect(store.barriers().map((barrier) => barrier.topic)).toEqual([FORGOTTEN, FORGOTTEN]);
       expect(store.barriers().map((barrier) => barrier.topic_hash)).toEqual([textFingerprint('lunch habits'), textFingerprint('Skips lunch on meeting-heavy days')]);
     });
   });
@@ -44,7 +44,10 @@ describe('claims', () => {
         { kind: 'fact', text: 'Lives in Bengaluru', source: 'stated', evidence: '"I live in Bengaluru"', touches_forgotten: false },
       ] }), AT)).toContain('+1 held1');
       expect(store.claims().map((claim) => claim.text)).toEqual(['Lives in Bengaluru']);
-      expect(nightlyInput(store, 'owner: hi')).toContain('<forgotten id="1">the owner\'s ex</forgotten>');
+      // The barrier prompt carries the marker only: the forgotten words never return to the model.
+      const input = nightlyInput(store, 'owner: hi');
+      expect(input).toContain('<forgotten id="1">a removed item</forgotten>');
+      expect(input).not.toContain("owner's ex");
     });
   });
 

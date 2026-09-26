@@ -107,6 +107,72 @@ describe('forget coverage', () => {
     });
   });
 
+  it('a model-supplied forget_topic is never stored or shown back - barrier holds marker + fingerprint only', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const topic = `the ${MARKER} affair`;
+      const result = applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic,
+      }), AT);
+      expect(result).toContain('barrier');
+      const rows = sql.exec<{ topic: string; topic_hash: string | null }>('SELECT topic, topic_hash FROM forget_barriers').toArray();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.topic).toBe(FORGOTTEN); // never the raw model-supplied words
+      expect(rows[0]!.topic_hash).toBe(textFingerprint(topic));
+      expect(barrierPrompt(store)).not.toContain(MARKER);
+      expect(barrierPrompt(store)).toContain('a removed item');
+      // and the fingerprint is what blocks re-admission of the same content
+      const second = applyClaimOps(store, JSON.stringify({
+        add: [{ kind: 'fact', text: topic, source: 'stated', evidence: 'owner said', touches_forgotten: false }],
+        seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null,
+      }), AT);
+      expect(second).toContain('held1');
+      expect(store.claims()).toEqual([]);
+      // barrier insert is idempotent on the fingerprint - no duplicate rows
+      expect(sql.exec<{ n: number }>('SELECT count(*) AS n FROM forget_barriers').toArray()[0]!.n).toBe(1);
+    });
+  });
+
+  it('a failed purge preserves a durable pending intent and the source text, and a retry resumes to completion', async () => {
+    await withSql((rawSql) => {
+      let failEpisodes = true;
+      const sql = new Proxy(rawSql, {
+        get: (target, prop, receiver) => {
+          if (prop !== 'exec') return Reflect.get(target, prop, receiver);
+          return (query: string, ...args: unknown[]) =>
+            (failEpisodes && query.startsWith('UPDATE episodes')) ? (() => { throw new Error('fts locked'); })() : target.exec(query, ...(args as never[]));
+        },
+      }) as SqlStorage;
+      const store = claimStore(sql);
+      const claimId = Number(
+        rawSql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
+      );
+      episodeIndex(rawSql).add('entry-1', 'owner', `remember: ${CLAIM_TEXT}`, Date.parse(AT));
+      const ops = JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null });
+
+      // First pass: episodes fails. The claim leaves the active set but KEEPS its text, and the
+      // pending intent is durable - the receipt names the failure honestly.
+      const first = applyClaimOps(store, ops, AT);
+      expect(first).toContain('purge-incomplete');
+      expect(first).toContain('episodes(failed)');
+      expect(store.claims()).toEqual([]); // out of the active set
+      const midClaim = rawSql.exec<{ status: string; text: string }>('SELECT status, text FROM claims WHERE id = ?', claimId).toArray()[0]!;
+      expect(midClaim.status).toBe('purging');
+      expect(midClaim.text).toContain(MARKER); // source text preserved for resume
+      expect(rawSql.exec<{ n: number }>('SELECT count(*) AS n FROM purge_pending WHERE claim_id = ?', claimId).one().n).toBe(1);
+
+      // Retry (the owner asks again, the model re-lists the same id): the 'purging' claim is
+      // still forgettable, redactions are idempotent no-ops, and the purge settles completely.
+      failEpisodes = false;
+      const second = applyClaimOps(store, ops, AT);
+      expect(second).toContain('purged');
+      expect(second).not.toContain('purge-incomplete');
+      expect(rawSql.exec<{ n: number }>('SELECT count(*) AS n FROM claims WHERE id = ?', claimId).one().n).toBe(0);
+      expect(rawSql.exec<{ n: number }>('SELECT count(*) AS n FROM purge_pending').one().n).toBe(0);
+      expect(rawSql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE episodes MATCH ?`, `"${MARKER}"`).one().n).toBe(0); // failed store now clean
+    });
+  });
+
   it('a failed store is named in the receipt and every other store is still cleaned', async () => {
     await withSql((rawSql) => {
       // Force one store to fail: UPDATEs against episodes throw. Purge must continue with the

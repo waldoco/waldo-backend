@@ -13,6 +13,18 @@ const fakeStorage = () => {
 };
 
 describe('tool output ledger', () => {
+  it('forget redaction removes casing variants of the forgotten text, not just the exact string', async () => {
+    const storage = fakeStorage();
+    const ledger = toolOutputLedger(storage);
+    await ledger.record({ tool: 'web_search', ok: true, at: 1000, taint: 'external', summary: 'Owner mentioned Morning Pages and MORNING PAGES again' });
+    const { redactToolOutputLedger } = await import('../src/conversation/tool-output-ledger');
+    const touched = await redactToolOutputLedger(storage as never, ['morning pages'], '[forgotten]');
+    expect(touched).toBe(1);
+    const row = [...storage.data.values()][0] as { summary: string };
+    expect(row.summary.toLowerCase()).not.toContain('morning pages');
+    expect(row.summary).toBe('Owner mentioned [forgotten] and [forgotten] again');
+  });
+
   it('records and returns recent outputs as tool_result fragments, newest last', async () => {
     const ledger = toolOutputLedger(fakeStorage());
     await ledger.record({ tool: 'query_calendar', ok: true, at: 1000, taint: 'external', summary: '{"events":[]}' });
