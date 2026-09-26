@@ -1,11 +1,12 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
-import { exchangeGoogleCode, googleClient, GoogleError, type GoogleClient } from '../../../packages/runtime/src/connectors/google.ts';
+import { exchangeGoogleCode, googleClient, googleHas, GoogleError, type GoogleClient } from '../../../packages/runtime/src/connectors/google.ts';
+import { PROXY_METHODS, PROXY_METHOD_FEATURE, validateProxyArgs, type ProxyMethod } from '../../../packages/runtime/src/connectors/proxy-methods.ts';
 
 const env = (name: string) => Deno.env.get(name) ?? '';
 const [url, service, router, clientId, clientSecret] = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'WALDO_ROUTER_HMAC_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].map(env);
-const METHODS = ['events', 'draft', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail'] as const;
-type Method = (typeof METHODS)[number];
+// The allowlist, arg bounds and scope-gate map come from the shared module - both sides must agree.
+type Method = ProxyMethod;
 
 const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
@@ -61,13 +62,21 @@ const handle = async (body: Body): Promise<Response> => {
     }
     // One-time move of a token saved in the Durable Object before this proxy existed.
     if (body.op === 'adopt' && body.refresh_token) return store(body.do_name, body.email ?? 'google', body.scopes ?? [], body.refresh_token);
-    if (body.op !== 'call' || !body.connection || !METHODS.includes(body.method as Method)) return fail(404, 'unknown operation');
-    const token = await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
+    if (body.op !== 'call' || !body.connection || !(PROXY_METHODS as readonly string[]).includes(body.method ?? '')) return fail(404, 'unknown operation');
+    const method = body.method as Method;
+    // Bounds before any token is touched; args are validated, never logged or stored here.
+    const argsError = validateProxyArgs(method, body.args ?? []);
+    if (argsError) return fail(404, argsError);
+    // Owner gate (owner_id_for inside the SQL) plus scope gate: the stored grant must cover the
+    // method's feature before the proxy spends the token on it.
+    const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as { secret: string; scopes: string[] | null }[];
+    const token = access[0]?.secret ?? null;
     if (!token) return fail(401, 'connection unavailable');
+    if (!googleHas(access[0]!.scopes, PROXY_METHOD_FEATURE[method])) return fail(403, `scope_missing: ${PROXY_METHOD_FEATURE[method]}`);
     let refreshError = '';
     const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; });
     try {
-      const data = await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? []));
+      const data = await (client[method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? []));
       await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
       return reply({ data: data ?? null });
     } catch (error) {

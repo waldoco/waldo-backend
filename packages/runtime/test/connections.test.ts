@@ -34,6 +34,23 @@ describe('google proxy', () => {
     expect(String(sent(fetcher)[1].body)).not.toMatch(/refresh_token|access_token/);
   });
 
+  it('routes tasks, sendRaw and findSentByMessageId through the owner-bound signed call', async () => {
+    const fetcher = vi.fn().mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ data: null }))));
+    const client = proxyOf(fetcher).client('do-a', 'c-1');
+    await client.tasks('todo', 20);
+    await client.sendRaw('To: a@b.test\r\n\r\nhi', 'thread-1');
+    await client.findSentByMessageId('<m@waldo-send>');
+    const methods = fetcher.mock.calls.map((call) => JSON.parse(String((call[1] as { body: string }).body)).method);
+    expect(methods).toEqual(['tasks', 'sendRaw', 'findSentByMessageId']);
+    // every call is signed and carries the connection id, never a token
+    for (const call of fetcher.mock.calls) {
+      const init = call[1] as { headers: Record<string, string>; body: string };
+      expect(init.headers['x-waldo-sig']).toBeTruthy();
+      expect(String(init.body)).toContain('"connection":"c-1"');
+      expect(String(init.body)).not.toMatch(/refresh_token|access_token/);
+    }
+  });
+
   it('maps a refresh failure to health and a scope gap to a 403 GoogleError', async () => {
     const health = vi.fn();
     const refused = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { status: 401, message: 'google token failed: invalid_grant' } })));
