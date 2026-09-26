@@ -32,7 +32,7 @@ export type TelegramWebhookEnv = Readonly<{
 
 export const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 
-const sameSecret = (given: string, expected: string): boolean => {
+export const sameSecret = (given: string, expected: string): boolean => {
   const a = new TextEncoder().encode(given);
   const b = new TextEncoder().encode(expected);
   let diff = a.length ^ b.length;

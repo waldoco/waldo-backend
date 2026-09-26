@@ -36,6 +36,7 @@ import { connectServiceHandler, googleHandlers } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
+import { PROBE_TURN_DO_URL } from './probe-turn';
 import { whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
 import { callMcpToolHandler } from '../tools/live/mcp';
 import { createTelegramFileDownloader } from './telegram-media';
@@ -143,6 +144,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (new URL(request.url).pathname === '/whatsapp-turn' && request.method === 'POST') {
       return this.whatsappTurn(request, body);
+    }
+    if (new URL(request.url).pathname === new URL(PROBE_TURN_DO_URL).pathname && request.method === 'POST') {
+      return this.probeTurn(body);
     }
     const update = JSON.parse(body) as RawUpdate;
     if (this.intercept(update)) return new Response('ok');
@@ -310,6 +314,35 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (!text.startsWith('/') && control.steer(update.update_id, text)) log({ trace, hop: 'steer', ms: 0, ok: true, detail: 'queued for the running turn' });
     return false;
+  }
+
+  // Staging probe path: runs one real owner turn from a synthetic update WITHOUT the
+  // update-id dedupe offset (negative probe sequence, never stored as offset) so probes
+  // cannot swallow or reorder real Telegram messages. Outbound Telegram effects (reply,
+  // typing) still fire - the owner's staging chat is the visible receipt surface.
+  private async probeTurn(body: string): Promise<Response> {
+    if ((this.env.WALDO_ENVIRONMENT ?? 'development') !== 'staging') return new Response('not found', { status: 404 });
+    let text: unknown;
+    try {
+      text = (JSON.parse(body) as { text?: unknown }).text;
+    } catch {
+      return new Response('bad request', { status: 400 });
+    }
+    if (typeof text !== 'string' || text.trim().length === 0 || text.length > 4_000) {
+      return new Response('bad request', { status: 400 });
+    }
+    const result = await this.serial(async () => {
+      const { listener, owner, ready } = this.setup('telegram');
+      await ready;
+      if (!listener) return { trace: null as string | null, outcome: 'unlinked' as const };
+      const seq = ((await this.ctx.storage.get<number>('probe_seq')) ?? 0) - 1;
+      await this.ctx.storage.put('probe_seq', seq);
+      const outcome = await listener.handle({
+        updateId: seq, messageId: null, senderId: owner, chatId: owner, sentAt: null, text: text.trim(),
+      });
+      return { trace: `tg-${seq}` as string | null, outcome };
+    });
+    return Response.json(result);
   }
 
   private async turn(update: unknown, channel: ChannelKind = 'telegram'): Promise<void> {
