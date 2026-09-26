@@ -1791,7 +1791,9 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests[0]!.request.system).toBeUndefined();
   });
 
-  it('drops tool turns that trip a structural scribe deny', async () => {
+  it('replaces a structurally denied tool turn with an explicit omission receipt, keeping the call', async () => {
+    // Was: the whole tool_turns batch was dropped, so the model answered as if the tool
+    // returned nothing. The receipt keeps the turn visible and truthful.
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1807,6 +1809,91 @@ describe('sanitiseRequest structural degradation', () => {
       runtimeCtx(),
     );
     expect(result.ok).toBe(true);
-    expect(gateway.requests[0]!.request.tool_turns).toBeUndefined();
+    const turns = gateway.requests[0]!.request.tool_turns;
+    expect(turns).toHaveLength(1);
+    expect(turns![0]!.call).toEqual({ call_id: 'c1', name: 'web_search', arguments: '{}' });
+    expect(turns![0]!.output).toContain('omitted by the scribe');
+    expect(turns![0]!.output).toContain('do not report it as empty');
+  });
+
+  it('keeps every tool turn when populated Google reads overflow the batch policy together', async () => {
+    // Regression for the live break: two populated reads (~20k chars each) overflowed the
+    // 32,768-char internal_context batch policy as a SET, and the all-or-nothing degrade
+    // dropped both - the model answered "nothing found" with data in hand.
+    const busyInbox = JSON.stringify({ messages: [{ id: 'm1', from: 'a@b.co', subject: 'x'.repeat(19_500), snippet: 's', at: '2026-09-26T00:00:00Z' }] });
+    const busyCalendar = JSON.stringify({ events: [{ id: 'e1', summary: 'y'.repeat(19_500), start: '2026-09-26T10:00:00Z' }] });
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'what does my day look like' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: busyInbox },
+            { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: busyCalendar },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    const turns = gateway.requests[0]!.request.tool_turns;
+    expect(turns).toHaveLength(2);
+    // Scribe redacts emails in external-tainted content, so assert the payloads survived
+    // rather than byte-equality.
+    expect(turns![0]!.output).toContain('x'.repeat(1_000));
+    expect(turns![1]!.output).toContain('y'.repeat(1_000));
+  });
+
+  it('reduces a single oversize tool output to its head plus a receipt, preserving the stored-output id', async () => {
+    // Schema caps output at 32,768, so per-item oversize arrives via output + call
+    // arguments together exceeding the internal_context policy.
+    const stored = JSON.stringify({ ok: true, data: { stored_output: 'out_123', total_chars: 61_000, head: `payload ${'z'.repeat(30_000)}` } });
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'summarise that page' }],
+          tool_turns: [{ call: { call_id: 'c1', name: 'browse_page', arguments: JSON.stringify({ url: 'u'.repeat(16_000) }) }, output: stored }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    const output = gateway.requests[0]!.request.tool_turns![0]!.output;
+    expect(output).toContain('out_123');
+    expect(output).toContain('reduced by the scribe');
+    expect(output).toContain('do not report it as empty');
+    expect(output.length).toBeLessThan(stored.length);
+  });
+
+  it('still fails the whole request closed when one tool turn carries a hard scribe deny', async () => {
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'web_search', arguments: '{}' }, output: 'fine result' },
+            { call: { call_id: 'c2', name: 'get_communication', arguments: '{}' }, output: 'remember 1111111111111111 please' },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.scribe?.reason).toBe('canary_leak');
+    expect(gateway.requests).toHaveLength(0);
   });
 });

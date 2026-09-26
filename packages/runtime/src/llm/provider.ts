@@ -1401,9 +1401,52 @@ async function sanitiseRequest(
       error: new HookHaltError('llm_provider', 'sanitised messages invalid', 'transient'),
     };
   }
-  let toolTurns = request.tool_turns === undefined ? undefined : await sanitiseValue(request.tool_turns, 'internal_context');
-  if (toolTurns !== undefined && !toolTurns.ok && softScribe(toolTurns.error)) toolTurns = undefined;
-  if (toolTurns !== undefined && !toolTurns.ok) return { ...toolTurns, scribeDestination: 'internal_context' };
+  // Per-item before per-batch: the batch sanitise caps the whole tool_turns array at the
+  // internal_context policy (32,768 chars), so one populated Google read day (inbox +
+  // calendar + tasks in the same turn) overflowed the batch and the old all-or-nothing
+  // degrade dropped EVERY result - the model then answered "nothing found" while the tools
+  // had returned data. Each turn now sanitises on its own; only an item that still fails
+  // soft is reduced or receipted, and a hard deny (canary/secret/health/injection) anywhere
+  // still fails the request closed, unchanged.
+  let toolTurns: { ok: true; payload: unknown } | undefined;
+  if (request.tool_turns !== undefined) {
+    const kept: LLMRequest['tool_turns'] & unknown[] = [];
+    for (const turn of request.tool_turns) {
+      const single = await sanitiseValue([turn], 'internal_context');
+      if (single.ok && Array.isArray(single.payload) && single.payload.length === 1) {
+        kept.push(single.payload[0]);
+        continue;
+      }
+      if (!single.ok && !softScribe(single.error)) {
+        return { ...single, scribeDestination: 'internal_context' };
+      }
+      const reason = !single.ok ? single.error.reason : 'scribe:shape_invalid';
+      // An oversize output keeps its leading JSON - the dispatcher writes the stored-output
+      // id and head at the start - with an explicit receipt appended, so the model can page
+      // the rest via read_tool_output instead of guessing at emptiness.
+      // Budget the head against what the re-sanitised item must still carry: the call
+      // arguments (up to 16,384) and the receipt itself, under the 32,768 policy.
+      const head = turn.output.slice(0, Math.max(1_000, 24_000 - turn.call.arguments.length));
+      const receipt =
+        `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. ` +
+        'The tool DID return data - do not report it as empty. Page the rest with read_tool_output using the stored output id above, or ask to narrow the request.]';
+      const reduced = await sanitiseValue([{ ...turn, output: `${head}${receipt}` }], 'internal_context');
+      if (reduced.ok && Array.isArray(reduced.payload) && reduced.payload.length === 1) {
+        kept.push(reduced.payload[0]);
+        continue;
+      }
+      if (!reduced.ok && !softScribe(reduced.error)) {
+        return { ...reduced, scribeDestination: 'internal_context' };
+      }
+      kept.push({
+        call: turn.call,
+        output:
+          `[waldo: this tool output was omitted by the scribe (${reason}); the tool DID return ${turn.output.length} characters - do not report it as empty. ` +
+          'Page it with read_tool_output using the stored output id from the dispatcher result, or ask to narrow the request.]',
+      });
+    }
+    toolTurns = { ok: true, payload: kept };
+  }
   const parsed = llmRequestSchema.safeParse({
     ...request,
     system: system?.payload,
