@@ -1423,13 +1423,13 @@ async function sanitiseRequest(
     // Aggregate pass: per-turn provenance must not drop batch-level checks. Injection scoring
     // aggregates rule matches across the full tool batch (two individually allowed fragments
     // deny together) and internal_context carries a total character cap, so the combined kept
-    // turns are re-sanitised with the same external taint. Hard denies fail closed; an
-    // oversize batch sheds its oldest turns until it fits (each turn already passed alone).
-    while (kept.length > 0) {
+    // turns are re-sanitised with the same external taint. ANY aggregate failure closes the
+    // request: no silent shedding - dropping a turn would change run semantics (a partial
+    // context the model answers from) with no receipt the owner can see. (Per-turn structural
+    // soft-denies above still drop only their own turn, as before.)
+    if (kept.length > 0) {
       const combined = await sanitiseValue(kept, 'internal_context', 'external');
-      if (combined.ok) break;
-      if (!softScribe(combined.error)) return { ...combined, scribeDestination: 'internal_context' };
-      kept.shift();
+      if (!combined.ok) return { ...combined, scribeDestination: 'internal_context' };
     }
     toolTurnsPayload = kept.length > 0 ? kept : undefined;
   }

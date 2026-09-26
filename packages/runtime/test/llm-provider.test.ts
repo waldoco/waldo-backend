@@ -1880,9 +1880,11 @@ describe('sanitiseRequest structural degradation', () => {
     expect(gateway.requests).toHaveLength(0);
   });
 
-  it('aggregate context cap: two 17k tool turns exceed the total bound, so the oldest is shed', async () => {
+  it('aggregate context cap: two 17k tool turns exceed the total bound, so the request fails closed', async () => {
     // internal_context carries a 32,768-character TOTAL cap: two benign 17,000-char turns each
-    // pass alone; the combined batch must not sail past the bound. The oldest turn drops.
+    // pass alone, but the combined batch must not sail past the bound. No silent shedding - a
+    // dropped turn would hand the model a partial context with no receipt. The whole request
+    // is denied instead, and nothing reaches the gateway.
     const big = (id: string, fill: string) => ({ call: { call_id: id, name: 'read_channel', arguments: '{}' }, output: fill.repeat(17_000) });
     const first = big('c1', 'a');
     const second = big('c2', 'b');
@@ -1892,9 +1894,9 @@ describe('sanitiseRequest structural degradation', () => {
       { trigger: 'brief', renderRequest: () => ({ messages: [{ role: 'user' as const, content: 'q' }], tool_turns: [first, second], max_tokens: 512, temperature: 0.3 }) },
       runtimeCtx(),
     );
-    expect(result.ok).toBe(true);
-    const sent = gateway.requests[0]!.request.tool_turns as { call: { call_id: string } }[];
-    expect(sent.map((turn) => turn.call.call_id)).toEqual(['c2']);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.scribe?.destination).toBe('internal_context');
+    expect(gateway.requests).toHaveLength(0);
   });
 
   it('owner messages keep the full scan: a 16-hex shape in a trusted message still denies', async () => {
