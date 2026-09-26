@@ -207,3 +207,48 @@ describe('claim admission gate (slice 4)', () => {
     });
   });
 });
+describe('claim origin classes (gate provenance)', () => {
+  it('persists the grounding verdict as origin: owner, untrusted, agent, or null when ungated', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      applyClaimOps(store, ops({ add: [
+        { kind: 'fact', text: 'Owner-grounded', source: 'stated', evidence: '"I run at 6am on weekdays"', touches_forgotten: false },
+        { kind: 'fact', text: 'Shared-grounded', source: 'stated', evidence: '"forwarded diet plan details"', touches_forgotten: false },
+        { kind: 'fact', text: 'Ungrounded', source: 'stated', evidence: 'mentioned something about mornings', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, {
+        owner: 'I run at 6am on weekdays',
+        shared: 'Article: forwarded diet plan details here',
+      });
+      const byText = new Map(store.claims().map((claim) => [claim.text, claim]));
+      expect(byText.get('Owner-grounded')).toMatchObject({ origin: 'owner', source: 'stated' });
+      expect(byText.get('Shared-grounded')).toMatchObject({ origin: 'untrusted', source: 'inferred' });
+      expect(byText.get('Ungrounded')).toMatchObject({ origin: 'agent', source: 'inferred' });
+      // Ungated write paths (console edits, legacy callers) carry no origin - never fabricated.
+      store.add({ kind: 'fact', text: 'Console edit', source: 'stated', evidence: 'console' }, AT);
+      expect(store.claims().find((claim) => claim.text === 'Console edit')).toMatchObject({ origin: null });
+    });
+  });
+
+  it('untrusted-origin claims can never be promoted into the constellation', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      applyClaimOps(store, ops({ add: [
+        { kind: 'observation', text: 'External-content observation', source: 'inferred', evidence: '"some forwarded claim about sleep"', touches_forgotten: false },
+        { kind: 'observation', text: 'Owner observation', source: 'inferred', evidence: '"I barely slept before the launch"', touches_forgotten: false },
+      ] }), AT, 'owner agreed', undefined, {
+        owner: 'I barely slept before the launch',
+        shared: 'some forwarded claim about sleep',
+      });
+      const byText = new Map(store.claims().map((claim) => [claim.text, claim]));
+      const detail = applyPromotion(store, JSON.stringify({
+        nodes: [{ id: null, domain: 'sleep', label: 'Sleep', summary: 'Sleep patterns', strength: 0.6, status: 'active', supporting_spots: [] }],
+        edges: [],
+        promoted: [byText.get('External-content observation')!.id, byText.get('Owner observation')!.id],
+      }), AT);
+      // Only the owner-origin observation promotes; the untrusted one is excluded structurally.
+      expect(detail).toBe('nodes1 edges0 promoted1');
+      expect(store.claims().find((claim) => claim.text === 'External-content observation')).toMatchObject({ status: 'active' });
+      expect(store.claims('promoted').map((claim) => claim.text)).toEqual(['Owner observation']);
+    });
+  });
+});

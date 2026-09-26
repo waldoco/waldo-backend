@@ -736,7 +736,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
       else {
         try {
-          const detail = await responder.consolidate(trace, transcript(day, clock.timezone));
+          const sides = {
+            owner: day.filter((episode) => episode.speaker === 'owner').map((episode) => episode.text).join('\n'),
+            waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
+          };
+          const detail = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
           log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${detail}` });
         } catch (error) {
           log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
