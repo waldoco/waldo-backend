@@ -10,7 +10,7 @@ const atLocal = z
   .describe("When it happened, as YYYY-MM-DDTHH:MM in the owner's local time; omit for now.");
 
 export const logMealArgsSchema = z.strictObject({
-  description: z.string().min(1).max(500).describe("What the owner ate, in their words."),
+  description: z.string().min(1).max(500).describe("What the owner ate, in their words; for a food photo, what you see."),
   items: z.array(z.string().min(1).max(100)).max(20).optional().describe('Itemized list, only when the owner gave one.'),
   calories_estimate: z
     .int()

@@ -86,6 +86,50 @@ describe('whatsapp telegram shim', () => {
   });
 });
 
+describe('whatsapp photos (A6)', () => {
+  it('an image becomes the telegram-shaped photo update the shared media path reads; caption rides as the turn text', () => {
+    const { updates, seq } = whatsappIngressUpdates([
+      { id: 'wamid.p1', from: '15550001111', type: 'image', image: { id: 'media-p1', mime_type: 'image/jpeg', caption: 'log lunch: dal, rice' } },
+    ], '15550001111', 0);
+    expect(seq).toBe(1);
+    expect(updates[0]).toEqual({
+      update_id: WA_UPDATE_BASE + 1,
+      message: {
+        from: { id: 15550001111 },
+        chat: { id: 15550001111, type: 'private' },
+        photo: [{ file_id: 'media-p1' }],
+        caption: 'log lunch: dal, rice',
+      },
+    });
+  });
+
+  it('an image without caption carries no text; images without a media id or from a foreign sender are skipped', () => {
+    const { updates, seq } = whatsappIngressUpdates([
+      { id: 'wamid.p2', from: '15550001111', type: 'image', image: { id: 'media-p2', mime_type: 'image/jpeg' } },
+      { id: 'wamid.p3', from: '15550001111', type: 'image' },
+      { id: 'wamid.p4', from: '15550009999', type: 'image', image: { id: 'media-p4' } },
+    ], '15550001111', 4);
+    expect(seq).toBe(5);
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toEqual({
+      update_id: WA_UPDATE_BASE + 5,
+      message: {
+        from: { id: 15550001111 },
+        chat: { id: 15550001111, type: 'private' },
+        photo: [{ file_id: 'media-p2' }],
+      },
+    });
+  });
+
+  it('a caption carrying a verification artifact is quarantined like any owner text', () => {
+    const { updates } = whatsappIngressUpdates([
+      { id: 'wamid.p5', from: '15550001111', type: 'image', image: { id: 'media-p5', caption: 'G-729314' } },
+    ], '15550001111', 0);
+    expect(JSON.stringify(updates)).not.toContain('729314');
+    expect((updates[0] as { message: { caption: string } }).message.caption).toBe('[quarantined: otp artifact - see your WhatsApp thread]');
+  });
+});
+
 describe('whatsapp voice notes (W4)', () => {
   it('a voice note becomes the telegram-shaped voice update the shared transcriber path reads', () => {
     const { updates, seq } = whatsappIngressUpdates([
