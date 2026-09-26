@@ -23,7 +23,7 @@ describe('tier-2 connector contract', () => {
     for (const name of TIER2_HANDLERS) {
       const google: GoogleAccess = { client: async () => null };
       const handler = googleHandlers(google, desk, clock).find((h) => h.name === name)!;
-      const result = await handler.handle({ include_declined: false, limit: 5 } as never);
+      const result = await handler.handle({ include_declined: false, limit: 5 } as never, { authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at: 0 } } } as never);
       expect(result, name).toMatchObject({
         ok: false, code: 'auth_failed',
         connect: { status: 'auth_required', service: 'google', reason: 'not_connected' },

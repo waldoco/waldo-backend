@@ -92,7 +92,7 @@ describe('google tools', () => {
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
     const [query] = googleHandlers(google, proposals, clock);
-    const result = await query!.handle({ include_declined: false, limit: 20 } as never);
+    const result = await query!.handle({ include_declined: false, limit: 20 } as never, { authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at: 0 } } } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',
       error: expect.stringContaining('connect button'),
