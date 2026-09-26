@@ -6,6 +6,8 @@ import {
   type ScheduleEntry,
   type ScheduleKind,
   type SchedulePayloadRefs,
+  nextCronOccurrence,
+  parseCronExpression,
   type ScheduleRecurrence,
 } from '@waldo/contracts';
 import type { Deps } from '../seams/deps';
@@ -308,6 +310,13 @@ function nextOccurrence(recurrence: ScheduleRecurrence, now: number): number {
         recurrence.every_ms +
       phase;
     return next > now ? next : next + recurrence.every_ms;
+  }
+  if (recurrence.type === 'cron') {
+    const schedule = parseCronExpression(recurrence.expression);
+    if (schedule === null) throw new Error(`invalid cron recurrence: ${recurrence.expression}`);
+    const next = nextCronOccurrence(schedule, recurrence.timezone, now);
+    if (next === null) throw new Error(`cron recurrence has no occurrence within scan bound: ${recurrence.expression}`);
+    return next;
   }
   return nextDailyLocalOccurrence(recurrence.time, recurrence.timezone, now);
 }
