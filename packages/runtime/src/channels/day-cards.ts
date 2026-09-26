@@ -8,6 +8,10 @@ const DAY_MS = 24 * 60 * 60_000;
 type Sql = Pick<SqlStorage, 'exec'>;
 export type CardPlan = Readonly<{ card: CardId; time: string | null; reason: string }>;
 
+// The day_plan hop is whitelisted for the gated trace sinks, so its detail must stay
+// content-free: planned times reveal the owner's daily schedule, so the trace keeps the count.
+export const dayPlanTraceDetail = (plans: readonly CardPlan[]): string => `${plans.length} planned`;
+
 export const isClock = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 
 export const cardFor = (id: string): DayCard | null => DAY_CARDS.find((card) => card.id === id) ?? null;

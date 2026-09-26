@@ -909,6 +909,36 @@ function applyDestinationPolicy(
   };
 }
 
+// Offload store guard (release blocker, populated-reads slice): raw external tool output is
+// never stored. Storage is not a sanitise destination, so the destination size/structure caps
+// do not apply - but every content check does. Only guarded (redacted) text reaches the store,
+// so a read-back slice can never expose unguarded content, including a secret that would span
+// read chunks.
+export function guardForOffload(raw: SanitiseInput): SanitiseResult {
+  const input = prepareInput(raw);
+  if (!input) return deny('size_cap', 'invalid_payload');
+
+  const secret = containsCanaryOrSecret(input.payload, input);
+  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret !== undefined) return deny('canary_token', secret);
+
+  const health = containsForbiddenHealth(input);
+  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.matched) return deny('health_value', 'health_value_leak');
+
+  const pii = redactPii(input.payload, input.destination);
+  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+
+  const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
+  if ('ok' in instructions) return instructions;
+  return {
+    ok: true,
+    payload: instructions.payload,
+    source_taint: input.source_taint,
+    redactions: instructions.redactions,
+  };
+}
+
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');

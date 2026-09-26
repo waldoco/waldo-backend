@@ -139,7 +139,9 @@ export const checkScenario = (scenario: Scenario, run: ScenarioRun): readonly st
     if (want.ok !== undefined && !matches.some((entry) => entry.ok === want.ok)) {
       failures.push(`hop ${want.hop} never had ok=${want.ok} (got ${matches.map((entry) => `${entry.ok}${entry.error ? ` "${entry.error}"` : ''}${entry.text?.output ? ` out=${entry.text.output.slice(0, 120)}` : ''}`).join(', ')})`);
     }
-    if (want.note && !matches.some((entry) => want.note!.test(entry.error ?? entry.detail ?? ''))) {
+    // Typed failures carry their machine-readable code:reason in entry.code (free-form error
+    // text is what the privacy gate strips), so the note check reads all three fields.
+    if (want.note && !matches.some((entry) => want.note!.test([entry.error, entry.detail, entry.code].filter(Boolean).join(' ')))) {
       failures.push(`hop ${want.hop} note never matched ${want.note}`);
     }
     if (want.maxMs !== undefined && !matches.every((entry) => entry.ms <= want.maxMs!)) {

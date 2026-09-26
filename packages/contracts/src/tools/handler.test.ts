@@ -263,6 +263,7 @@ describe('external-origin tool classification — ADR-0049', () => {
       'read_document',
       'call_mcp_tool',
       'search_connector',
+      'read_tool_output',
     ]);
   });
 });
