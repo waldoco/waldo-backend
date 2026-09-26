@@ -127,7 +127,29 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'file.remove': 'File removed from this list. It stays in your Telegram chat.',
   'file.unavailable': 'That file could not be fetched from Telegram.',
   invalid: 'That change could not be applied.',
+  'approval.sent': 'Sent.',
+  'approval.found': 'Found in Sent and marked sent.',
+  'approval.unconfirmed': 'Send unconfirmed. Check Sent, then use Check Sent or mark it not sent.',
+  'approval.closed': 'Marked as not sent.',
+  'approval.handled': 'Already handled.',
+  'approval.other': 'Done. Telegram has the details.',
 };
+
+// Console approval redirects must carry only a fixed outcome code: decision
+// messages can describe private email content, which must never enter a URL,
+// browser history, or request logs. Unknown toasts fall back to a generic code.
+const APPROVAL_REDIRECT_CODES: Readonly<Record<string, string>> = {
+  'Sent': 'approval.sent',
+  'Found in Sent': 'approval.found',
+  'Send unconfirmed': 'approval.unconfirmed',
+  'Not in Sent yet': 'approval.unconfirmed',
+  'Marked as not sent': 'approval.closed',
+  'Already handled.': 'approval.handled',
+};
+
+export function approvalRedirectCode(toast: string): string {
+  return APPROVAL_REDIRECT_CODES[toast] ?? 'approval.other';
+}
 
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }>;
 

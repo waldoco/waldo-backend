@@ -75,7 +75,7 @@ describe('approval desk', () => {
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
         call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
-        owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+        owner: 42, google: async () => ({ client, connection: 'conn-test' }), newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'you have a call at 6' });
       expect(sent[0]!.body.text).toBe('Proposed: Move "Gym" to Wed 23 Sept, 19:00 to Wed 23 Sept, 20:00. you have a call at 6');
@@ -137,7 +137,7 @@ describe('approval desk', () => {
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
         call: async (_method, body) => { texts.push(String((body as { text?: string }).text ?? '')); return {}; },
-        owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+        owner: 42, google: async () => ({ client, connection: 'conn-test' }), newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const tap = (id: string) => desk.callback({ id: 'q', from: { id: 42 }, data: `a:${id}` }, 't');
       const move = { action: 'move' as const, event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'clash' };
@@ -183,7 +183,7 @@ describe('approval desk', () => {
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
         call: async () => ({}),
-        owner: 42, google: async () => client, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+        owner: 42, google: async () => ({ client, connection: 'conn-test' }), newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       expect(desk.pending(now)).toEqual([]);
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'call at 6' });
@@ -227,7 +227,7 @@ describe('approval desk - email_send rail', () => {
     digest: '', content_digest: 'cd1',
   };
   let idSeq = 0;
-  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string; failFirstCard?: boolean; googleError?: Error }) => {
+  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string; failFirstCard?: boolean; googleError?: Error; pinUnavailable?: boolean }) => {
     const sent: { method: string; body: Record<string, unknown> }[] = [];
     const sentRaw: string[] = [];
     let now = 1_000_000;
@@ -238,6 +238,7 @@ describe('approval desk - email_send rail', () => {
     } as unknown as GoogleClient;
     const googleIntents: (string | undefined)[] = [];
     const googleCorrelations: (string | undefined)[] = [];
+    const googlePins: (string | undefined)[] = [];
     const desk = approvalDesk(state.storage.sql, {
       call: async (method, body) => {
         sent.push({ method, body: body as Record<string, unknown> });
@@ -249,12 +250,12 @@ describe('approval desk - email_send rail', () => {
         }
         return {};
       },
-      owner: 42, google: async (sendIntent?: string, correlation?: string) => { googleIntents.push(sendIntent); googleCorrelations.push(correlation); if (opts.googleError) { const e = opts.googleError; opts.googleError = undefined; throw e; } return opts.connected === false ? null : client; }, newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      owner: 42, google: async (sendIntent?: string, correlation?: string, pinned?: string) => { googleIntents.push(sendIntent); googleCorrelations.push(correlation); googlePins.push(pinned); if (opts.googleError) { const e = opts.googleError; opts.googleError = undefined; throw e; } if (opts.pinUnavailable && pinned) return null; return opts.connected === false ? null : { client, connection: 'conn-test' }; }, newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
     });
     const { sha256Hex } = await import('../src/connectors/google');
     const proposed = await desk.proposeSendEmail({ ...proposal, ...(opts.messageId !== undefined ? { message_id: opts.messageId } : {}), digest: await sha256Hex(proposal.raw) });
     if (!proposed.ok) throw new Error(`unexpected proposal failure: ${proposed.reason}`);
-    return { desk, id: proposed.id, sent, sentRaw, googleIntents, googleCorrelations, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
+    return { desk, id: proposed.id, sent, sentRaw, googleIntents, googleCorrelations, googlePins, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
   it('proposes with Send it / Modify / Not now, sends the exact stored bytes on approve, never undoes, expires', async () => {
@@ -371,7 +372,7 @@ describe('approval desk - email_send rail', () => {
       let n = 0;
       const desk = approvalDesk(state.storage.sql, {
         call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
-        owner: 42, google: async () => client, newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+        owner: 42, google: async () => ({ client, connection: 'conn-test' }), newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const firstProposal = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
       if (!firstProposal.ok) throw new Error('unexpected proposal failure');
@@ -407,7 +408,7 @@ describe('approval desk - email_send rail', () => {
       let n = 0;
       const desk = approvalDesk(state.storage.sql, {
         call: async () => ({}),
-        owner: 42, google: async () => client, newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+        owner: 42, google: async () => ({ client, connection: 'conn-test' }), newId: () => String(++n), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const { sha256Hex } = await import('../src/connectors/google');
       // Two separate intents, identical content, distinct Message-IDs (as the turn-scoped key produces).
@@ -575,6 +576,34 @@ describe('approval desk - email_send rail', () => {
     });
   });
 
+  it('pins the sending connection and reconciles that SAME account', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-pin'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, googlePins, sql } = await setup(state, { sendError: new Error('network timeout'), found: false });
+      expect((await desk.decide(id, 'a', 't')).toast).toBe('Send unconfirmed');
+      // the connection that performed the send is pinned on the ledger row before I/O resolves
+      expect(sql.exec<{ connection: string | null }>('SELECT connection FROM ledger WHERE id = ?', id).toArray()[0]!.connection).toBe('conn-test');
+      // reconciliation goes back to that SAME pinned connection, never a fresh account pick
+      await desk.decide(id, 'r', 't');
+      expect(googlePins[googlePins.length - 1]).toBe('conn-test');
+    });
+  });
+
+  it('an unavailable pinned connection stays unknown with reconnect/review guidance and never leaks the id', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-pin-gone'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sql } = await setup(state, { sendError: new Error('network timeout'), found: false, pinUnavailable: true });
+      expect((await desk.decide(id, 'a', 't')).toast).toBe('Send unconfirmed');
+      const out = await desk.decide(id, 'r', 't');
+      expect(out.toast).toBe('Account unavailable');
+      expect(out.message).toContain('Reconnect');
+      expect(out.message).toContain('check Sent yourself');
+      expect(out.message).not.toContain('conn-test');
+      expect(out.buttons).toEqual([['Check Sent', `r:${id}`], ['I checked Sent - not there', `x:${id}`]]);
+      expect(sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!.status).toBe('unknown');
+    });
+  });
+
   it('repeated reconciliation proves delivery: a later positive Sent hit closes the row done', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-reconcile-late'));
     await runInDurableObject(stub, async (_i, state) => {
@@ -584,7 +613,7 @@ describe('approval desk - email_send rail', () => {
         findSentByMessageId: async () => found,
       } as unknown as GoogleClient;
       const desk = approvalDesk(state.storage.sql, {
-        call: async () => ({}), owner: 42, google: async () => client,
+        call: async () => ({}), owner: 42, google: async () => ({ client, connection: 'conn-test' }),
         newId: () => 'rc1', now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const { sha256Hex } = await import('../src/connectors/google');

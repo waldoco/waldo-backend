@@ -1,6 +1,6 @@
 import { OPENAI_GPT_5_MINI_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { consoleAccess, signInPage, parseConsoleAction, renderConsole, sessionCookie } from '../src/channels/console';
+import { approvalRedirectCode, consoleAccess, signInPage, parseConsoleAction, renderConsole, sessionCookie, NOTICES } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 const memoryStore = () => {
@@ -185,5 +185,18 @@ describe('owner console', () => {
     expect(html).toContain('Not built yet');
     expect(html.indexOf('The Brief')).toBeLessThan(html.indexOf('Check-in'));
     expect(renderConsole({ ...view, google: { accounts: [], connectAvailable: false } })).toContain('OAuth app keys are not set');
+  });
+});
+
+describe('approvalRedirectCode privacy boundary', () => {
+  it('never carries decision message content into the redirect code', () => {
+    const marker = 'PRIVATE-SUBJECT-cat-facts-to-alice@example.com';
+    for (const toast of ['Sent', 'Found in Sent', 'Send unconfirmed', 'Not in Sent yet', 'Marked as not sent', 'Already handled.', marker]) {
+      const code = approvalRedirectCode(toast);
+      expect(code).not.toContain(marker);
+      expect(code).toMatch(/^approval\.[a-z]+$/);
+      expect(NOTICES[code]).toBeTruthy();
+      expect(NOTICES[code]).not.toContain(marker);
+    }
   });
 });

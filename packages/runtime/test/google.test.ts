@@ -101,6 +101,19 @@ describe('google tools', () => {
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=|accounts\.google/);
   });
 
+  it('read handlers thread the authenticated turn trace into the connector client', async () => {
+    const calls: { feature?: string; sendIntent?: string; correlation?: string }[] = [];
+    const google: GoogleAccess = {
+      client: (async (feature?: string, sendIntent?: string, correlation?: string) => {
+        calls.push({ feature, sendIntent, correlation });
+        return { events: async () => [] };
+      }) as never,
+    };
+    const [query] = googleHandlers(google, proposals, clock);
+    await query!.handle({ include_declined: false, limit: 5 } as never, { trace: 'tg-904957571', authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at: 0 } } } as never);
+    expect(calls).toEqual([{ feature: 'calendar', sendIntent: undefined, correlation: 'tg-904957571' }]);
+  });
+
   it('connect_service reports the typed intent too; already-connected stays ok', async () => {
     const down = connectServiceHandler({ client: async () => null });
     const off = await down.handle({ service: 'google' } as never, {} as never);

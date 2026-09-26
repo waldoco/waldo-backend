@@ -6,7 +6,7 @@ export type TelegramCall = (method: string, body: object) => Promise<unknown>;
 export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: string; message?: { message_id: number; chat: { id: number } } }>;
 
 type Undo = { op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string };
-type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null };
+type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null; connection: string | null };
 
 export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
@@ -66,7 +66,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   owner: number;
   // sendIntent binds the proxy send idempotency gate to the approved proposal: the email rail
   // passes its approval entry id, so a replayed approval can never fire a second provider send.
-  google(sendIntent?: string, correlation?: string): Promise<GoogleClient | null>;
+  // Returns the client AND the opaque connection that will serve it; pinnedConnection
+  // restricts selection to the account that handled the original approved send.
+  google(sendIntent?: string, correlation?: string, pinnedConnection?: string): Promise<Readonly<{ client: GoogleClient; connection: string }> | null>;
   newId(): string;
   now(): number;
   timezone: string;
@@ -76,6 +78,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
+  // Account pinning (#202): the opaque connection id that handled an approved send is stored
+  // here, so reconciliation checks THAT SAME account. It never appears in owner text or logs.
+  try { sql.exec('ALTER TABLE ledger ADD COLUMN connection TEXT'); } catch { /* column already present */ }
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const describe = (p: ProposeCalendarChangeArgs) => {
     const name = p.title ? `"${p.title}"` : 'the event';
@@ -185,11 +190,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             // connection in the owner-DO wiring, so a mail-only grant could never reconcile
             // and a multi-account owner could search the wrong mailbox. The send intent id
             // routes feature=mail; it gates idempotency only on sendRaw, so reuse here is safe.
-            const client = await deps.google(`email_send:${id}`, trace);
-            if (client === null) {
-              out = { toast: 'Google is not connected', message: 'I could not check Sent because Google is not connected.', buttons: unresolvedButtons(id) };
+            // Reconcile against the SAME pinned connection that handled the approved send;
+            // searching a different account would check the wrong Sent folder.
+            const pinned = row(id)?.connection ?? undefined;
+            const got = await deps.google(`email_send:${id}`, trace, pinned);
+            if (got === null) {
+              out = pinned
+                ? { toast: 'Account unavailable', message: 'The Google account that handled this send is unavailable, so I still cannot confirm it. Reconnect it or check Sent yourself, then mark it accordingly.', buttons: unresolvedButtons(id) }
+                : { toast: 'Google is not connected', message: 'I could not check Sent because Google is not connected.', buttons: unresolvedButtons(id) };
             } else {
-              const found = await client.findSentByMessageId(ep.message_id).then((hit) => hit, () => null);
+              const found = await got.client.findSentByMessageId(ep.message_id).then((hit) => hit, () => null);
               if (found === true) {
                 setStatus(id, 'done');
                 out = { toast: 'Found in Sent', message: `I found it in your Sent folder: ${describeEmail(ep)}. Marking it sent - I will not send it again.` };
@@ -209,24 +219,28 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             // Everything up to sendRaw is pre-I/O: if the client build (Vault adopt, token
             // refresh) or the digest hash throws, NO provider call happened, so the claim is
             // released back to 'open' instead of stranding the row as 'sending' forever.
-            let client: GoogleClient | null = null;
+            let got: Readonly<{ client: GoogleClient; connection: string }> | null = null;
             let digestOk = false;
             try {
               // The approval id is the send idempotency intent for the proxy gate: a replayed
               // approval replays as the same intent and can never fire a second provider send.
-              client = await deps.google(`email_send:${id}`, trace);
-              digestOk = client !== null && (await sha256Hex(ep.raw)) === ep.digest;
+              got = await deps.google(`email_send:${id}`, trace);
+              digestOk = got !== null && (await sha256Hex(ep.raw)) === ep.digest;
             } catch (error) {
               setStatus(id, 'open');
               throw error;
             }
-            if (client === null) {
+            if (got === null) {
               setStatus(id, 'open'); // claimed but never attempted: release it for a connected retry
               out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
             } else if (!digestOk) {
               setStatus(id, 'failed');
               out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
             } else {
+              // Pin the exact connection that will perform the send BEFORE any provider I/O,
+              // so reconciliation (here or from 'r') checks the same account's Sent.
+              sql.exec('UPDATE ledger SET connection = ? WHERE id = ?', got.connection, id);
+              const client = got.client;
               try {
                 await client.sendRaw(ep.raw, ep.thread_id);
                 setStatus(id, 'done');
@@ -256,11 +270,11 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }
         }
       } else {
-        const client = await deps.google();
-        if (client === null) {
+        const got = await deps.google();
+        if (got === null) {
           out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
         } else if (action === 'a') {
-          const undo = await apply(client, proposal);
+          const undo = await apply(got.client, proposal);
           if (undo === 'stale') {
             setStatus(id, 'stale');
             out = { toast: 'The event changed', message: `The event changed in your calendar after I proposed this, so I didn't apply it: ${describe(proposal)}. Ask me again and I'll look at the new version.` };
@@ -269,7 +283,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             out = { toast: 'Done', message: `Done: ${describe(proposal)}.${undo ? ' Undo is available for 10 minutes.' : " This one can't be undone from here."}` };
           }
         } else if (entry.undo_json && entry.decided_at !== null && deps.now() - entry.decided_at <= UNDO_WINDOW_MS) {
-          await revert(client, JSON.parse(entry.undo_json) as Undo);
+          await revert(got.client, JSON.parse(entry.undo_json) as Undo);
           setStatus(id, 'undone');
           out = { toast: 'Undone', message: `Undone: ${describe(proposal)}.` };
         } else {
@@ -338,8 +352,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async propose(p) {
       const id = `p${deps.newId()}`;
       const summary = `${describe(p)}. ${p.reason}`;
-      const client = p.event_id ? await deps.google() : null;
-      const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
+      const got = p.event_id ? await deps.google() : null;
+      const seen = got && p.event_id ? (await got.client.event(p.event_id)).etag : undefined;
       const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
       await say(`Proposed: ${summary}`, [['Do it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);

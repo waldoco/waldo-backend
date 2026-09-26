@@ -7,7 +7,7 @@ import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, approvalRedirectCode, consoleAccess, consoleActionTraceDetail, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
@@ -26,7 +26,7 @@ import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
-import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleClient, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
@@ -230,7 +230,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (action && ['approval.approve', 'approval.skip', 'approval.undo', 'approval.reconcile', 'approval.notsent'].includes(action.action)) {
         const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u', 'approval.reconcile': 'r', 'approval.notsent': 'x' } as const;
         const out = await desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval');
-        return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(out.message.slice(0, 200))}` } });
+        return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${approvalRedirectCode(out.toast)}` } });
       }
       if (action?.action === 'account.delete') {
         const done = admin && doName ? await admin.deleteOwner(doName) : false;
@@ -551,13 +551,19 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await storage.delete(['google:tokens', 'google:connection']);
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
-      // The first healthy account whose grant covers the feature serves it.
       async client(feature: GoogleFeature = 'calendar', sendIntent?: string, correlation?: string) {
+        return (await google.clientWithConnection(feature, sendIntent, correlation))?.client ?? null;
+      },
+      // The first healthy account whose grant covers the feature serves it. A pinned
+      // connection restricts selection to that exact account (send reconciliation must check
+      // the Sent folder of the account that actually sent); an unknown pin yields null.
+      async clientWithConnection(feature: GoogleFeature = 'calendar', sendIntent?: string, correlation?: string, pinnedId?: string): Promise<Readonly<{ client: GoogleClient; connection: string }> | null> {
         const app = await googleApp();
         if (!app) return null;
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
-        const fit = all.filter((account) => googleHas(account.scopes, feature));
+        let fit = all.filter((account) => googleHas(account.scopes, feature));
+        if (pinnedId !== undefined) fit = fit.filter((account) => account.id === pinnedId);
         let account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
         // Send-path custody gate: sends ride the proxy idempotency claim/store and Vault
@@ -571,8 +577,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           await google.keep(adopted);
           account = { id: adopted.id, email: adopted.email, scopes: adopted.scopes };
         }
-        if (path.kind === 'direct') return googleClient(app, { refresh_token: account.refresh_token!, email: account.email }, fetch, (error) => noteHealth(account.id, error));
-        return vault!.client(doName!, account.id, (error) => noteHealth(account.id, error), sendIntent, correlation);
+        if (path.kind === 'direct') return { client: googleClient(app, { refresh_token: account.refresh_token!, email: account.email }, fetch, (error) => noteHealth(account.id, error)), connection: account.id };
+        return { client: vault!.client(doName!, account.id, (error) => noteHealth(account.id, error), sendIntent, correlation), connection: account.id };
       },
       async state() {
         await google.migrate();
@@ -651,7 +657,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const desk = approvalDesk(storage.sql, {
-      call, owner, google: (sendIntent?: string, correlation?: string) => google.client(sendIntent ? 'mail' : 'calendar', sendIntent, correlation), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
+      call, owner, google: (sendIntent?: string, correlation?: string, pinnedConnection?: string) => google.clientWithConnection(sendIntent ? 'mail' : 'calendar', sendIntent, correlation, pinnedConnection), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
       timezone: clock.timezone, log,
       browserSubmit: (proposal) => executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
     });

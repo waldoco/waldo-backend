@@ -9,7 +9,9 @@ import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
-  client(feature?: GoogleFeature): Promise<GoogleClient | null>;
+  // correlation is the authenticated turn trace: it lands in the signed proxy body so EF /
+  // Langfuse rows join to this turn. Content never enters it.
+  client(feature?: GoogleFeature, sendIntent?: string, correlation?: string): Promise<GoogleClient | null>;
 }>;
 
 export type EffectDesk = Readonly<{
@@ -32,8 +34,8 @@ const authFailed = (reason: ConnectIntent['reason'], feature: GoogleFeature): To
   connect: { status: 'auth_required', service: 'google', reason, feature },
 });
 
-async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>): Promise<ToolResult<T>> {
-  const client = await google.client(feature);
+async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work: (client: GoogleClient) => Promise<T>, trace?: string): Promise<ToolResult<T>> {
+  const client = await google.client(feature, undefined, trace);
   if (client === null) return authFailed('not_connected', feature);
   try {
     return { ok: true, data: await work(client), source_taint: 'external' };
@@ -63,12 +65,12 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: queryCalendarArgsSchema,
     trigger_allowlist: allowlist('query_calendar'),
     autonomy_gated: false,
-    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs) => withGoogle(google, 'calendar', async (client) => {
+    handle: ({ date_range, include_declined, limit }: QueryCalendarArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'calendar', async (client) => {
       const now = clock.now().getTime();
       const from = date_range?.from ?? new Date(now).toISOString();
       const to = date_range?.to ?? new Date(now + DAY_MS).toISOString();
       return { timezone: clock.timezone, from, to, events: await client.events(from, to, limit, include_declined) };
-    }),
+    }, ctx?.trace),
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
@@ -76,10 +78,10 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
-    handle: ({ date_range }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
+    handle: ({ date_range }: GetCommunicationArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'mail', async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       return { since: new Date(since).toISOString(), messages: (await client.newMail(since, 10)).map(quarantineMailItem) };
-    }),
+    }, ctx?.trace),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_tasks',
@@ -87,11 +89,11 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     schema: getTasksArgsSchema,
     trigger_allowlist: allowlist('get_tasks'),
     autonomy_gated: false,
-    handle: ({ status, limit }: GetTasksArgs) => withGoogle(google, 'tasks', async (client) => ({
+    handle: ({ status, limit }: GetTasksArgs, ctx?: ToolDispatcherContext) => withGoogle(google, 'tasks', async (client) => ({
       status,
       tasks: await client.tasks(status, limit),
       ...(status === 'in_progress' ? { note: 'Google Tasks has no in-progress state; showing open tasks.' } : {}),
-    })),
+    }), ctx?.trace),
   } satisfies ToolHandler<GetTasksArgs, unknown, ToolDispatcherContext>,
   {
     name: 'propose_calendar_change',
@@ -112,7 +114,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // The draft receipt is a mutation ack, not provider-controlled content, so the result is
     // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
     // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
-    handle: async (args: DraftEmailArgs) => {
+    handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
       const result = await withGoogle(google, 'mail', async (client) => {
         const draft = await client.draft({
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
@@ -120,7 +122,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         });
         desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
         return { ...draft, sent: false };
-      });
+      }, ctx?.trace);
       return result.ok ? { ...result, source_taint: null } : result;
     },
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
@@ -137,7 +139,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: SendEmailArgs, ctx: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
-      const gate = await withGoogle(google, 'mail', async () => null);
+      const gate = await withGoogle(google, 'mail', async () => null, ctx.trace);
       if (!gate.ok) return { ...gate, source_taint: null };
       // Idempotency is scoped to the logical send: owner + turn + content. A retry of the same
       // logical send (same turn, same content) keeps one proposal and one Message-ID, so the
