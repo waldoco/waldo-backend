@@ -15,19 +15,22 @@ create index health_logs_owner_recent on waldo.health_logs (owner_id, logged_at 
 alter table waldo.health_logs enable row level security;
 alter table waldo.health_logs force row level security;
 
--- Append one log entry for an owner. The payload's md5 rides the signed message so a replayed
--- signature can never attach to a different body. Returns the new id, or null for an unknown DO.
-create function waldo.health_log_add(p_do_name text, p_kind text, p_logged_at timestamptz, p_source text, p_payload jsonb, p_at bigint, p_sig text) returns bigint
+-- Append one log entry for an owner. p_payload is text, not jsonb: the md5 pre-image must be
+-- the exact bytes the caller sent, and Postgres jsonb re-serialization (key order, spacing)
+-- is not byte-reproducible client-side. The payload's md5 rides the signed message so a
+-- replayed signature can never attach to a different body; the object shape is still enforced
+-- by the table check after the cast. Returns the new id, or null for an unknown DO.
+create function waldo.health_log_add(p_do_name text, p_kind text, p_logged_at timestamptz, p_source text, p_payload text, p_at bigint, p_sig text) returns bigint
 language plpgsql security definer set search_path = '' as $$
 declare v_owner uuid; v_id bigint;
 begin
-  if not waldo.router_signed('health.add.' || p_do_name || '.' || p_kind || '.' || p_source || '.' || md5(p_payload::text), p_at, p_sig) then
+  if not waldo.router_signed('health.add.' || p_do_name || '.' || p_kind || '.' || p_source || '.' || md5(p_payload), p_at, p_sig) then
     raise exception 'unsigned router call' using errcode = '42501';
   end if;
   v_owner := waldo.owner_id_for(p_do_name);
   if v_owner is null then return null; end if;
   insert into waldo.health_logs (owner_id, kind, logged_at, source, payload)
-    values (v_owner, p_kind, p_logged_at, p_source, p_payload)
+    values (v_owner, p_kind, p_logged_at, p_source, p_payload::jsonb)
     returning id into v_id;
   return v_id;
 end $$;
@@ -46,7 +49,7 @@ begin
   return query select * from waldo.health_logs where owner_id = v_owner order by logged_at desc limit greatest(0, least(p_limit, 50));
 end $$;
 
-revoke all on function waldo.health_log_add(text, text, timestamptz, text, jsonb, bigint, text) from public;
+revoke all on function waldo.health_log_add(text, text, timestamptz, text, text, bigint, text) from public;
 revoke all on function waldo.health_log_recent(text, integer, bigint, text) from public;
-grant execute on function waldo.health_log_add(text, text, timestamptz, text, jsonb, bigint, text) to anon;
+grant execute on function waldo.health_log_add(text, text, timestamptz, text, text, bigint, text) to anon;
 grant execute on function waldo.health_log_recent(text, integer, bigint, text) to anon;
