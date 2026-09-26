@@ -22,9 +22,9 @@ import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
+import { TOOL_LOOP_MAX_ROUNDS } from '../conversation/tool-loop';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
-const MAX_TOOL_ROUNDS = 25;
 const CLINICAL_FALLBACK = {
   text: "I can't advise on that one. A doctor or pharmacist can. If this is an emergency or you feel unsafe, call your local emergency number now.",
   input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, latency_ms: 0,
@@ -119,8 +119,8 @@ export const createTelegramResponder = (
       return runToolLoop({
         handlers,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
-        maxSteps: MAX_TOOL_ROUNDS,
-        ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        maxSteps: TOOL_LOOP_MAX_ROUNDS,
+        ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }), trace },
         step: async (tools, turns) => {
           const added = control.round();
           if (added === null) return { text: STOPPED_REPLY };

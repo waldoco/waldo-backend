@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
+import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, googleServes, readConsentState, sha256Hex, b64url } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -55,6 +55,22 @@ describe('google oauth state', () => {
   });
 });
 
+describe('googleServes (verified scopes or reconsent)', () => {
+  it('legacy null scopes never serve a feature; empty and partial verified scopes fail closed', () => {
+    // A legacy row with scopes null must route to reconsent: the proxy scope gate denies
+    // every call on it, so runtime selection must not pick it on blanket trust.
+    expect(googleServes(null, 'mail')).toBe(false);
+    expect(googleServes(null, 'calendar')).toBe(false);
+    expect(googleServes([], 'calendar')).toBe(false);
+    expect(googleServes(['https://www.googleapis.com/auth/calendar.readonly'], 'mail')).toBe(false);
+  });
+
+  it('verified scopes serve their feature', () => {
+    // Real granted scope sets (as stored after a verified exchange).
+    expect(googleServes(['https://www.googleapis.com/auth/calendar.events'], 'calendar')).toBe(true);
+  });
+});
+
 describe('google client', () => {
   it('exchanges the code with its PKCE verifier and the exact redirect URI', async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
@@ -71,8 +87,9 @@ describe('google client', () => {
 
   it('reads events without cancelled or declined ones', async () => {
     const calls: { url: string }[] = [];
-    const events = await googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls)).events('2026-09-23T00:00:00Z', '2026-09-24T00:00:00Z', 20, false);
-    expect(events).toEqual([{ id: 'e1', title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, description: 'Leg day' }]);
+    const page = await googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls)).events('2026-09-23T00:00:00Z', '2026-09-24T00:00:00Z', 20, false);
+    expect(page.items).toEqual([{ id: 'e1', title: 'Gym', start: '2026-09-23T18:00:00+05:30', end: '2026-09-23T19:00:00+05:30', all_day: false, description: 'Leg day' }]);
+    expect(page.complete).toBe(true);
     expect(calls[1]!.url).toContain('singleEvents=true');
   });
 
@@ -88,17 +105,30 @@ describe('google client', () => {
 });
 
 describe('google tools', () => {
-  const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
+  const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => ({ ok: true as const, id: 'proposal:1', reused: null }), record: () => undefined };
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
     const [query] = googleHandlers(google, proposals, clock);
-    const result = await query!.handle({ include_declined: false, limit: 20 } as never);
+    const result = await query!.handle({ include_declined: false, limit: 20 } as never, { authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at: 0 } } } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',
       error: expect.stringContaining('connect button'),
       connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'calendar' },
     });
     expect(JSON.stringify(result)).not.toMatch(/https?:|state=|accounts\.google/);
+  });
+
+  it('read handlers thread the authenticated turn trace into the connector client', async () => {
+    const calls: { feature?: string; sendIntent?: string; correlation?: string }[] = [];
+    const google: GoogleAccess = {
+      client: (async (feature?: string, sendIntent?: string, correlation?: string) => {
+        calls.push({ feature, sendIntent, correlation });
+        return { events: async () => [] };
+      }) as never,
+    };
+    const [query] = googleHandlers(google, proposals, clock);
+    await query!.handle({ include_declined: false, limit: 5 } as never, { trace: 'tg-904957571', authenticatedUserId: 'owner-1', session: { rate_limit_window: { started_at: 0 } } } as never);
+    expect(calls).toEqual([{ feature: 'calendar', sendIntent: undefined, correlation: 'tg-904957571' }]);
   });
 
   it('connect_service reports the typed intent too; already-connected stays ok', async () => {
@@ -212,10 +242,81 @@ describe('gmail send rail bytes', () => {
     const raw = 'xJ7';
     expect(await client.sendRaw(raw, 't1')).toEqual({ message_id: 'sent1', thread_id: 't1' });
     const sendCall = calls.find((c) => c.url.includes('/messages/send'))!;
-    expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: 'xJ7', threadId: 't1' });
+    // Gmail messages.send takes base64url MIME in Message.raw: the boundary encodes exactly once.
+    expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: b64url(new TextEncoder().encode(raw)), threadId: 't1' });
     expect(await client.findSentByMessageId('<m1@waldo-send>')).toBe(true);
     const findCall = calls.find((c) => c.url.includes('/messages?'))!;
     expect(decodeURIComponent(findCall.url.replace(/\+/g, ' '))).toContain('in:sent rfc822msgid:m1@waldo-send');
+  });
+});
+
+describe('calendar pagination', () => {
+  it('follows nextPageToken on a short page so the requested range is fully covered', async () => {
+    const seen: string[] = [];
+    const paged = ((url: string | URL) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      const token = new URL(u).searchParams.get('pageToken');
+      if (token === null) return Promise.resolve(Response.json({
+        items: [{ id: 'e1', summary: 'One', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' } }],
+        nextPageToken: 'p2',
+      }));
+      return Promise.resolve(Response.json({
+        items: [{ id: 'e2', summary: 'Two', start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T21:00:00+05:30' } }],
+      }));
+    }) as typeof fetch;
+    const client = googleClient(app, { refresh_token: 'rt' }, paged);
+    const page = await client.events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
+    expect(page.items.map((event) => event.id)).toEqual(['e1', 'e2']);
+    expect(page.complete).toBe(true);
+    expect(seen).toHaveLength(3); // token + page 1 + page 2
+    expect(seen[2]).toContain('pageToken=p2');
+  });
+
+  it('keeps paging past declined/cancelled runs so matching events on later pages are found', async () => {
+    // Owner review on #202: raw-page counting returned an apparently complete empty answer
+    // while matching events sat on later pages. Filters apply BEFORE the limit is counted.
+    const declined = (id: string) => ({ id, summary: 'Busy', status: 'confirmed', start: { dateTime: '2026-09-23T18:00:00+05:30' }, end: { dateTime: '2026-09-23T19:00:00+05:30' }, attendees: [{ self: true, responseStatus: 'declined' }] });
+    const paged = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      const token = new URL(u).searchParams.get('pageToken');
+      if (token === null) return Promise.resolve(Response.json({ items: [declined('d1'), declined('d2')], nextPageToken: 'p2' }));
+      return Promise.resolve(Response.json({
+        items: [{ id: 'real1', summary: 'Dentist', status: 'confirmed', start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T21:00:00+05:30' } }],
+      }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, paged).events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
+    expect(page.items.map((event) => event.id)).toEqual(['real1']);
+    expect(page.complete).toBe(true);
+  });
+
+  it('marks coverage partial when the requested limit is reached but a next page exists', async () => {
+    // Owner re-review on #202: hitting the requested limit with a nextPageToken still
+    // outstanding means more matching events may exist - complete must be false.
+    const event = (id: string) => ({ id, summary: 'Standup', status: 'confirmed', start: { dateTime: '2026-09-23T10:00:00+05:30' }, end: { dateTime: '2026-09-23T10:30:00+05:30' } });
+    const full = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      return Promise.resolve(Response.json({ items: [event('e1'), event('e2')], nextPageToken: 'p2' }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, full).events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 2, false);
+    expect(page.items.map((item) => item.id)).toEqual(['e1', 'e2']);
+    expect(page.complete).toBe(false);
+  });
+
+  it('marks coverage partial when the page bound trips with more pages remaining', async () => {
+    let fetches = 0;
+    const endless = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      fetches += 1;
+      return Promise.resolve(Response.json({ items: [], nextPageToken: `p${fetches}` }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, endless).events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 20, false);
+    expect(page.items).toEqual([]);
+    expect(page.complete).toBe(false);
   });
 });
 
@@ -224,19 +325,51 @@ describe('get_tasks', () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     const client = googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls));
     const open = await client.tasks('todo', 20);
-    expect(open.map((task) => task.id)).toEqual(['t1', 't2']);
-    expect(open[0]).toMatchObject({ title: 'Buy stamps', status: 'todo' });
-    expect(open[1]).toMatchObject({ due: '2026-09-30T00:00:00Z' });
+    expect(open.items.map((task) => task.id)).toEqual(['t1', 't2']);
+    expect(open.complete).toBe(true);
+    expect(open.items[0]).toMatchObject({ title: 'Buy stamps', status: 'todo' });
+    expect(open.items[1]).toMatchObject({ due: '2026-09-30T00:00:00Z' });
     expect(calls.at(-1)!.url).toContain('showCompleted=false');
+    expect(calls.at(-1)!.url).toContain('showHidden=false');
     const done = await client.tasks('done', 20);
-    expect(done.map((task) => ({ id: task.id, status: task.status }))).toEqual([{ id: 't3', status: 'done' }]);
+    expect(done.items.map((task) => ({ id: task.id, status: task.status }))).toEqual([{ id: 't3', status: 'done' }]);
+    // first-party completed tasks require BOTH flags (Google tasks.list semantics)
     expect(calls.at(-1)!.url).toContain('showCompleted=true');
+    expect(calls.at(-1)!.url).toContain('showHidden=true');
     const all = await client.tasks('all', 20);
-    expect(all.map((task) => task.id)).toEqual(['t1', 't2', 't3']);
+    expect(all.items.map((task) => task.id)).toEqual(['t1', 't2', 't3']);
+    expect(calls.at(-1)!.url).toContain('showHidden=true');
+  });
+
+  it('keeps paging past filtered-out tasks so matching ones on later pages are found', async () => {
+    // Owner review on #202: one filtered page is not the whole answer.
+    const paged = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      const token = new URL(u).searchParams.get('pageToken');
+      if (token === null) return Promise.resolve(Response.json({ items: [{ id: 'c1', status: 'completed' }, { id: 'c2', status: 'completed' }], nextPageToken: 'p2' }));
+      return Promise.resolve(Response.json({ items: [{ id: 'open1', status: 'needsAction', title: 'Call the bank' }] }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, paged).tasks('todo', 20);
+    expect(page.items.map((task) => task.id)).toEqual(['open1']);
+    expect(page.complete).toBe(true);
+  });
+
+  it('marks coverage partial when the requested limit is reached but a next page exists', async () => {
+    // Owner re-review on #202: same rule as Calendar - limit reached with a live
+    // nextPageToken means the answer is partial, not complete.
+    const full = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      return Promise.resolve(Response.json({ items: [{ id: 'k1', status: 'needsAction', title: 'One' }, { id: 'k2', status: 'needsAction', title: 'Two' }], nextPageToken: 'p2' }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, full).tasks('todo', 2);
+    expect(page.items.map((task) => task.id)).toEqual(['k1', 'k2']);
+    expect(page.complete).toBe(false);
   });
 
   it('handler is registered, returns tasks, and notes the in-progress mapping honestly', async () => {
-    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p', reused: null }), record: () => {} };
     const access: GoogleAccess = { client: async () => googleClient(app, { refresh_token: 'rt' }, fakeFetch([])) };
     const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks');
     expect(handler).toBeDefined();
@@ -248,7 +381,7 @@ describe('get_tasks', () => {
   });
 
   it('handler returns the typed connect intent when Google is not connected', async () => {
-    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => ({ ok: true as const, id: 'p', reused: null }), record: () => {} };
     const access: GoogleAccess = { client: async () => null };
     const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks')!;
     const result = await handler.handle({ status: 'todo', limit: 20 });

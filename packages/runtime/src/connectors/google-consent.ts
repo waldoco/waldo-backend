@@ -53,6 +53,20 @@ export async function startConsent(deps: ConsentDeps, app: GoogleApp, secret: st
 }
 
 export type ConsentCallback = Readonly<{ nonce: string; code?: string | null; error?: string | null }>;
+
+// Wraps a grant exchange with active-session validation: the connect-session ticket must be
+// atomically claimed (true) BEFORE the exchange runs, because the exchange itself writes the
+// proxy/Vault connection. A revoked, expired, unknown, or unreachable ticket makes the
+// callback throw before any token is stored anywhere; a later exchange failure settles a
+// truthful failed outcome, retryable by issuing a fresh connect link. Attempts not minted
+// from a connect session pass null and keep their existing behavior.
+export const sessionGatedExchange = (
+  exchange: ConsentExchange,
+  claim: (() => Promise<boolean>) | null,
+): ConsentExchange => async (code, verifier, redirectUri) => {
+  if (claim !== null && !(await claim())) throw new Error('connect session revoked or expired');
+  return exchange(code, verifier, redirectUri);
+};
 export type ConsentExchange = (code: string, verifier: string, redirectUri: string) => Promise<ConsentGrant | null>;
 
 // fresh is true only for the call that settled the attempt; a replayed callback gets fresh false,

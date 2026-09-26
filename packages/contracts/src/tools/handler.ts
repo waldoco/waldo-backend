@@ -104,6 +104,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'call_mcp_tool',
   'search_connector',
   'read_tool_output',
+  'browse_page',
+  'browse_act',
 ];
 
 // A privileged action is any DIRECT external mutation or send (ADR-0049) — the conservative

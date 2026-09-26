@@ -27,4 +27,11 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');
   });
+
+  it('pins the receipt-truth rules (tg-904957562: a failed or substituted tool must never be claimed as success)', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('The tool result is the receipt');
+    expect(MESSAGING_BEHAVIOR).toContain('approval card exists only when the result carries a proposal_id');
+    expect(MESSAGING_BEHAVIOR).toContain('draft_email only saves a draft in Gmail');
+    expect(MESSAGING_BEHAVIOR).toContain('Suggest reconnecting a service only when the failure is about auth');
+  });
 });

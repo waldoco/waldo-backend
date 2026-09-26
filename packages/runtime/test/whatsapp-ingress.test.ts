@@ -16,6 +16,15 @@ describe('whatsapp ingress normalization', () => {
     expect(updates[0]).toMatchObject({ callback_query: { from: { id: 15550001111 }, data: 'a:p12' } });
   });
 
+  it('r/x recovery replies synthesize callbacks too - a WhatsApp owner can reconcile an unknown send', () => {
+    const { updates } = whatsappIngressUpdates([
+      { id: 'wamid.r', from: '15550001111', type: 'text', text: { body: 'r:p12' } },
+      { id: 'wamid.x', from: '15550001111', type: 'text', text: { body: 'x:p12' } },
+    ], '15550001111', 0);
+    expect(updates[0]).toMatchObject({ callback_query: { from: { id: 15550001111 }, data: 'r:p12' } });
+    expect(updates[1]).toMatchObject({ callback_query: { from: { id: 15550001111 }, data: 'x:p12' } });
+  });
+
   it('E1: a verification artifact in inbound text is redacted before the turn exists', () => {
     const { updates } = whatsappIngressUpdates([
       { id: 'wamid.otp', from: '15550001111', type: 'text', text: { body: 'Fwd: Your WhatsApp code: 123-456. Do not share it.' } },

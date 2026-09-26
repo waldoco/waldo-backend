@@ -84,7 +84,7 @@ export const signInPage = (token: string): Response => new Response(
 export const sessionCookie = (request: Request): string | null =>
   (request.headers.get('cookie') ?? '').split(';').map((part) => part.trim().split('=')).find(([name]) => name === CONSOLE_COOKIE)?.[1] ?? null;
 
-export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'account.delete'] as const;
+export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'approval.reconcile', 'approval.notsent', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'account.delete'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
 // The trace detail for a console action. The form id is free-form text (parseConsoleAction
@@ -127,7 +127,55 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'file.remove': 'File removed from this list. It stays in your Telegram chat.',
   'file.unavailable': 'That file could not be fetched from Telegram.',
   invalid: 'That change could not be applied.',
+  'approval.sent': 'Sent.',
+  'approval.found': 'Found in Sent and marked sent.',
+  'approval.unconfirmed': 'Send unconfirmed. Check Sent, then use Check Sent or mark it not sent.',
+  'approval.closed': 'Marked as not sent.',
+  'approval.handled': 'Already handled.',
+  'approval.failed': 'That did not work. Try again.',
+  'approval.offline': 'Google is not connected. Reconnect it, then try again.',
+  'approval.unavailable': 'The Google account that handled this send is unavailable. Reconnect it or check Sent yourself.',
+  'approval.expired': 'That proposal expired, so nothing happened. Ask Waldo again if you still want it.',
+  'approval.changed': 'The details changed after approval, so nothing was sent. Ask Waldo again for a fresh one.',
+  'approval.skipped': 'Skipped. Nothing changed.',
+  'approval.change': 'Nothing changed yet. Tell Waldo what to change.',
+  'approval.cannotundo': 'A sent email cannot be undone. Nothing was reversed.',
+  'approval.undone': 'Undone.',
+  'approval.toolate': 'Too late to undo. Nothing was changed.',
+  'approval.nobrowsing': 'Browsing is not set up on this Waldo. Nothing happened.',
+  // Neutral by contract: the console action redirects without any Telegram delivery, so no
+  // status here may claim Telegram has details (owner review on #202). The fallback stays
+  // neutral for unknown outcomes; every toast approvals.ts can emit is mapped explicitly.
+  'approval.other': 'Done.',
 };
+
+// Console approval redirects must carry only a fixed outcome code: decision
+// messages can describe private email content, which must never enter a URL,
+// browser history, or request logs. Unknown toasts fall back to a generic code.
+const APPROVAL_REDIRECT_CODES: Readonly<Record<string, string>> = {
+  'Sent': 'approval.sent',
+  'Found in Sent': 'approval.found',
+  'Send unconfirmed': 'approval.unconfirmed',
+  'Not in Sent yet': 'approval.unconfirmed',
+  'Marked as not sent': 'approval.closed',
+  'Already handled.': 'approval.handled',
+  'That failed': 'approval.failed',
+  'Google is not connected': 'approval.offline',
+  'Account unavailable': 'approval.unavailable',
+  'This proposal expired': 'approval.expired',
+  'Email changed': 'approval.changed',
+  'The event changed': 'approval.changed',
+  'Not now': 'approval.skipped',
+  'Tell me what to change': 'approval.change',
+  "Can't be undone": 'approval.cannotundo',
+  'Undone': 'approval.undone',
+  'Too late to undo': 'approval.toolate',
+  'Browsing is not set up': 'approval.nobrowsing',
+};
+
+export function approvalRedirectCode(toast: string): string {
+  return APPROVAL_REDIRECT_CODES[toast] ?? 'approval.other';
+}
 
 export type ConsoleCard = Readonly<{ id: string; name: string; defaultTime: string; time: string | null; reason: string; sent: boolean; pin: string | null }>;
 
@@ -137,7 +185,7 @@ export type ConsoleView = Readonly<{
   now: string;
   sessionUntil: string;
   sessionCount: number;
-  approvals: readonly Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>[];
+  approvals: readonly Readonly<{ id: string; summary: string; state: 'open' | 'done' | 'unknown'; undoable: boolean }>[];
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
@@ -198,6 +246,14 @@ const connectors = (view: ConsoleView) => {
 const approvals = (view: ConsoleView) => {
   if (view.approvals.length === 0) return empty('Nothing waiting on you. When Waldo proposes a calendar change, it lands here and in Telegram.');
   return view.approvals.map((item) => {
+    // An unreconciled send is NOT Done: render it explicitly with its recovery actions, or the
+    // dashboard shows a false success receipt for an email whose delivery was never proven.
+    if (item.state === 'unknown') {
+      const guidance = 'Send unconfirmed - it may already be in Sent. Check Sent first so it never goes twice.';
+      const recovery = form(view.csrf, 'approval.reconcile', 'Check Sent', { id: item.id }, { tone: 'primary' })
+        + form(view.csrf, 'approval.notsent', 'I checked Sent - not there', { id: item.id }, { tone: 'danger', confirm: 'Only use this after checking your Sent folder yourself. This closes the send and lets Waldo propose a fresh email.' });
+      return `<div class="row"><div class="main"><div class="line">${esc(item.summary)}</div><div class="sub">${guidance}</div></div>${chip('Send unconfirmed', 'red')}<div class="act">${recovery}</div></div>`;
+    }
     const actions = item.state === 'open'
       ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
       : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this change in your calendar?' }) : '';

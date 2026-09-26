@@ -30,7 +30,7 @@ describe('scheduled day cards', () => {
 
   it('composes calendar, ledger and today into the card prompt, and says so when the calendar fails', async () => {
     let asked: string[] = [];
-    const google = { events: async (from: string, to: string) => { asked = [from, to]; return [{ id: 'e1', title: 'Investor call', start: '2026-09-24T10:00:00+05:30', end: '2026-09-24T10:30:00+05:30', all_day: false, description: 'Deck v3' }]; } } as unknown as GoogleClient;
+    const google = { events: async (from: string, to: string) => { asked = [from, to]; return { items: [{ id: 'e1', title: 'Investor call', start: '2026-09-24T10:00:00+05:30', end: '2026-09-24T10:30:00+05:30', all_day: false, description: 'Deck v3' }], complete: true }; } } as unknown as GoogleClient;
     const close = await composeDayCard(cardFor('card:close')!, now, tz, { google, connectable: false, ledger: 'Open\n- nothing', today: '[2026-09-23T09:00] owner: shipped the deck', updates: '- calendar added: {"title":"Dentist"}' });
     expect(asked).toEqual(['2026-09-23T18:30:00.000Z', '2026-09-24T18:30:00.000Z']);
     expect(close).toContain('"start":"2026-09-24T10:00"');

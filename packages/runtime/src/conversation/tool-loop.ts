@@ -38,6 +38,11 @@ export const toolDefinitions = (handlers: DispatchToolOptions<ToolDispatcherCont
 // model must answer, so a turn always ends in words. Identical repeated calls are refused.
 export const FAILED_ROUNDS_LIMIT = 3;
 
+// The chat-turn round budget lives HERE, next to the loop it bounds and the doc that chose
+// it (docs/planning/TOOL_LOOP_BUDGET.md) - not in a channel file (ego-audit S2: the policy
+// had two homes). Channel adapters pass this; tests pass their own to exercise the mechanism.
+export const TOOL_LOOP_MAX_ROUNDS = 25;
+
 export async function runToolLoop(input: Readonly<{
   step: ToolLoopStep;
   handlers: DispatchToolOptions<ToolDispatcherContext>['handlers'];

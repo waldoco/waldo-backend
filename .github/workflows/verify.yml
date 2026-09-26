@@ -49,6 +49,11 @@ jobs:
       - name: Verify (core)
         run: node scripts/guards/guard-package-manager.mjs && pnpm -r typecheck && pnpm verify:node && pnpm verify:supabase && pnpm verify:supabase:session-revocation && pnpm verify:guards
 
+      # Deno Edge Functions are not covered by the pnpm typecheck: compile-check the connector
+      # proxy entry (and its shared imports) so a broken EF cannot ship behind green CI.
+      - name: Edge Function compile gate
+        run: npx --yes deno@2.5.6 check --sloppy-imports supabase/functions/connector-proxy/index.ts
+
       # Required scenario gate: the main vitest config excludes the scenario harness, so the
       # shards above never run it. This step is the only CI coverage for the scenario suite.
       - name: Runtime scenarios
