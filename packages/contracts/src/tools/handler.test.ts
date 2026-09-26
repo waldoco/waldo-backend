@@ -254,7 +254,7 @@ describe('general-agent tools — gate coupling (ADR-0049)', () => {
 });
 
 describe('external-origin tool classification — ADR-0049', () => {
-  it('covers every connector, calendar, communication, task, web, document, and MCP result', () => {
+  it('covers every connector, calendar, communication, task, web, browser, document, and MCP result', () => {
     expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
       'query_calendar',
       'get_communication',
@@ -264,6 +264,8 @@ describe('external-origin tool classification — ADR-0049', () => {
       'call_mcp_tool',
       'search_connector',
       'read_tool_output',
+      'browse_page',
+      'browse_act',
     ]);
   });
 });
