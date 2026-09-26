@@ -4,7 +4,7 @@ import {
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
 import { runToolLoop, type LoopExit } from '../conversation/tool-loop';
-import { CHILD_TOOL_NAMES, delegateTaskHandler, SUBAGENT_MAX_ROUNDS, SUBAGENT_SYSTEM_PROMPT } from '../conversation/subagent';
+import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT } from '../conversation/subagent';
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
@@ -117,23 +117,22 @@ export const createTelegramResponder = (
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => {
       const trace = traceId;
-      // Subagent orchestration v1 (owner-delegated spec decisions 2026-09-26): the delegate_task
-      // handler is built per turn so the spawn counter resets each turn and the spawner closes
-      // over this turn's LLM step. The child runs a nested tool loop on the read-only subset
-      // (CHILD_TOOL_NAMES) with its own round slice; flat by construction - children never get
-      // delegate_task.
-      const delegate = delegateTaskHandler(async (task) => {
-        let exit: LoopExit = 'completed';
-        const text = await runToolLoop({
-          handlers: handlers.filter((handler) => (CHILD_TOOL_NAMES as readonly string[]).includes(handler.name)),
-          maxSteps: SUBAGENT_MAX_ROUNDS,
+      // Subagent orchestration v1: the delegate_task handler is built per turn so the spawn
+      // counter resets each turn and the spawner closes over this turn's LLM step. The child
+      // runs a nested tool loop on the read-only subset (CHILD_TOOL_NAMES) with its own round
+      // slice; flat by construction - children never get delegate_task.
+      const delegate = delegateTaskHandler((task) =>
+        runChildLoop(task, {
+          handlers,
           ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
-          onSettle: (settled) => { exit = settled; },
-          step: (tools, turns) =>
-            complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content: task }], undefined, undefined, tools, turns),
-        });
-        return { exit, text };
-      });
+          controlRound: () => control.round(),
+          complete: (content, tools, turns) =>
+            complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns),
+          onTool: (event) => {
+            log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          },
+        }),
+      );
       return runToolLoop({
         handlers: [...handlers, delegate],
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
@@ -145,7 +144,7 @@ export const createTelegramResponder = (
           const entries = [...request.messages];
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           return complete(trace, 'reply',
-          [messagingSystemPrompt(handlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
+          [messagingSystemPrompt([...handlers, delegate].map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
