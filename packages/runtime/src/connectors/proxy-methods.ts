@@ -2,7 +2,7 @@
 // (connections.ts) and the Edge Function (supabase/functions/connector-proxy/index.ts): a
 // method must pass BOTH sides, so the list lives once here. Adding a method means naming its
 // scope-gate feature and its arg bounds below, or it does not ship.
-import { GOOGLE_FEATURE_SCOPES, type GoogleFeature } from './google';
+import { GOOGLE_FEATURE_SCOPES, type GoogleFeature } from './google.ts';
 
 export const PROXY_METHODS = ['events', 'draft', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'tasks', 'sendRaw', 'findSentByMessageId'] as const;
 export type ProxyMethod = (typeof PROXY_METHODS)[number];
