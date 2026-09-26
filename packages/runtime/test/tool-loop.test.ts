@@ -330,6 +330,71 @@ describe('mutation-resets-streak (Hermes progress evidence)', () => {
     expect(outputs.some((o) => o.includes('No progress'))).toBe(false);
   });
 
+  it('an identical read after a landed mutation dispatches again (new state epoch resets read dedupe)', async () => {
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    };
+    let n = 0;
+    const outputs: string[] = [];
+    const SAME = '{"query":"exactly the same search"}';
+    const text = await runToolLoop({
+      handlers: [web, send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools) return { text: 'done.' };
+        // Same read twice: the second is an exact duplicate and must refuse. A successful gated
+        // mutation lands, opening a new state epoch; the SAME read args must then dispatch again.
+        if (n <= 2) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: SAME }] };
+        if (n === 3) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'b'.repeat(64) + '"}' }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 's3', name: 'web_search', arguments: SAME }] };
+        return { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(searched).toBe(2);
+    expect(outputs[1]).toContain('Same call already made this turn');
+    expect(outputs.some((o) => o.includes('"queued":true'))).toBe(true);
+  });
+
+  it('a landed mutation never re-enables duplicate mutations (write/send dedupe is retained)', async () => {
+    let sent = 0;
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => { sent += 1; return { ok: true as const, data: { queued: true }, source_taint: null }; },
+    };
+    const SEND_ARGS = '{"channel":"telegram","content":"hi","idempotency_key":"' + 'c'.repeat(64) + '"}';
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      handlers: [send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        // First send dispatches and lands; the reset it triggers must NOT clear mutation dedupe,
+        // so the identical second send still refuses.
+        return tools && n <= 2 ? { text: '', tool_calls: [{ call_id: `m${n}`, name: 'send_message', arguments: SEND_ARGS }] } : { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(sent).toBe(1);
+    expect(outputs[1]).toContain('Same call already made this turn');
+  });
+
   it('without an intervening mutation the 4th repeat is refused (control)', async () => {
     let searched = 0;
     const web = webSearchHandler('test-key', async (): Promise<Response> => {

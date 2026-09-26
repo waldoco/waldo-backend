@@ -52,7 +52,8 @@ across mature open harnesses (Hermes agent, OpenClaw, LangGraph, OpenHands):
 - NO_PROGRESS_LIMIT = 3 (semantic no-progress): the same (tool, args, result) triple with only
   volatile spans (ISO timestamps, uuid-shaped ids, 20+ char token runs such as cursors/request
   ids) differing is counted across the turn; at three repeats the stabilized (tool, args) pair
-  is refused pre-dispatch for the rest of the turn. Small integers (page numbers, amounts)
+  is refused pre-dispatch until a successful gated mutation lands, which opens a new state
+  epoch and clears the block. Small integers (page numbers, amounts)
   survive stabilization, so legit pagination never trips it. Precedent: OpenClaw hashes tool
   outcomes with volatile fields stripped for its rolling-history detectors.
 

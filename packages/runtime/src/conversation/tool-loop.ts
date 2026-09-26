@@ -50,7 +50,8 @@ export const WARN_WINDOW_ROUNDS = 5;
 // Pure-alphabetic long words (ordinary search terms like electroencephalography) survive, so
 // genuinely different calls never collide; small integers (page numbers, amounts) survive too.
 // Once the same stabilized (tool, args, result) triple appears NO_PROGRESS_LIMIT times in a
-// turn, that stabilized (tool, args) pair is refused pre-dispatch for the rest of the turn.
+// turn, that stabilized (tool, args) pair is refused pre-dispatch until a successful gated
+// mutation opens a new state epoch and clears it.
 export const NO_PROGRESS_LIMIT = 3;
 
 // Token shapes only: dates, UUIDs, and 20+ char runs carrying digit/underscore evidence
@@ -77,10 +78,11 @@ export async function runToolLoop(input: Readonly<{
   const offered = new Set<string>();
   const noProgressTriples = new Map<string, number>();
   const noProgressBlocked = new Set<string>();
-  // Mutation-resets-streak (Hermes tool_guardrails.py: `_progress_since_failure`): a state change
-  // landing between repeats makes the next identical call a new experiment, not a loop. Waldo's
-  // mutation class is the autonomy-gated/privileged set (ADR-0049: direct external mutation or
-  // send). A successful gated call clears both no-progress maps.
+  // Mutation-resets-streak: a state change landing between repeats makes the next identical
+  // call a new experiment, not a loop. Waldo's mutation class is the autonomy-gated/privileged
+  // set (ADR-0049: direct external mutation or send). A successful gated call clears both
+  // no-progress maps and read-side exact-call dedupe (a new state epoch); duplicate protection
+  // for mutations themselves is retained, so a write or send can never be re-fired by a reset.
   const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated).map((h) => h.name));
   let failedRounds = 0;
   for (let round = 0; ; round += 1) {
@@ -114,6 +116,9 @@ export async function runToolLoop(input: Readonly<{
       if (result.ok && mutationTools.has(call.name as never)) {
         noProgressTriples.clear();
         noProgressBlocked.clear();
+        for (const seenKey of seen) {
+          if (!mutationTools.has(seenKey.slice(0, seenKey.indexOf('\u0000')) as never)) seen.delete(seenKey);
+        }
       }
       if (!noProgressBlocked.has(stablePair)) {
         const triple = `${stablePair}\u0000${stabilize(JSON.stringify(result))}`;
