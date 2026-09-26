@@ -53,6 +53,7 @@ Feature areas and observation types live in `HOPS`. The root span is type `agent
 | reactions | `receipt`, `resolved` (tool), `choose_reaction` (chain), `llm_reaction` (generation) |
 | reply | `respond`, `joined_path` (chain), `llm_reply` (generation) |
 | memory | `memory` (chain), `llm_memory` (generation) |
+| provider | `llm_provider_failure` (span; allowlisted model, HTTP status and error subtype in staging text-capture mode) |
 | other | any hop not yet mapped (span) |
 
 ### Text capture

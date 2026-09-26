@@ -130,7 +130,10 @@ describe('TelegramOwnerListener', () => {
     entries.length = 0;
     const failing = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, saveOffset: async () => undefined, now: () => (clock += 5), log: (entry) => entries.push(entry), respond: async () => { throw new Error('model down'); } });
     await failing.handle({ updateId: 8, messageId: 80, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'x' });
-    expect(entries.at(-1)).toMatchObject({ trace: 'tg-8', hop: 'turn', ok: false, error: 'model down' });
+    expect(entries.at(-1)).toMatchObject({
+      trace: 'tg-8', hop: 'turn', ok: false, error: 'model down',
+      text: { input: 'x', output: 'Sorry - I hit a problem answering that. Please try again in a moment.' },
+    });
     expect(entries).toContainEqual(expect.objectContaining({ hop: 'respond', ok: false, error: 'model down' }));
   });
 

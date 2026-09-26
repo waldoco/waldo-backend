@@ -82,7 +82,13 @@ export const createTelegramResponder = (
       ...message,
       ...(attachments && index === texts.length - 1 ? { attachments: attachments.map((file) => `${file.kind}:${file.filename}`) } : {}),
     }));
-    const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
+    const adapter = gateway ?? new OpenAIResponsesAdapter({
+      apiKey: openaiApiKey,
+      onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; },
+      onErrorMetadata: (metadata) => {
+        log({ trace, hop: 'llm_provider_failure', ms: 0, ok: false, code: metadata.code, detail: JSON.stringify({ purpose, ...metadata }) });
+      },
+    });
     const result = await new RuntimeLLMProvider({ gateway: adapter, circuitBreaker }).complete({
       trigger: 'user_message',
       policy,
