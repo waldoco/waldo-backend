@@ -117,6 +117,23 @@ describe('owner console', () => {
     expect(noneLeft).toContain('Nothing waiting on you');
   });
 
+  it('shows gate holds as kind + reason + day only - refused words never reach the page', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('Held at the gate (1)');
+    expect(html).toContain('self report');
+    expect(html).toContain('2026-09-25');
+    expect(html).not.toContain('fingerprint');
+    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, holds: [] });
+    expect(none).not.toContain('Held at the gate');
+  });
+
+  it('marks spots grounded only in shared content', () => {
+    const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] });
+    expect(html).toContain('from shared content');
+    expect(renderConsole(SAMPLE_CONSOLE_VIEW)).not.toContain('from shared content');
+  });
+
   it('renders real usage numbers with a total, and an honest empty state', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('id="usage"');

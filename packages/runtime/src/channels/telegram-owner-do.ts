@@ -840,6 +840,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           google: { accounts: linked, connectAvailable: google.configured() },
           telegram: { linked: telegramLinked(identity), unlinkAvailable: consoleAuth(this.env) !== null && identity.get<string>('do_name') !== undefined },
           profile: profile(memory.claims()), spots: memory.claims(), retiredSpots: ['dismissed', 'promoted'].flatMap((status) => memory.claims(status)), forgettingSpots: memory.claims('purging'),
+          holds: memory.holds().map(({ id, kind, reason, created_at }) => ({ id, kind, reason, created_at })),
           nodes: memory.nodes(), edges: memory.edges(), barriers: memory.barriers().length,
           cards: DAY_CARDS.map((card) => {
             const row = planned.get(card.id);
