@@ -26,6 +26,7 @@ const expectedMigrations = [
   '20260925170000_waldo_assert_channel_presence.sql',
   '20260926100000_waldo_proxy_access.sql',
   '20260926110000_waldo_proxy_idempotency.sql',
+  '20260926120000_waldo_connect_session_ttl.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
