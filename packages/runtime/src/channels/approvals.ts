@@ -156,13 +156,24 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               setStatus(id, 'done');
               out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
             } catch (error) {
-              const landed = await client.findSentByMessageId(ep.message_id).catch(() => false);
-              if (landed) {
+              // Typed outcome, never a guess: confirmed landed -> done; confirmed absent ->
+              // failed; reconciliation impossible (lookup error, or no Message-ID to search) ->
+              // unknown with honest wording. Claiming "nothing was delivered" when we cannot
+              // check would invite a duplicate resend.
+              const cause = error instanceof Error ? error.message : String(error);
+              let landed: boolean | null = null;
+              if (typeof ep.message_id === 'string' && ep.message_id.length > 0) {
+                landed = await client.findSentByMessageId(ep.message_id).then((found) => found, () => null);
+              }
+              if (landed === true) {
                 setStatus(id, 'done');
                 out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. Gmail confirmed it after a hiccup; it went out exactly once.` };
-              } else {
+              } else if (landed === false) {
                 setStatus(id, 'failed');
-                out = { toast: "That didn't send", message: `The email did not send (${error instanceof Error ? error.message : String(error)}). Nothing was delivered - ask me to send it again.` };
+                out = { toast: "That didn't send", message: `The email did not send (${cause}). Nothing was delivered - ask me to send it again.` };
+              } else {
+                setStatus(id, 'unknown');
+                out = { toast: 'Send unconfirmed', message: `I could not confirm whether that email went out (${cause}). It may be in your Sent folder - check there before asking me to resend, so it never goes twice.` };
               }
             }
           }
@@ -205,6 +216,16 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return id;
     },
     async proposeSendEmail(payload) {
+      // Idempotent on the digest: a tool-loop retry after an ambiguous card timeout re-sends the
+      // SAME proposal's card instead of minting a second proposal with a fresh Message-ID. Two
+      // approvals then hit one row and the second is Already handled - the duplicate-mail race
+      // the owner caught on 2026-09-26 is closed.
+      const existing = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'open'").toArray()
+        .find((r) => { try { return (JSON.parse(r.payload_json) as EmailSendProposal).digest === payload.digest; } catch { return false; } });
+      if (existing) {
+        await say(`Send this email? ${existing.summary}`, [['Send it', `a:${existing.id}`], ['Modify', `e:${existing.id}`], ['Not now', `s:${existing.id}`]]);
+        return existing.id;
+      }
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());

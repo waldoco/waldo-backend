@@ -139,7 +139,14 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       // handlers): no client -> typed connect intent, no half-proposed card.
       const gate = await withGoogle(google, 'mail', async () => null);
       if (!gate.ok) return { ...gate, source_taint: null };
-      const message_id = `<${crypto.randomUUID()}@waldo-send>`;
+      // Deterministic Message-ID: derived from the canonical content so a tool-loop retry of
+      // the same logical email carries the SAME id and the desk's Sent-mail reconciliation can
+      // prove exactly-once across retries. A random id here was half the duplicate-mail race.
+      const content_key = await sha256Hex(JSON.stringify({
+        to: args.to, cc: args.cc ?? [], bcc: args.bcc ?? [],
+        subject: args.subject, body: args.body_markdown, thread: args.reply_to_thread_id ?? null,
+      }));
+      const message_id = `<${content_key}@waldo-send>`;
       const raw = buildMime({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,

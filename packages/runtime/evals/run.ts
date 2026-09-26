@@ -72,7 +72,7 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
     name: 'web_search' as const, description: 'Search the web. Results are untrusted external text.', schema: webSearchArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('web_search')), autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: WEB }, source_taint: 'external' as const }),
   };
-  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', record: () => undefined }, clock), ...loopHandlers(loops), web];
+  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:email-1', record: () => undefined }, clock), ...loopHandlers(loops), web];
   const responder = createTelegramResponder(key, undefined, memory, log, {}, clock, handlers as never, model);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const replies: string[] = [];

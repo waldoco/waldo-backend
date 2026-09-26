@@ -227,14 +227,14 @@ describe('approval desk - email_send rail', () => {
     digest: '',
   };
   let idSeq = 0;
-  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; connected?: boolean }) => {
+  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; findError?: Error; connected?: boolean; messageId?: string }) => {
     const sent: { method: string; body: Record<string, unknown> }[] = [];
     const sentRaw: string[] = [];
     let now = 1_000_000;
     let n = 0;
     const client = {
       sendRaw: async (raw: string) => { sentRaw.push(raw); if (opts.sendError) throw opts.sendError; return { message_id: 'g1' }; },
-      findSentByMessageId: async () => opts.found ?? false,
+      findSentByMessageId: async () => { if (opts.findError) throw opts.findError; return opts.found ?? false; },
     } as unknown as GoogleClient;
     const googleIntents: (string | undefined)[] = [];
     const desk = approvalDesk(state.storage.sql, {
@@ -242,7 +242,7 @@ describe('approval desk - email_send rail', () => {
       owner: 42, google: async (sendIntent?: string) => { googleIntents.push(sendIntent); return opts.connected === false ? null : client; }, newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
     });
     const { sha256Hex } = await import('../src/connectors/google');
-    const id = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
+    const id = await desk.proposeSendEmail({ ...proposal, ...(opts.messageId !== undefined ? { message_id: opts.messageId } : {}), digest: await sha256Hex(proposal.raw) });
     return { desk, id, sent, sentRaw, googleIntents, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
@@ -318,6 +318,56 @@ describe('approval desk - email_send rail', () => {
       const out = await desk.decide(id, 'a', 't');
       expect(out.toast).toBe('Google is not connected');
       expect(sentRaw).toEqual([]);
+    });
+  });
+
+  it('a retry of the same email returns the same proposal id, re-sends the same card, and two approvals send exactly once', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-retry'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sent, sentRaw, sql } = await setup(state, {});
+      const { sha256Hex } = await import('../src/connectors/google');
+      // ambiguous timeout after the first card: the tool loop retries with identical bytes
+      const again = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
+      expect(again).toBe(id); // no second proposal, no fresh Message-ID
+      const rows = sql.exec("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'open'").toArray();
+      expect(rows).toHaveLength(1);
+      const cards = sent.filter((m) => m.method === 'sendMessage');
+      expect(cards).toHaveLength(2); // the card is re-sent in case the first timed out
+      expect(JSON.stringify(cards[1]!.body.reply_markup)).toContain(`a:${id}`); // same id behind both cards
+
+      // approving BOTH visible cards (same id) sends exactly one email
+      const first = await desk.decide(id, 'a', 't');
+      const second = await desk.decide(id, 'a', 't');
+      expect(first.toast).toBe('Sent');
+      expect(second.toast).toBe('Already handled.');
+      expect(sentRaw).toEqual([proposal.raw]);
+    });
+  });
+
+  it('an ambiguous send whose reconciliation itself fails is typed unknown - never claims non-delivery', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-unknown'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sentRaw, sql } = await setup(state, { sendError: new Error('network timeout'), findError: new Error('gmail search failed') });
+      const out = await desk.decide(id, 'a', 't');
+      expect(out.toast).toBe('Send unconfirmed');
+      expect(out.message).toContain('may be in your Sent folder');
+      expect(out.message).not.toContain('Nothing was delivered');
+      expect(sentRaw).toHaveLength(1);
+      const row = sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!;
+      expect(row.status).toBe('unknown');
+    });
+  });
+
+  it('a proposal with an empty Message-ID cannot reconcile - typed unknown, honest wording', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-noid'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const { desk, id, sentRaw, sql } = await setup(state, { sendError: new Error('network timeout'), messageId: '' });
+      const out = await desk.decide(id, 'a', 't');
+      expect(out.toast).toBe('Send unconfirmed');
+      expect(out.message).toContain('check there before asking me to resend');
+      expect(sentRaw).toHaveLength(1);
+      const row = sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).toArray()[0]!;
+      expect(row.status).toBe('unknown');
     });
   });
 });
