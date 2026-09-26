@@ -3,6 +3,7 @@ import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
 import { isQuiet, loopBook, loopHandlers, loopsSection, proactivityLine } from './loops';
+import { armHeartbeat, heartbeatTick } from './heartbeat';
 import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../memory/migration';
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
@@ -70,6 +71,7 @@ type OwnerRuntime = Readonly<{
   reminders: ReturnType<typeof reminderBook>;
   scheduler: Scheduler;
   fire(entry: ScheduleEntry): Promise<void>;
+  beat(entry: ScheduleEntry): Promise<void>;
   nightly(entry: ScheduleEntry): Promise<void>;
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
@@ -284,10 +286,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   override async alarm(): Promise<void> {
     await this.serial(async () => {
-      const { scheduler, fire, nightly, briefs, cards, ready, log } = this.setup();
+      const { scheduler, fire, beat, nightly, briefs, cards, ready, log } = this.setup();
       await ready;
       const started = Date.now();
-      const fired = await scheduler.dispatchDue({ reminder: fire, dreaming: nightly, pre_activity_spot: briefs, brief: cards });
+      const fired = await scheduler.dispatchDue({ reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards });
       for (const entry of fired) {
         const late = started - entry.due_at;
         if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
@@ -721,7 +723,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const quiet = () => isQuiet(loops.proactivity(), Date.now(), clock.timezone);
     const download = createTelegramFileDownloader(token ?? '');
     const updates = updateBook(storage.sql);
-    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now())])
+    const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now()), armHeartbeat(scheduler, Date.now())])
       .then(async ([, , , seeded]) => {
         const scrubbed = await scrubConversationHistory(storage);
         if (scrubbed > 0) log({ trace: 'history:scrub', hop: 'egress_scrub', ms: 0, ok: true, detail: `${scrubbed} entries` });
@@ -792,6 +794,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       } catch (error) {
         log({ trace, hop: 'day_plan', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
       }
+    };
+    // H1 heartbeat (HEARTBEAT_AND_CRON plan): quiet-by-default due-work scan. The send goes
+    // through the same traced Telegram API as every other owner message; the tick itself is
+    // deterministic, so a scan failure lands in the schedule retry/quarantine policy unchanged.
+    const beat = async (entry: ScheduleEntry) => {
+      const trace = `${entry.id}:${entry.occurrence_at}`;
+      const started = Date.now();
+      await heartbeatTick({
+        scheduler, sql: storage.sql, loops, timezone: clock.timezone, now: () => Date.now(),
+        send: async (text) => { await api.sendMessage({ chat_id: owner, text }); },
+      })(entry);
+      log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: true });
     };
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
@@ -888,7 +902,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, scheduler, fire, nightly, briefs, cards, updateCheck, traces, log, google,
+    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, scheduler, fire, beat, nightly, briefs, cards, updateCheck, traces, log, google,
       view: async (session, notice) => {
         const linked = await google.state();
         const now = Date.now();

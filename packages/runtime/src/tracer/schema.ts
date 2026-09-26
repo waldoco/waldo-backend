@@ -221,6 +221,13 @@ export function ensureSchema(storage: DurableObjectStorage): void {
     );
   `);
   sql.exec('CREATE INDEX IF NOT EXISTS schedule_runs_by_schedule ON schedule_runs (schedule_id, fired_at DESC);');
+
+  // Heartbeat flood control: one row per notified (loop, due) occurrence.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS heartbeat_notified (
+      loop_id TEXT NOT NULL, due TEXT NOT NULL, notified_at INTEGER NOT NULL,
+      PRIMARY KEY (loop_id, due));
+  `);
 }
 
 function ensureColumn(sql: SqlStorage, table: string, column: string, ddl: string): void {
