@@ -3,7 +3,7 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { buildMime, GoogleError, googleServes, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import type { EmailSendProposal, ProposeSendEmailResult } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -12,6 +12,8 @@ export type GoogleAccess = Readonly<{
   // correlation is the authenticated turn trace: it lands in the signed proxy body so EF /
   // Langfuse rows join to this turn. Content never enters it.
   client(feature?: GoogleFeature, sendIntent?: string, correlation?: string): Promise<GoogleClient | null>;
+  // Selects before a draft or approval is created. self requires exactly one eligible account.
+  mailSender?(self: boolean, correlation?: string): Promise<Readonly<{ client: GoogleClient; connection: string; email: string }> | null>;
 }>;
 
 export type EffectDesk = Readonly<{
@@ -22,6 +24,16 @@ export type EffectDesk = Readonly<{
 
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 const DAY_MS = 24 * 60 * 60_000;
+export const selectMailSender = <T extends Readonly<{ id: string; email: string; scopes: readonly string[] | null }>>(
+  accounts: readonly T[], failing: Readonly<Record<string, string>>, self: boolean,
+): T | null => {
+  const eligible = accounts.filter((account) =>
+    googleServes(account.scopes, 'mail') &&
+    !failing[account.id] && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(account.email));
+  return eligible.length === 0 || (self && eligible.length !== 1) ? null : eligible[0]!;
+};
+const resolveRecipients = (to: readonly string[], selfEmail: string): string[] =>
+  to.map((recipient) => recipient === 'self' ? selfEmail : recipient);
 
 // S4 (CONNECT_FLOW_DESIGN 4.4): auth failures are a typed intent, never a URL in text. The
 // responder sees `connect` and calls the channel's offerConnect seam; the model only ever
@@ -118,7 +130,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<ProposeCalendarChangeArgs, unknown, ToolDispatcherContext>,
   {
     name: 'draft_email',
-    description: "Save an email draft in the owner's Gmail. It is not sent; the owner reviews and sends it themselves. It creates NO approval card and nothing enters the owner's approval queue - when the owner asked to send, or asked to approve first, use send_email instead.",
+    description: "Save an email draft in the owner's Gmail. Use recipient 'self' only when the owner explicitly means their own connected Gmail address; never use it for a redacted or unknown address. It is not sent; the owner reviews and sends it themselves. It creates NO approval card and nothing enters the owner's approval queue - when the owner asked to send, or asked to approve first, use send_email instead.",
     schema: draftEmailArgsSchema,
     trigger_allowlist: allowlist('draft_email'),
     autonomy_gated: false,
@@ -126,12 +138,16 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
     // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
     handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
-      const result = await withGoogle(google, 'mail', async (client) => {
+      const self = args.to.includes('self');
+      const sender = await google.mailSender?.(self, ctx?.trace);
+      if (!sender) return self ? { ok: false, code: 'transient', error: 'I could not identify exactly one connected mail account for self. Choose one account before trying again.', source_taint: null } : authFailed('not_connected', 'mail');
+      const to = resolveRecipients(args.to, sender.email);
+      const result = await withGoogle({ client: async () => sender.client }, 'mail', async (client) => {
         const draft = await client.draft({
-          to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+          to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
         });
-        desk.record('email_draft', `Drafted "${args.subject}" to ${args.to.join(', ')}`, draft);
+        desk.record('email_draft', `Drafted "${args.subject}" to ${to.join(', ')}`, draft);
         return { ...draft, sent: false };
       }, ctx?.trace);
       return result.ok ? { ...result, source_taint: null } : result;
@@ -139,7 +155,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<DraftEmailArgs, unknown, ToolDispatcherContext>,
   {
     name: 'send_email',
-    description: "Send an email from the owner's Gmail. The owner gets Send it / Modify / Not now buttons showing the exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
+    description: "Send an email from the owner's Gmail. Use recipient 'self' only when the owner explicitly means their own connected Gmail address; never use it for a redacted or unknown address. The owner gets Send it / Modify / Not now buttons showing From, exact recipients, subject and body; nothing sends until they approve. Use draft_email instead when the owner wants to review or edit it in Gmail themselves.",
     schema: sendEmailArgsSchema,
     trigger_allowlist: allowlist('send_email'),
     autonomy_gated: false,
@@ -150,25 +166,30 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     handle: async (args: SendEmailArgs, ctx: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
-      const gate = await withGoogle(google, 'mail', async () => null, ctx.trace);
-      if (!gate.ok) return { ...gate, source_taint: null };
+      const self = args.to.includes('self');
+      const sender = await google.mailSender?.(self, ctx.trace);
+      if (!sender) return self
+        ? { ok: false, code: 'transient', error: 'I could not identify exactly one connected mail account for self. Choose one account before trying again.', source_taint: null }
+        : { ...authFailed('not_connected', 'mail'), source_taint: null };
+      const to = resolveRecipients(args.to, sender.email);
       // Idempotency is scoped to the logical send: owner + turn + content. A retry of the same
       // logical send (same turn, same content) keeps one proposal and one Message-ID, so the
       // desk's Sent-mail reconciliation proves exactly-once across retries. The same content on
       // a NEW request or day is a new logical send with its own Message-ID - an old Sent hit
       // can never mark a later failed send as delivered, and distinct intents never collapse.
       const content_key = await sha256Hex(JSON.stringify({
-        to: args.to, cc: args.cc ?? [], bcc: args.bcc ?? [],
+        sender: sender.connection, to, cc: args.cc ?? [], bcc: args.bcc ?? [],
         subject: args.subject, body: args.body_markdown, thread: args.reply_to_thread_id ?? null,
       }));
       const logical_key = `${ctx.authenticatedUserId}:${ctx.session.rate_limit_window.started_at}:${content_key}`;
       const message_id = `<${await sha256Hex(logical_key)}@waldo-send>`;
       const raw = buildMime({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+        to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,
       });
       const proposal = await desk.proposeSendEmail({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+        from: sender.email, sender_connection: sender.connection,
+        to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown,
         ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
         message_id, raw, digest: await sha256Hex(raw), content_digest: content_key,

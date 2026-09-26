@@ -33,6 +33,7 @@ const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 // sha256 digest binding them. Approval replays payload.raw verbatim; a digest mismatch fails
 // closed instead of sending; message_id reconciles an ambiguous send via Sent-mail lookup.
 export type EmailSendProposal = Readonly<{
+  from?: string; sender_connection?: string;
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
   subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string;
   // sha256 over the content fields only (no Message-ID): stable across turns for identical
@@ -117,7 +118,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   // cut: proposeSendEmail fails with a typed oversize instead of sending a partial preview.
   const TELEGRAM_MESSAGE_LIMIT = 4096;
   const describeEmail = (p: EmailSendProposal) => {
-    const lines = [`To: ${p.to.join(', ')}`];
+    const lines = [...(p.from ? [`From: ${p.from}`] : []), `To: ${p.to.join(', ')}`];
     if (p.cc?.length) lines.push(`Cc: ${p.cc.join(', ')}`);
     if (p.bcc?.length) lines.push(`Bcc: ${p.bcc.join(', ')}`);
     lines.push(`Subject: ${p.subject}`, '');
@@ -245,7 +246,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             try {
               // The approval id is the send idempotency intent for the proxy gate: a replayed
               // approval replays as the same intent and can never fire a second provider send.
-              got = await deps.google(`email_send:${id}`, trace);
+              got = await deps.google(`email_send:${id}`, trace, ep.sender_connection);
+              // Existing pre-pin proposals retain their historical approval path. New ones
+              // can only send through the exact connection selected when the card was made.
+              if (ep.sender_connection && got?.connection !== ep.sender_connection) got = null;
               digestOk = got !== null && (await sha256Hex(ep.raw)) === ep.digest;
             } catch (error) {
               setStatus(id, 'open');
@@ -253,7 +257,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             }
             if (got === null) {
               setStatus(id, 'open'); // claimed but never attempted: release it for a connected retry
-              out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
+              out = ep.sender_connection
+                ? { toast: 'Account unavailable', message: 'The Google account shown on this approval is unavailable. Reconnect it before trying again; nothing was sent.' }
+                : { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
             } else if (!digestOk) {
               setStatus(id, 'failed');
               out = { toast: 'Email changed', message: `The stored email no longer matches what you approved, so nothing was sent: ${describeEmail(ep)}. Ask me again and I'll prepare a fresh one.` };
@@ -366,7 +372,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       }
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at, connection) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL, ?)", id, summary, JSON.stringify(payload), deps.now(), payload.sender_connection ?? null);
       const delivered = await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
       return { ok: true, id, reused: null, delivered };
     },

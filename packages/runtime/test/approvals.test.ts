@@ -286,6 +286,25 @@ describe('approval desk - email_send rail', () => {
     });
   });
 
+  it('shows From and resolved To, then fails closed if the proposal-time sender pin was revoked', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-self-pin'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const run = await setup(state, { pinUnavailable: true });
+      await run.desk.decide(run.id, 's', 't');
+      const proposed = await run.desk.proposeSendEmail({
+        ...proposal, from: 'owner@example.com', sender_connection: 'conn-revoked',
+        to: ['owner@example.com'], content_digest: 'self-pin',
+      });
+      if (!proposed.ok) throw new Error('proposal unexpectedly failed');
+      expect(run.sent.at(-1)?.body.text).toContain('From: owner@example.com\nTo: owner@example.com');
+      const out = await run.desk.decide(proposed.id, 'a', 't');
+      expect(out.toast).toBe('Account unavailable');
+      expect(run.googlePins.at(-1)).toBe('conn-revoked');
+      expect(run.sentRaw).toEqual([]);
+      expect(run.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', proposed.id).toArray()[0]?.status).toBe('open');
+    });
+  });
+
   it('binds the proxy send idempotency gate to the approved proposal id, never to content alone', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-intent'));
     await runInDurableObject(stub, async (_i, state) => {

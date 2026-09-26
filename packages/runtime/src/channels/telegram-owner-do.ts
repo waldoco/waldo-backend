@@ -33,7 +33,7 @@ import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
 import { signedRpc } from '../identity/owner-directory';
 import { googleProxy } from '../connectors/connections';
 import { googleClientPath } from '../connectors/google-account-path';
-import { connectServiceHandler, googleHandlers } from '../tools/live/google';
+import { connectServiceHandler, googleHandlers, selectMailSender } from '../tools/live/google';
 import { approvalDesk, type ApprovalDesk, type CallbackQuery } from './approvals';
 import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
@@ -557,6 +557,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       async client(feature: GoogleFeature = 'calendar', sendIntent?: string, correlation?: string) {
         return (await google.clientWithConnection(feature, sendIntent, correlation))?.client ?? null;
+      },
+      async mailSender(self: boolean, correlation?: string): Promise<Readonly<{ client: GoogleClient; connection: string; email: string }> | null> {
+        await google.migrate();
+        const failing = await health();
+        const selected = selectMailSender(await accounts(), failing, self);
+        // A self alias cannot silently choose among multiple connected mailboxes. This check
+        // runs before a Vault/client/provider call.
+        if (!selected) return null;
+        const pinned = await google.clientWithConnection('mail', undefined, correlation, selected.id);
+        return pinned && pinned.connection === selected.id
+          ? { ...pinned, email: selected.email }
+          : null;
       },
       // The first healthy account whose grant covers the feature serves it. A pinned
       // connection restricts selection to that exact account (send reconciliation must check
