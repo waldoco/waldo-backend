@@ -1,32 +1,46 @@
-# Channel options: Discord, iMessage, WhatsApp
+# Channel surfaces - owner ruling 2026-09-26
 
-Researched on 23 September 2026. Recheck vendor terms and prices before building each one.
+Supersedes the 23 September ranking (Discord-first). Owner ruling, WhatsApp 26 September 2026 (17:01 IST, corrected 17:02): Telegram is testing-only, kept as an opt-in channel for users who want it; it is not a headline surface. Official surfaces, in order:
 
-## Discord
+1. **The Waldo app.** The product. Own surface, no platform dependency.
+2. **iMessage + WhatsApp.** The chat surfaces. Positioning to Meta: the app is the product; WhatsApp is a surface/extension, not a general-purpose chatbot destination.
+3. **Waldo agent mail.** The agent's own email identity, in the pattern of Instinct's and Muse's agent inboxes.
 
-- **Route.** An official bot. [Slash commands and buttons arrive as HTTPS interactions](https://docs.discord.com/developers/tutorials/hosting-on-cloudflare-workers), which fits the Worker. Ordinary messages need a live [Gateway](https://docs.discord.com/developers/events/gateway.md) WebSocket connection. On Cloudflare that means a Durable Object that keeps the socket open, or a small always-on relay. The slice has to prove which one.
-- **Message content.** Message text needs the privileged `MESSAGE_CONTENT` intent, except in DMs with the bot and messages that mention it. An owner DM works without approval.
-- **Cost.** Free.
-- **Fit.** Good. It's also our threading test channel.
+Opt-in extras: Telegram (exists today, testing channel), Discord (official bot; the threading test channel).
 
-## iMessage
+## Per-surface detail
 
-- **No official consumer API.** [Apple Messages for Business](https://register.apple.com/resources/messages/messaging-documentation/faq) needs an Apple-approved messaging service provider and a registered business. The customer starts every conversation, and the business can't message again after the customer ends one. That's built for brands, not a personal agent.
-- **Hosted providers.** Services such as [Sendblue](https://www.sendblue.com/pricing) and [LoopMessage](https://loopmessage.com/apidocs/) run real Apple hardware and expose a REST API and webhooks. Sendblue charges a flat fee per line per month and lists webhooks on its $100/month tier, with no per-message fees. This is the production route for per-user iMessage.
-- **Self-hosted.** [BlueBubbles](https://docs.bluebubbles.app/server) runs on a Mac signed in to iMessage. It reads the Messages database and sends through AppleScript. It works for the owner on his own Mac at no cost, but it doesn't scale per user, and the Mac has to stay on.
-- **Fit.** Good for the owner prototype through BlueBubbles, and for production through a hosted provider.
+### Waldo app
+Own surface. Parallel track to all of the below; configures the same per-owner agent/DO.
 
-## WhatsApp
+### iMessage
+- No official consumer API. Apple Messages for Business is built for brands (approved MSP, registered business, customer-initiated only) - wrong shape for a personal agent.
+- **Owner prototype + beta: mac-bridge.** BlueBubbles server on the spare iMac signed in to iMessage: REST API + webhooks to the Worker, reads the Messages database, sends via AppleScript. Reactions/tapbacks supported (matters for the P3 personality layer). The Mac must stay awake - BlueBubbles issue #750 documents inbound delivery stopping after Mac inactivity; power settings and a watchdog are part of the setup. AirMessage is the fallback; BlueBubbles is the more active project.
+- **Per-user production: hosted providers** (Sendblue, LoopMessage) run real Apple hardware with REST + webhooks; Sendblue lists webhooks on its $100/month tier. That is the scale route.
+- Risk: self-hosted bridging is outside Apple's terms for the host account; keep it to the owner's own Apple ID until the hosted route is justified.
 
-- **Official route.** The [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started): a business phone number, webhooks for inbound messages, and [per-message pricing](https://developers.facebook.com/docs/whatsapp/pricing/) with a 24-hour customer service window.
-- **Blocker.** The [WhatsApp Business Solution Terms](https://www.whatsapp.com/legal/business-solution-terms) (last modified March 6, 2026) prohibit "AI Providers" from using the platform when AI is the "primary (rather than incidental or ancillary) functionality". The terms name general-purpose AI assistants. Waldo is a general-purpose personal agent. The only carve-out is for users with European Economic Area or Brazil numbers. Indian numbers (+91) are outside it. The rule has been in force since [January 15, 2026](https://techcrunch.com/2025/10/18/whatssapp-changes-its-terms-to-bar-general-purpose-chatbots-from-its-platform/).
-- **Unofficial libraries.** Libraries that drive WhatsApp Web break WhatsApp's terms and risk the number being banned. Not recommended.
-- **Fit.** Blocked for our main market unless the owner decides otherwise after reading the terms.
+### WhatsApp
+- Official route only: Cloud API (or a BSP such as Gupshup/Twilio for hand-holding). Unofficial libraries (Baileys, whatsapp-web.js, WAHA) risk non-deterministic number bans - never on a number that matters.
+- **The terms problem, stated plainly:** the WhatsApp Business Solution Terms (last modified 2026-03-06) bar "AI Providers" whose AI is the "primary (rather than incidental or ancillary) functionality" from offering general-purpose assistants, except where Meta is legally required (EEA/Brazil numbers today; EU/Italy/Brazil antitrust probes active, European Commission interim-measures charge sheet April 2026). Meta's AI-provider pricing notice restates it with a January 15, 2026 effective date.
+- **The honest read of the app-primary framing:** Faff (Faff Technologies Pvt Ltd, Bangalore) operates a WhatsApp-based personal-assistant service on a +91 number today; their terms frame it as a human-executed task service (wallet, onboarding call, human agents) where the AI is ancillary. Poke was barred after public launch and is back only in Brazil under regulatory pressure. Instinct runs a US number in invite beta, below the enforcement radar. So: the "app is the product, WhatsApp is an extension" framing is the strongest available position and matches how Faff survives, but it is a risk posture, not a permission - if the WhatsApp surface itself reads as the full general-purpose assistant, Meta can still call the AI primary on that surface. Enforcement is discretionary and rises with visibility. The number must be dedicated, disposable infrastructure, never a personal number.
+- Build path unchanged: claim the Cloud API test number, wire the webhook, submit business verification (the long pole) in parallel. Embedded signup v4; India Sold-To WABAs move to INR billing by 2026-12-31.
 
-## Recommended order
+### Waldo agent mail
+The agent's own email identity (pattern: Instinct and Muse run dedicated agent inboxes). Waldo already treats inbound email as external content at the scribe and has receipt-truth for sends (#182). Missing: the dedicated agent mailbox/address, its inbound webhook into the owner DO, and the outbound identity policy (when the agent writes as itself vs as the owner).
 
-1. **Discord.** Official and free, the owner DM needs no approval, and it becomes the threading test channel. The only new piece is keeping the Gateway connection up.
-2. **iMessage.** Prototype through BlueBubbles on the owner's Mac, then move to a hosted provider for per-user production.
-3. **WhatsApp.** On hold. The official API bars general-purpose AI assistants outside EEA and Brazil numbers.
+### Telegram (opt-in)
+Exists end-to-end; durable spool ingress (#168). Testing channel and opt-in user channel. Not headline positioning.
 
-The Waldo mobile app connection runs in parallel with these, because it is our own surface.
+### Discord (opt-in)
+Official bot; slash commands as HTTPS interactions fit the Worker; ordinary messages need a Gateway WebSocket held open by a DO or small relay. Threading test channel.
+
+## Sources
+- WhatsApp Business Solution Terms: https://www.whatsapp.com/legal/business-solution-terms
+- AI-provider pricing notice (2026-01-15 effective): https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing/ai-providers
+- Ban coverage: https://techcrunch.com/2025/10/18/whatssapp-changes-its-terms-to-bar-general-purpose-chatbots-from-its-platform/
+- EC antitrust charge sheet (2026-04): https://mondovisione.com/media-and-resources/news/european-commission-sends-meta-fresh-charge-sheet-on-possible-interim-measures-t-2026415/
+- Faff (WhatsApp assistant operating in India): https://www.faffit.com/ and https://welcome.usefaff.com/terms
+- Poke Brazil carve-out: TechCrunch Poke launch coverage; Instinct US-number WhatsApp: WIRED (2026).
+- BlueBubbles server: https://github.com/BlueBubblesApp/bluebubbles-server and inactivity issue: https://github.com/BlueBubblesApp/bluebubbles-server/issues/750
+- Apple Messages for Business constraints: https://register.apple.com/resources/messages/messaging-documentation/faq
+- Hosted iMessage providers: https://www.sendblue.com/pricing , https://loopmessage.com/apidocs/
