@@ -52,6 +52,19 @@ export const dayPlanBook = (sql: Sql) => {
         day, card,
       );
     },
+    // Quiet-hours hold (H1b): sent=2 records "held", never "sent" - a held card stays truthfully
+    // unsent until the heartbeat's release re-arms it and the real send marks sent=1. The
+    // WHERE sent = 0 guard keeps a card that already genuinely sent from regressing to held.
+    held(day: string, card: CardId): void {
+      sql.exec(
+        `INSERT INTO day_plan (day, card, time, reason, sent) VALUES (?, ?, NULL, 'held: quiet hours', 2)
+         ON CONFLICT (day, card) DO UPDATE SET sent = 2 WHERE sent = 0`,
+        day, card,
+      );
+    },
+    heldToday(day: string): readonly CardId[] {
+      return sql.exec<{ card: CardId }>('SELECT card FROM day_plan WHERE day = ? AND sent = 2 ORDER BY card', day).toArray().map((row) => row.card);
+    },
   };
 };
 export type DayPlanBook = ReturnType<typeof dayPlanBook>;

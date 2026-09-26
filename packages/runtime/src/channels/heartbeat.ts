@@ -1,5 +1,6 @@
 import type { ScheduleEntry } from '@waldo/contracts';
 import type { Scheduler, ScheduleExecutor } from '../scheduler/multiplexer';
+import type { DayPlanBook } from './day-cards';
 import { isQuiet, type Loop, type LoopBook } from './loops';
 import { localIso } from './reminders';
 
@@ -13,8 +14,11 @@ import { localIso } from './reminders';
 // A crash between acting and confirming leaves delivery 'pending' - recoverable, never treated
 // as delivered. Terminal delivery states ('sent'/'failed') are never re-sent on retry.
 //
-// H1 scope is deliberately narrower than the plan's full input set: it scans past-due open loops
-// only. Due reminders and released held briefs land in the H1b follow-up slice.
+// H1+H1b scope: past-due open loops, plus release of quiet-hours-held day cards (H1b). A card
+// held at its planned time (day_plan sent=2) is re-armed here once quiet ends; the real send
+// happens in the normal cards pipeline (the tick stays deterministic - no LLM turn) and marks
+// the card sent there. Due reminders need no heartbeat path: the C3 missed-run policy fires
+// the latest elapsed occurrence once, so a heartbeat copy would double-fire.
 export const HEARTBEAT_ID = 'heartbeat-tick';
 export const HEARTBEAT_EVERY_MS = 30 * 60_000;
 const MAX_LISTED_LOOPS = 3;
@@ -39,6 +43,7 @@ export type HeartbeatDeps = Readonly<{
   scheduler: Scheduler;
   sql: Sql;
   loops: LoopBook;
+  plans: Pick<DayPlanBook, 'heldToday'>;
   timezone: string;
   now: () => number;
   send: (text: string) => Promise<void>;
@@ -66,6 +71,17 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       deps.scheduler.markHeartbeatDecision(runId, 'quiet');
       return;
     }
+    // H1b release: quiet-hours-held day cards from TODAY re-arm to fire immediately. The upsert
+    // resets the entry to armed, so a crashed release retry re-arms idempotently; yesterday's
+    // held cards are stale and stay as the historical record of the hold.
+    const today = localIso(firedAt, deps.timezone).slice(0, 10);
+    const heldCards = deps.plans.heldToday(today);
+    for (const card of heldCards) {
+      await deps.scheduler.schedule({
+        id: card, kind: 'brief', payloadRefs: { id: card },
+        occurrenceAt: firedAt, dueAt: firedAt, recurrence: null,
+      });
+    }
     const localNow = localIso(firedAt, deps.timezone).slice(0, 16);
     // The cooldown filter lives in SQL BEFORE the LIMIT: paging the 20 earliest-due loops and
     // filtering in JS would starve a 21st notifiable loop forever while the front page sits in
@@ -84,7 +100,9 @@ export const heartbeatTick = (deps: HeartbeatDeps): ScheduleExecutor => {
       )
       .toArray();
     if (notify.length === 0) {
-      deps.scheduler.markHeartbeatDecision(runId, 'quiet');
+      // A release-only tick acted (its effect is the re-arm) but sent nothing itself - the
+      // released card's own run row carries that send's delivery truth.
+      deps.scheduler.markHeartbeatDecision(runId, heldCards.length > 0 ? 'acted' : 'quiet');
       return;
     }
     deps.scheduler.markHeartbeatDecision(runId, 'acted');
