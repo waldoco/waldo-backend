@@ -348,10 +348,20 @@ function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
 ): SanitiseFailureReason | undefined {
+  // The generic embedded canary-shape scan (/16 hex chars/) applies to all agent-side
+  // (non-external) content, and to EVERY destination even for external-tainted content, with
+  // one exception: provider ingestion into internal_context. Received provider data carries
+  // ordinary 16-hex identifiers (Gmail message ids are exactly 16 hex chars; Calendar etags
+  // are 16 digits) - the shape scan denied every populated Google read at the offload guard.
+  // Egress keeps the scan regardless of taint: a PostLLMCall in a turn that read provider data
+  // inherits external taint (the run loop merges tool-result taint into the turn context) and
+  // its destination is send_message, so a canary-shaped token can still never be emitted.
+  // Exact session-canary matching runs for every taint and destination.
+  const embeddedScan = !(input.source_taint === 'external' && input.destination === 'internal_context');
   let canaryFound = false;
   let secretFound = containsStructuredSecret(payload, input.destination);
   const result = visitStrings(payload, input.destination, (text) => {
-    if (input.canary_tokens.some((token) => text.includes(token)) || matches(CANARY_REGEX, text)) {
+    if (input.canary_tokens.some((token) => text.includes(token)) || (embeddedScan && matches(CANARY_REGEX, text))) {
       canaryFound = true;
     }
     if (SECRET_PATTERNS.some((pattern) => matches(pattern, text))) secretFound = true;
@@ -906,6 +916,36 @@ function applyDestinationPolicy(
     payload: boundedPayload,
     source_taint: input.source_taint,
     redactions,
+  };
+}
+
+// Offload store guard (release blocker, populated-reads slice): raw external tool output is
+// never stored. Storage is not a sanitise destination, so the destination size/structure caps
+// do not apply - but every content check does. Only guarded (redacted) text reaches the store,
+// so a read-back slice can never expose unguarded content, including a secret that would span
+// read chunks.
+export function guardForOffload(raw: SanitiseInput): SanitiseResult {
+  const input = prepareInput(raw);
+  if (!input) return deny('size_cap', 'invalid_payload');
+
+  const secret = containsCanaryOrSecret(input.payload, input);
+  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret !== undefined) return deny('canary_token', secret);
+
+  const health = containsForbiddenHealth(input);
+  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.matched) return deny('health_value', 'health_value_leak');
+
+  const pii = redactPii(input.payload, input.destination);
+  if (pii.invalid) return deny('size_cap', 'invalid_payload');
+
+  const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
+  if ('ok' in instructions) return instructions;
+  return {
+    ok: true,
+    payload: instructions.payload,
+    source_taint: input.source_taint,
+    redactions: instructions.redactions,
   };
 }
 

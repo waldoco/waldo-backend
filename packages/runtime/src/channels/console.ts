@@ -87,6 +87,14 @@ export const sessionCookie = (request: Request): string | null =>
 export const CONSOLE_ACTIONS = ['spot.confirm', 'spot.dismiss', 'spot.forget', 'node.forget', 'proactivity.set', 'card.today', 'card.pin', 'card.unpin', 'google.connect', 'google.disconnect', 'session.signout', 'session.signout.all', 'approval.approve', 'approval.skip', 'approval.undo', 'file.remove', 'telegram.link', 'telegram.unlink', 'timezone.set', 'invite.create', 'invite.revoke', 'account.delete'] as const;
 export type ConsoleAction = Readonly<{ action: (typeof CONSOLE_ACTIONS)[number]; id: string; value: string }>;
 
+// The trace detail for a console action. The form id is free-form text (parseConsoleAction
+// accepts any string, and several actions ignore the id entirely), so it must never reach the
+// trace sinks: only an integer target id is content-free enough to log next to the enum action.
+export const consoleActionTraceDetail = (action: string, id: string): string => {
+  const numeric = Number(id);
+  return id !== '' && Number.isInteger(numeric) ? `${action} ${numeric}` : action;
+};
+
 // Linked means a telegram subject is actually bound to this owner (set when presence routing
 // delivers a message to this DO) and a console unlink has not tombstoned it. Reading the
 // unlink flag alone inverts the truth for a fresh owner: an unset flag is not a link.

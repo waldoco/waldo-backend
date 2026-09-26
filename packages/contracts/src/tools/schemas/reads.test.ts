@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import {
   callMcpToolArgsSchema,
@@ -289,5 +290,23 @@ describe('external-origin results carry taint (ADR-0049)', () => {
     expect(
       callMcpToolResultSchema.safeParse({ output: {}, source_taint: 'internal' }).success,
     ).toBe(false);
+  });
+});
+
+describe('date_range guidance and strictness', () => {
+  it('rejects the exact live-failure args: minute precision without seconds or offset', () => {
+    expect(
+      queryCalendarArgsSchema.safeParse({ date_range: { from: '2026-09-26T00:00', to: '2026-09-26T23:59' } }).success,
+    ).toBe(false);
+  });
+
+  it('tells the model the required format in the advertised JSON schema', () => {
+    const json = z.toJSONSchema(queryCalendarArgsSchema, { io: 'input' }) as {
+      properties?: { date_range?: { properties?: { from?: { description?: string } } } };
+    };
+    const description = json.properties?.date_range?.properties?.from?.description ?? '';
+    expect(description).toContain('seconds');
+    expect(description).toContain('offset');
+    expect(description).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 });

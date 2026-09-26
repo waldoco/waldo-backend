@@ -15,6 +15,11 @@ const fakeFetch = (calls: { url: string; init?: RequestInit }[]) => (async (inpu
     { id: 'e3', summary: 'Declined sync', attendees: [{ self: true, responseStatus: 'declined' }, {}], start: { dateTime: '2026-09-23T20:00:00+05:30' }, end: { dateTime: '2026-09-23T20:30:00+05:30' } },
   ] });
   if (url.includes('/gmail/v1/users/me/drafts')) return Response.json({ id: 'd1', message: { id: 'm1', threadId: 't1' } });
+  if (url.includes('tasks.googleapis.com/tasks/v1/lists/@default/tasks')) return Response.json({ items: [
+    { id: 't1', title: 'Buy stamps', status: 'needsAction', updated: '2026-09-23T06:00:00Z' },
+    { id: 't2', title: 'Pay rent', status: 'needsAction', due: '2026-09-30T00:00:00Z', updated: '2026-09-22T06:00:00Z' },
+    { id: 't3', title: 'Renew license', status: 'completed', updated: '2026-09-21T06:00:00Z' },
+  ] });
   return new Response('{}', { status: 404 });
 }) as typeof fetch;
 
@@ -211,5 +216,43 @@ describe('gmail send rail bytes', () => {
     expect(await client.findSentByMessageId('<m1@waldo-send>')).toBe(true);
     const findCall = calls.find((c) => c.url.includes('/messages?'))!;
     expect(decodeURIComponent(findCall.url.replace(/\+/g, ' '))).toContain('in:sent rfc822msgid:m1@waldo-send');
+  });
+});
+
+describe('get_tasks', () => {
+  it('client lists default-list tasks, maps status, and filters done items unless asked', async () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    const client = googleClient(app, { refresh_token: 'rt' }, fakeFetch(calls));
+    const open = await client.tasks('todo', 20);
+    expect(open.map((task) => task.id)).toEqual(['t1', 't2']);
+    expect(open[0]).toMatchObject({ title: 'Buy stamps', status: 'todo' });
+    expect(open[1]).toMatchObject({ due: '2026-09-30T00:00:00Z' });
+    expect(calls.at(-1)!.url).toContain('showCompleted=false');
+    const done = await client.tasks('done', 20);
+    expect(done.map((task) => ({ id: task.id, status: task.status }))).toEqual([{ id: 't3', status: 'done' }]);
+    expect(calls.at(-1)!.url).toContain('showCompleted=true');
+    const all = await client.tasks('all', 20);
+    expect(all.map((task) => task.id)).toEqual(['t1', 't2', 't3']);
+  });
+
+  it('handler is registered, returns tasks, and notes the in-progress mapping honestly', async () => {
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const access: GoogleAccess = { client: async () => googleClient(app, { refresh_token: 'rt' }, fakeFetch([])) };
+    const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks');
+    expect(handler).toBeDefined();
+    const result = await handler!.handle({ status: 'todo', limit: 20 });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect((result.data as { tasks: readonly { id: string }[] }).tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+    const inProgress = await handler!.handle({ status: 'in_progress', limit: 20 });
+    expect(inProgress.ok && JSON.stringify(inProgress.data)).toContain('no in-progress state');
+  });
+
+  it('handler returns the typed connect intent when Google is not connected', async () => {
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const access: GoogleAccess = { client: async () => null };
+    const handler = googleHandlers(access, desk, clock).find((h) => h.name === 'get_tasks')!;
+    const result = await handler.handle({ status: 'todo', limit: 20 });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result).toMatchObject({ code: 'auth_failed', connect: { feature: 'tasks', reason: 'not_connected' } });
   });
 });

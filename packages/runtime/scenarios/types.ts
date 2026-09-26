@@ -10,7 +10,7 @@ export type ScenarioCategory =
 export type HopAssert = Readonly<{
   hop: string;              // 'llm_reply', 'memory', 'tool_query_calendar', ...
   ok?: boolean;             // required outcome when given
-  note?: RegExp;            // matched against the hop's error/detail text
+  note?: RegExp;            // matched against the hop's error/detail/code text
   maxMs?: number;           // wall-clock bound
   trace?: RegExp;           // scope the assertion to hops of matching turns (e.g. /-2$/)
   after?: string;           // this hop must land after the named hop

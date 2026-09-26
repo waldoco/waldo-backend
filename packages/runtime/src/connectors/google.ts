@@ -31,15 +31,36 @@ async function sign(secret: string, payload: string): Promise<string> {
 // The state names the owner's Durable Object (to route the callback) and a one-time nonce whose
 // record, expiry and PKCE verifier live in that Durable Object. The MAC lets the Worker drop forged
 // callbacks before waking anything.
-export async function consentState(secret: string, owner: string, nonce: string): Promise<string> {
-  return `${owner}.${nonce}.${await sign(secret, `${owner}.${nonce}`)}`;
+// The surface that started the flow (telegram, whatsapp, dashboard, app) rides in the signed
+// state so the completion page can route the owner back where they came from. Unknown or
+// tampered surfaces fail verification; the page falls back to the console.
+export const CONSENT_SURFACES = ['telegram', 'whatsapp', 'dashboard', 'app'] as const;
+export type ConsentSurface = (typeof CONSENT_SURFACES)[number];
+
+export async function consentState(secret: string, owner: string, nonce: string, surface?: ConsentSurface): Promise<string> {
+  const body = surface ? `${owner}.${nonce}.${surface}` : `${owner}.${nonce}`;
+  return `${body}.${await sign(secret, body)}`;
 }
 
 // The owner is the Durable Object name, which may hold dots, so split from the right.
-export async function readConsentState(secret: string, state: string): Promise<Readonly<{ owner: string; nonce: string }> | null> {
-  const [mac, nonce, ...rest] = state.split('.').reverse();
-  const owner = rest.reverse().join('.');
-  if (!owner || !nonce || !mac) return null;
+export async function readConsentState(secret: string, state: string): Promise<Readonly<{ owner: string; nonce: string; surface?: ConsentSurface }> | null> {
+  const parts = state.split('.');
+  const mac = parts[parts.length - 1];
+  if (!mac || parts.length < 3) return null;
+  // Surface-aware shape first: owner.nonce.surface.mac, owner itself dotted. The MAC binds the
+  // exact layout, so a surface moved or edited by hand fails both shapes.
+  if (parts.length >= 4) {
+    const surface = parts[parts.length - 2] ?? '';
+    const nonce = parts[parts.length - 3] ?? '';
+    const owner = parts.slice(0, -3).join('.');
+    if (owner && nonce && (CONSENT_SURFACES as readonly string[]).includes(surface)) {
+      const body = `${owner}.${nonce}.${surface}`;
+      if ((await sign(secret, body)) === mac) return { owner, nonce, surface: surface as ConsentSurface };
+    }
+  }
+  const nonce = parts[parts.length - 2] ?? '';
+  const owner = parts.slice(0, -2).join('.');
+  if (!owner || !nonce) return null;
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
@@ -102,6 +123,10 @@ export const sha256Hex = async (text: string): Promise<string> => {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 };
 
+export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
+export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string }>;
+type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
+
 export type GoogleClient = Readonly<{
   events(from: string, to: string, limit: number, includeDeclined: boolean): Promise<readonly CalendarItem[]>;
   draft(input: DraftInput): Promise<Readonly<{ draft_id: string; message_id?: string; thread_id?: string }>>;
@@ -113,6 +138,7 @@ export type GoogleClient = Readonly<{
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
+  tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
 // health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
@@ -172,6 +198,23 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
         return { id, from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
       }));
+    },
+    async tasks(status, limit) {
+      const url = new URL('https://tasks.googleapis.com/tasks/v1/lists/@default/tasks');
+      // Google Tasks has no in-progress state: todo and in_progress both read the open list;
+      // the handler says so on the result when the owner filtered for in_progress.
+      const want = status === 'done' ? 'completed' : 'needsAction';
+      url.search = new URLSearchParams({
+        maxResults: String(limit), showHidden: 'false',
+        showCompleted: status === 'done' || status === 'all' ? 'true' : 'false',
+      }).toString();
+      const json = await call(url.toString()) as { items?: GoogleTask[] };
+      return (json.items ?? [])
+        .filter((task) => status === 'all' || task.status === want)
+        .map((task) => ({
+          id: task.id, title: task.title ?? '(no title)', status: task.status === 'completed' ? 'done' as const : 'todo' as const,
+          ...(task.due ? { due: task.due } : {}), ...(task.updated ? { updated: task.updated } : {}),
+        }));
     },
     async draft(input) {
       const raw = b64url(new TextEncoder().encode(buildMime(input)));

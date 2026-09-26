@@ -4,6 +4,7 @@ import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT } from '../src/conversati
 import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
+import { webSearchHandler } from '../src/tools/live/web-search';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' });
@@ -78,6 +79,30 @@ describe('runToolLoop', () => {
     expect(capped).toContain('[cut: 500 more characters not shown; narrow the request]');
     expect(capToolOutput('small')).toBe('small');
   });
+});
+
+describe('external taint through the model boundary', () => {
+  it('a successful external result keeps source_taint external in the JSON the model reads; internal results stay untainted', async () => {
+    const seen: (readonly LLMToolTurn[])[] = [];
+    const web = webSearchHandler('test-key', async () => Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } }));
+    const text = await runToolLoop({
+      handlers: [...handlers, web], ctx, maxSteps: 4,
+      step: async (_tools, turns) => {
+        seen.push(turns);
+        if (turns.length === 0) return { text: '', tool_calls: [{ call_id: 'c1', name: 'web_search', arguments: '{"query":"q"}' }] };
+        if (turns.length === 1) return { text: '', tool_calls: [{ call_id: 'c2', name: 'get_context', arguments: '{}' }] };
+        return { text: 'done' };
+      },
+    });
+    expect(text).toBe('done');
+    const webOut = JSON.parse(seen[1]![0]!.output);
+    expect(webOut.ok).toBe(true);
+    expect(webOut.source_taint).toBe('external'); // provider text never presents as internal truth
+    const internalOut = JSON.parse(seen[2]![1]!.output);
+    expect(internalOut.ok).toBe(true);
+    expect(internalOut.source_taint).toBeUndefined();
+  });
+
 });
 
 describe('reasoning passback', () => {
