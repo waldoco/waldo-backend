@@ -83,7 +83,9 @@ export const createTelegramResponder = (
     const adapter = gateway ?? new OpenAIResponsesAdapter({
       apiKey: openaiApiKey,
       onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; },
-      onErrorMetadata: (metadata) => { console.warn(JSON.stringify({ event: 'openai_provider_failure', trace, purpose, ...metadata })); },
+      onErrorMetadata: (metadata) => {
+        log({ trace, hop: 'llm_provider_failure', ms: 0, ok: false, code: metadata.code, detail: JSON.stringify({ purpose, ...metadata }) });
+      },
     });
     const result = await new RuntimeLLMProvider({ gateway: adapter, circuitBreaker }).complete({
       trigger: 'user_message',
