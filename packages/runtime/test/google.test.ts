@@ -242,11 +242,15 @@ describe('get_tasks', () => {
     expect(open[0]).toMatchObject({ title: 'Buy stamps', status: 'todo' });
     expect(open[1]).toMatchObject({ due: '2026-09-30T00:00:00Z' });
     expect(calls.at(-1)!.url).toContain('showCompleted=false');
+    expect(calls.at(-1)!.url).toContain('showHidden=false');
     const done = await client.tasks('done', 20);
     expect(done.map((task) => ({ id: task.id, status: task.status }))).toEqual([{ id: 't3', status: 'done' }]);
+    // first-party completed tasks require BOTH flags (Google tasks.list semantics)
     expect(calls.at(-1)!.url).toContain('showCompleted=true');
+    expect(calls.at(-1)!.url).toContain('showHidden=true');
     const all = await client.tasks('all', 20);
     expect(all.map((task) => task.id)).toEqual(['t1', 't2', 't3']);
+    expect(calls.at(-1)!.url).toContain('showHidden=true');
   });
 
   it('handler is registered, returns tasks, and notes the in-progress mapping honestly', async () => {

@@ -210,9 +210,14 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       // Google Tasks has no in-progress state: todo and in_progress both read the open list;
       // the handler says so on the result when the owner filtered for in_progress.
       const want = status === 'done' ? 'completed' : 'needsAction';
+      // First-party completed tasks only appear when BOTH showCompleted and showHidden are
+      // true (Google tasks.list hides completed-and-hidden items otherwise); open-only reads
+      // keep both false so deleted/hidden noise stays out.
+      const includeCompleted = status === 'done' || status === 'all';
       url.search = new URLSearchParams({
-        maxResults: String(limit), showHidden: 'false',
-        showCompleted: status === 'done' || status === 'all' ? 'true' : 'false',
+        maxResults: String(limit),
+        showHidden: includeCompleted ? 'true' : 'false',
+        showCompleted: includeCompleted ? 'true' : 'false',
       }).toString();
       const json = await call(url.toString()) as { items?: GoogleTask[] };
       return (json.items ?? [])
