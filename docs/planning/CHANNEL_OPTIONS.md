@@ -15,9 +15,10 @@ Own surface. Parallel track to all of the below; configures the same per-owner a
 
 ### iMessage
 - No official consumer API. Apple Messages for Business is built for brands (approved MSP, registered business, customer-initiated only) - wrong shape for a personal agent.
-- **Owner prototype + beta: mac-bridge.** BlueBubbles server on the spare iMac signed in to iMessage: REST API + webhooks to the Worker, reads the Messages database, sends via AppleScript. Reactions/tapbacks supported (matters for the P3 personality layer). The Mac must stay awake - BlueBubbles issue #750 documents inbound delivery stopping after Mac inactivity; power settings and a watchdog are part of the setup. AirMessage is the fallback; BlueBubbles is the more active project.
-- **Per-user production: hosted providers** (Sendblue, LoopMessage) run real Apple hardware with REST + webhooks; Sendblue lists webhooks on its $100/month tier. That is the scale route.
-- Risk: self-hosted bridging is outside Apple's terms for the host account; keep it to the owner's own Apple ID until the hosted route is justified.
+- **The model is single-identity (owner correction 2026-09-26, the Instinct model):** ONE waldo iMessage number/Apple ID that every user texts from their own Apple ID. Users bring their own devices; waldo only ever operates one line. User verification is matching the sender's phone number or Apple ID email to their dashboard account. No per-user hardware anywhere.
+- **Bridge: mac-bridge.** BlueBubbles server on one always-on Mac (the spare iMac works; any always-on macOS host does - it drives the Messages app, reads the Messages database, sends via AppleScript, exposes REST + webhooks to the Worker). Reactions/tapbacks supported (matters for the P3 personality layer). The Mac must stay awake - BlueBubbles issue #750 documents inbound delivery stopping after Mac inactivity; power settings and a watchdog are part of the setup. AirMessage is the fallback; BlueBubbles is the more active project.
+- **Scale question is single-line throughput, not per-user devices.** One always-on Mac serves all users at beta scale. At volume, hosted providers (Sendblue, LoopMessage) run real Apple hardware for one line with REST + webhooks (Sendblue lists webhooks on its $100/month tier) - that is the throughput route, still a single waldo identity.
+- Risk: self-hosted bridging is outside Apple's terms for the host account; the bridge identity is a dedicated waldo Apple ID, never a personal one.
 
 ### WhatsApp
 - Official route only: Cloud API (or a BSP such as Gupshup/Twilio for hand-holding). Unofficial libraries (Baileys, whatsapp-web.js, WAHA) risk non-deterministic number bans - never on a number that matters.
