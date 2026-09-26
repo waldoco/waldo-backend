@@ -77,6 +77,11 @@ export async function runToolLoop(input: Readonly<{
   const offered = new Set<string>();
   const noProgressTriples = new Map<string, number>();
   const noProgressBlocked = new Set<string>();
+  // Mutation-resets-streak (Hermes tool_guardrails.py: `_progress_since_failure`): a state change
+  // landing between repeats makes the next identical call a new experiment, not a loop. Waldo's
+  // mutation class is the autonomy-gated/privileged set (ADR-0049: direct external mutation or
+  // send). A successful gated call clears both no-progress maps.
+  const mutationTools = new Set(input.handlers.filter((h) => h.autonomy_gated).map((h) => h.name));
   let failedRounds = 0;
   for (let round = 0; ; round += 1) {
     const offer = tools.length > 0 && round < input.maxSteps && failedRounds < FAILED_ROUNDS_LIMIT;
@@ -106,6 +111,10 @@ export async function runToolLoop(input: Readonly<{
         }
       }
       seen.add(key);
+      if (result.ok && mutationTools.has(call.name as never)) {
+        noProgressTriples.clear();
+        noProgressBlocked.clear();
+      }
       if (!noProgressBlocked.has(stablePair)) {
         const triple = `${stablePair}\u0000${stabilize(JSON.stringify(result))}`;
         const hits = (noProgressTriples.get(triple) ?? 0) + 1;

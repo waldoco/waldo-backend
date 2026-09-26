@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionState, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
+import { buildSessionState, sendMessageArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
 import { capToolOutput, NO_PROGRESS_LIMIT, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
@@ -286,5 +286,67 @@ describe('refusals never feed the failure streak', () => {
     // refusal rounds: the streak only reached 1, never FAILED_ROUNDS_LIMIT, so the loop never
     // withdrew tools before the model chose to close.
     expect(offered).toEqual([true, true, true, true, true, true, true]);
+  });
+});
+
+describe('mutation-resets-streak (Hermes progress evidence)', () => {
+  it('a successful mutation clears no-progress tracking, so a repeated read is a new experiment', async () => {
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    const send = {
+      name: 'send_message' as const,
+      description: 'Queue a message.',
+      schema: sendMessageArgsSchema,
+      trigger_allowlist: triggerTypeSchema.options.filter((t) => TOOL_PERMISSIONS[t].includes('send_message')),
+      autonomy_gated: true,
+      handle: async () => ({ ok: true as const, data: { queued: true }, source_taint: null }),
+    };
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      // send_message is autonomy-gated, so the dispatcher's autonomy_gate_check hook needs a
+      // hasApproval source in ctx. This stub approves in-loop, matching the dispatcherContext
+      // shape in tool-dispatcher.test.ts; no real send occurs - the handler below is a stub.
+      handlers: [web, send as never], ctx: { ...ctx, hasApproval: () => true }, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        if (!tools) return { text: 'done.' };
+        // 3 searches differing only in a volatile cursor token: exact-dup never fires, but the
+        // stabilized triple repeats, so the pair is blocked after the 3rd result. Then a
+        // successful mutation lands - new state, new experiment - and the SAME search must
+        // dispatch again instead of refusing.
+        if (n <= 3) return { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] };
+        if (n === 4) return { text: '', tool_calls: [{ call_id: 'm1', name: 'send_message', arguments: '{"channel":"telegram","content":"hi","idempotency_key":"' + 'a'.repeat(64) + '"}' }] };
+        if (n === 5) return { text: '', tool_calls: [{ call_id: 's4', name: 'web_search', arguments: '{"query":"status cursor-token-9-abcdefgh"}' }] };
+        return { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(searched).toBe(4);
+    expect(outputs.some((o) => o.includes('No progress'))).toBe(false);
+  });
+
+  it('without an intervening mutation the 4th repeat is refused (control)', async () => {
+    let searched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => {
+      searched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+    });
+    let n = 0;
+    const outputs: string[] = [];
+    await runToolLoop({
+      handlers: [web], ctx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        return tools && n <= 4 ? { text: '', tool_calls: [{ call_id: `s${n}`, name: 'web_search', arguments: `{"query":"status cursor-token-${n}-abcdefgh"}` }] } : { text: 'done.' };
+      },
+    });
+    expect(searched).toBe(3);
+    expect(outputs[outputs.length - 1]).toContain('No progress');
   });
 });
