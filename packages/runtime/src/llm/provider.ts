@@ -8,6 +8,8 @@ import {
   SKILL_PROMPT_SERIALIZER_REVISION,
   isStructuralP6Route,
   p6ClampAction,
+  SANITISE_DESTINATION_POLICIES,
+  deriveContextBudgetChars,
   sanitiseFailureReasonSchema,
   sanitiseInputSchema,
   sanitiseResultSchema,
@@ -1327,11 +1329,22 @@ async function sanitiseRequest(
     payload: unknown,
     destination: 'system_prompt' | 'internal_context',
   ): Promise<{ ok: true; payload: unknown } | { ok: false; error: HookHaltError }> => {
+    // Dynamic per-model context budget (owner decision 2026-09-26): the internal_context char
+    // budget derives from the REQUEST model's real context window, tighten-only against the
+    // pinned wire ceiling. system_prompt keeps the pinned policy unchanged.
+    const maxCharsOverride =
+      destination === 'internal_context'
+        ? deriveContextBudgetChars(
+            request.model,
+            SANITISE_DESTINATION_POLICIES.internal_context.max_chars,
+          )
+        : undefined;
     const input = sanitiseInputSchema.safeParse({
       payload,
       destination,
       canary_tokens: canaryTokens,
       source_taint: sourceTaint.data,
+      max_chars_override: maxCharsOverride,
     });
     if (!input.success) {
       return {

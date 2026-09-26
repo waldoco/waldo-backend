@@ -2,6 +2,7 @@ export * from './core/error';
 export * from './core/hooks';
 export * from './core/trigger';
 export * from './model/roster';
+export * from './model/context-budget';
 export * from './health/crs';
 export * from './memory/pattern-id';
 export * from './memory/trust';

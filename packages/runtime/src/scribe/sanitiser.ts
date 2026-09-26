@@ -851,6 +851,10 @@ function applyDestinationPolicy(
   redactions: Redaction[],
 ): SanitiseResult {
   const policy: SanitiseDestinationPolicy = SANITISE_DESTINATION_POLICIES[input.destination];
+  // Dynamic per-model budget (owner-ratified 2026-09-26): an optional caller override shrinks the
+  // char budget below the pinned wire ceiling - never above it (min() here IS the tighten-only
+  // rule). Only max_chars is overridable; depth/field/item structure limits stay pinned.
+  const maxChars = Math.min(policy.max_chars, input.max_chars_override ?? policy.max_chars);
   const isText = typeof payload === 'string';
   const isStructured = typeof payload === 'object' && payload !== null;
   if (
@@ -870,14 +874,14 @@ function applyDestinationPolicy(
 
   const serialized = isText ? payload : JSON.stringify(payload);
   let boundedPayload = payload;
-  if (serialized.length > policy.max_chars) {
+  if (serialized.length > maxChars) {
     if (input.destination !== 'sandbox_stdout') {
       return deny('size_cap', 'oversize');
     }
     if (isText) {
-      boundedPayload = `${payload.slice(0, policy.max_chars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
+      boundedPayload = `${payload.slice(0, maxChars - TRUNCATION_MARKER.length)}${TRUNCATION_MARKER}`;
     } else {
-      const truncated = truncateSandboxStructuredStdout(payload, policy.max_chars);
+      const truncated = truncateSandboxStructuredStdout(payload, maxChars);
       if (truncated === undefined) return deny('size_cap', 'oversize');
       boundedPayload = truncated;
     }
