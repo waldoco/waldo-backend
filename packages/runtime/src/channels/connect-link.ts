@@ -5,8 +5,8 @@
 // The ticket rides in the `t` query parameter, never the URL path: edge observability
 // (Workers Logs, traces) captures request URLs and only query-string redaction is supported,
 // so a path-borne bearer ticket would land in persisted logs. The legacy /c/<ticket> path
-// form is still accepted so links minted before the cutover keep working until their 12h TTL
-// lapses; nothing mints it anymore.
+// form is REJECTED (not resolved) so a stale link can never put its ticket into new logs;
+// tickets are single-session and expire within hours anyway.
 import { signedRpc, type OwnerDirectoryEnv } from '../identity/owner-directory';
 import { consentPage } from './google-oauth';
 
@@ -31,9 +31,9 @@ type ConnectEnv = OwnerDirectoryEnv & Readonly<{ TELEGRAM_OWNER_DO?: { idFromNam
 
 export const handleConnectTicket = async (request: Request, env: ConnectEnv): Promise<Response> => {
   const url = new URL(request.url);
-  const ticket =
-    url.searchParams.get('t') ??
-    (url.pathname.startsWith(CONNECT_LINK_PREFIX) ? url.pathname.slice(CONNECT_LINK_PREFIX.length) : '');
+  // Hard cutover: a path-borne ticket is never resolved - it must not enter fresh logs.
+  if (url.pathname.slice(CONNECT_LINK_PREFIX.length) !== '') return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
+  const ticket = url.searchParams.get('t') ?? '';
   if (!TICKET.test(ticket)) return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const call = signedRpc(env);
   const owners = env.TELEGRAM_OWNER_DO;

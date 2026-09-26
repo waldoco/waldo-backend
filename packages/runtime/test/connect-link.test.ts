@@ -99,10 +99,11 @@ describe('handleConnectTicket', () => {
     expect(JSON.parse(doCalls[0]!.body).ticket_hash).toBe(await ticketHash(TICKET));
   });
 
-  it('legacy /c/<ticket> path links still resolve until their TTL lapses', async () => {
-    const { response, rpcCalls } = await run(TICKET, { status: 'ok', do_name: '5458446350', provider: 'google', session: 's1' }, undefined, 'path');
-    expect(response.status).toBe(302);
-    expect(rpcCalls[0]!.args.p_ticket_hash).toBe(await ticketHash(TICKET));
+  it('legacy /c/<ticket> path links are rejected outright (never resolved, never logged anew)', async () => {
+    const { response, rpcCalls, doCalls } = await run(TICKET, { status: 'ok', do_name: '5458446350', provider: 'google', session: 's1' }, undefined, 'path');
+    expect(response.status).toBe(404);
+    expect(rpcCalls).toHaveLength(0);
+    expect(doCalls).toHaveLength(0);
   });
 
   it('DO mint failure -> failed page, never a naked 500', async () => {

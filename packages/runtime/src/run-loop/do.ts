@@ -3114,6 +3114,8 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
     // Keep the exact ephemeral synthesis envelope bounded before it crosses into the provider
     // runtime. Individual Composer and replay artifacts have their own limits; this closes the
     // aggregate amplification path across a multi-tool run without persisting the payload.
+    console.error('DIAG envelope bytes:', typeof observePayload === 'string' ? utf8ByteLengthWithinLimit(observePayload, 1 << 30) : 'n/a');
+    console.error('DIAGPROMPT>>>' + composition.prompt + '<<<END');
     if (
       typeof observePayload !== 'string' ||
       utf8ByteLengthWithinLimit(observePayload, TRUSTED_V2_SYNTHESIS_MESSAGE_MAX_UTF8_BYTES) ===
