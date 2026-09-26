@@ -25,6 +25,7 @@ import {
   type GatewayStep,
   type LLMRequest,
   type LLMResponse,
+  type LLMToolTurn,
   type ModelName,
   type ModelRoute,
   type Provider,
@@ -32,6 +33,7 @@ import {
   type RoutingPolicy,
   type SanitiseDestination,
   type SanitiseFailureReason,
+  type SourceTaint,
   type TrustedRunV2ProviderExecutionWitness,
 } from '@waldo/contracts';
 import {
@@ -1404,57 +1406,125 @@ async function sanitiseRequest(
       error: new HookHaltError('llm_provider', 'sanitised messages invalid', 'transient'),
     };
   }
-  // Per-item before per-batch: the batch sanitise caps the whole tool_turns array at the
-  // internal_context policy (32,768 chars), so one populated Google read day (inbox +
-  // calendar + tasks in the same turn) overflowed the batch and the old all-or-nothing
-  // degrade dropped EVERY result - the model then answered "nothing found" while the tools
-  // had returned data. Each turn now sanitises on its own; only an item that still fails
-  // soft is reduced or receipted, and a hard deny (canary/secret/health/injection) anywhere
-  // still fails the request closed, unchanged.
+  // Per-item before per-batch, then an aggregate pass over the final batch (owner review
+  // reconciliation of #204/#208/#209): the batch sanitise caps the whole tool_turns array at
+  // the internal_context policy, so one populated Google read day overflowed the batch and the
+  // old all-or-nothing degrade dropped EVERY result - the model answered "nothing found" with
+  // data in hand. Each turn now sanitises on its own; only an item that still fails soft is
+  // reduced or receipted; a hard deny (canary/secret/health/injection) anywhere still fails
+  // the request closed. The assembled batch is then re-sanitised as a whole, because batch
+  // injection scoring aggregates rule matches across turns and internal_context carries a
+  // total cap (#204). Aggregate OVERSIZE compacts the largest turn that carries a VERIFIED
+  // stored-output id down to a head + truthful receipt and retries; any other aggregate
+  // failure - or oversize with nothing left to compact - fails the request closed. No silent
+  // shedding, no unverified retrieval promises.
   let toolTurns: { ok: true; payload: unknown } | undefined;
   if (request.tool_turns !== undefined) {
-    const kept: LLMRequest['tool_turns'] & unknown[] = [];
-    for (const turn of request.tool_turns) {
-      // Dispatcher-derived provenance (owner finding on #204): a tool turn's taint comes
-      // from the dispatcher's own per-tool contract (EXTERNAL_ORIGIN_TOOLS), not from a
-      // blanket assignment - mutation acks (draft/send receipts) keep the run's taint,
-      // external-origin reads (web/mail/calendar/MCP/browse) carry 'external'.
-      const itemTaint = (EXTERNAL_ORIGIN_TOOLS as readonly string[]).includes(turn.call.name)
-        ? ('external' as const)
+    // A retrieval claim is made only from a verified stored-output id observed in the turn
+    // text: the tool-loop marker shape and the dispatcher offload JSON both carry it, while
+    // tool-loop.ts can also truncate WITHOUT storing - then the receipt says so instead of
+    // promising read_tool_output (owner review on #209).
+    const storedIdOf = (output: string): string | undefined =>
+      /"stored_output"\s*:\s*"([^"]+)"/.exec(output)?.[1] ??
+      /\[(?:full|partial) output stored as ([\w-]+):/.exec(output)?.[1];
+    // Dispatcher-derived provenance (owner finding on #204): a tool turn's taint comes from
+    // the dispatcher's own per-tool contract (EXTERNAL_ORIGIN_TOOLS), not from a blanket
+    // assignment - mutation acks keep the run taint, external-origin reads carry 'external'.
+    const turnTaint = (turn: LLMToolTurn): SourceTaint =>
+      (EXTERNAL_ORIGIN_TOOLS as readonly string[]).includes(turn.call.name)
+        ? 'external'
         : sourceTaint.data;
-      const single = await sanitiseValue([turn], 'internal_context', itemTaint);
+    // Typed safe receipt: the original call is NOT carried - its rejected arguments could
+    // carry exactly the content the scribe denied (owner review on #209). Call id and name
+    // survive; arguments are replaced, and the receipt itself is re-sanitised before it may
+    // enter the request. A receipt that cannot pass closes the request.
+    const omissionReceipt = async (
+      turn: LLMToolTurn,
+      reason: string,
+    ): Promise<{ ok: true; value: LLMToolTurn } | { ok: false; error: HookHaltError }> => {
+      const storedId = storedIdOf(turn.output);
+      const candidate: LLMToolTurn = {
+        call: { call_id: turn.call.call_id, name: turn.call.name, arguments: '{}' },
+        output:
+          `[waldo: this tool output was omitted by the scribe (${reason}); the tool DID return ${turn.output.length} characters - do not report it as empty. ` +
+          (storedId !== undefined
+            ? `The guarded output is stored as ${storedId}; page it with read_tool_output, or ask to narrow the request.]`
+            : 'No retrievable copy exists (the output was not stored); ask to narrow the request and re-run the tool.]'),
+      };
+      const checked = await sanitiseValue([candidate], 'internal_context', turnTaint(turn));
+      if (!checked.ok) return { ok: false, error: checked.error };
+      if (!Array.isArray(checked.payload) || checked.payload.length !== 1) {
+        return { ok: false, error: new HookHaltError('llm_provider', 'omission receipt invalid', 'transient') };
+      }
+      return { ok: true, value: checked.payload[0] as LLMToolTurn };
+    };
+    const kept: LLMToolTurn[] = [];
+    for (const turn of request.tool_turns) {
+      const single = await sanitiseValue([turn], 'internal_context', turnTaint(turn));
       if (single.ok && Array.isArray(single.payload) && single.payload.length === 1) {
-        kept.push(single.payload[0]);
+        kept.push(single.payload[0] as LLMToolTurn);
         continue;
       }
       if (!single.ok && !softScribe(single.error)) {
         return { ...single, scribeDestination: 'internal_context' };
       }
       const reason = !single.ok ? single.error.reason : 'scribe:shape_invalid';
-      // An oversize output keeps its leading JSON - the dispatcher writes the stored-output
-      // id and head at the start - with an explicit receipt appended, so the model can page
-      // the rest via read_tool_output instead of guessing at emptiness.
-      // Budget the head against what the re-sanitised item must still carry: the call
-      // arguments (up to 16,384) and the receipt itself, under the 32,768 policy.
+      // An oversize output keeps its leading text with an explicit receipt appended, so the
+      // model can page the rest via read_tool_output - but only when a stored-output id was
+      // actually verified in the text; otherwise the receipt says the tail is not retrievable.
+      const storedId = storedIdOf(turn.output);
       const head = turn.output.slice(0, Math.max(1_000, 24_000 - turn.call.arguments.length));
       const receipt =
-        `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. ` +
-        'The tool DID return data - do not report it as empty. Page the rest with read_tool_output using the stored output id above, or ask to narrow the request.]';
-      const reduced = await sanitiseValue([{ ...turn, output: `${head}${receipt}` }], 'internal_context', itemTaint);
+        storedId !== undefined
+          ? `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. The tool DID return data - do not report it as empty. The guarded output is stored as ${storedId}; page the rest with read_tool_output, or ask to narrow the request.]`
+          : `\n[waldo: this tool output was reduced by the scribe (${reason}); showing ${head.length} of ${turn.output.length} characters. The tool DID return data - do not report it as empty. The remainder was not stored and is NOT retrievable; ask to narrow the request and re-run the tool.]`;
+      const reduced = await sanitiseValue([{ ...turn, output: `${head}${receipt}` }], 'internal_context', turnTaint(turn));
       if (reduced.ok && Array.isArray(reduced.payload) && reduced.payload.length === 1) {
-        kept.push(reduced.payload[0]);
+        kept.push(reduced.payload[0] as LLMToolTurn);
         continue;
       }
       if (!reduced.ok && !softScribe(reduced.error)) {
         return { ...reduced, scribeDestination: 'internal_context' };
       }
-      kept.push({
-        call: turn.call,
-        output:
-          `[waldo: this tool output was omitted by the scribe (${reason}); the tool DID return ${turn.output.length} characters - do not report it as empty. ` +
-          'Page it with read_tool_output using the stored output id from the dispatcher result, or ask to narrow the request.]',
-      });
+      const receipted = await omissionReceipt(turn, !reduced.ok ? reduced.error.reason : reason);
+      if (!receipted.ok) return { ok: false, error: receipted.error, scribeDestination: 'internal_context' };
+      kept.push(receipted.value);
     }
+    // Aggregate pass (#204): per-item provenance never drops batch-level checks. The batch
+    // carries external taint if ANY kept turn is external-origin.
+    const batchTaint: SourceTaint = kept.some((turn) => turnTaint(turn) === 'external')
+      ? 'external'
+      : sourceTaint.data;
+    const COMPACT_HEAD = 4_000;
+    let batch = await sanitiseValue(kept, 'internal_context', batchTaint);
+    while (!batch.ok && batch.error.reason === 'scribe:oversize') {
+      // Compact the largest turn that carries a verified stored-output id.
+      let pick = -1;
+      for (let i = 0; i < kept.length; i += 1) {
+        if (storedIdOf(kept[i]!.output) === undefined) continue;
+        if (kept[i]!.output.length <= COMPACT_HEAD + 512) continue;
+        if (pick === -1 || kept[i]!.output.length > kept[pick]!.output.length) pick = i;
+      }
+      if (pick === -1) break;
+      const compactedId = storedIdOf(kept[pick]!.output)!;
+      const compacted: LLMToolTurn = {
+        ...kept[pick]!,
+        output:
+          `${kept[pick]!.output.slice(0, COMPACT_HEAD)}\n[waldo: this tool output was reduced by the scribe to fit the request budget; showing ${COMPACT_HEAD} characters. The tool DID return data - do not report it as empty. The guarded output is stored as ${compactedId}; page it with read_tool_output, or ask to narrow the request.]`,
+      };
+      const checkedItem = await sanitiseValue([compacted], 'internal_context', turnTaint(kept[pick]!));
+      if (!checkedItem.ok) return { ...checkedItem, scribeDestination: 'internal_context' };
+      if (!Array.isArray(checkedItem.payload) || checkedItem.payload.length !== 1) {
+        return {
+          ok: false,
+          error: new HookHaltError('llm_provider', 'compacted turn invalid', 'transient'),
+          scribeDestination: 'internal_context',
+        };
+      }
+      kept[pick] = checkedItem.payload[0] as LLMToolTurn;
+      batch = await sanitiseValue(kept, 'internal_context', batchTaint);
+    }
+    if (!batch.ok) return { ...batch, scribeDestination: 'internal_context' };
     toolTurns = { ok: true, payload: kept };
   }
   const parsed = llmRequestSchema.safeParse({

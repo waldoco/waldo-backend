@@ -1817,11 +1817,13 @@ describe('sanitiseRequest structural degradation', () => {
   });
 
   it('keeps every tool turn when populated Google reads overflow the batch policy together', async () => {
-    // Regression for the live break: two populated reads (~20k chars each) overflowed the
-    // 32,768-char internal_context batch policy as a SET, and the all-or-nothing degrade
-    // dropped both - the model answered "nothing found" with data in hand.
-    const busyInbox = JSON.stringify({ messages: [{ id: 'm1', from: 'a@b.co', subject: 'x'.repeat(19_500), snippet: 's', at: '2026-09-26T00:00:00Z' }] });
-    const busyCalendar = JSON.stringify({ events: [{ id: 'e1', summary: 'y'.repeat(19_500), start: '2026-09-26T10:00:00Z' }] });
+    // Regression for the live break: two populated reads overflowed the 32,768-char
+    // internal_context batch policy as a SET, and the all-or-nothing degrade dropped both -
+    // the model answered "nothing found" with data in hand. Per #204 + the #209 review, the
+    // final batch is re-sanitised as a whole; on aggregate oversize the turns carrying
+    // VERIFIED stored-output ids compact to heads + truthful receipts, and the turn survives.
+    const busyInbox = JSON.stringify({ ok: true, data: { stored_output: 'to-1', total_chars: 61_000, stored_chars: 61_000, truncated: false, head: `inbox ${'x'.repeat(19_500)}`, read_with: 'read_tool_output' } });
+    const busyCalendar = JSON.stringify({ ok: true, data: { stored_output: 'to-2', total_chars: 58_000, stored_chars: 58_000, truncated: false, head: `cal ${'y'.repeat(19_500)}`, read_with: 'read_tool_output' } });
     const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
     const provider = new RuntimeLLMProvider({ gateway });
     const result = await provider.complete(
@@ -1842,10 +1844,103 @@ describe('sanitiseRequest structural degradation', () => {
     expect(result.ok).toBe(true);
     const turns = gateway.requests[0]!.request.tool_turns;
     expect(turns).toHaveLength(2);
-    // Scribe redacts emails in external-tainted content, so assert the payloads survived
-    // rather than byte-equality.
-    expect(turns![0]!.output).toContain('x'.repeat(1_000));
-    expect(turns![1]!.output).toContain('y'.repeat(1_000));
+    // Both turns survive; compaction is minimal - the largest stored turn reduces to a head +
+    // truthful receipt naming its verified stored id, which is enough for the batch to pass
+    // the aggregate scribe pass. The other turn keeps its full content.
+    expect(turns![0]!.output).toContain('to-1');
+    expect(turns![1]!.output).toContain('to-2');
+    const receipts = turns!.filter((t) => t.output.includes('reduced by the scribe'));
+    expect(receipts.length).toBeGreaterThanOrEqual(1);
+    for (const receipt of receipts) expect(receipt.output).toContain('do not report it as empty');
+    const total = turns!.reduce((sum, t) => sum + t.output.length, 0);
+    expect(total).toBeLessThanOrEqual(32_768);
+  });
+
+  it('fails closed when the aggregate batch overflows and no turn carries a stored-output id', async () => {
+    // #204's rule kept: when the final batch cannot pass and nothing is truthfully
+    // compactible, the request fails closed rather than silently shedding turns.
+    const bigA = JSON.stringify({ messages: [{ id: 'm1', subject: 'x'.repeat(19_500) }] });
+    const bigB = JSON.stringify({ events: [{ id: 'e1', summary: 'y'.repeat(19_500) }] });
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'what does my day look like' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'get_communication', arguments: '{}' }, output: bigA },
+            { call: { call_id: 'c2', name: 'query_calendar', arguments: '{}' }, output: bigB },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(false);
+    expect(gateway.requests).toHaveLength(0);
+  });
+
+  it('omission receipts never carry the rejected call arguments to the gateway', async () => {
+    // #209 review: a soft-denied turn (triple-encoded health string -> invalid_payload) whose
+    // call arguments carry a canary-shaped string must not let the original arguments reach
+    // the gateway. The receipt keeps call id + name with arguments replaced.
+    const canaryShaped = 'aaaa0000bbbb1111';
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [{
+            call: { call_id: 'c1', name: 'web_search', arguments: JSON.stringify({ note: canaryShaped }) },
+            output: `out ${softBad}`,
+          }],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx(),
+    );
+    expect(result.ok).toBe(true);
+    const turns = gateway.requests[0]!.request.tool_turns;
+    expect(turns).toHaveLength(1);
+    expect(turns![0]!.call).toEqual({ call_id: 'c1', name: 'web_search', arguments: '{}' });
+    expect(turns![0]!.output).toContain('omitted by the scribe');
+    expect(JSON.stringify(gateway.requests[0]!.request.tool_turns)).not.toContain(canaryShaped);
+  });
+
+  it('fails closed with zero gateway calls when the aggregate batch pass hard-denies', async () => {
+    // Batch-level checks are real checks: a deny that only fires on the assembled batch
+    // closes the request even though every item passed alone.
+    const recording = (input: { payload: unknown; source_taint: 'external' | null }) => {
+      const payload = input.payload as unknown[];
+      if (Array.isArray(payload) && payload.length > 1 && payload.every((item) => typeof (item as { call?: unknown })?.call === 'object')) {
+        return { ok: false as const, check: 'canary_token' as const, reason: 'canary_leak' as const };
+      }
+      return { ok: true as const, payload: input.payload, source_taint: input.source_taint, redactions: [] };
+    };
+    const gateway = new ScriptedGateway((request) => ({ ok: true, data: response(request.request.model) }));
+    const provider = new RuntimeLLMProvider({ gateway });
+    const result = await provider.complete(
+      {
+        trigger: 'brief',
+        renderRequest: () => ({
+          messages: [{ role: 'user' as const, content: 'current question' }],
+          tool_turns: [
+            { call: { call_id: 'c1', name: 'web_search', arguments: '{}' }, output: 'first' },
+            { call: { call_id: 'c2', name: 'web_search', arguments: '{}' }, output: 'second' },
+          ],
+          max_tokens: 512,
+          temperature: 0.3,
+        }),
+      },
+      runtimeCtx({ sanitise: recording as never }),
+    );
+    expect(result.ok).toBe(false);
+    expect(gateway.requests).toHaveLength(0);
   });
 
   it('reduces a single oversize tool output to its head plus a receipt, preserving the stored-output id', async () => {
