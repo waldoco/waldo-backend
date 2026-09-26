@@ -15,6 +15,14 @@ export type OpenAIAdapterOptions = Readonly<{
   timeoutMs?: number;
   client?: OpenAIResponsesClient;
   onResponseMetadata?: (metadata: OpenAIResponseMetadata) => void;
+  onErrorMetadata?: (metadata: OpenAIErrorMetadata) => void;
+}>;
+
+export type OpenAIErrorMetadata = Readonly<{
+  model: ModelName;
+  status?: number;
+  kind: 'http' | 'timeout' | 'network' | 'unknown';
+  code: 'auth_failed' | 'not_found' | 'rate_limited' | 'oversize' | 'invalid_args' | 'transient';
 }>;
 
 export type OpenAIResponseMetadata = Readonly<{
@@ -31,10 +39,12 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   private readonly timeoutMs: number;
   private readonly missingKey: boolean;
   private readonly onResponseMetadata: ((metadata: OpenAIResponseMetadata) => void) | undefined;
+  private readonly onErrorMetadata: ((metadata: OpenAIErrorMetadata) => void) | undefined;
 
   constructor(options: OpenAIAdapterOptions) {
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.onResponseMetadata = options.onResponseMetadata;
+    this.onErrorMetadata = options.onErrorMetadata;
     this.missingKey = options.client === undefined && (options.apiKey?.trim().length ?? 0) === 0;
     this.client = options.client ?? (this.missingKey ? undefined : new OpenAI({
       apiKey: options.apiKey,
@@ -96,7 +106,11 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       });
       return { ok: true, data: parsed };
     } catch (error) {
-      return { ok: false, code: openAIErrorCode(error), error: 'OpenAI request failed' };
+      const code = openAIErrorCode(error);
+      const status = error instanceof OpenAI.APIError ? error.status : undefined;
+      const kind = status !== undefined ? 'http' : error instanceof Error && error.name === 'AbortError' ? 'timeout' : error instanceof OpenAI.APIConnectionError ? 'network' : 'unknown';
+      this.onErrorMetadata?.({ model: input.request.model, ...(status === undefined ? {} : { status }), kind, code });
+      return { ok: false, code, error: 'OpenAI request failed' };
     } finally {
       clearTimeout(timeout);
     }

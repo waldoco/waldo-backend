@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import OpenAI from 'openai';
 import {
   OPENAI_GPT_5_NANO_MODEL,
   OPENAI_PROVIDER,
@@ -171,6 +172,19 @@ describe('OpenAIResponsesAdapter', () => {
       code: 'transient',
       error: 'OpenAI request failed',
     });
+  });
+
+  it('reports safe provider status for failed live calls without exposing the error body', async () => {
+    let failure: unknown;
+    const adapter = new OpenAIResponsesAdapter({
+      apiKey: 'secret-test-key',
+      client: client(async () => { throw new OpenAI.APIError(402, { message: 'secret-test-key billing detail' }, 'secret-test-key billing detail', new Headers()); }),
+      onErrorMetadata: (value) => { failure = value; },
+    });
+
+    await expect(adapter.complete(gatewayRequest())).resolves.toEqual({ ok: false, code: 'transient', error: 'OpenAI request failed' });
+    expect(failure).toEqual({ model: OPENAI_GPT_5_NANO_MODEL, status: 402, kind: 'http', code: 'transient' });
+    expect(JSON.stringify(failure)).not.toContain('secret-test-key');
   });
 
   it('aborts a hung request at the adapter timeout', async () => {
