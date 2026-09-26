@@ -22,6 +22,11 @@ export type ConstellationNode = Readonly<{ id: number; domain: string; label: st
 export type ConstellationEdge = Readonly<{ from_id: number; to_id: number; relation: string; strength: number; evidence_count: number }>;
 type NewClaim = Readonly<{ kind: string; text: string; source: string; evidence: string }>;
 
+// Case-insensitive literal replace: the forgotten text may appear with different casing in
+// other stores, and SQLite replace() alone would leave those variants behind.
+const ciRedact = (value: string, needle: string, marker: string): string =>
+  needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
+
 export const FORGOTTEN = '[forgotten]';
 const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char}`);
 const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
@@ -37,6 +42,10 @@ export const claimStore = (sql: Sql) => {
   if (!sql.exec("SELECT name FROM pragma_table_info('forget_barriers')").toArray().some((col) => (col as { name: string }).name === 'topic_hash')) {
     sql.exec('ALTER TABLE forget_barriers ADD COLUMN topic_hash TEXT');
   }
+  // Legacy barriers carried the raw topic text and no hash. Barriers go back to the model in
+  // every memory pass, so redact the legacy topic to the marker - forgotten text must never
+  // re-enter a prompt. Hash matching is unaffected (legacy rows have no hash to match).
+  sql.exec('UPDATE forget_barriers SET topic = ? WHERE topic_hash IS NULL AND topic != ?', FORGOTTEN, FORGOTTEN);
   sql.exec('CREATE TABLE IF NOT EXISTS memory_backups (id INTEGER PRIMARY KEY AUTOINCREMENT, reason TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, created_at TEXT NOT NULL)');
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL, strength REAL NOT NULL,
@@ -130,17 +139,51 @@ export const claimStore = (sql: Sql) => {
       const hasEpisodes = tableExists(sql, 'episodes');
       const hasSpots = tableExists(sql, 'spots');
       const hasRevisions = tableExists(sql, 'core_file_revisions');
+      // SQLite LIKE is case-insensitive but replace() is case-sensitive: a casing variant of
+      // the forgotten text would match the predicate yet survive the redaction. Fetch the
+      // matching rows and redact in JS with a case-insensitive literal replace instead.
       for (const text of texts) {
         const like = `%${likeEscape(text)}%`;
+        const ci = (value: string) => ciRedact(value, text, FORGOTTEN);
         // Episodes and spots are append-only history: rows are redacted in place, never
         // deleted, so the record's shape survives while the forgotten text does not.
-        if (hasEpisodes) attempt('episodes', () => sql.exec(`UPDATE episodes SET text = replace(text, ?, ?) WHERE text LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like));
-        attempt('memory_backups', () => sql.exec(`UPDATE memory_backups SET payload = replace(payload, ?, ?) WHERE payload LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like));
-        if (hasSpots) attempt('legacy_spots', () => sql.exec(`UPDATE spots SET text = replace(text, ?, ?), evidence = replace(evidence, ?, ?) WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
-        if (hasRevisions) attempt('legacy_core_files', () => sql.exec(`UPDATE core_file_revisions SET content = replace(content, ?, ?) WHERE content LIKE ? ESCAPE '\\'`, text, FORGOTTEN, like));
+        if (hasEpisodes) attempt('episodes', () => {
+          for (const row of sql.exec<{ rid: number; text: string }>(`SELECT rowid AS rid, text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.text);
+            if (redacted !== row.text) sql.exec('UPDATE episodes SET text = ? WHERE rowid = ?', redacted, row.rid);
+          }
+        });
+        attempt('memory_backups', () => {
+          for (const row of sql.exec<{ rid: number; payload: string }>(`SELECT id AS rid, payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.payload);
+            if (redacted !== row.payload) sql.exec('UPDATE memory_backups SET payload = ? WHERE id = ?', redacted, row.rid);
+          }
+        });
+        if (hasSpots) attempt('legacy_spots', () => {
+          for (const row of sql.exec<{ rid: number; text: string; evidence: string }>(`SELECT id AS rid, text, evidence FROM spots WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, like, like).toArray()) {
+            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence);
+            if (redactedText !== row.text || redactedEvidence !== row.evidence) sql.exec('UPDATE spots SET text = ?, evidence = ? WHERE id = ?', redactedText, redactedEvidence, row.rid);
+          }
+        });
+        if (hasRevisions) attempt('legacy_core_files', () => {
+          for (const row of sql.exec<{ f: string; rev: number; content: string }>(`SELECT file AS f, revision AS rev, content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.content);
+            if (redacted !== row.content) sql.exec('UPDATE core_file_revisions SET content = ? WHERE file = ? AND revision = ?', redacted, row.f, row.rev);
+          }
+        });
         // Other claims may quote the forgotten text in their own text or evidence.
-        attempt('surviving_claims', () => sql.exec(`UPDATE claims SET text = replace(text, ?, ?), evidence = replace(evidence, ?, ?) WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, text, FORGOTTEN, text, FORGOTTEN, like, like, ...idList));
-        attempt('constellation_nodes', () => sql.exec(`UPDATE constellation_nodes SET label = replace(label, ?, ?), summary = replace(summary, ?, ?) WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, text, FORGOTTEN, text, FORGOTTEN, like, like));
+        attempt('surviving_claims', () => {
+          for (const row of sql.exec<{ rid: number; text: string; evidence: string }>(`SELECT id AS rid, text, evidence FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, like, like, ...idList).toArray()) {
+            const redactedText = ci(row.text); const redactedEvidence = ci(row.evidence);
+            if (redactedText !== row.text || redactedEvidence !== row.evidence) sql.exec('UPDATE claims SET text = ?, evidence = ? WHERE id = ?', redactedText, redactedEvidence, row.rid);
+          }
+        });
+        attempt('constellation_nodes', () => {
+          for (const row of sql.exec<{ id: number; label: string; summary: string }>(`SELECT id, label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray()) {
+            const redactedLabel = ci(row.label); const redactedSummary = ci(row.summary);
+            if (redactedLabel !== row.label || redactedSummary !== row.summary) sql.exec('UPDATE constellation_nodes SET label = ?, summary = ? WHERE id = ?', redactedLabel, redactedSummary, row.id);
+          }
+        });
       }
       attempt('constellation_refs', () => {
         for (const node of sql.exec<ConstellationNode>('SELECT * FROM constellation_nodes').toArray()) {
@@ -149,10 +192,23 @@ export const claimStore = (sql: Sql) => {
           if (kept.length !== spots.length) sql.exec('UPDATE constellation_nodes SET supporting_spots = ? WHERE id = ?', JSON.stringify(kept), node.id);
         }
       });
-      // Settle LAST: the claim row and its pending marker are removed only when every store is
-      // clean. A failure anywhere leaves both behind, so 'try again' is honest - a retry finds
-      // the source text intact and the already-redacted stores are idempotent no-ops.
-      if (failed.length === 0) {
+      const remaining: Record<string, number> = {};
+      for (const text of texts) {
+        const like = `%${likeEscape(text)}%`;
+        const add = (store: string, n: number) => { if (n > 0) remaining[store] = (remaining[store] ?? 0) + n; };
+        // The purged claims themselves still hold their text until settle below - exclude them.
+        add('claims', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, like, like, ...idList).one().n);
+        if (hasEpisodes) add('episodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
+        add('memory_backups', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like, ).one().n);
+        if (hasSpots) add('legacy_spots', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
+        if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
+        add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
+      }
+      // Settle LAST, after verification: the claim row and its pending marker are removed only
+      // when every store is clean AND the survivor scan is empty. Any failure or survivor
+      // leaves both behind, so 'try again' is honest - a retry finds the source text intact
+      // and the already-redacted stores are idempotent no-ops.
+      if (failed.length === 0 && Object.keys(remaining).length === 0) {
         for (const claim of forgotten) {
           attempt('claims', () => {
             sql.exec('DELETE FROM claims WHERE id = ?', claim.id);
@@ -160,18 +216,7 @@ export const claimStore = (sql: Sql) => {
           });
         }
       }
-      const remaining: Record<string, number> = {};
-      for (const text of texts) {
-        const like = `%${likeEscape(text)}%`;
-        const add = (store: string, n: number) => { if (n > 0) remaining[store] = (remaining[store] ?? 0) + n; };
-        add('claims', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\'`, like, like).one().n);
-        if (hasEpisodes) add('episodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
-        add('memory_backups', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like, ).one().n);
-        if (hasSpots) add('legacy_spots', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
-        if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
-        add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
-      }
-      return { removed: forgotten.length, remaining, texts, failed };
+      return { removed: failed.length === 0 && Object.keys(remaining).length === 0 ? forgotten.length : 0, remaining, texts, failed };
     },
   };
 };

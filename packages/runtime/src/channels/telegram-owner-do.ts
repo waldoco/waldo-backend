@@ -856,18 +856,26 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
           identity.put('timezone', value);
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
-          const claim = memory.claims().find((row) => row.id === spotId);
+          // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
+          // must be able to select it. Dismiss/confirm stay active-only.
+          const claim = memory.claims().find((row) => row.id === spotId)
+            ?? (action === 'spot.forget' ? memory.claims('purging').find((row) => row.id === spotId) : undefined);
           if (!claim) return false;
           if (action === 'spot.dismiss') memory.setStatus(spotId, 'dismissed');
           else if (action === 'spot.confirm') memory.confirm(spotId, 'owner, console', new Date(now).toISOString());
           else {
             const result = memory.purge([spotId], new Date(now).toISOString());
+            let kvRemaining = 0;
             if (result.texts.length) {
-              await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN);
+              // KV stores are part of the verdict: the SQL stores being clean is not the whole
+              // settlement. The tool-output ledger collapses any surviving summary to the
+              // marker, so a touched row is a redacted row there.
+              kvRemaining += (await redactConversationEntries(this.ctx.storage, result.texts, FORGOTTEN)).remaining;
               await redactToolOutputLedger(this.ctx.storage, result.texts, FORGOTTEN);
             }
-            if (result.failed.length || Object.keys(result.remaining).length) {
-              log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: `spot.forget purge_incomplete: ${[...result.failed, ...Object.keys(result.remaining)].join(',')}` });
+            if (result.failed.length || Object.keys(result.remaining).length || kvRemaining > 0) {
+              const detail = [...result.failed, ...Object.keys(result.remaining), ...(kvRemaining ? ['conversation'] : [])].join(',');
+              log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: `spot.forget purge_incomplete: ${detail}` });
               return 'spot.forget.incomplete';
             }
           }
@@ -876,8 +884,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           if (!node) return false;
           memory.forgetNode(spotId);
           memory.barrier(node.label, new Date(now).toISOString());
-          await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
+          const conv = await redactConversationEntries(this.ctx.storage, [node.label], FORGOTTEN);
           await redactToolOutputLedger(this.ctx.storage, [node.label], FORGOTTEN);
+          if (conv.remaining > 0) log({ trace: `console:${now}`, hop: 'console_action', ms: 0, ok: false, detail: 'node.forget conversation redaction incomplete' });
         } else if (action === 'file.remove') {
           if (!files.remove(spotId)) return false;
         } else if (action === 'google.disconnect') {

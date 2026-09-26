@@ -107,6 +107,41 @@ describe('forget coverage', () => {
     });
   });
 
+  it('case-variant quoting is redacted too: LIKE matches it, so redaction must as well', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const forgottenId = Number(
+        sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id,
+      );
+      // A casing variant of the forgotten text in another claim: SQLite LIKE matches it,
+      // but a plain replace() would leave it intact while the source claim settles away.
+      const variant = CLAIM_TEXT.toUpperCase();
+      sql.exec(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', ?, ?, ?)`,
+        'Owner likes morning runs', `heard "${variant}" once`, AT, AT);
+      const result = applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
+      }), AT);
+      expect(result).toContain('purged');
+      // The variant is gone AND the source settled - no half-forgotten state.
+      expect(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE evidence LIKE ?`, `%${variant}%`).one().n).toBe(0);
+      expect(sql.exec<{ evidence: string }>(`SELECT evidence FROM claims WHERE text = 'Owner likes morning runs'`).one().evidence).toContain(FORGOTTEN);
+      expect(store.claims().map((claim) => claim.id)).not.toContain(forgottenId);
+    });
+  });
+
+  it('legacy barrier rows with raw topic text are redacted on load and never reach the prompt', async () => {
+    await withSql((sql) => {
+      // Pre-migration shape: raw topic, no hash. Recreate against a fresh store so the
+      // migration in claimStore() runs over it.
+      sql.exec('CREATE TABLE IF NOT EXISTS forget_barriers (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, topic_hash TEXT, created_at TEXT NOT NULL)');
+      sql.exec(`INSERT INTO forget_barriers (topic, topic_hash, created_at) VALUES (?, NULL, ?)`, `the ${MARKER} topic`, AT);
+      const store = claimStore(sql);
+      expect(sql.exec<{ topic: string }>('SELECT topic FROM forget_barriers').toArray().map((row) => row.topic)).toEqual([FORGOTTEN]);
+      expect(barrierPrompt(store)).not.toContain(MARKER);
+      expect(barrierPrompt(store)).toContain('a removed item');
+    });
+  });
+
   it('a model-supplied forget_topic is never stored or shown back - barrier holds marker + fingerprint only', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
