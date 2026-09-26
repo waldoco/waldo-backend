@@ -80,7 +80,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     undo_json TEXT, created_at INTEGER NOT NULL, decided_at INTEGER)`);
   // Account pinning (#202): the opaque connection id that handled an approved send is stored
   // here, so reconciliation checks THAT SAME account. It never appears in owner text or logs.
-  try { sql.exec('ALTER TABLE ledger ADD COLUMN connection TEXT'); } catch { /* column already present */ }
+  // Check the column instead of blanket-catching the ALTER: a real migration error must fail
+  // loudly here, not later in the send path.
+  const hasConnection = sql.exec("PRAGMA table_info(ledger)").toArray().some((col) => (col as { name?: string }).name === 'connection');
+  if (!hasConnection) sql.exec('ALTER TABLE ledger ADD COLUMN connection TEXT');
   const when = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: deps.timezone, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
   const describe = (p: ProposeCalendarChangeArgs) => {
     const name = p.title ? `"${p.title}"` : 'the event';

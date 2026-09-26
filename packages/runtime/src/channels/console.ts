@@ -132,6 +132,9 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'approval.unconfirmed': 'Send unconfirmed. Check Sent, then use Check Sent or mark it not sent.',
   'approval.closed': 'Marked as not sent.',
   'approval.handled': 'Already handled.',
+  'approval.failed': 'That did not work. Check Telegram or try again.',
+  'approval.offline': 'Google is not connected. Reconnect it, then try again.',
+  'approval.unavailable': 'The Google account that handled this send is unavailable. Reconnect it or check Sent yourself.',
   'approval.other': 'Done. Telegram has the details.',
 };
 
@@ -145,6 +148,9 @@ const APPROVAL_REDIRECT_CODES: Readonly<Record<string, string>> = {
   'Not in Sent yet': 'approval.unconfirmed',
   'Marked as not sent': 'approval.closed',
   'Already handled.': 'approval.handled',
+  'That failed': 'approval.failed',
+  'Google is not connected': 'approval.offline',
+  'Account unavailable': 'approval.unavailable',
 };
 
 export function approvalRedirectCode(toast: string): string {

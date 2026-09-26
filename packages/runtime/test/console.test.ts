@@ -191,12 +191,23 @@ describe('owner console', () => {
 describe('approvalRedirectCode privacy boundary', () => {
   it('never carries decision message content into the redirect code', () => {
     const marker = 'PRIVATE-SUBJECT-cat-facts-to-alice@example.com';
-    for (const toast of ['Sent', 'Found in Sent', 'Send unconfirmed', 'Not in Sent yet', 'Marked as not sent', 'Already handled.', marker]) {
+    for (const toast of ['Sent', 'Found in Sent', 'Send unconfirmed', 'Not in Sent yet', 'Marked as not sent', 'Already handled.', 'That failed', 'Google is not connected', 'Account unavailable', marker]) {
       const code = approvalRedirectCode(toast);
       expect(code).not.toContain(marker);
       expect(code).toMatch(/^approval\.[a-z]+$/);
       expect(NOTICES[code]).toBeTruthy();
       expect(NOTICES[code]).not.toContain(marker);
     }
+  });
+});
+
+describe('console approval notices stay truthful on failure', () => {
+  it('failure classes never render the Done fallback', () => {
+    expect(approvalRedirectCode('That failed')).toBe('approval.failed');
+    expect(approvalRedirectCode('Google is not connected')).toBe('approval.offline');
+    expect(approvalRedirectCode('Account unavailable')).toBe('approval.unavailable');
+    expect(NOTICES['approval.failed']).not.toContain('Done');
+    expect(NOTICES['approval.offline']).not.toContain('Done');
+    expect(NOTICES['approval.unavailable']).not.toContain('Done');
   });
 });
