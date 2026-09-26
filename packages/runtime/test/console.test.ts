@@ -211,6 +211,42 @@ describe('console approval notices stay truthful on failure', () => {
     expect(NOTICES['approval.unavailable']).not.toContain('Done');
   });
 
+  it('maps every toast approvals.ts can emit - exhaustively - and keeps unknowns neutral', () => {
+    // Owner re-review on #202: mirror of every `toast:` literal in channels/approvals.ts.
+    // Each must land on a specific accurate code; only a genuinely unknown toast may fall
+    // through to the neutral approval.other.
+    const emitted: ReadonlyArray<readonly [string, string]> = [
+      ['Sent', 'approval.sent'],
+      ['Found in Sent', 'approval.found'],
+      ['Send unconfirmed', 'approval.unconfirmed'],
+      ['Not in Sent yet', 'approval.unconfirmed'],
+      ['Marked as not sent', 'approval.closed'],
+      ['Already handled.', 'approval.handled'],
+      ['That failed', 'approval.failed'],
+      ['Google is not connected', 'approval.offline'],
+      ['Account unavailable', 'approval.unavailable'],
+      ['This proposal expired', 'approval.expired'],
+      ['Email changed', 'approval.changed'],
+      ['The event changed', 'approval.changed'],
+      ['Not now', 'approval.skipped'],
+      ['Tell me what to change', 'approval.change'],
+      ["Can't be undone", 'approval.cannotundo'],
+      ['Undone', 'approval.undone'],
+      ['Too late to undo', 'approval.toolate'],
+      ['Browsing is not set up', 'approval.nobrowsing'],
+      ['Done', 'approval.other'],
+    ];
+    for (const [toast, code] of emitted) {
+      expect(approvalRedirectCode(toast), `toast "${toast}"`).toBe(code);
+      expect(NOTICES[code], `notice for ${code}`).toBeTruthy();
+    }
+    // The three previously unmapped outcomes must not claim completion:
+    expect(NOTICES['approval.toolate']).toContain('Nothing was changed');
+    expect(NOTICES['approval.nobrowsing']).toContain('Nothing happened');
+    expect(NOTICES['approval.undone']).toBe('Undone.');
+    expect(approvalRedirectCode('some unknown toast')).toBe('approval.other');
+  });
+
   it('expired, changed, skipped and change-request outcomes get their own accurate statuses', () => {
     // Owner review on #202: these fell into a fallback that claimed "Telegram has the details"
     // while the console action only redirects. Each outcome now says what actually happened.

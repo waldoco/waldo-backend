@@ -292,6 +292,20 @@ describe('calendar pagination', () => {
     expect(page.complete).toBe(true);
   });
 
+  it('marks coverage partial when the requested limit is reached but a next page exists', async () => {
+    // Owner re-review on #202: hitting the requested limit with a nextPageToken still
+    // outstanding means more matching events may exist - complete must be false.
+    const event = (id: string) => ({ id, summary: 'Standup', status: 'confirmed', start: { dateTime: '2026-09-23T10:00:00+05:30' }, end: { dateTime: '2026-09-23T10:30:00+05:30' } });
+    const full = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      return Promise.resolve(Response.json({ items: [event('e1'), event('e2')], nextPageToken: 'p2' }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, full).events('2026-09-23T00:00:00+05:30', '2026-09-24T00:00:00+05:30', 2, false);
+    expect(page.items.map((item) => item.id)).toEqual(['e1', 'e2']);
+    expect(page.complete).toBe(false);
+  });
+
   it('marks coverage partial when the page bound trips with more pages remaining', async () => {
     let fetches = 0;
     const endless = ((url: string | URL) => {
@@ -339,6 +353,19 @@ describe('get_tasks', () => {
     const page = await googleClient(app, { refresh_token: 'rt' }, paged).tasks('todo', 20);
     expect(page.items.map((task) => task.id)).toEqual(['open1']);
     expect(page.complete).toBe(true);
+  });
+
+  it('marks coverage partial when the requested limit is reached but a next page exists', async () => {
+    // Owner re-review on #202: same rule as Calendar - limit reached with a live
+    // nextPageToken means the answer is partial, not complete.
+    const full = ((url: string | URL) => {
+      const u = String(url);
+      if (u.startsWith('https://oauth2.googleapis.com/token')) return Promise.resolve(Response.json({ access_token: 'at' }));
+      return Promise.resolve(Response.json({ items: [{ id: 'k1', status: 'needsAction', title: 'One' }, { id: 'k2', status: 'needsAction', title: 'Two' }], nextPageToken: 'p2' }));
+    }) as typeof fetch;
+    const page = await googleClient(app, { refresh_token: 'rt' }, full).tasks('todo', 2);
+    expect(page.items.map((task) => task.id)).toEqual(['k1', 'k2']);
+    expect(page.complete).toBe(false);
   });
 
   it('handler is registered, returns tasks, and notes the in-progress mapping honestly', async () => {

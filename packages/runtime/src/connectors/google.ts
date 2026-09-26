@@ -200,7 +200,6 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       // more pages remaining, complete=false says the coverage is partial.
       const kept: GoogleEvent[] = [];
       let pageToken: string | undefined;
-      let complete = true;
       for (let page = 0; page < GOOGLE_MAX_PAGES; page += 1) {
         const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
         url.search = new URLSearchParams({ timeMin: from, timeMax: to, singleEvents: 'true', orderBy: 'startTime', maxResults: String(limit), ...(pageToken ? { pageToken } : {}) }).toString();
@@ -212,10 +211,11 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         );
         pageToken = json.nextPageToken;
         if (!pageToken || kept.length >= limit) break;
-        if (page === GOOGLE_MAX_PAGES - 1) complete = false;
       }
-      if (pageToken && kept.length < limit) complete = false;
-      return { items: kept.slice(0, limit).map(toItem), complete };
+      // complete means the provider was EXHAUSTED (owner re-review on #202): a nextPageToken
+      // left over - whether the loop stopped on the requested limit or the page bound - means
+      // more matching items may exist beyond what was fetched, so the answer is partial.
+      return { items: kept.slice(0, limit).map(toItem), complete: !pageToken };
     },
     async changedEvents(since, from, to) {
       const url = new URL(EVENTS);
@@ -255,7 +255,6 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       // the list is truly exhausted - one filtered page is not the whole answer.
       const kept: GoogleTask[] = [];
       let pageToken: string | undefined;
-      let complete = true;
       for (let page = 0; page < GOOGLE_MAX_PAGES; page += 1) {
         const paged = new URL(url.toString());
         if (pageToken) paged.searchParams.set('pageToken', pageToken);
@@ -263,15 +262,16 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         kept.push(...(json.items ?? []).filter((task) => status === 'all' || task.status === want));
         pageToken = json.nextPageToken;
         if (!pageToken || kept.length >= limit) break;
-        if (page === GOOGLE_MAX_PAGES - 1) complete = false;
       }
-      if (pageToken && kept.length < limit) complete = false;
+      // complete means the provider was EXHAUSTED (owner re-review on #202): a nextPageToken
+      // left over - whether the loop stopped on the requested limit or the page bound - means
+      // more matching items may exist beyond what was fetched, so the answer is partial.
       return {
         items: kept.slice(0, limit).map((task) => ({
           id: task.id, title: task.title ?? '(no title)', status: task.status === 'completed' ? 'done' as const : 'todo' as const,
           ...(task.due ? { due: task.due } : {}), ...(task.updated ? { updated: task.updated } : {}),
         })),
-        complete,
+        complete: !pageToken,
       };
     },
     async draft(input) {

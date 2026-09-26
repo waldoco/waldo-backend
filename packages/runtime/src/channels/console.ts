@@ -140,8 +140,12 @@ export const NOTICES: Readonly<Record<string, string>> = {
   'approval.skipped': 'Skipped. Nothing changed.',
   'approval.change': 'Nothing changed yet. Tell Waldo what to change.',
   'approval.cannotundo': 'A sent email cannot be undone. Nothing was reversed.',
+  'approval.undone': 'Undone.',
+  'approval.toolate': 'Too late to undo. Nothing was changed.',
+  'approval.nobrowsing': 'Browsing is not set up on this Waldo. Nothing happened.',
   // Neutral by contract: the console action redirects without any Telegram delivery, so no
-  // status here may claim Telegram has details (owner review on #202).
+  // status here may claim Telegram has details (owner review on #202). The fallback stays
+  // neutral for unknown outcomes; every toast approvals.ts can emit is mapped explicitly.
   'approval.other': 'Done.',
 };
 
@@ -164,6 +168,9 @@ const APPROVAL_REDIRECT_CODES: Readonly<Record<string, string>> = {
   'Not now': 'approval.skipped',
   'Tell me what to change': 'approval.change',
   "Can't be undone": 'approval.cannotundo',
+  'Undone': 'approval.undone',
+  'Too late to undo': 'approval.toolate',
+  'Browsing is not set up': 'approval.nobrowsing',
 };
 
 export function approvalRedirectCode(toast: string): string {
