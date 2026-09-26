@@ -14,6 +14,7 @@ const DEFAULT_PROACTIVITY: Proactivity = { quiet_start: null, quiet_end: null, v
 export const loopBook = (sql: Sql, deps: Readonly<{ newId(): string; now(): number }>) => {
   sql.exec(`CREATE TABLE IF NOT EXISTS loops (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, due TEXT, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, closed_at INTEGER)`);
+  sql.exec('CREATE INDEX IF NOT EXISTS loops_status_due_idx ON loops (status, due)');
   sql.exec('CREATE TABLE IF NOT EXISTS proactivity (id INTEGER PRIMARY KEY CHECK (id = 1), settings TEXT NOT NULL)');
   return {
     open(args: OpenLoopArgs): Loop {
