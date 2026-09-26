@@ -74,7 +74,7 @@ export const runScenario = async (scenario: Scenario): Promise<ScenarioRun> => {
   const connectOffers: ConnectIntent[] = [];
   const google = {
     client: scenario.fixtures?.googleNotConnected ? async () => null : async () => ({
-      events: async () => events,
+      events: async () => ({ items: events, complete: true }),
       event: async (id: string) => events.find((event) => event.id === id)!,
       newMail: async () => scenario.fixtures?.mail ?? [],
       changedEvents: async () => [],
