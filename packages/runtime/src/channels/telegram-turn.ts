@@ -65,12 +65,14 @@ export const createTelegramResponder = (
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
   const policy = routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
+  const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const safety = {
     authenticatedUserId: ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null,
     sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
+    // Typed store provenance for the provider's retrieval receipts (owner review on #212).
+    ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
-  const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const handlers = [getContextHandler(clock), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
     const started = Date.now();

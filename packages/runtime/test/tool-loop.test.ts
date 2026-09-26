@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionState, type LLMTool, type LLMToolTurn } from '@waldo/contracts';
-import { capToolOutput, runToolLoop, TOOL_OUTPUT_LIMIT } from '../src/conversation/tool-loop';
+import { capToolOutput, NO_PROGRESS_LIMIT, runToolLoop, TOOL_OUTPUT_LIMIT, WARN_WINDOW_ROUNDS } from '../src/conversation/tool-loop';
 import { googleHandlers } from '../src/tools/live/google';
 import { resolveRunLoopAdapters } from '../src/run-loop/adapters';
 import { getContextHandler } from '../src/tools/live/get-context';
@@ -168,5 +168,123 @@ describe('runToolLoop connect intents', () => {
     });
     expect(JSON.parse(outputs[0]!)).toMatchObject({ ok: false, connect: { status: 'auth_required', service: 'google' } });
     expect(outputs[0]).not.toMatch(/https?:|state=/);
+  });
+});
+
+describe('warn-first budget notice and semantic no-progress', () => {
+  const okFetcher = async (): Promise<Response> =>
+    Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D' }] } });
+
+  it('attaches a remaining-rounds notice inside the last WARN_WINDOW_ROUNDS rounds and still hard-stops at the cap', async () => {
+    const web = webSearchHandler('test-key', okFetcher);
+    const seenAt: string[][] = [];
+    let n = 0;
+    const maxSteps = WARN_WINDOW_ROUNDS + 3;
+    const text = await runToolLoop({
+      handlers: [web], ctx, maxSteps,
+      step: async (tools, turns) => {
+        seenAt.push(turns.map((t) => t.output));
+        n += 1;
+        return tools ? { text: '', tool_calls: [{ call_id: `w${n}`, name: 'web_search', arguments: `{"query":"topic ${n}"}` }] } : { text: 'wrapped up.' };
+      },
+    });
+    expect(text).toBe('wrapped up.');
+    expect(seenAt[1]![0]).not.toContain('[budget:');
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 4 tool rounds left this turn - start wrapping up')))).toBe(true);
+    expect(seenAt.some((turns) => turns.some((o) => o.includes('[budget: 2 tool rounds left this turn - wrap up and answer now')))).toBe(true);
+    const lastDelivered = seenAt[seenAt.length - 1]!;
+    expect(lastDelivered[lastDelivered.length - 1]).toContain('[budget: tool budget exhausted this turn');
+  });
+
+  it('refuses a call whose stabilized (tool, args, result) triple repeats NO_PROGRESS_LIMIT times, pre-dispatch', async () => {
+    let fetched = 0;
+    const volatileFetcher = async (): Promise<Response> => {
+      fetched += 1;
+      return Response.json({ web: { results: [{ title: 'T', url: 'https://x.test', description: 'D', request_id: `req-${fetched}-0123456789abcdef`, at: `2026-09-26T10:0${fetched}:00Z` }] } });
+    };
+    const web = webSearchHandler('test-key', volatileFetcher);
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      handlers: [web], ctx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        return tools ? { text: '', tool_calls: [{ call_id: `p${n}`, name: 'web_search', arguments: `{"query":"status check cursor-token-${n}-abcdefgh"}` }] } : { text: 'stopped.' };
+      },
+    });
+    expect(text).toBe('stopped.');
+    expect(fetched).toBe(NO_PROGRESS_LIMIT);
+    expect(outputs[outputs.length - 1]).toContain('No progress');
+  });
+
+  it('never blocks distinct long natural-language queries that return identical empty results', async () => {
+    // Long pure-alphabetic words are ordinary search terms, not volatile tokens; stabilization
+    // must preserve them, so three different queries with the same empty outcome stay callable.
+    let fetched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return Response.json({ web: { results: [] } }); });
+    const queries = [
+      'electroencephalography',
+      'psychoneuroimmunology',
+      'antidisestablishmentarianism',
+      // Distinct hyphenated natural-language phrases must never stabilize to the same key.
+      'post-traumatic-stress-disorder',
+      'large-language-model-evaluation',
+    ];
+    let n = 0;
+    const outputs: string[] = [];
+    const text = await runToolLoop({
+      handlers: [web], ctx, maxSteps: 25,
+      onTool: (e) => outputs.push(e.output),
+      step: async (tools) => {
+        n += 1;
+        return tools && n <= queries.length ? { text: '', tool_calls: [{ call_id: `q${n}`, name: 'web_search', arguments: `{"query":"${queries[n - 1]}"}` }] } : { text: 'answered.' };
+      },
+    });
+    expect(text).toBe('answered.');
+    expect(fetched).toBe(queries.length);
+    expect(outputs.every((o) => !o.includes('No progress'))).toBe(true);
+  });
+
+  it('does not flag calls whose small-integer args genuinely differ (pagination survives stabilization)', async () => {
+    let fetched = 0;
+    const web = webSearchHandler('test-key', async (): Promise<Response> => { fetched += 1; return okFetcher(); });
+    let n = 0;
+    const text = await runToolLoop({
+      handlers: [web], ctx, maxSteps: 25,
+      step: async (tools) => {
+        n += 1;
+        return tools && n <= 5 ? { text: '', tool_calls: [{ call_id: `g${n}`, name: 'web_search', arguments: `{"query":"topic page ${n}"}` }] } : { text: 'done.' };
+      },
+    });
+    expect(text).toBe('done.');
+    expect(fetched).toBe(5);
+  });
+});
+
+describe('refusals never feed the failure streak', () => {
+  it('refusal-only rounds neither withdraw tools nor reset a genuine failure streak', async () => {
+    let n = 0;
+    const offered: boolean[] = [];
+    const text = await runToolLoop({
+      handlers, ctx, maxSteps: 25,
+      step: async (tools) => {
+        offered.push(tools !== undefined);
+        n += 1;
+        if (!tools) return { text: 'closed.' };
+        // rounds 1-2: same identical call (2nd is refused); round 3: unknown tool (genuine
+        // failure); rounds 4-5: refusals again. If refusals fed the streak, tools would be
+        // withdrawn by round 4-5.
+        if (n <= 2) return { text: '', tool_calls: [call] };
+        if (n === 3) return { text: '', tool_calls: [{ call_id: 'x3', name: 'launch_rocket', arguments: '{"limit":1}' }] };
+        if (n <= 6) return { text: '', tool_calls: [call] };
+        return { text: 'closed.' };
+      },
+    });
+    expect(text).toBe('closed.');
+    // Tools were still offered after two refusal rounds + one genuine failure + three more
+    // refusal rounds: the streak only reached 1, never FAILED_ROUNDS_LIMIT, so the loop never
+    // withdrew tools before the model chose to close.
+    expect(offered).toEqual([true, true, true, true, true, true, true]);
   });
 });
