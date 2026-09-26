@@ -77,13 +77,29 @@ export const handleTelegramWebhook = async (
   if (!subject) return new Response('ok');
   const owners = env.TELEGRAM_OWNER_DO;
   const origin = new URL(request.url).origin;
-  waitUntil((async () => {
-    const route = await directory.byPresence('telegram', subject);
-    if (route) {
-      const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject };
-      if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
-      return owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/turn', { method: 'POST', body, headers });
+  // Durable-before-ack: the owner DO spools the update durably before we ack, so a
+  // routing or storage failure returns non-200 and Telegram redelivers. The link-code
+  // path has no owner DO to spool into, so it stays fire-and-forget after the ack.
+  let route: Awaited<ReturnType<OwnerDirectory['byPresence']>>;
+  try {
+    route = await directory.byPresence('telegram', subject);
+  } catch (error) {
+    console.log(JSON.stringify({ hop: 'telegram_route', ok: false, error: String(error) }));
+    return new Response('routing unavailable', { status: 500 });
+  }
+  if (route) {
+    const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject };
+    if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
+    try {
+      const ingress = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/telegram-ingress', { method: 'POST', body, headers });
+      if (!ingress.ok) return new Response('ingress failed', { status: 500 });
+    } catch (error) {
+      console.log(JSON.stringify({ hop: 'telegram_ingress', ok: false, error: String(error) }));
+      return new Response('ingress unavailable', { status: 500 });
     }
+    return new Response('ok');
+  }
+  waitUntil((async () => {
     const code = linkCode(update);
     if (!code || !env.TELEGRAM_BOT_TOKEN) return undefined;
     const linked = await directory.redeem('telegram', subject, code).catch(() => null);

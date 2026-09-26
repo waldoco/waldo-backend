@@ -12,6 +12,7 @@ import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
 import { Scheduler } from '../scheduler/multiplexer';
+import { telegramSpool } from './telegram-spool';
 import { productionDeps } from '../seams/deps';
 import { durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller } from './egress-guard';
@@ -143,6 +144,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (new URL(request.url).pathname === '/whatsapp-turn' && request.method === 'POST') {
       return this.whatsappTurn(request, body);
+    }
+    if (new URL(request.url).pathname === '/telegram-ingress' && request.method === 'POST') {
+      return this.telegramIngress(body);
     }
     const update = JSON.parse(body) as RawUpdate;
     if (this.intercept(update)) return new Response('ok');
@@ -277,6 +281,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
   override async alarm(): Promise<void> {
     await this.serial(async () => {
+      const spool = telegramSpool(this.ctx.storage, (update) => this.turn(update));
+      await spool.drain();
       const { scheduler, fire, nightly, briefs, cards, ready, log } = this.setup();
       await ready;
       const started = Date.now();
@@ -285,7 +291,35 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const late = started - entry.due_at;
         if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
       }
+      // dispatchDue's finally re-arms from the schedule table and would drop a spool
+      // retry armed during the drain, so the spool re-asserts its wake afterwards.
+      if ((await spool.pending()) > 0) await spool.ensureWake();
     });
+  }
+
+  // Ingress-side ack path: intercept reaches a running turn first (control messages are
+  // transient by design), then the update is durably spooled before the ack. Updates
+  // without an update_id cannot be deduped, so they keep the old inline processing.
+  private async telegramIngress(body: string): Promise<Response> {
+    const update = JSON.parse(body) as RawUpdate;
+    if (this.intercept(update)) return new Response('ok');
+    if (update.update_id === undefined) {
+      await this.serial(() => this.turn(update));
+      return new Response('ok');
+    }
+    const spool = telegramSpool(this.ctx.storage, (u) => this.turn(u));
+    const recorded = await spool.record(update.update_id, body);
+    if (recorded === 'processed') return new Response('ok');
+    // Queue full: no ack - Telegram redelivers after the drain makes room.
+    if (recorded === 'full') return new Response('spool full', { status: 503 });
+    // Oversize can never fit: ack it (no redelivery loop) and drop it with a typed trace, never stored.
+    if (recorded === 'too_large') {
+      console.log(JSON.stringify({ trace: `tg-${update.update_id}`, hop: 'spool_reject', ok: false, detail: 'update body over the spool byte bound' }));
+      return new Response('ok');
+    }
+    this.ctx.waitUntil(this.serial(() => spool.drain()));
+    await spool.ensureWake();
+    return new Response('ok');
   }
 
   private serial<T>(work: () => Promise<T>): Promise<T> {
