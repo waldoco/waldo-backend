@@ -808,7 +808,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
       await heartbeatTick({
-        scheduler, sql: storage.sql, loops, timezone: clock.timezone, now: () => Date.now(),
+        scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(),
         send: async (text) => { await api.sendMessage({ chat_id: owner, text }); },
       })(entry);
       log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: true });
@@ -891,8 +891,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const started = Date.now();
       const now = Date.now();
       if (quiet()) {
-        plans.sent(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
-        return log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} held: quiet hours` });
+        // H1b: record the hold truthfully (never as sent); the heartbeat's release path
+        // re-arms held cards when quiet ends and the real send marks sent then.
+        plans.held(localIso(entry.occurrence_at, clock.timezone).slice(0, 10), card.id);
+        return log({ trace, hop: 'day_card', ms: 0, ok: true, detail: `${card.id} held: quiet hours; releases when quiet ends` });
       }
       const client = await google.client();
       const midnight = localToEpoch(`${localIso(now, clock.timezone).slice(0, 10)}T00:00`, clock.timezone);
