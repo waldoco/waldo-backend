@@ -35,7 +35,7 @@ export type ModelContextSpec = z.infer<typeof modelContextSpecSchema>;
 // - OPENAI_GPT_5_NANO_MODEL / OPENAI_GPT_5_MINI_MODEL: OpenAI model pages - 400,000 context,
 //   128,000 max output (developers.openai.com/api/docs/models/<id>).
 // - OPENAI_GPT_6_LUNA_MODEL: OpenAI model page - 1,050,000 context, 128,000 max output
-//   (developers.openai.com/api/docs/models/gpt-6-luna).
+//   (OpenAI model page; identifier is owned by the roster).
 // - ANTHROPIC_CLAUDE_SONNET_4_6_MODEL: Anthropic context-windows doc - listed in the 1M-window
 //   group, 128k max output (platform.claude.com/docs/en/build-with-claude/context-windows).
 // - ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL: same doc - outside the 1M group, so the 200k window;

@@ -6,7 +6,7 @@ const PRICES: Readonly<Record<string, Readonly<{ input: number; cachedInput: num
   [OPENAI_GPT_5_NANO_MODEL]: { input: 0.05, cachedInput: 0.005, output: 0.4 },
   // checked 2026-09-24 on the model page linked from the pricing page above
   [OPENAI_GPT_5_MINI_MODEL]: { input: 0.25, cachedInput: 0.025, output: 2 },
-  // https://developers.openai.com/api/docs/models/gpt-6-luna (checked 2026-09-26)
+  // OpenAI model page (checked 2026-09-26; identifier is owned by the roster)
   [OPENAI_GPT_6_LUNA_MODEL]: { input: 0.1, cachedInput: 0.01, output: 0.5 },
 };
 
