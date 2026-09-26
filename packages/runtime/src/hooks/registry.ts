@@ -291,10 +291,16 @@ export const toolArgZodValidateHook: HookHandler<HookRuntimeContext> = {
     if (!parsed.success) {
       // Model-authored args are safe to echo: the message is the model's recovery path, so name
       // the failing fields and the format the schema expects instead of an opaque halt.
-      const issues = (parsed as { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } }).error.issues
+      const rawIssues = (parsed as { success: false; error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> } }).error.issues;
+      const issues = rawIssues
         .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
         .join('; ');
-      return halt(`invalid tool arguments: ${issues}; match the tool schema exactly - datetimes need ISO 8601 with seconds and a UTC offset`, 'invalid_args');
+      // The datetime hint only when a datetime actually failed validation: appended blindly it
+      // misleads the model on non-datetime errors (e.g. get_crs range_days > 90 hunts for a
+      // UTC offset that was never the problem).
+      const datetimeFailed = rawIssues.some((issue) => /datetime|date|offset|ISO 8601/i.test(issue.message));
+      const hint = datetimeFailed ? ' - datetimes need ISO 8601 with seconds and a UTC offset' : '';
+      return halt(`invalid tool arguments: ${issues}; match the tool schema exactly${hint}`, 'invalid_args');
     }
 
     return ok();

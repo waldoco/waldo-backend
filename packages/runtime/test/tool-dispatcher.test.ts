@@ -1046,10 +1046,37 @@ describe('ToolDispatcher', () => {
       ok: false,
       call_id: 'call-invalid-args',
       tool: 'get_crs',
-      error: 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly - datetimes need ISO 8601 with seconds and a UTC offset',
+      // The datetime hint is scoped to datetime validation failures; a range error gets none.
+      error: 'invalid tool arguments: range_days: Too big: expected number to be <=90; match the tool schema exactly',
       code: 'invalid_args',
       reason: 'invalid_args',
     });
+    expect(handled).toBe(false);
+  });
+
+  it('keeps the datetime hint for an actual datetime validation failure', async () => {
+    let handled = false;
+    const handler: ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext> = {
+      name: 'query_calendar',
+      description: 'test',
+      schema: queryCalendarArgsSchema,
+      trigger_allowlist: triggerAllowlistFor('query_calendar'),
+      autonomy_gated: false,
+      async handle() {
+        handled = true;
+        return { ok: true, data: { events: [] }, source_taint: null };
+      },
+    };
+
+    const result = await dispatchTool(
+      { id: 'call-bad-date', name: 'query_calendar', args: { date_range: { from: 'tomorrow morning', to: '2026-09-27T10:00:00+05:30' } } },
+      dispatcherContext('brief'),
+      { handlers: [handler], extraHooks: [] },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('invalid_args');
+    expect(result.error).toContain('datetimes need ISO 8601 with seconds and a UTC offset');
     expect(handled).toBe(false);
   });
 
