@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { telegramSpool, TELEGRAM_SPOOL_PREFIX } from '../src/channels/telegram-spool';
+import { SPOOL_MAX_ATTEMPTS, SPOOL_MAX_BODY_BYTES, SPOOL_MAX_ENTRIES, telegramSpool, TELEGRAM_SPOOL_PREFIX } from '../src/channels/telegram-spool';
 import { armAlarm } from '../src/scheduler/alarm-slot';
 
 let seq = 0;
@@ -40,7 +40,7 @@ describe('telegram spool mechanics', () => {
       const spool = telegramSpool(s, () => Promise.resolve());
       expect(await spool.record(9, update(9, 'first delivery'))).toBe('spooled');
       expect(await spool.record(9, update(9, 'redelivery'))).toBe('duplicate');
-      expect(await s.get<string>(`${TELEGRAM_SPOOL_PREFIX}9`)).toBe(update(9, 'first delivery'));
+      expect(await s.get<{ body: string; attempts: number }>(`${TELEGRAM_SPOOL_PREFIX}9`)).toEqual({ body: update(9, 'first delivery'), attempts: 0 });
     });
   });
 
@@ -110,6 +110,59 @@ describe('telegram spool mechanics', () => {
   });
 });
 
+describe('spool bounds and failed-body retention', () => {
+  it('rejects new updates at the entry bound without storing them', async () => {
+    const stub = freshStub();
+    await withStorage(stub, async (s) => {
+      const spool = telegramSpool(s, () => Promise.resolve());
+      for (let i = 1; i <= SPOOL_MAX_ENTRIES; i++) {
+        expect(await spool.record(i, update(i, `update ${i}`))).toBe('spooled');
+      }
+      expect(await spool.record(SPOOL_MAX_ENTRIES + 1, update(SPOOL_MAX_ENTRIES + 1, 'one too many'))).toBe('full');
+      expect(await s.get(`${TELEGRAM_SPOOL_PREFIX}${SPOOL_MAX_ENTRIES + 1}`)).toBeUndefined();
+      expect((await s.list({ prefix: TELEGRAM_SPOOL_PREFIX })).size).toBe(SPOOL_MAX_ENTRIES);
+    });
+  });
+
+  it('rejects an oversize body without storing it, so the payload never lands in storage', async () => {
+    const stub = freshStub();
+    await withStorage(stub, async (s) => {
+      const spool = telegramSpool(s, () => Promise.resolve());
+      const oversize = 'x'.repeat(SPOOL_MAX_BODY_BYTES + 1);
+      expect(await spool.record(9, oversize)).toBe('too_large');
+      expect(await s.get(`${TELEGRAM_SPOOL_PREFIX}9`)).toBeUndefined();
+    });
+  });
+
+  it('drops a poison update - raw body included - after the attempt bound', async () => {
+    const stub = freshStub();
+    await withStorage(stub, async (s) => {
+      const spool = telegramSpool(s, () => Promise.resolve());
+      await spool.record(9, update(9, 'poison body that must not linger'));
+      const poison = () => { throw new Error('turn crash'); };
+      const poisonSpool = telegramSpool(s, poison);
+      for (let i = 0; i < SPOOL_MAX_ATTEMPTS - 1; i++) await poisonSpool.drain();
+      const entry = await s.get<{ body: string; attempts: number }>(`${TELEGRAM_SPOOL_PREFIX}9`);
+      expect(entry?.attempts).toBe(SPOOL_MAX_ATTEMPTS - 1);
+      await poisonSpool.drain();
+      expect(await s.get(`${TELEGRAM_SPOOL_PREFIX}9`)).toBeUndefined();
+      expect([...(await s.list({ prefix: TELEGRAM_SPOOL_PREFIX })).values()].map((v) => JSON.stringify(v)).join('')).not.toContain('poison body that must not linger');
+    });
+  });
+
+  it('bounds the ingress endpoint: 503 when the spool is full, acked drop for oversize bodies', async () => {
+    const stub = freshStub();
+    await withStorage(stub, async (s) => {
+      for (let i = 1; i <= SPOOL_MAX_ENTRIES; i++) await s.put(`${TELEGRAM_SPOOL_PREFIX}${i}`, { body: update(i, `update ${i}`), attempts: 0 });
+    });
+    const full = await stub.fetch('https://telegram-owner/telegram-ingress', { method: 'POST', body: update(SPOOL_MAX_ENTRIES + 1, 'overflow') });
+    expect(full.status).toBe(503);
+    const oversized = await stub.fetch('https://telegram-owner/telegram-ingress', { method: 'POST', body: JSON.stringify({ update_id: 5000, filler: 'x'.repeat(SPOOL_MAX_BODY_BYTES) }) });
+    expect(oversized.status).toBe(200);
+    expect(await withStorage(stub, (s) => s.get(`${TELEGRAM_SPOOL_PREFIX}5000`))).toBeUndefined();
+  });
+});
+
 describe('telegram ingress endpoint', () => {
   // The test pool has no bot token, so every drain fails at runtime setup: entries stay
   // spooled, which makes the durable write directly observable after the ack.
@@ -128,7 +181,8 @@ describe('telegram ingress endpoint', () => {
     await stub.fetch('https://telegram-owner/telegram-ingress', { method: 'POST', body: update(9, 'first delivery') });
     const res = await stub.fetch('https://telegram-owner/telegram-ingress', { method: 'POST', body: update(9, 'redelivery') });
     expect(res.status).toBe(200);
-    expect(await withStorage(stub, (s) => s.get<string>(`${TELEGRAM_SPOOL_PREFIX}9`))).toBe(update(9, 'first delivery'));
+    const stored = await withStorage(stub, (s) => s.get<{ body: string; attempts: number }>(`${TELEGRAM_SPOOL_PREFIX}9`));
+    expect(stored?.body).toBe(update(9, 'first delivery'));
   });
 
   it('acks an update_id below the processed offset without spooling', async () => {

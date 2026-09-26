@@ -310,6 +310,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const spool = telegramSpool(this.ctx.storage, (u) => this.turn(u));
     const recorded = await spool.record(update.update_id, body);
     if (recorded === 'processed') return new Response('ok');
+    // Queue full: no ack - Telegram redelivers after the drain makes room.
+    if (recorded === 'full') return new Response('spool full', { status: 503 });
+    // Oversize can never fit: ack it (no redelivery loop) and drop it with a typed trace, never stored.
+    if (recorded === 'too_large') {
+      console.log(JSON.stringify({ trace: `tg-${update.update_id}`, hop: 'spool_reject', ok: false, detail: 'update body over the spool byte bound' }));
+      return new Response('ok');
+    }
     this.ctx.waitUntil(this.serial(() => spool.drain()));
     await spool.ensureWake();
     return new Response('ok');
