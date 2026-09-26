@@ -125,6 +125,16 @@ describe('llmResponse metering', () => {
     expect(llmRequestSchema.safeParse({ ...baseRequest, tools, tool_turns: [{ call, output: '{"ok":true}' }] }).success).toBe(true);
   });
 
+  it('tool-call arguments use a wire ceiling, not a size policy (S4)', () => {
+    // A legitimately long tool call (long email body, big doc) must clear the wire schema;
+    // per-destination size policy is the scribe's job, not the wire's. The ceiling only
+    // rejects absurdly large payloads.
+    const legit = { call_id: 'c1', name: 'draft_email', arguments: JSON.stringify({ body: 'x'.repeat(100_000) }) };
+    expect(llmRequestSchema.safeParse({ ...baseRequest, tool_turns: [{ call: legit, output: '{"ok":true}' }] }).success).toBe(true);
+    const absurd = { call_id: 'c1', name: 'draft_email', arguments: 'x'.repeat(131_073) };
+    expect(llmResponseSchema.safeParse({ ...baseResponse, text: '', tool_calls: [absurd] }).success).toBe(false);
+  });
+
   it('carries text or tool calls, never neither', () => {
     const call = { call_id: 'c1', name: 'get_context', arguments: '{}' };
     expect(llmResponseSchema.safeParse({ ...baseResponse, text: '' }).success).toBe(false);
