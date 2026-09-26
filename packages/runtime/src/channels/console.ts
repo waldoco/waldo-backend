@@ -149,6 +149,7 @@ export type ConsoleView = Readonly<{
   spots: readonly Claim[];
   retiredSpots: readonly Claim[];
   forgettingSpots: readonly Claim[];
+  holds: readonly Readonly<{ id: number; kind: string; reason: string; created_at: string }>[];
   nodes: readonly ConstellationNode[];
   edges: readonly ConstellationEdge[];
   cards: readonly ConsoleCard[];
@@ -230,7 +231,7 @@ const checklist = (view: ConsoleView) => {
 const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: 'Waldo\'s inference' };
 
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? spot.source, spot.source === 'inferred' ? 'plain' : 'teal')} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Why: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('');
+  : view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? spot.source, spot.source === 'inferred' ? 'plain' : 'teal')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'muted')}` : ''} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Why: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('');
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
@@ -239,6 +240,11 @@ const constellation = (view: ConsoleView) => {
   const edges = view.edges.length === 0 ? '' : `<h3>Links</h3>${view.edges.map((edge) => `<div class="row edge"><div class="main"><b>${esc(label.get(edge.from_id) ?? `#${edge.from_id}`)}</b> <span class="rel">${esc(edge.relation)}</span> <b>${esc(label.get(edge.to_id) ?? `#${edge.to_id}`)}</b><div class="sub">${edge.evidence_count} supporting observations</div></div><div class="strength">${meter(edge.strength)}</div></div>`).join('')}`;
   return nodes + edges;
 };
+
+// Holds never store text (the admission gate refuses before write), so this list shows
+// kind + reason + day only - the owner sees the gate working without the refused words
+// ever entering memory or this page.
+const held = (view: ConsoleView) => view.holds.length === 0 ? '' : `<details><summary>Held at the gate (${view.holds.length})</summary><div class="sub">Waldo declined to remember these - the words were never stored, only what kind of thing it was and why.</div>${view.holds.map((hold) => `<div class="row"><div class="main"><div class="line">${chip(hold.kind)} ${chip(hold.reason.replace(/-/g, ' '), 'muted')}</div></div><div class="sub">${esc(day(hold.created_at))}</div></div>`).join('')}</details>`;
 
 const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'In constellation' : 'Dismissed', spot.status === 'promoted' ? 'teal' : 'muted')}</div>`).join('')}</details>`;
 
@@ -340,7 +346,7 @@ ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 ${section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view))}
 ${section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Everything here reflects real state.', checklist(view))}
 ${section('connections', 'Connections', 'What Waldo can reach, and the switches to change it. Items marked not built yet are on the plan but not wired.', connectors(view))}
-${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + forgetting(view) + retired(view))}
+${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + forgetting(view) + retired(view) + held(view))}
 ${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}
 ${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view))}
 ${section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view))}
