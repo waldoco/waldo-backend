@@ -50,6 +50,20 @@ Official name for the protected focus block (maps "Focus Time"). Target: >=90 un
 - Status chips stay semantic and sparse: they mark state (Form zone, Protected window), they do not turn the console into a wearable dashboard.
 - Copy follows the Home rule: health is context for decisions, never medical claims, never the headline.
 
+## Console chip taxonomy (craft pass 2, 2026-09-27)
+
+The console renders state through a closed set of semantic chip states. Every state derives from real view data - no chip renders for a state the data does not back.
+
+| Chip state | Meaning | Ontology mapping |
+| --- | --- | --- |
+| good | settled positive state | Energized / Steady zones, Protected window, Improving slope |
+| neutral | informational label | kind/source labels, Holding / Mixed slope |
+| muted | not built, dismissed, stale | - |
+| danger | wrong, needs action | Depleted zone, failed removals |
+| provisional | unconfirmed or untrusted-derived | Drooping zone, inferred spots, shared-content origin |
+
+Sparse by posture: chips mark state; the console is not a wearable dashboard. Form/Load zone chips land on the console only when the health lane ships real data - adding them earlier would be a dishonest consumer.
+
 ## Unresolved (owner acknowledged)
 
 1. Team Pings counting rule.
