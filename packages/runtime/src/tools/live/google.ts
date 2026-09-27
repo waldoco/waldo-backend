@@ -1,4 +1,4 @@
-import { artifactMarker, quarantineArtifacts, type ArtifactKind } from '../../security/artifact-hygiene';
+import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
@@ -45,29 +45,42 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work:
   }
 }
 
-// E1 (issue #150): a verification artifact in either visible field quarantines both - the
-// snippet routinely re-states a code the subject hides, and vice versa. from/at/id stay so the
-// owner can find the item in Gmail itself; the raw artifact never enters model context.
+// E1 (issue #150) as amended by the owner's September 27, 2026 ruling ("instinct way for OTP"):
+// a verification artifact in either visible list field quarantines both - the snippet routinely
+// re-states a code the subject hides, and vice versa. The list marker tells the model the honest
+// path: read the thread and the artifact is relayed to the owner directly (see read_thread).
+// from/at/id stay so the owner can find the item in Gmail itself; the raw artifact never enters
+// model context.
 const quarantineMailItem = <T extends { subject: string; snippet: string }>(item: T): T & { quarantined?: readonly ArtifactKind[] } => {
   const q = quarantineArtifacts(`${item.subject}
 ${item.snippet}`);
   if (q.kinds.length === 0) return item;
-  const marker = q.kinds.map(artifactMarker).join(' ');
+  const marker = `[quarantined: ${q.kinds.join('/')} artifact - read the thread; it is relayed to the owner directly]`;
   return { ...item, subject: marker, snippet: marker, quarantined: q.kinds };
 };
 
-// E1 for thread bodies (same fixed pattern set as the list projection): a verification
-// artifact anywhere in the visible text quarantines subject and body together - the owner
-// reads the code or link in Gmail itself, never through the model.
-const quarantineThreadMessage = <T extends { subject: string; body: string }>(item: T): T & { quarantined?: readonly ArtifactKind[] } => {
-  const q = quarantineArtifacts(`${item.subject}
+// The relay sink: the owner DO wires this to a direct Telegram/WhatsApp send. Returns false when
+// the send failed so the marker can fall back to the honest source-app copy instead of claiming a
+// relay that never happened. Absent in probes/tests: the marker falls back the same way.
+export type ArtifactRelay = (from: string, artifacts: readonly ExtractedArtifact[]) => Promise<boolean>;
+
+// E1 for thread bodies, post-ruling: the artifact is EXTRACTED from the full body (complete text,
+// never a truncated snippet) and relayed to the owner on his chat channel - the Instinct behavior
+// without the code ever entering model context, episodes, or traces. The tool result carries only
+// the marker; a failed or absent relay falls back to the source-app copy, never a false claim.
+const relayThreadMessage = async <T extends { subject: string; body: string; from: string }>(item: T, relay: ArtifactRelay | undefined): Promise<T & { quarantined?: readonly ArtifactKind[] }> => {
+  const extracted = extractArtifacts(`${item.subject}
 ${item.body}`);
-  if (q.kinds.length === 0) return item;
-  const marker = q.kinds.map(artifactMarker).join(' ');
-  return { ...item, subject: marker, body: marker, quarantined: q.kinds };
+  if (extracted.artifacts.length === 0) return item;
+  const kinds = [...new Set(extracted.artifacts.map((artifact) => artifact.kind))].sort();
+  const relayed = relay !== undefined && await relay(item.from, extracted.artifacts).then(() => true, () => false);
+  const marker = relayed
+    ? `[${kinds.join('/')} artifact - sent to the owner in a separate message]`
+    : kinds.map(artifactMarker).join(' ');
+  return { ...item, subject: marker, body: marker, quarantined: kinds };
 };
 
-export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock) => [
+export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock, relayArtifact?: ArtifactRelay) => [
   {
     name: 'query_calendar',
     description: "Read the owner's Google Calendar events in a time range (defaults to now through the next 24 hours).",
@@ -113,7 +126,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     autonomy_gated: false,
     handle: ({ thread_id, limit }: ReadThreadArgs) => withGoogle(google, 'mail', async (client) => ({
       thread_id,
-      messages: (await client.readThread(thread_id, limit)).map(quarantineThreadMessage),
+      messages: await Promise.all((await client.readThread(thread_id, limit)).map((message) => relayThreadMessage(message, relayArtifact))),
     })),
   } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {

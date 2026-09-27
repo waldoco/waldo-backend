@@ -41,24 +41,46 @@ const PATTERNS: ReadonlyArray<{ kind: ArtifactKind; re: RegExp }> = [
   },
   // "your code is 123456", "OTP: 123456" - the bare form, no vendor adjective needed.
   { kind: 'otp', re: new RegExp(String.raw`\b(?:code|otp|passcode)\b\s*(?:is|:)?\s*#?\s*` + CODE + String.raw`\b`, 'gi') },
+  // Google's SMS/mail prefix form runs first: "G-123456 is your Google verification code" would
+  // otherwise lose its prefix to the generic "is your" pattern below before extraction sees it.
+  { kind: 'otp', re: new RegExp(String.raw`\bG-\d{6}\b`, 'g') },
   // "123456 is your Google verification code", "123-456 is your WhatsApp code".
   { kind: 'otp', re: new RegExp(String.raw`\b` + CODE + String.raw`\s+is\s+your\s+(?:[\w-]+\s){0,3}(?:code|passcode|otp)\b`, 'gi') },
-  // Google's SMS/mail prefix form: "G-123456 is your Google verification code".
-  { kind: 'otp', re: new RegExp(String.raw`\bG-\d{6}\b`, 'g') },
 ];
 
 // Replace every artifact match with a typed marker. Returns the redacted text plus the distinct
 // kinds found; an empty kinds array means the text passed through untouched (same string identity).
 export const quarantineArtifacts = (text: string): Quarantine => {
+  const extracted = extractArtifacts(text);
+  const kinds = [...new Set(extracted.artifacts.map((artifact) => artifact.kind))].sort();
+  return kinds.length === 0 ? { text, kinds: [] } : { text: extracted.text, kinds };
+};
+
+export type ExtractedArtifact = Readonly<{ kind: ArtifactKind; value: string }>;
+
+// Owner-ruled OTP parity (September 27, 2026 WhatsApp ruling, superseding the #150 keep-quarantined
+// posture for the mail read path): the same fixed patterns, but the matched value is captured so the
+// artifact can be relayed to the owner directly on his chat channel - the Instinct behavior ("read
+// the code out of mail for me") without the artifact ever entering model context or persistence.
+// Duplicates (a code restated in subject + body) collapse by value.
+export const extractArtifacts = (text: string): { text: string; artifacts: readonly ExtractedArtifact[] } => {
   let redacted = text;
-  const kinds = new Set<ArtifactKind>();
+  const seen = new Set<string>();
+  const artifacts: ExtractedArtifact[] = [];
   for (const { kind, re } of PATTERNS) {
-    redacted = redacted.replace(re, () => {
-      kinds.add(kind);
+    redacted = redacted.replace(re, (match) => {
+      // OTP patterns match the surrounding phrase ("Your login code is 123456"); the relay value
+      // is the code itself. Links relay whole. The G- prefix form must be tried first - its six
+      // digits would otherwise match the plain-digit alternative.
+      const value = kind === 'otp' ? (match.match(/G-\d{6}|\d{3}-\d{3}|\d{4,8}/)?.[0] ?? match) : match;
+      if (!seen.has(value)) {
+        seen.add(value);
+        artifacts.push({ kind, value });
+      }
       return artifactMarker(kind);
     });
   }
-  return kinds.size === 0 ? { text, kinds: [] } : { text: redacted, kinds: [...kinds].sort() };
+  return artifacts.length === 0 ? { text, artifacts: [] } : { text: redacted, artifacts };
 };
 
 // True when nothing meaningful survives the redaction - the whole message was the artifact.

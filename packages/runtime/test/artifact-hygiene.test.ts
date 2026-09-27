@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { artifactMarker, onlyArtifacts, quarantineArtifacts } from '../src/security/artifact-hygiene';
+import { artifactMarker, extractArtifacts, onlyArtifacts, quarantineArtifacts } from '../src/security/artifact-hygiene';
 
 const ARTIFACTS: ReadonlyArray<{ text: string; kinds: string[]; stolen: string }> = [
   // gmail-class OTPs
@@ -73,5 +73,29 @@ describe('artifact hygiene quarantine', () => {
     expect(q.kinds).toEqual(['otp']);
     expect(q.text).not.toContain('918273');
     expect(q.text).toContain('Fwd from bank');
+  });
+});
+
+describe('extractArtifacts (owner-ruled OTP parity)', () => {
+  it('captures the bare code from the surrounding phrase, deduped by value', () => {
+    const { text, artifacts } = extractArtifacts('Your login code is 123456. Again: your code is 123456.');
+    expect(artifacts).toEqual([{ kind: 'otp', value: '123456' }]);
+    expect(text).not.toContain('123456');
+    expect(text).toContain('[quarantined: otp artifact');
+  });
+
+  it('keeps the G- prefix form whole and relays links complete', () => {
+    const { artifacts } = extractArtifacts('G-654321 is your Google verification code');
+    expect(artifacts).toEqual([{ kind: 'otp', value: 'G-654321' }]);
+    const link = extractArtifacts('Sign in: https://x.example/auth/v1/verify?token_hash=abc123&type=magiclink');
+    expect(link.artifacts[0]!.value).toContain('token_hash=abc123');
+    expect(link.text).not.toContain('token_hash');
+  });
+
+  it('returns identity when nothing matches', () => {
+    const source = 'Thursday works, 7pm.';
+    const { text, artifacts } = extractArtifacts(source);
+    expect(text).toBe(source);
+    expect(artifacts).toEqual([]);
   });
 });
