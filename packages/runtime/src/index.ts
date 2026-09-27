@@ -12,6 +12,7 @@ import { armAlarm } from './scheduler/alarm-slot';
 import { handleTelegramWebhook, TELEGRAM_WEBHOOK_PATH } from './channels/telegram-webhook';
 import { handleProbeTurn, PROBE_TURN_PATH } from './channels/probe-turn';
 import { handleWhatsAppWebhook, WHATSAPP_WEBHOOK_PATH } from './channels/whatsapp-webhook';
+import { EVENT_INGRESS_PREFIX, handleEventIngress } from './channels/event-ingress';
 import { handleGoogleCallback } from './channels/google-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
@@ -127,6 +128,9 @@ export default {
     }
     if (new URL(request.url).pathname === WHATSAPP_WEBHOOK_PATH) {
       return handleWhatsAppWebhook(request, env, (work) => ctx?.waitUntil(work));
+    }
+    if (new URL(request.url).pathname.startsWith(EVENT_INGRESS_PREFIX)) {
+      return handleEventIngress(request, env, (work) => ctx?.waitUntil(work));
     }
     if (new URL(request.url).pathname === PROBE_TURN_PATH) {
       return handleProbeTurn(request, env);
