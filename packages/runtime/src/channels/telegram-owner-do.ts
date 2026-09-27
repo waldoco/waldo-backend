@@ -357,7 +357,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log } = this.setup();
       await ready;
       const started = Date.now();
-      const fired = await scheduler.dispatchDue({ reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder });
+      let fired: readonly ScheduleEntry[];
+      try {
+        fired = await scheduler.dispatchDue({ reminder: fire, heartbeat: beat, dreaming: nightly, pre_activity_spot: briefs, brief: cards, standing_order: fireOrder });
+      } catch (error) {
+        // A dispatch throw used to leave no trace at all - the wake was invisible in Langfuse.
+        log({ trace: `alarm:${started}`, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'dispatch' });
+        throw error;
+      }
       for (const entry of fired) {
         const late = started - entry.due_at;
         if (late > LATE_FIRE_MS) log({ trace: `${entry.id}:${entry.occurrence_at}`, hop: 'late_fire', ms: late, ok: false, error: `${entry.kind} fired ${Math.round(late / 60_000)} min late` });
@@ -850,7 +857,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }) : null;
     const fire = async (entry: ScheduleEntry) => {
       const note = book.note(entry.id);
-      if (note === null) return;
+      if (note === null) {
+        // The entry fired but its note row is gone - log the miss instead of returning silently.
+        const missing = `${entry.id}:${entry.occurrence_at}:${entry.attempts}`;
+        log({ trace: missing, hop: 'reminder', ms: 0, ok: false, error: 'note row missing at fire time', code: 'note_missing' });
+        log({ trace: missing, hop: 'machine_turn', ms: 0, ok: false, detail: 'reminder' });
+        return;
+      }
       const run = runs.start('reminder', entry.id);
       const trace = `${entry.id}:${entry.occurrence_at}:${entry.attempts}`;
       const started = Date.now();
@@ -872,9 +885,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         book.fired(entry);
         runs.finish(run.id, 'completed', 'reminder sent');
         log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, text: { input: note, output: text } });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'reminder' });
       } catch (error) {
         runs.finish(run.id, 'failed', 'reminder failed');
         log({ trace, hop: 'reminder', ms: Date.now() - started, ok: false, error: String(error) });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'reminder' });
         throw error;
       }
     };
@@ -902,12 +917,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (text) await api.sendMessage({ chat_id: owner, text });
         runs.finish(run.id, 'completed', order.gate === 'confirm_first' ? 'confirm-first order asked' : 'order reported');
         log({ trace, hop: 'standing_order', ms: Date.now() - started, ok: true, detail: order.gate, text: { input: order.scope, output: text } });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'standing_order' });
       } catch (error) {
         runs.finish(run.id, 'failed', 'order failed');
         if (order.escalation === 'message_owner') {
           await api.sendMessage({ chat_id: owner, text: 'One of your standing orders could not run just now. I will try again at its next scheduled time.' }).catch(() => undefined);
         }
         log({ trace, hop: 'standing_order', ms: Date.now() - started, ok: false, error: String(error) });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'standing_order' });
         throw error;
       }
     };
@@ -940,35 +957,44 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         })(entry);
         runs.finish(run.id, 'completed', 'tick completed');
         log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: true });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'heartbeat' });
       } catch (error) {
         runs.finish(run.id, 'failed', 'tick failed');
+        log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: false, error: String(error), code: turnFailureCode(error) });
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'heartbeat' });
         throw error;
       }
     };
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
-      await migrateCoreFiles(`${trace}:migration`);
-      const day = episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000);
-      if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
-      else {
-        try {
-          const sides = {
-            owner: day.filter((episode) => episode.speaker === 'owner').map((episode) => episode.text).join('\n'),
-            waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
-          };
-          const detail = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
-          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${detail}` });
-        } catch (error) {
-          log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+      try {
+        await migrateCoreFiles(`${trace}:migration`);
+        const day = episodes.since(entry.occurrence_at - 24 * 60 * 60_000, 40_000);
+        if (day.length === 0) log({ trace, hop: 'nightly_memory', ms: 0, ok: true, detail: 'quiet day' });
+        else {
+          try {
+            const sides = {
+              owner: day.filter((episode) => episode.speaker === 'owner').map((episode) => episode.text).join('\n'),
+              waldo: day.filter((episode) => episode.speaker === 'waldo').map((episode) => episode.text).join('\n'),
+            };
+            const detail = await responder.consolidate(trace, transcript(day, clock.timezone), sides);
+            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: true, detail: `${day.length} turns; ${detail}` });
+          } catch (error) {
+            log({ trace, hop: 'nightly_memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+          }
         }
+        const promoting = Date.now();
+        await responder.promote(`${trace}:constellation`)
+          .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail }))
+          .catch((error: unknown) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: false, error: String(error) }));
+        await armDayCards(scheduler, plans, clock.timezone, Date.now());
+        await planToday(`${trace}:plan`);
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: true, detail: 'nightly' });
+      } catch (error) {
+        log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, error: String(error), detail: 'nightly' });
+        throw error;
       }
-      const promoting = Date.now();
-      await responder.promote(`${trace}:constellation`)
-        .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail }))
-        .catch((error: unknown) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: false, error: String(error) }));
-      await armDayCards(scheduler, plans, clock.timezone, Date.now());
-      await planToday(`${trace}:plan`);
     };
     const briefBook = eventBriefs(storage.sql, clock.timezone);
     const briefs = async (entry: ScheduleEntry) => {

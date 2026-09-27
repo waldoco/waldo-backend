@@ -62,6 +62,40 @@ describe('otlpTurnExporter', () => {
     expect(root!.traceId).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  it('flushes machine traces on a machine_turn root: reminders, ticks and nightly stop being invisible', async () => {
+    const { calls, send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'rem:1:2:0', hop: 'send', ms: 300, ok: true });
+    await log({ trace: 'rem:1:2:0', hop: 'reminder', ms: 900, ok: true });
+    expect(calls).toHaveLength(0);
+    await log({ trace: 'rem:1:2:0', hop: 'machine_turn', ms: 950, ok: true, detail: 'reminder' });
+
+    expect(calls).toHaveLength(1);
+    const [root, ...hops] = spans(0);
+    expect(root!.name).toBe('telegram.machine');
+    expect(root!.parentSpanId).toBeUndefined();
+    expect(attrs(root!)).toMatchObject({
+      'langfuse.trace.name': 'telegram.machine',
+      'langfuse.trace.metadata.outcome': 'completed',
+      'langfuse.trace.metadata.trace_key': 'rem:1:2:0',
+    });
+    expect(hops.map((span) => span.name)).toEqual(['send', 'reminder']);
+    expect(hops.every((span) => span.traceId === root!.traceId && span.parentSpanId === root!.spanId)).toBe(true);
+  });
+
+  it('marks a failed machine turn at the trace level', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'rem:9:1:0', hop: 'reminder', ms: 0, ok: false, error: 'note row missing at fire time', code: 'note_missing' });
+    await log({ trace: 'rem:9:1:0', hop: 'machine_turn', ms: 0, ok: false, detail: 'reminder' });
+    const [root, reminder] = spans(0);
+    expect(root!.name).toBe('telegram.machine');
+    expect(root!.status.code).toBe(2);
+    expect(attrs(root!)['langfuse.trace.metadata.outcome']).toBe('failed');
+    expect(attrs(reminder!)['langfuse.observation.metadata.detail']).toBeUndefined();
+    expect(reminder!.status.code).toBe(2);
+  });
+
   it('carries the emitting owner on every hop span, so an alarm or card is attributable in Langfuse', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
@@ -83,7 +117,7 @@ describe('otlpTurnExporter', () => {
       'langfuse.trace.name': 'telegram.turn', 'langfuse.user.id': 'telegram:1', 'langfuse.session.id': 'telegram-dm:1',
       'langfuse.environment': 'staging', 'langfuse.release': 'abc1234',
       'langfuse.trace.tags': ['channel:telegram', 'feature:reactions', 'feature:reply'],
-      'langfuse.trace.metadata.schema_version': '2', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
+      'langfuse.trace.metadata.schema_version': '3', 'langfuse.trace.metadata.trace_key': 'tg-4', 'langfuse.trace.metadata.outcome': 'answered',
     });
     expect(attrs(receipt!)).toMatchObject({ 'langfuse.observation.metadata.hop': 'receipt', 'langfuse.observation.metadata.feature': 'reactions', 'langfuse.observation.type': 'tool' });
     expect(hopFeature('brand_new_hop')).toBe('other');
