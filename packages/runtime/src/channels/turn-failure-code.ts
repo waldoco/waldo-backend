@@ -5,7 +5,7 @@
 // known internal error shapes classify; everything else is 'unknown'.
 export const turnFailureCode = (error: unknown): string => {
   const message = error instanceof Error ? error.message : '';
-  const context = /^conversation context failed: ([a-z_]+)$/.exec(message);
+  const context = /^conversation context failed: ([a-z_:]+)$/.exec(message);
   if (context) return `context_failed:${context[1]}`;
   if (/parameter bindings/.test(message)) return 'sql_binding_mismatch';
   if (/^illegal transition /.test(message)) return 'journal_transition';

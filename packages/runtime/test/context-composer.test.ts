@@ -753,7 +753,7 @@ describe('ContextComposer', () => {
         },
       },
     }).compose(trustedEnvelope(), RUNTIME_INPUTS);
-    expect(unsafeHealth).toEqual({ ok: false, failure: { code: 'sanitisation_failed' } });
+    expect(unsafeHealth).toEqual({ ok: false, failure: { code: 'sanitisation_failed:health_value_leak' } });
 
     const unsafeExternal = await createContextComposer({
       ...base,
@@ -776,7 +776,7 @@ describe('ContextComposer', () => {
         },
       },
     }).compose(trustedEnvelope(), RUNTIME_INPUTS);
-    expect(unsafeExternal).toEqual({ ok: false, failure: { code: 'sanitisation_failed' } });
+    expect(unsafeExternal).toEqual({ ok: false, failure: { code: 'sanitisation_failed:untrusted_instruction' } });
 
     const mismatchedRecall = await createContextComposer({
       ...base,
@@ -1736,7 +1736,7 @@ describe('ContextComposer', () => {
       },
     }).compose(trustedEnvelope(), RUNTIME_INPUTS);
 
-    expect(result).toEqual({ ok: false, failure: { code: 'sanitisation_failed' } });
+    expect(result).toEqual({ ok: false, failure: { code: 'sanitisation_failed:untrusted_instruction' } });
     expect(recallCalls).toBe(0);
     expect('prompt' in result).toBe(false);
 
