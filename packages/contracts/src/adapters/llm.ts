@@ -54,12 +54,12 @@ export type LLMToolTurn = z.infer<typeof llmToolTurnSchema>;
 
 // No credential field exists here by design: provider keys live in the gateway BYOK store,
 // never in the contract or Worker env (ADR-0069 §5.2).
-export // Cap on declared tools per request. Must stay >= the largest TOOL_PERMISSIONS ACL
+// Cap on declared tools per request. Must stay >= the largest TOOL_PERMISSIONS ACL
 // (user_message grants the full ratified surface minus execute_code - 54 today) with
 // headroom, and below provider hard limits (OpenAI: 128). permissions.test.ts asserts
 // the parity so a growing tool surface fails CI instead of every live turn.
 export const LLM_TOOLS_MAX = 64;
-const llmRequestSchema = z.strictObject({
+export const llmRequestSchema = z.strictObject({
   model: modelNameSchema,
   system: z.string().min(1).optional(),
   messages: z.array(llmMessageSchema).min(1),
