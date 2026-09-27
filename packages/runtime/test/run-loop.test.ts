@@ -409,7 +409,7 @@ describe('RunLoopDO full contract FSM', () => {
           candidate: {
             push_class: 'brief',
             trigger: 'brief',
-            event_id: 'alice@example.com',
+            event_id: '4111 1111 1111 1111',
             expires_at: null,
           },
         }),

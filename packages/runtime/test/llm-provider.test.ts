@@ -1200,8 +1200,8 @@ describe('RuntimeLLMProvider', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.response.text).toBe('email [REDACTED_EMAIL]');
-    expect(result.tool_call_source).toEqual({ text: 'email [REDACTED_EMAIL]' });
+    expect(result.response.text).toBe('email user@example.com');
+    expect(result.tool_call_source).toEqual({ text: 'email user@example.com' });
   });
 
   it('halts through PostLLMCall hooks before returning unsafe model text', async () => {
@@ -1383,9 +1383,9 @@ describe('RuntimeLLMProvider', () => {
   it('sanitises the system once and the whole message array once after custom hooks', async () => {
     const destinations: string[] = [];
     const gateway = new ScriptedGateway((request) => {
-      expect(request.request.system).toBe('Contact [REDACTED_EMAIL]');
+      expect(request.request.system).toBe('Contact owner@example.com');
       expect(request.request.messages).toEqual([
-        { role: 'user', content: 'Email [REDACTED_EMAIL]' },
+        { role: 'user', content: 'Email user@example.com' },
         { role: 'assistant', content: 'Safe reply' },
       ]);
       return { ok: true, data: response(request.request.model) };
@@ -1607,9 +1607,9 @@ describe('RuntimeLLMProvider', () => {
 
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.response.text).toBe('Contact [REDACTED_EMAIL] for the update.');
+      expect(result.response.text).toBe('Contact user@example.com for the update.');
       expect(result.tool_call_source).toEqual({
-        text: 'Contact [REDACTED_EMAIL] for the update.',
+        text: 'Contact user@example.com for the update.',
       });
       expect(gateway.requests).toHaveLength(gatewayCalls);
     },

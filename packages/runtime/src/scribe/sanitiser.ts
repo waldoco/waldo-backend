@@ -18,6 +18,7 @@ import {
   type SanitiseDestinationPolicy,
   type SanitiseFailureReason,
   type SanitiseInput,
+  type SourceTaint,
   type SanitiseResult,
 } from '@waldo/contracts';
 
@@ -662,31 +663,53 @@ function encodedPiiKind(text: string, destination: SanitiseDestination): Redacti
 function redactEncodedPii(
   text: string,
   destination: SanitiseDestination,
+  taint: SourceTaint,
   counts: Map<RedactionKind, number>,
 ): string {
   let output = text.replace(BASE64_TOKEN, (token) => {
     const kind = encodedPiiKind(token, destination);
-    if (kind === undefined) return token;
+    if (kind === undefined || ownerReadable(destination, taint, kind)) return token;
     increment(counts, kind);
     return `[REDACTED_${kind === 'credit_card' ? 'CREDIT_CARD' : kind.toUpperCase()}]`;
   });
   const candidates = /(?:[A-Za-z0-9._+\/%-]|\\u[0-9a-fA-F]{4}){3,}/g;
   output = output.replace(candidates, (token) => {
     const kind = encodedPiiKind(token, destination);
-    if (kind === undefined) return token;
+    if (kind === undefined || ownerReadable(destination, taint, kind)) return token;
     increment(counts, kind);
     return `[REDACTED_${kind === 'credit_card' ? 'CREDIT_CARD' : kind.toUpperCase()}]`;
   });
   return output;
 }
 
+// Owner seam split (owner direction 2026-09-27: "no need to redact things a personal agent
+// would need"). When the payload is owner-authored (source_taint null) and its destination is
+// the model itself or the owner's own channel, the owner's own contact details stay readable:
+// redacting them broke draft_email ("REDACTED_EMAIL" recipient) and leaked redaction machinery
+// into replies. External-tainted payloads and every persistence/egress destination (memory_block,
+// draft_document, skill_body, audit_log, r2_summary, outbox, sandbox_stdout) keep full redaction.
+// Two kinds never skip, whatever the taint: credit_card (no owner flow needs a full PAN in
+// context) and attendee_name (third-party PII, not the owner's own).
+const OWNER_READABLE_DESTINATIONS: ReadonlySet<SanitiseDestination> = new Set([
+  'system_prompt',
+  'internal_context',
+  'draft_email',
+  'send_message',
+]);
+const OWNER_SKIPPABLE_KINDS: ReadonlySet<RedactionKind> = new Set(['email', 'phone', 'address']);
+
+function ownerReadable(destination: SanitiseDestination, taint: SourceTaint, kind: RedactionKind): boolean {
+  return taint === null && OWNER_READABLE_DESTINATIONS.has(destination) && OWNER_SKIPPABLE_KINDS.has(kind);
+}
+
 function redactPiiText(
   text: string,
   key: string | undefined,
   destination: SanitiseDestination,
+  taint: SourceTaint,
   counts: Map<RedactionKind, number>,
 ): string {
-  let output = redactEncodedPii(text, destination, counts);
+  let output = redactEncodedPii(text, destination, taint, counts);
   output = replaceAndCount(
     output,
     PII_PATTERNS.cc,
@@ -694,17 +717,21 @@ function redactPiiText(
     'credit_card',
     counts,
   );
-  output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
-  output = replaceAndCount(output, PHONE_PATTERN, '[REDACTED_PHONE]', 'phone', counts);
-  output = replaceAndCount(output, PII_PATTERNS.ipv4, '[REDACTED_ADDRESS]', 'address', counts);
-  output = replaceAndCount(output, PII_PATTERNS.ipv6, '[REDACTED_ADDRESS]', 'address', counts);
-  output = replaceAndCount(output, ADDRESS_PATTERN, '[REDACTED_ADDRESS]', 'address', counts);
+  if (!ownerReadable(destination, taint, 'email'))
+    output = replaceAndCount(output, PII_PATTERNS.email, '[REDACTED_EMAIL]', 'email', counts);
+  if (!ownerReadable(destination, taint, 'phone'))
+    output = replaceAndCount(output, PHONE_PATTERN, '[REDACTED_PHONE]', 'phone', counts);
+  if (!ownerReadable(destination, taint, 'address')) {
+    output = replaceAndCount(output, PII_PATTERNS.ipv4, '[REDACTED_ADDRESS]', 'address', counts);
+    output = replaceAndCount(output, PII_PATTERNS.ipv6, '[REDACTED_ADDRESS]', 'address', counts);
+    output = replaceAndCount(output, ADDRESS_PATTERN, '[REDACTED_ADDRESS]', 'address', counts);
+  }
 
   if (key !== undefined && ATTENDEE_KEY.test(key) && PERSON_NAME.test(output)) {
     increment(counts, 'attendee_name');
     return '[REDACTED_ATTENDEE_NAME]';
   }
-  if (key !== undefined && ADDRESS_KEY.test(key) && output === text && output.trim().length > 0) {
+  if (key !== undefined && ADDRESS_KEY.test(key) && !ownerReadable(destination, taint, 'address') && output === text && output.trim().length > 0) {
     increment(counts, 'address');
     return '[REDACTED_ADDRESS]';
   }
@@ -747,10 +774,11 @@ function transformJsonStrings(
 function redactPii(
   payload: JsonValue,
   destination: SanitiseDestination,
+  taint: SourceTaint,
 ): { invalid: boolean; payload: JsonValue; redactions: Redaction[] } {
   const counts = new Map<RedactionKind, number>();
   const transformed = transformJsonStrings(payload, (text, key) =>
-    redactPiiText(text, key, destination, counts),
+    redactPiiText(text, key, destination, taint, counts),
   );
   return {
     ...transformed,
@@ -940,7 +968,7 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
-  const pii = redactPii(input.payload, input.destination);
+  const pii = redactPii(input.payload, input.destination, input.source_taint);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);
@@ -965,7 +993,7 @@ export function sanitise(raw: SanitiseInput): SanitiseResult {
   if (health.invalid) return deny('size_cap', 'invalid_payload');
   if (health.matched) return deny('health_value', 'health_value_leak');
 
-  const pii = redactPii(input.payload, input.destination);
+  const pii = redactPii(input.payload, input.destination, input.source_taint);
   if (pii.invalid) return deny('size_cap', 'invalid_payload');
 
   const instructions = inspectInstructions(pii.payload, input.destination, pii.redactions);

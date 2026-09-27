@@ -593,14 +593,14 @@ describe('hook registry', () => {
       ),
     ).resolves.toEqual({
       event: 'PostLLMCall',
-      response: { '[REDACTED_EMAIL]': 'owner' },
+      response: { 'alice@example.com': 'owner' },
       tokens_in: 1,
       tokens_out: 1,
     });
     expect(calls).toBe(1);
   });
 
-  it('never rewrites executable tool-call arguments: text redacts, arguments pass through (2026-09-25 draft_email)', async () => {
+  it('keeps owner-intent addresses readable in text and byte-identical in arguments (2026-09-25 draft_email; owner direction 2026-09-27: no redaction of what a personal agent needs)', async () => {
     const ctx = runtimeCtx({ sanitise });
     const args = JSON.stringify({ to: ['priya@example.com'], subject: 'Deck', body_markdown: 'I will send the deck by Thursday.' });
     const result = await runHooks(
@@ -621,9 +621,9 @@ describe('hook registry', () => {
     expect(result.event).toBe('PostLLMCall');
     if (result.event !== 'PostLLMCall') throw new Error('unreachable');
     const response = result.response as { text: string; tool_calls: { arguments: string }[] };
-    // Owner-bound text keeps full redaction...
-    expect(response.text).toBe('Drafted it to [REDACTED_EMAIL] - not sent.');
-    // ...but the executable call is byte-identical: the recipient IS the call.
+    // Owner-bound text keeps the address readable (owner-readable seam)...
+    expect(response.text).toBe('Drafted it to priya@example.com - not sent.');
+    // ...and the executable call is byte-identical: the recipient IS the call.
     expect(response.tool_calls[0]!.arguments).toBe(args);
   });
 

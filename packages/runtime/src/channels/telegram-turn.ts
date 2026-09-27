@@ -220,6 +220,9 @@ export const createTelegramResponder = (
   // hallucinated Gmail offer, with correct history in the prompt), so these turns escalate
   // to memoryModel for their reply hop. Set by respond() for the duration of one submit.
   let replyModelOverride: ModelName | undefined;
+  // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
+  // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
+  let lastReply: string | undefined;
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, chatId: number, said: string, time: TurnTimer, fromOwner = false) => {
     traceId = id;
@@ -237,7 +240,9 @@ export const createTelegramResponder = (
     // Self-name prefix strip (2026-09-27 staging receipt: 8 of 22 replies opened with
     // "Waldo:"/"Waldo here." - a friend texting never signs their own messages, and the
     // prefixed history taught the model to keep doing it).
-    return publication.text.replace(/^\s*waldo(?:\s+here)?\s*[:.,!\-]\s*/i, '');
+    const out = publication.text.replace(/^\s*waldo(?:\s+here)?\s*[:.,!\-]\s*/i, '');
+    lastReply = out;
+    return out;
   };
   return {
     async respond(turn, time) {
@@ -318,6 +323,9 @@ export const createTelegramResponder = (
     },
     control,
     planDay: (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
-    chooseReaction: async (turn) => (JSON.parse(await ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), turn.text, { name: 'reaction', schema: reactionSchema(TELEGRAM_REACTIONS) })) as { reaction?: string }).reaction ?? null,
+    chooseReaction: async (turn) => {
+      const gist = lastReply === undefined ? turn.text : `${turn.text}\n\n[Your reply just sent: ${lastReply.slice(0, 500)}]`;
+      return (JSON.parse(await ask(`tg-${turn.updateId}`, 'reaction', reactionInstruction(TELEGRAM_REACTIONS), gist, { name: 'reaction', schema: reactionSchema(TELEGRAM_REACTIONS) })) as { reaction?: string }).reaction ?? null;
+    },
   };
 };

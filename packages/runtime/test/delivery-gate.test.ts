@@ -526,7 +526,7 @@ describe('DeliveryGate runtime policy state', () => {
           candidate: {
             push_class: FETCH_ALERT,
             trigger: FETCH_ALERT,
-            event_id: 'alice@example.com',
+            event_id: '4111 1111 1111 1111',
             expires_at: null,
           },
         }),
@@ -841,7 +841,7 @@ describe('DeliveryGate runtime policy state', () => {
         JSON.stringify({
           push_class: FETCH_ALERT,
           trigger: FETCH_ALERT,
-          event_id: 'bob@example.com',
+          event_id: '4111 1111 1111 1111',
           expires_at: null,
         }),
         runId,
