@@ -1,5 +1,5 @@
 import {
-  acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_5_MINI_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -87,7 +87,7 @@ export const createTelegramResponder = (
   // are durable state, so they escalate one rung under cheapest-passing: nano demonstrably
   // does not pass for claim_ops. Bare affirmative/negative turns ("yes") escalate to it for
   // the reply hop too - context-binding is where nano failed worst.
-  memoryModel: ModelName = OPENAI_GPT_5_MINI_MODEL,
+  memoryModel: ModelName = OPENAI_GPT_6_LUNA_MODEL,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
