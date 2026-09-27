@@ -32,7 +32,7 @@ const returnAction = (surface: ConsentSurface | undefined, bot: string | null): 
 };
 
 const COPY: Record<ConsentOutcome['kind'], Readonly<{ status: number; title: string; body: string }>> = {
-  linked: { status: 200, title: 'Google is connected', body: 'Waldo can now read your calendar and help with mail you approve. You can close this tab.' },
+  linked: { status: 200, title: 'Google is connected', body: 'Google access was saved. This does not confirm a live Calendar or Gmail read yet. Try a request in chat to check it. You can close this tab.' },
   denied: { status: 400, title: 'Google was not connected', body: 'Access was not granted. Ask Waldo to connect Google whenever you want to try again.' },
   expired: { status: 410, title: 'This link has expired', body: 'Connect links last 15 minutes. Ask Waldo to connect Google for a fresh one.' },
   invalid: { status: 400, title: 'This link is not valid', body: 'It may have been copied incompletely. Ask Waldo to connect Google for a fresh one.' },
@@ -45,7 +45,9 @@ export const consentPage = (outcome: ConsentOutcome, bot: string | null, surface
   const account = outcome.kind === 'linked' && outcome.email ? `<p class="account">${escape(outcome.email)}</p>` : '';
   const back = returnAction(surface, bot);
   const mark = outcome.kind === 'linked' ? '&#10003;' : '!';
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${copy.title} - Waldo</title>
+  // The callback has already settled server-side. Remove its one-time code and state from
+  // the address bar/history before the owner follows a return link or shares this tab.
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${copy.title} - Waldo</title><script>history.replaceState(null, '', location.pathname);</script>
 <style>:root{color-scheme:light dark;--bg:#f7f7f5;--card:#fff;--ink:#1c1c1a;--muted:#6b6b66;--ok:#1f7a4d;--bad:#b3261e;--btn:#2a6fdb}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1f1f1d;--ink:#ecece8;--muted:#a3a39c;--ok:#5cc28f;--bad:#f2837a;--btn:#5b93f0}}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,sans-serif}
@@ -58,7 +60,7 @@ h1{font-size:22px;margin:0 0 8px}p{margin:0 0 16px;color:var(--muted)}.account{c
     status: copy.status,
     headers: {
       'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer',
-      'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      'content-security-policy': "default-src 'none'; script-src 'sha256-BSHIA8uyEksveTZNsWDdE7q9p6Oqa/LdAOuySBi6RJg='; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     },
   });
 };

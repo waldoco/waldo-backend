@@ -130,6 +130,7 @@ describe('consent result page', () => {
     const html = await response.text();
     expect(response.status).toBe(200);
     expect(html).toContain('Google is connected');
+    expect(html).toContain('does not confirm a live Calendar or Gmail read yet');
     expect(html).toContain('me@example.com');
     expect(html).toContain('href="https://t.me/waldo_bot"');
     expect(html).toContain('Back to Telegram');
@@ -151,11 +152,16 @@ describe('consent result page', () => {
 
   it('escapes the account email and locks down caching, framing and the referrer carrying the code', async () => {
     const response = consentPage({ kind: 'linked', email: '<script>x</script>@e.com', scopes: [] }, null);
-    expect(await response.text()).not.toContain('<script>x');
+    const html = await response.text();
+    expect(html).not.toContain('<script>x');
     expect(response.headers.get('referrer-policy')).toBe('no-referrer');
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('x-frame-options')).toBe('DENY');
     expect(response.headers.get('content-security-policy')).toContain("default-src 'none'");
+    const script = html.match(/<script>(.*?)<\/script>/)?.[1];
+    expect(script).toBe("history.replaceState(null, '', location.pathname);");
+    const hash = btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(script)))));
+    expect(response.headers.get('content-security-policy')).toContain(`script-src 'sha256-${hash}'`);
   });
 
   it('routes each initiating surface back to where it started, with the console as the safe fallback', async () => {
