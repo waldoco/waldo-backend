@@ -289,6 +289,7 @@ const CLAIM_RULES = [
   'When the exchange repeats a claim, list its id in seen. When the owner agrees with an inferred claim, list it in confirm. When the owner corrects a claim, dismiss it and add the corrected one.',
   'Only when the owner explicitly asks to forget something in the text you are reviewing, list the matching claim and node ids in forget_claims and forget_nodes, and name the subject in a few neutral words in forget_topic so it is never relearned. Without an explicit ask in that text, forget_claims and forget_nodes stay empty and forget_topic is null - never forget on your own read of the conversation.',
   'Never record the owner\'s questions or one-off momentary states (asking the time, the weather, what is on the calendar today, a bare yes or no). Record what stays true: preferences, routines, plans, facts about the owner.',
+  'Sources stay sources: a claim about something that lives in a connected source (an email, an event, a file) records what it means for the owner and a pointer to where it lives, never a copy of its contents. Current state of those sources is read live at ask time, not recalled from a claim.',
   'Mark an added claim touches_forgotten when it is about anything the owner asked to forget.',
   'Health routines and how the owner says they feel are fine. Never record a diagnosis Waldo inferred.',
 ];

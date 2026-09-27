@@ -26,6 +26,10 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Never send generic check-ins');
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');
+    expect(MESSAGING_BEHAVIOR).toContain('not the contents of their Gmail, Calendar or Drive');
+    expect(MESSAGING_BEHAVIOR).toContain('read live with its tool when they ask, never recalled from memory');
+    expect(MESSAGING_BEHAVIOR).toContain('reading and triage are read-only until the owner decides');
+    expect(MESSAGING_BEHAVIOR).toContain('Nothing sends on its own');
   });
 });
 
