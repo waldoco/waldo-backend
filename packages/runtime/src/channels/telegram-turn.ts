@@ -26,6 +26,15 @@ import { STOPPED_REPLY, turnControl } from './turn-control';
 import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 
+// The owner's approval line (owner direction 2026-09-27): first-party state - his own memory,
+// tasks, sheets, drafts - proceeds without a per-action card. Anything that could reach another
+// person or an outside service (messages, browser submits, MCP calls) needs his clear yes, so
+// until those flows carry a proposal card the gate halts them with a typed reason instead of
+// executing silently. The taint gate still runs before this and blocks external-tainted
+// privileged calls outright.
+const EXTERNAL_REACH_TOOLS = new Set(['send_message', 'execute_action', 'call_mcp_tool', 'delete_message', 'restore_message']);
+export const telegramOwnerApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
+
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
 const MAX_TOOL_ROUNDS = 25;
 const CLINICAL_FALLBACK = {
@@ -88,6 +97,7 @@ export const createTelegramResponder = (
   const safety = {
     authenticatedUserId: ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
     sourceTaint: null, toolArgSourceTaint: null,
+    hasApproval: telegramOwnerApproval,
     sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
