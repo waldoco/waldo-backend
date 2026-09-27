@@ -57,3 +57,21 @@ export function messagingSystemPrompt(tools: readonly string[]): string {
   const available = tools.length === 0 ? 'Tools available in this chat: none.' : `Tools available in this chat: ${[...tools].sort().join(', ')}.`;
   return `${MESSAGING_BEHAVIOR}\n\n${available}`;
 }
+
+export type MessagingClock = Readonly<{ timezone: string; now: () => Date }>;
+
+// Time grounding (2026-09-27 staging receipt: the reply model greeted "Morning" at 5pm IST -
+// the prompt carried no time signal and get_context was never called). This line anchors
+// greetings and time-of-day references at prompt build; get_context stays the fresh-precision
+// path. A malformed stored timezone must not fail the turn: fall back to UTC.
+export function ownerClockLine(clock: MessagingClock): string {
+  let zone = clock.timezone;
+  let local: string;
+  try {
+    local = new Intl.DateTimeFormat('en-GB', { timeZone: zone, dateStyle: 'full', timeStyle: 'short' }).format(clock.now());
+  } catch {
+    zone = 'UTC';
+    local = new Intl.DateTimeFormat('en-GB', { timeZone: 'UTC', dateStyle: 'full', timeStyle: 'short' }).format(clock.now());
+  }
+  return `The owner's current local time: ${local} (${zone}). Anchor greetings and time-of-day references to this; call get_context if you need fresh precision mid-turn.`;
+}
