@@ -108,8 +108,8 @@ describe('several Google accounts', () => {
 
   it('shows one row per account, each with its own disconnect and health', () => {
     const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: true, accounts: [
-      { id: 'c-1', email: 'me@work.test', error: null, mail: true },
-      { id: 'c-2', email: 'me@home.test', error: 'invalid_grant', mail: false },
+      { id: 'c-1', email: 'me@work.test', error: null, calendar: true, mail: true, tasks: true },
+      { id: 'c-2', email: 'me@home.test', error: 'invalid_grant', calendar: true, mail: false, tasks: false },
     ] } });
     expect(html).toContain('Google: me@work.test');
     expect(html).toContain('name="id" value="c-2"');
