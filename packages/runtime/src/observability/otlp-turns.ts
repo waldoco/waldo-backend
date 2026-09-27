@@ -8,13 +8,14 @@ type Send = (url: string, init: RequestInit) => Promise<Response>;
 type Span = Readonly<{ entry: TurnLogEntry; endMs: number }>;
 
 // Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
-export const TRACE_SCHEMA_VERSION = '2';
+export const TRACE_SCHEMA_VERSION = '3';
 
 // Every hop has one feature area and a Langfuse observation type. New hops land in `other`
 // as plain spans until they are added here; model calls (`llm_*`) are always generations.
 type Hop = Readonly<{ feature: string; type: 'agent' | 'chain' | 'tool' | 'span' }>;
 export const HOPS: Readonly<Record<string, Hop>> = {
   turn: { feature: 'turn', type: 'agent' },
+  machine_turn: { feature: 'schedule', type: 'agent' },
   pickup: { feature: 'channel', type: 'span' },
   typing: { feature: 'channel', type: 'tool' }, progress: { feature: 'channel', type: 'tool' }, send: { feature: 'channel', type: 'tool' },
   receipt: { feature: 'reactions', type: 'tool' }, resolved: { feature: 'reactions', type: 'tool' }, choose_reaction: { feature: 'reactions', type: 'chain' },
@@ -23,6 +24,10 @@ export const HOPS: Readonly<Record<string, Hop>> = {
   llm_reply: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
 };
 export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
+
+// Machine turns (reminder fires, heartbeat ticks, nightly, standing orders) close their trace
+// with a machine_turn root instead of turn; without a root the spans never leave `pending`.
+const ROOT_NAMES: Readonly<Record<string, string>> = { turn: 'turn', machine_turn: 'machine' };
 
 export const langfuseOtlpConfig = (env: Env): OtlpConfig | null => {
   const { LANGFUSE_PUBLIC_KEY: pk, LANGFUSE_SECRET_KEY: sk, LANGFUSE_BASE_URL: base } = env;
@@ -47,6 +52,8 @@ const tagsFor = (context: TraceContext, spans: readonly Span[]) => [
 export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send: Send = fetch, now: () => number = Date.now) => {
   const pending = new Map<string, Span[]>();
   const exported = new Map<string, Readonly<{ traceId: string; rootId: string }>>();
+
+  const rootName = (hop: string) => `${context.channel}.${ROOT_NAMES[hop] ?? 'turn'}`;
 
   const observationType = (hop: string) => HOPS[hop]?.type ?? (hop.startsWith('tool_') ? 'tool' : 'span');
   const generation = ({ hop, usage }: TurnLogEntry) => {
@@ -92,7 +99,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
 
   const span = (traceId: string, spanId: string, parentSpanId: string | undefined, { entry, endMs }: Span, extra: readonly object[] = []) => ({
     traceId, spanId, ...(parentSpanId ? { parentSpanId } : {}),
-    name: parentSpanId ? entry.hop : `${context.channel}.turn`, kind: 1,
+    name: parentSpanId ? entry.hop : rootName(entry.hop), kind: 1,
     startTimeUnixNano: nanos(endMs - entry.ms), endTimeUnixNano: nanos(endMs),
     attributes: [
       attr('langfuse.environment', context.environment),
@@ -124,7 +131,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
     const item = { entry, endMs: now() };
     const done = exported.get(entry.trace);
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))])]);
-    if (entry.hop !== 'turn') {
+    if (entry.hop !== 'turn' && entry.hop !== 'machine_turn') {
       pending.set(entry.trace, [...(pending.get(entry.trace) ?? []), item]);
       if (pending.size > 50) pending.delete(pending.keys().next().value!);
       return Promise.resolve();
@@ -135,7 +142,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
     exported.set(entry.trace, ids);
     if (exported.size > 50) exported.delete(exported.keys().next().value!);
     const root = span(ids.traceId, ids.rootId, undefined, item, [
-      attr('langfuse.trace.name', `${context.channel}.turn`),
+      attr('langfuse.trace.name', rootName(entry.hop)),
       attr('langfuse.user.id', context.userId),
       attr('langfuse.session.id', context.sessionId),
       attr('langfuse.release', context.release),
@@ -144,7 +151,7 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       attr('langfuse.trace.metadata.schema_version', TRACE_SCHEMA_VERSION),
       attr('langfuse.trace.metadata.channel', context.channel),
       attr('langfuse.trace.metadata.trace_key', entry.trace),
-      attr('langfuse.trace.metadata.outcome', entry.ok ? 'answered' : 'failed'),
+      attr('langfuse.trace.metadata.outcome', entry.ok ? (entry.hop === 'turn' ? 'answered' : 'completed') : 'failed'),
       ...totals(hops),
       ...traceIo(item.entry),
     ]);
