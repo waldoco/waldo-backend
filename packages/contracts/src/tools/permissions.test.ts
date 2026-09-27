@@ -33,12 +33,14 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 49 canonical tools, in order', () => {
+  it('is exactly the 51 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
       'query_calendar',
       'get_communication',
+      'search_communication',
+      'read_thread',
       'get_tasks',
       'get_master_metrics',
       'get_context',
@@ -112,6 +114,8 @@ describe('TOOL_PERMISSIONS', () => {
         'query_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
@@ -129,6 +133,8 @@ describe('TOOL_PERMISSIONS', () => {
         'query_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
@@ -142,6 +148,8 @@ describe('TOOL_PERMISSIONS', () => {
         'query_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
@@ -180,6 +188,8 @@ describe('TOOL_PERMISSIONS', () => {
         'query_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
@@ -238,11 +248,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 48 of 49', () => {
+  it('grants no trigger the full surface — user_message tops out at 50 of 51', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(48);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(50);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {

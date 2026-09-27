@@ -99,7 +99,10 @@ export class GoogleError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 export type CalendarChange = CalendarItem & Readonly<{ status: string; created: string }>;
-export type MailItem = Readonly<{ id: string; from: string; subject: string; snippet: string; at: string }>;
+export type MailItem = Readonly<{ id: string; thread_id: string; from: string; subject: string; snippet: string; at: string }>;
+// A1: a thread-read message carries the decoded body; the list projection (MailItem) stays
+// snippet-only so 'what is new' scans never pull bodies into a turn.
+export type ThreadMessage = Readonly<{ id: string; from: string; subject: string; at: string; body: string }>;
 export type DraftInput = Readonly<{ to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[]; subject: string; body: string; threadId?: string }>;
 
 // Canonical MIME for the send rail: fixed header order, CRLF, no display names. The digest the
@@ -138,8 +141,29 @@ export type GoogleClient = Readonly<{
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
+  searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
+  readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
+
+const b64urlDecode = (data: string): string => {
+  const binary = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+  return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
+};
+
+// Thread bodies enter model context only through the E1 verification-artifact quarantine
+// (tools/live/google.ts); this cap is the second wall - a huge body never floods a turn.
+const BODY_CAP = 4000;
+type GmailPayload = Readonly<{ mimeType?: string; body?: { data?: string }; parts?: GmailPayload[]; headers?: { name: string; value: string }[] }>;
+type GmailFullMessage = Readonly<{ id?: string; snippet?: string; internalDate?: string; payload?: GmailPayload }>;
+const threadBody = (payload: GmailPayload | undefined): string => {
+  const plain = (part: GmailPayload): string => {
+    if (part.mimeType === 'text/plain' && part.body?.data) return b64urlDecode(part.body.data);
+    for (const child of part.parts ?? []) { const text = plain(child); if (text) return text; }
+    return '';
+  };
+  return (payload ? plain(payload) : '').trim().slice(0, BODY_CAP);
+};
 
 // health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void): GoogleClient {
@@ -164,6 +188,18 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
   const match = (etag?: string): Record<string, string> => (etag ? { 'if-match': etag } : {});
   const send = async (url: string, method: string, body: unknown, etag?: string) =>
     toItem(await call(url, { method, headers: { 'content-type': 'application/json', ...match(etag) }, body: JSON.stringify(body) }) as unknown as GoogleEvent);
+  const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
+  const listIds = async (q: string, limit: number): Promise<readonly string[]> => {
+    const list = new URL(GMAIL);
+    list.search = new URLSearchParams({ q, maxResults: String(limit) }).toString();
+    const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
+    return messages.map((message) => message.id);
+  };
+  const mailItems = (ids: readonly string[]): Promise<readonly MailItem[]> => Promise.all(ids.map(async (id) => {
+    const message = await call(`${GMAIL}/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`) as { threadId?: string; snippet?: string; internalDate?: string; payload?: { headers?: { name: string; value: string }[] } };
+    const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
+    return { id, thread_id: message.threadId ?? '', from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
+  }));
   return {
     event: async (id) => toItem(await call(`${EVENTS}/${encodeURIComponent(id)}`) as unknown as GoogleEvent),
     createEvent: ({ title, start, end }) => send(EVENTS, 'POST', { summary: title, start: { dateTime: start }, end: { dateTime: end } }),
@@ -189,15 +225,25 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
         .map((event) => ({ ...toItem({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' }));
     },
     async newMail(since, limit) {
-      const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
-      const list = new URL(GMAIL);
-      list.search = new URLSearchParams({ q: `in:inbox category:primary after:${Math.floor(since / 1000)}`, maxResults: String(limit) }).toString();
-      const { messages = [] } = await call(list.toString()) as { messages?: { id: string }[] };
-      return Promise.all(messages.map(async ({ id }) => {
-        const message = await call(`${GMAIL}/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`) as { snippet?: string; internalDate?: string; payload?: { headers?: { name: string; value: string }[] } };
+      return mailItems(await listIds(`in:inbox category:primary after:${Math.floor(since / 1000)}`, limit));
+    },
+    // A1: arbitrary Gmail search - the model builds q clauses (from:, subject:, words) and the
+    // handler appends after:/before: from the date range. Same metadata projection as newMail.
+    async searchMail(query, limit) {
+      return mailItems(await listIds(query, limit));
+    },
+    // A1: one thread with bodies decoded. text/plain wins; an HTML-only or empty body falls
+    // back to the snippet so the model still sees something.
+    async readThread(threadId, limit) {
+      const json = await call(`https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=full`) as { messages?: GmailFullMessage[] };
+      return (json.messages ?? []).slice(0, limit).map((message) => {
         const header = (name: string) => message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? '';
-        return { id, from: header('From'), subject: header('Subject'), snippet: message.snippet ?? '', at: new Date(Number(message.internalDate ?? 0)).toISOString() };
-      }));
+        return {
+          id: message.id ?? '', from: header('From'), subject: header('Subject'),
+          at: new Date(Number(message.internalDate ?? 0)).toISOString(),
+          body: threadBody(message.payload) || (message.snippet ?? ''),
+        };
+      });
     },
     async tasks(status, limit) {
       const url = new URL('https://tasks.googleapis.com/tasks/v1/lists/@default/tasks');

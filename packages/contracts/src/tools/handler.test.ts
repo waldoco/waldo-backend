@@ -258,6 +258,8 @@ describe('external-origin tool classification — ADR-0049', () => {
     expect(EXTERNAL_ORIGIN_TOOLS).toEqual([
       'query_calendar',
       'get_communication',
+      'search_communication',
+      'read_thread',
       'get_tasks',
       'web_search',
       'read_document',

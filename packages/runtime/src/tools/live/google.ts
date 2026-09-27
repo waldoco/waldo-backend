@@ -1,7 +1,7 @@
 import { artifactMarker, quarantineArtifacts, type ArtifactKind } from '../../security/artifact-hygiene';
 import {
-  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
-  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
+  connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
+  type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import type { EmailSendProposal } from '../../channels/approvals';
@@ -56,6 +56,17 @@ ${item.snippet}`);
   return { ...item, subject: marker, snippet: marker, quarantined: q.kinds };
 };
 
+// E1 for thread bodies (same fixed pattern set as the list projection): a verification
+// artifact anywhere in the visible text quarantines subject and body together - the owner
+// reads the code or link in Gmail itself, never through the model.
+const quarantineThreadMessage = <T extends { subject: string; body: string }>(item: T): T & { quarantined?: readonly ArtifactKind[] } => {
+  const q = quarantineArtifacts(`${item.subject}
+${item.body}`);
+  if (q.kinds.length === 0) return item;
+  const marker = q.kinds.map(artifactMarker).join(' ');
+  return { ...item, subject: marker, body: marker, quarantined: q.kinds };
+};
+
 export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: OwnerClock) => [
   {
     name: 'query_calendar',
@@ -81,6 +92,30 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       return { since: new Date(since).toISOString(), messages: (await client.newMail(since, 10)).map(quarantineMailItem) };
     }),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,
+  {
+    name: 'search_communication',
+    description: "Search the owner's Gmail by sender, subject or words, optionally in a date range. Returns matching messages with from, subject, snippet, time and thread_id. Use get_communication for 'what is new' instead, and read_thread to read one thread in full.",
+    schema: searchCommunicationArgsSchema,
+    trigger_allowlist: allowlist('search_communication'),
+    autonomy_gated: false,
+    handle: ({ query, date_range, limit }: SearchCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
+      const clauses = [query];
+      if (date_range?.from) clauses.push(`after:${Math.floor(Date.parse(date_range.from) / 1000)}`);
+      if (date_range?.to) clauses.push(`before:${Math.floor(Date.parse(date_range.to) / 1000)}`);
+      return { query, messages: (await client.searchMail(clauses.join(' '), limit)).map(quarantineMailItem) };
+    }),
+  } satisfies ToolHandler<SearchCommunicationArgs, unknown, ToolDispatcherContext>,
+  {
+    name: 'read_thread',
+    description: "Read one Gmail thread by thread_id - the messages with sender, subject, time and body. Use after get_communication or search_communication surfaces a thread the owner asks about, before drafting a reply.",
+    schema: readThreadArgsSchema,
+    trigger_allowlist: allowlist('read_thread'),
+    autonomy_gated: false,
+    handle: ({ thread_id, limit }: ReadThreadArgs) => withGoogle(google, 'mail', async (client) => ({
+      thread_id,
+      messages: (await client.readThread(thread_id, limit)).map(quarantineThreadMessage),
+    })),
+  } satisfies ToolHandler<ReadThreadArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_tasks',
     description: "Read the owner's Google Tasks (default list). Defaults to open tasks. Google Tasks has no in-progress state; asking for it returns the open tasks with a note.",

@@ -4,7 +4,7 @@ import {
   callMcpToolArgsSchema,
   callMcpToolResultSchema,
   executeActionArgsSchema,
-  getCommunicationArgsSchema,
+  getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
@@ -308,5 +308,21 @@ describe('date_range guidance and strictness', () => {
     expect(description).toContain('seconds');
     expect(description).toContain('offset');
     expect(description).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+  });
+});
+
+describe('searchCommunicationArgs / readThreadArgs (A1)', () => {
+  it('search requires a non-empty query, caps the limit at 20, and defaults it to 10', () => {
+    expect(searchCommunicationArgsSchema.safeParse({ query: 'from:sam' }).success).toBe(true);
+    expect(searchCommunicationArgsSchema.parse({ query: 'from:sam' }).limit).toBe(10);
+    expect(searchCommunicationArgsSchema.safeParse({}).success).toBe(false);
+    expect(searchCommunicationArgsSchema.safeParse({ query: '' }).success).toBe(false);
+    expect(searchCommunicationArgsSchema.safeParse({ query: 'x', limit: 21 }).success).toBe(false);
+    expect(searchCommunicationArgsSchema.safeParse({ query: 'x', extra: 1 }).success).toBe(false);
+  });
+  it('read_thread requires a thread id', () => {
+    expect(readThreadArgsSchema.safeParse({ thread_id: 't1' }).success).toBe(true);
+    expect(readThreadArgsSchema.safeParse({}).success).toBe(false);
+    expect(readThreadArgsSchema.safeParse({ thread_id: '' }).success).toBe(false);
   });
 });

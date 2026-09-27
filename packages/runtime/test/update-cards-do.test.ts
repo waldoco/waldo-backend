@@ -27,7 +27,7 @@ describe('update cards', () => {
         { ...event, id: 'e2', title: 'Standup', status: 'confirmed', created: '2026-09-01T00:00:00Z' },
         { ...event, id: 'e3', title: 'Lunch', status: 'cancelled', created: '2026-09-01T00:00:00Z' },
       ];
-      const mail: MailItem[] = [{ id: 'm1', from: 'Asha <asha@example.com>', subject: 'Deck by 5?', snippet: 'Can you', at: '2026-09-23T04:06:00Z' }];
+      const mail: MailItem[] = [{ thread_id: 't9', id: 'm1', from: 'Asha <asha@example.com>', subject: 'Deck by 5?', snippet: 'Can you', at: '2026-09-23T04:06:00Z' }];
       const t1 = t0 + 10 * 60_000;
       const changes = await collectChanges(book, fake(calendar, mail, asked), t1);
       expect(asked).toEqual([['calendar', t0, t1, t1 + 2 * 86_400_000], ['mail', t0, 10]]);
@@ -65,7 +65,7 @@ describe('update cards', () => {
     }) as unknown as typeof fetch;
     const client = googleClient({ clientId: 'c', clientSecret: 's', redirectUri: 'https://r.test' }, { refresh_token: 'r' }, fetcher);
     expect(await client.changedEvents(t0, t0, t0 + 1000)).toEqual([{ id: 'x', title: '(no title)', start: '', end: '', all_day: true, status: 'cancelled', created: '2026-09-01T00:00:00Z' }]);
-    expect(await client.newMail(t0, 5)).toEqual([{ id: 'm1', from: 'A <a@x.test>', subject: 'Hello', snippet: 'hi', at: new Date(t0).toISOString() }]);
+    expect(await client.newMail(t0, 5)).toEqual([{ id: 'm1', thread_id: '', from: 'A <a@x.test>', subject: 'Hello', snippet: 'hi', at: new Date(t0).toISOString() }]);
     const events = new URL(urls.find((url) => url.includes('/events?'))!);
     expect([events.searchParams.get('updatedMin'), events.searchParams.get('showDeleted')]).toEqual([new Date(t0).toISOString(), 'true']);
     expect(new URL(urls.find((url) => url.includes('/messages?'))!).searchParams.get('q')).toBe(`in:inbox category:primary after:${t0 / 1000}`);

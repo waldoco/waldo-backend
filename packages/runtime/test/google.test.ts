@@ -256,3 +256,94 @@ describe('get_tasks', () => {
     if (!result.ok) expect(result).toMatchObject({ code: 'auth_failed', connect: { feature: 'tasks', reason: 'not_connected' } });
   });
 });
+
+describe('gmail search + thread read (A1)', () => {
+  const b64 = (text: string) => btoa(text).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+  const mailFetcher = (calls: string[]) => (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+    if (url.includes('/gmail/v1/users/me/threads/t1')) return Response.json({ messages: [
+      { id: 'm1', internalDate: '1759140000000', snippet: 'snip',
+        payload: { mimeType: 'multipart/alternative', headers: [{ name: 'From', value: 'sam@example.com' }, { name: 'Subject', value: 'Dinner' }],
+          parts: [{ mimeType: 'text/plain', body: { data: b64('Thursday works, 7pm.') } }, { mimeType: 'text/html', body: { data: b64('<p>ignored</p>') } }] } },
+      { id: 'm2', internalDate: '1759143600000', snippet: 'code falls back',
+        payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: 'noreply@example.com' }, { name: 'Subject', value: 'Sign in' }], body: { data: b64('Your login code is 123456.') } } },
+    ] });
+    if (url.includes('/gmail/v1/users/me/messages/m1?')) return Response.json({ threadId: 't1', snippet: 'snip', internalDate: '1759140000000', payload: { headers: [{ name: 'From', value: 'sam@example.com' }, { name: 'Subject', value: 'Dinner' }] } });
+    if (url.includes('/gmail/v1/users/me/messages/m9?')) return Response.json({ threadId: 't9', snippet: 'G-654321 is your Google verification code', internalDate: '1759140000000', payload: { headers: [{ name: 'From', value: 'no-reply@google.com' }, { name: 'Subject', value: 'G-654321 is your Google verification code' }] } });
+    if (url.includes('/gmail/v1/users/me/messages?')) return Response.json({ messages: [{ id: 'm1' }, { id: 'm9' }] });
+    return new Response('{}', { status: 404 });
+  }) as typeof fetch;
+  const access = (calls: string[]): GoogleAccess => ({ client: async () => googleClient(app, { refresh_token: 'rt' }, mailFetcher(calls)) });
+
+  it('searchMail passes the q clauses through and returns thread ids for chaining into read_thread', async () => {
+    const calls: string[] = [];
+    const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher(calls));
+    const items = await client.searchMail('from:sam@example.com after:1759000000', 10);
+    expect(items).toHaveLength(2);
+    expect(items[0]!).toEqual({ id: 'm1', thread_id: 't1', from: 'sam@example.com', subject: 'Dinner', snippet: 'snip', at: new Date(1759140000000).toISOString() });
+    const listUrl = decodeURIComponent(calls.find((u) => u.includes('messages?'))!).replace(/\+/g, ' ');
+    expect(listUrl).toContain('q=from:sam@example.com after:1759000000');
+    expect(listUrl).toContain('maxResults=10');
+  });
+
+  it('search_communication appends the date range as after:/before: and quarantines a verification artifact before model context', async () => {
+    const calls: string[] = [];
+    const handlers = googleHandlers(access(calls), desk, clock);
+    const search = handlers.find((h) => h.name === 'search_communication')!;
+    const result = await search.handle({ query: 'code', date_range: { from: '2026-09-28T00:00:00Z', to: '2026-09-30T00:00:00Z' }, limit: 10 } as never);
+    expect(result.ok).toBe(true);
+    const data = (result as { data: { messages: { id: string; subject: string; snippet: string; quarantined?: readonly string[] }[] } }).data;
+    const normal = data.messages.find((m) => m.id === 'm1')!;
+    expect(normal.subject).toBe('Dinner');
+    expect(normal.quarantined).toBeUndefined();
+    const otp = data.messages.find((m) => m.id === 'm9')!;
+    expect(otp.subject).toContain('[quarantined: otp artifact');
+    expect(otp.quarantined).toEqual(['otp']);
+    expect(JSON.stringify(data)).not.toContain('654321');
+    const listUrl = decodeURIComponent(calls.find((u) => u.includes('messages?'))!);
+    expect(listUrl).toContain(`after:${Math.floor(Date.parse('2026-09-28T00:00:00Z') / 1000)}`);
+    expect(listUrl).toContain(`before:${Math.floor(Date.parse('2026-09-30T00:00:00Z') / 1000)}`);
+  });
+
+  it('readThread decodes the text/plain body, falls back to the snippet, and caps at 4000 chars', async () => {
+    const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher([]));
+    const messages = await client.readThread('t1', 10);
+    expect(messages).toHaveLength(2);
+    expect(messages[0]!.body).toBe('Thursday works, 7pm.');
+    expect(messages[0]!.from).toBe('sam@example.com');
+    const big = 'x'.repeat(5000);
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json({ access_token: 'at' });
+      return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'text/plain', headers: [], body: { data: b64(big) } } }] });
+    }) as typeof fetch;
+    const [message] = await googleClient(app, { refresh_token: 'rt' }, fetcher).readThread('t1', 10);
+    expect(message!.body).toHaveLength(4000);
+  });
+
+  it('read_thread quarantines a body carrying an OTP - the raw code never reaches the model', async () => {
+    const handlers = googleHandlers(access([]), desk, clock);
+    const read = handlers.find((h) => h.name === 'read_thread')!;
+    const result = await read.handle({ thread_id: 't1', limit: 10 });
+    expect(result.ok).toBe(true);
+    const { messages } = (result as { data: { messages: { id: string; body: string; subject: string; quarantined?: readonly string[] }[] } }).data;
+    expect(messages[0]!.body).toBe('Thursday works, 7pm.');
+    expect(messages[1]!.quarantined).toEqual(['otp']);
+    expect(messages[1]!.body).toContain('[quarantined: otp artifact');
+    expect(messages[1]!.subject).toContain('[quarantined: otp artifact');
+    expect(JSON.stringify(messages)).not.toContain('123456');
+  });
+
+  it('both handlers return the typed connect intent (never a URL) when Google is not connected', async () => {
+    const offline: GoogleAccess = { client: async () => null };
+    const handlers = googleHandlers(offline, desk, clock);
+    for (const [name, args] of [['search_communication', { query: 'x', limit: 10 }], ['read_thread', { thread_id: 't1', limit: 10 }]] as const) {
+      const result = await handlers.find((h) => h.name === name)!.handle(args as never);
+      expect(result).toMatchObject({ ok: false, code: 'auth_failed', source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: 'not_connected', feature: 'mail' } });
+      expect(JSON.stringify(result)).not.toContain('http');
+    }
+  });
+});
