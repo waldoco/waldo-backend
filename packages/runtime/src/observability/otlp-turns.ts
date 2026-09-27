@@ -107,6 +107,11 @@ export const otlpTurnExporter = (config: OtlpConfig, context: TraceContext, send
       attr('langfuse.observation.metadata.feature', hopFeature(entry.hop)),
       attr('langfuse.observation.metadata.trace_key', entry.trace),
       ...(entry.detail ? [attr('langfuse.observation.metadata.detail', entry.detail)] : []),
+      // Typed failure identity rides its own attribute so a halted hop stays diagnosable
+      // when captureText gates the free-form error off: "code:reason" (e.g.
+      // "transient:approval_denied" pins the autonomy gate, "transient:sanitise_denied" the
+      // scribe) without exposing any argument or content.
+      ...(entry.code ? [attr('langfuse.observation.metadata.code', entry.code)] : []),
       ...(entry.guard ? [attr('langfuse.observation.metadata.guard', entry.guard)] : []),
       ...(entry.owner ? [attr('langfuse.observation.metadata.owner', entry.owner)] : []),
       ...generation(entry),
