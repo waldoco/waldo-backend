@@ -3,6 +3,7 @@
 // composer can stage them as tool_result sources with provenance and taint.
 import type { ContextFragment } from '../context-composer/types';
 import type { SourceTaint } from '@waldo/contracts';
+import { prepareWithScribe, type StrictSchema } from '../scribe/prepare';
 
 export type ToolOutputEntry = Readonly<{
   tool: string;
@@ -24,10 +25,37 @@ type KeyValueStorage = {
 
 const entryKey = (seq: number) => `toolout:${String(seq).padStart(10, '0')}`;
 
+const summaryAdmissionSchema: StrictSchema<string> = {
+  safeParse(value) {
+    return typeof value === 'string' ? { success: true, data: value } : { success: false };
+  },
+};
+
+// Tool-output summaries are staged into every later turn's prompt canvas as tool_result
+// fragments. A summary the scribe denies at that boundary (canary-shaped 16-hex token, fence
+// closer, injected instruction, structured secret) must never persist: once inside the ring it
+// fails every turn BEFORE any tool call can record, so the ring never rotates and the outage is
+// self-sustaining - the 2026-09-27 staging reply-outage root cause (trace chain
+// fbdd97e1 -> 8e717c7e -> :material:tool_result). Exact session canaries are per-runtime and
+// unknown at ledger time; the shape/fence/instruction guards are turn-independent and catch the class.
+const admitsForPrompt = (summary: string, taint: SourceTaint): boolean => {
+  // The exact-canary check is turn-scoped and meaningless here (the real tokens do not exist
+  // yet), but the contract schema requires exactly 3 distinct 16-hex tokens. Random throwaway
+  // tokens satisfy the schema with no false-positive risk (48 hex chars of entropy per call)
+  // while the shape/fence/secret scans - the turn-independent guards this admission check
+  // exists for - run unchanged. The payload must survive unrewritten: a fragment the scribe
+  // would transform on its way to the canvas is staged differently than what was recorded.
+  const throwawayCanaries = Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
+  const prepared = prepareWithScribe(summary, summaryAdmissionSchema, 'system_prompt', taint, throwawayCanaries);
+  return prepared.ok && prepared.value === summary;
+};
+
 export const toolOutputLedger = (storage: KeyValueStorage) => ({
   async record(entry: Omit<ToolOutputEntry, 'at'> & { at: number }): Promise<void> {
-    const count = (await storage.get<number>('toolout-count')) ?? 0;
     const summary = entry.summary.length > MAX_SUMMARY_CHARS ? `${entry.summary.slice(0, MAX_SUMMARY_CHARS)}...` : entry.summary;
+    // Admission guard at write time: a poisoned summary is dropped, never persisted.
+    if (!admitsForPrompt(summary, entry.taint)) return;
+    const count = (await storage.get<number>('toolout-count')) ?? 0;
     await storage.put({ [entryKey(count)]: { ...entry, summary }, 'toolout-count': count + 1 });
     // Ring: drop the oldest once we exceed the cap.
     if (count + 1 > MAX_KEPT) await storage.delete([entryKey(count - MAX_KEPT)]);
@@ -37,9 +65,18 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
     const entries = [...rows.entries()]
       .filter(([key]) => key !== 'toolout-count')
       .sort(([a], [b]) => a.localeCompare(b))
-      .slice(-MAX_KEPT)
-      .map(([, entry]) => entry);
-    return entries.map((entry) => ({
+      .slice(-MAX_KEPT);
+    // Same guard on read: legacy entries persisted before the write guard existed are evicted
+    // from storage (self-heal - this is the eviction the dead-turn ring could not perform) and
+    // excluded from the staged fragments, so the next turn composes clean and the ring resumes.
+    const poisonedKeys: string[] = [];
+    const clean = entries.filter(([key, entry]) => {
+      if (admitsForPrompt(entry.summary, entry.taint)) return true;
+      poisonedKeys.push(key);
+      return false;
+    });
+    if (poisonedKeys.length > 0) await storage.delete(poisonedKeys);
+    return clean.map(([, entry]) => entry).map((entry) => ({
       text: `${entry.tool} ${entry.ok ? 'succeeded' : 'failed'}: ${entry.summary}`,
       source: {
         source_key: `tool_output:${entry.tool}:${entry.at}`,
