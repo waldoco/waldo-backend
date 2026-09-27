@@ -60,6 +60,103 @@ describe('approval desk', () => {
     });
   });
 
+  it('message_send: proposes with Send it / Modify / Not now, executes verbatim ONLY on approve, collapses a repeated idempotency key', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-message'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      const delivered: string[] = [];
+      let now = 1_000_000;
+      let n = 0;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+        sendMessage: async (p) => { delivered.push(`${p.channel}:${p.content}`); },
+      });
+      const id = await desk.proposeSendMessage({ channel: 'telegram', content: 'Running 10 late', idempotency_key: 'k'.repeat(64) });
+      expect(sent[0]!.body.text).toBe('Send this message? Send this on telegram: "Running 10 late"');
+      const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
+      expect(keyboard).toContain(`a:${id}`);
+      expect(keyboard).toContain(`e:${id}`);
+      expect(keyboard).toContain(`s:${id}`);
+      expect(delivered).toEqual([]);
+
+      await desk.callback({ id: 'q1', from: { id: 42 }, data: `a:${id}` }, 't');
+      expect(delivered).toEqual(['telegram:Running 10 late']);
+
+      // never undoable
+      const undone = await desk.decide(id, 'u', 't');
+      expect(undone.toast).toBe("Can't be undone");
+
+      // ADR-0054: a second proposal with the same key approves onto the first send
+      const id2 = await desk.proposeSendMessage({ channel: 'telegram', content: 'Running 10 late', idempotency_key: 'k'.repeat(64) });
+      const again = await desk.decide(id2, 'a', 't');
+      expect(again.toast).toBe('Already sent');
+      expect(delivered).toHaveLength(1);
+
+      // a different key sends independently
+      const id3 = await desk.proposeSendMessage({ channel: 'telegram', content: 'Running 10 late', idempotency_key: 'z'.repeat(64) });
+      const fresh = await desk.decide(id3, 'a', 't');
+      expect(fresh.toast).toBe('Sent');
+      expect(delivered).toHaveLength(2);
+
+      // 12-hour TTL applies
+      const id4 = await desk.proposeSendMessage({ channel: 'telegram', content: 'hi', idempotency_key: 'y'.repeat(64) });
+      now += PROPOSAL_TTL_MS + 1;
+      const late = await desk.decide(id4, 'a', 't');
+      expect(late.toast).toBe('This proposal expired');
+
+      // no executor configured -> honest refusal
+      const desk2 = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const id5 = await desk2.proposeSendMessage({ channel: 'telegram', content: 'hi', idempotency_key: 'x'.repeat(64) });
+      const noExec = await desk2.decide(id5, 'a', 't');
+      expect(noExec.toast).toBe('Messaging is not set up');
+    });
+  });
+
+  it('mcp_call: proposes with Do it / Not now, executes ONLY on approve and reports a bounded outcome, never undoes', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-mcp'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      const executed: string[] = [];
+      let now = 1_000_000;
+      let n = 0;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+        mcpCall: async (p) => { executed.push(`${p.server}.${p.tool}`); return 'Result (external content, bounded): {"ok":true} (protocol 2025-06-18)'; },
+      });
+      const id = await desk.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: { n: 1 } });
+      expect(sent[0]!.body.text).toBe('Run this MCP tool? Run merge_pr on the github MCP server');
+      const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
+      expect(keyboard).toContain(`a:${id}`);
+      expect(keyboard).toContain(`s:${id}`);
+      expect(keyboard).not.toContain(`e:${id}`);
+      expect(executed).toEqual([]);
+
+      const out = await desk.decide(id, 'a', 't');
+      expect(out.toast).toBe('Done');
+      expect(out.message).toContain('Result (external content, bounded)');
+      expect(executed).toEqual(['github.merge_pr']);
+
+      // never undoable
+      const undone = await desk.decide(id, 'u', 't');
+      expect(undone.toast).toBe("Can't be undone");
+
+      // no executor configured -> honest refusal
+      const desk2 = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const id2 = await desk2.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: {} });
+      const noExec = await desk2.decide(id2, 'a', 't');
+      expect(noExec.toast).toBe('MCP is not set up');
+      expect(executed).toHaveLength(1);
+    });
+  });
+
   it('sends a card, applies only on Approve, undoes within the window, and keeps a ledger', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-desk'));
     await runInDurableObject(stub, async (_instance, state) => {

@@ -32,12 +32,22 @@ export type EmailSendProposal = Readonly<{
   subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string;
 }>;
 
+// send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
+// verbatim on Send it; the idempotency key collapses a second approval onto the first send.
+export type MessageSendProposal = Readonly<{ channel: string; content: string; idempotency_key: string }>;
+
+// call_mcp_tool proposals: server + tool + args replayed on approval. The result is external
+// content - reported to the owner bounded, never re-entered into model context.
+export type McpCallProposal = Readonly<{ server: string; tool: string; args: Record<string, unknown> }>;
+
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
 export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
   proposeSendEmail(payload: EmailSendProposal): Promise<string>;
+  proposeSendMessage(payload: MessageSendProposal): Promise<string>;
+  proposeMcpCall(payload: McpCallProposal): Promise<string>;
   record(kind: string, summary: string, payload: unknown): void;
   callback(query: CallbackQuery, trace: string): Promise<void>;
   decide(id: string, action: 'a' | 's' | 'e' | 'u', trace: string): Promise<ApprovalDecision>;
@@ -57,6 +67,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   timezone: string;
   log(entry: TurnLogEntry): void;
   browserSubmit?: (proposal: BrowserSubmitProposal) => Promise<string>;
+  sendMessage?: (proposal: MessageSendProposal) => Promise<void>;
+  // Returns a bounded owner-facing outcome line (the result is external content).
+  mcpCall?: (proposal: McpCallProposal) => Promise<string>;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -79,11 +92,19 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     return `${p.action.description} on ${p.url}${binding ? ` (${binding})` : ''}`;
   };
   const describeEmail = (p: EmailSendProposal) => `Send email to ${p.to.join(', ')}: "${p.subject}"`;
+  const describeMessage = (p: MessageSendProposal) => `Send this on ${p.channel}: "${p.content.length > 120 ? `${p.content.slice(0, 117)}...` : p.content}"`;
+  const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
+    if (entry.kind === 'message_send') return describeMessage(JSON.parse(entry.payload_json) as MessageSendProposal);
+    if (entry.kind === 'mcp_call') return describeMcp(JSON.parse(entry.payload_json) as McpCallProposal);
     return describe(JSON.parse(entry.payload_json) as Stored);
   };
+  // ADR-0054 exactly-once: a second approval of the same idempotency key collapses onto the
+  // first send instead of double-delivering.
+  const alreadySent = (key: string, selfId: string) =>
+    sql.exec<{ id: string }>("SELECT id FROM ledger WHERE kind = 'message_send' AND status = 'done' AND id != ? AND json_extract(payload_json, '$.idempotency_key') = ? LIMIT 1", selfId, key).toArray().length > 0;
   const expired = (entry: LedgerRow, p: Stored) =>
     deps.now() - entry.created_at > (entry.kind === 'browser_submit' ? BROWSER_SUBMIT_TTL_MS : PROPOSAL_TTL_MS) || (entry.kind !== 'browser_submit' && p.start !== undefined && Date.parse(p.start) <= deps.now());
   const apply = async (client: GoogleClient, p: Stored): Promise<Undo | null | 'stale'> => {
@@ -165,6 +186,41 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             }
           }
         }
+      } else if (entry.kind === 'message_send') {
+        const mp = JSON.parse(entry.payload_json) as MessageSendProposal;
+        if (action === 'u') {
+          out = { toast: "Can't be undone", message: 'A sent message cannot be undone. Nothing was reversed.' };
+        } else if (!deps.sendMessage) {
+          out = { toast: 'Messaging is not set up', message: 'I could not send that because messaging is not set up on this Waldo yet.' };
+        } else if (alreadySent(mp.idempotency_key, id)) {
+          setStatus(id, 'done');
+          out = { toast: 'Already sent', message: `That exact message already went out once, so nothing was sent twice: ${describeMessage(mp)}` };
+        } else {
+          try {
+            await deps.sendMessage(mp);
+            setStatus(id, 'done');
+            out = { toast: 'Sent', message: `Sent: ${describeMessage(mp)} This one can't be undone.` };
+          } catch (error) {
+            setStatus(id, 'failed');
+            out = { toast: "That didn't send", message: `The message did not send (${error instanceof Error ? error.message : String(error)}). Nothing was delivered - ask me to send it again.` };
+          }
+        }
+      } else if (entry.kind === 'mcp_call') {
+        const cp = JSON.parse(entry.payload_json) as McpCallProposal;
+        if (action === 'u') {
+          out = { toast: "Can't be undone", message: 'An MCP call cannot be undone from here. Nothing was reversed.' };
+        } else if (!deps.mcpCall) {
+          out = { toast: 'MCP is not set up', message: 'I could not run that because MCP execution is not set up on this Waldo yet.' };
+        } else {
+          try {
+            const outcome = await deps.mcpCall(cp);
+            setStatus(id, 'done');
+            out = { toast: 'Done', message: `Done: ${describeMcp(cp)}. ${outcome}` };
+          } catch (error) {
+            setStatus(id, 'failed');
+            out = { toast: 'That failed', message: `The call failed (${error instanceof Error ? error.message : String(error)}). Nothing else ran - ask me to try again.` };
+          }
+        }
       } else {
         const client = await deps.google();
         if (client === null) {
@@ -207,6 +263,20 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      return id;
+    },
+    async proposeSendMessage(payload) {
+      const id = `p${deps.newId()}`;
+      const summary = describeMessage(payload);
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      await say(`Send this message? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      return id;
+    },
+    async proposeMcpCall(payload) {
+      const id = `p${deps.newId()}`;
+      const summary = describeMcp(payload);
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      await say(`Run this MCP tool? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
       return id;
     },
     async propose(p) {

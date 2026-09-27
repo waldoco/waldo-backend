@@ -30,9 +30,11 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 // tasks, sheets, drafts - proceeds without a per-action card. Anything that could reach another
 // person or an outside service (messages, browser submits, MCP calls) needs his clear yes, so
 // until those flows carry a proposal card the gate halts them with a typed reason instead of
-// executing silently. The taint gate still runs before this and blocks external-tainted
-// privileged calls outright.
-const EXTERNAL_REACH_TOOLS = new Set(['send_message', 'execute_action', 'call_mcp_tool', 'delete_message', 'restore_message']);
+// executing silently. send_message and call_mcp_tool carry cards now (their handlers propose to
+// the approval desk and never execute directly), so they pass this gate; execute_action and
+// delete/restore_message still halt. The taint gate still runs before this and blocks
+// external-tainted privileged calls outright.
+const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const telegramOwnerApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
