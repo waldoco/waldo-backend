@@ -29,6 +29,7 @@ export * from './auth/consent';
 export * from './tools/connect-intent';
 export * from './tools/permissions';
 export * from './tools/handler';
+export * from './tools/schemas/artifacts';
 export * from './tools/schemas/reads';
 export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';

@@ -33,7 +33,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 51 canonical tools, in order', () => {
+  it('is exactly the 55 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -52,10 +52,14 @@ describe('toolName', () => {
       'send_message',
       'web_search',
       'read_document',
+      'list_artifacts',
+      'read_artifact',
       'call_mcp_tool',
       'write_task',
       'update_task',
       'draft_document',
+      'create_artifact',
+      'revise_artifact',
       'draft_email',
       'send_email',
       'search_connector',
@@ -159,6 +163,8 @@ describe('TOOL_PERMISSIONS', () => {
         'web_search',
         'browse_page',
         'read_document',
+        'list_artifacts',
+        'read_artifact',
         'search_tools',
       ],
       handoff_plan: ['get_crs', 'get_health', 'query_calendar', 'connect_service', 'get_tasks', 'propose_action'],
@@ -167,6 +173,8 @@ describe('TOOL_PERMISSIONS', () => {
         'write_task',
         'update_task',
         'draft_document',
+        'create_artifact',
+        'revise_artifact',
         'draft_email',
         'propose_schedule',
         'write_sheet_cell',
@@ -202,10 +210,14 @@ describe('TOOL_PERMISSIONS', () => {
         'browse_act',
         'delegate_task',
         'read_document',
+        'list_artifacts',
+        'read_artifact',
         'call_mcp_tool',
         'write_task',
         'update_task',
         'draft_document',
+        'create_artifact',
+        'revise_artifact',
         'draft_email',
         'send_email',
         'propose_schedule',
@@ -248,11 +260,11 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 50 of 51', () => {
+  it('grants no trigger the full surface — user_message tops out at 54 of 55', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(50);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(54);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {

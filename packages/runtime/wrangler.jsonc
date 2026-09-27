@@ -22,6 +22,11 @@
       { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
     ]
   },
+  // A5 artifact bodies (metadata lives in the owner DO). wrangler creates the bucket on the
+  // next Mac-lane deploy; a missing binding degrades to in-memory bodies, never a crash.
+  "r2_buckets": [
+    { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts" }
+  ],
   "ratelimits": [
     {
       "name": "RESPONSIBILITY_RATE_LIMITER",
@@ -49,6 +54,9 @@
           { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
         ]
       },
+      "r2_buckets": [
+        { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts-staging" }
+      ],
       "ratelimits": [
         {
           "name": "RESPONSIBILITY_RATE_LIMITER",
