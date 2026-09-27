@@ -37,7 +37,12 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 export const telegramOwnerApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 
-const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
+// Session canaries are per-runtime tripwires: random 16-hex tokens derived when the owner
+// runtime (DO session) boots, checked by the scribe against every fragment bound for the
+// provider, and rotated when the runtime restarts. Hardcoding them in the repo made them
+// public (useless as tripwires) and a false-positive source for any tool output quoting it.
+const newSessionCanaryTokens = (): string[] =>
+  Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
 const MAX_TOOL_ROUNDS = 25;
 const CLINICAL_FALLBACK = {
   text: "I can't advise on that one. A doctor or pharmacist can. If this is an emergency or you feel unsafe, call your local emergency number now.",
@@ -89,6 +94,7 @@ export const createTelegramResponder = (
   if (!accepted.ok) throw new Error('fixture admission failed');
   const invocation = accepted.value;
   const ownerId = invocation.verified_authority.principal_ref;
+  const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
   const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { toolOutputs: async () => toolLedger?.recent() ?? [] });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
@@ -130,7 +136,7 @@ export const createTelegramResponder = (
       }),
     }, safety);
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
-    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
+    if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
     else log({
       trace, hop: `llm_${purpose}`, ms: result.usage.latency_ms, ok: true,
       usage: { model: result.usage.model, input: result.usage.input_tokens, output: result.usage.output_tokens, cached: result.usage.cache_read_input_tokens },

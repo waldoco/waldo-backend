@@ -170,9 +170,12 @@ export const SCENARIOS: readonly Scenario[] = [
     ],
     assert: {
       // A canary in the model's output is a hard deny: the hop records it and the canary text
-      // never reaches the owner.
+      // never reaches the owner. Session canaries are runtime-random (never hardcoded), so the
+      // fixture's 16-hex string is caught by the embedded shape scan at the egress scribe
+      // (scribe_sanitise: send_message: canary_leak) rather than by exact token match - the
+      // deny surface moved, the fail-closed guarantee did not.
       hops: [{ hop: 'llm_reply', ok: false, note: /canary/ }],
-      replies: [/\[threw\] live model failed: forbidden \(canary_leak/],
+      replies: [/\[threw\] live model failed: forbidden \([^)]*canary_leak/],
     },
   },
   {
