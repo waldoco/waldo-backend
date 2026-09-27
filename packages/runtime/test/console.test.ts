@@ -116,6 +116,30 @@ describe('owner console', () => {
     expect(none).toContain('No background tasks yet.');
   });
 
+  it('builds the Overview only from recorded state, without inventing a Brief or a successful tool read', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('id="overview"');
+    expect(html).toContain('The Brief is marked sent.');
+    expect(html).toContain('does not confirm delivery');
+    expect(html).toContain('1 decision waiting.');
+    expect(html).toContain('Google is not connected.');
+    const granted = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'test@example.com', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } });
+    expect(granted).toContain('Google access saved. Live reads still need a real check.');
+    expect(html).not.toContain('Protected window');
+    const empty = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [], runs: [], trace: [], google: { accounts: [], connectAvailable: true }, cards: SAMPLE_CONSOLE_VIEW.cards.map((card) => ({ ...card, sent: false })) });
+    expect(empty).toContain('No Brief to read here yet.');
+    expect(empty).toContain('Nothing needs your approval.');
+    expect(empty).toContain('Nothing recorded yet.');
+    expect(empty).toContain('Google is not connected.');
+  });
+
+  it('does not mistake a past or skipped card for the next one, or an older activity page for latest movement', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, now: '2026-09-23 23:40', cards: SAMPLE_CONSOLE_VIEW.cards.map((card) => ({ ...card, sent: false })), page: { trace_before: null, runs_before: null, trace_applied: 1, runs_applied: 1 } });
+    expect(html).toContain('No more cards scheduled ahead.');
+    expect(html).toContain('Nothing recorded yet.');
+    expect(html).not.toContain('22:15 · The Close');
+  });
+
   it('renders the stat row as Figma-style cards: uppercase small labels, serif values, hover affordance', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('text-transform:uppercase');
