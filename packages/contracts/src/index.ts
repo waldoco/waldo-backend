@@ -34,6 +34,7 @@ export * from './tools/schemas/writes';
 export * from './tools/schemas/delegate';
 export * from './tools/schemas/reminders';
 export * from './tools/schemas/health';
+export * from './tools/schemas/standing-orders';
 export * from './tools/schemas/loops';
 export * from './tools/schemas/calendar';
 export * from './tools/schemas/threading';

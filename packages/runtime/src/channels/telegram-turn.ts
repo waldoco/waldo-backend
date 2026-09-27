@@ -59,6 +59,9 @@ export const createTelegramResponder = (
   // this slot suppresses memory persistence and strips the live provider handlers from the
   // turn's tool loop and system prompt. Inert for real turns; the DO owns the slot.
   probeGuard?: { suppressMemory: boolean; stripLiveTools: boolean },
+  // A7: the owner's standing orders join every reply's system prompt (read-only context,
+  // owner-authored via owner-confirmed turns). The supplier returns '' when none exist.
+  standingOrders?: () => string,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -163,8 +166,9 @@ export const createTelegramResponder = (
           if (added === null) return { text: STOPPED_REPLY };
           const entries = [...request.messages];
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
+          const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ...(memory ? [memoryPrompt(memory)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
           entries,
           undefined,
           pending,

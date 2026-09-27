@@ -11,6 +11,7 @@ export const scheduleKindSchema = z.enum([
   'dreaming',
   'reminder',
   'heartbeat',
+  'standing_order',
 ]);
 export type ScheduleKind = z.infer<typeof scheduleKindSchema>;
 
@@ -24,6 +25,7 @@ export const scheduleKindPriority: Readonly<Record<ScheduleKind, number>> = {
   dreaming: 6,
   reminder: 7,
   heartbeat: 8,
+  standing_order: 9,
 };
 
 export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | null>> = {
@@ -37,6 +39,8 @@ export const scheduleKindTrigger: Readonly<Record<ScheduleKind, TriggerType | nu
   reminder: null,
   // The heartbeat tick is a deterministic scan, not an LLM turn (HEARTBEAT_AND_CRON plan H1).
   heartbeat: null,
+  // A standing-order fire runs the same machine-turn path as a reminder fire (A7).
+  standing_order: null,
 };
 
 export const scheduleStatusSchema = z.enum(['armed', 'quarantined']);
