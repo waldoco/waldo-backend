@@ -41,6 +41,15 @@ Official name for the protected focus block (maps "Focus Time"). Target: >=90 un
 - No number without a source.
 - Trust model copy: three-position switch (Tell me / Ask me / Just do it) - maps to the shipped act_and_report / confirm_first gates; "undo it in one tap" and "reads metadata, never what your messages say" must be literally true wherever used.
 
+## Design posture (owner steer, 2026-09-27 1:00pm)
+
+"Tone down the health aspect if it reads too much like a health app / health agent." Waldo is a health-AWARE assistant, not a health-tracker UI. Concretely for the dashboard/console reskin:
+
+- Health appears as narrative CONTEXT inside the Overview (the morning card, the brief timeline: "your sleep was short by about 90 minutes" as prose), not as a wall of per-metric cards.
+- No metrics-wall IA on the console home. A dedicated Health Stats surface, if one ships, is a separate quiet screen - never the landing impression.
+- Status chips stay semantic and sparse: they mark state (Form zone, Protected window), they do not turn the console into a wearable dashboard.
+- Copy follows the Home rule: health is context for decisions, never medical claims, never the headline.
+
 ## Unresolved (owner acknowledged)
 
 1. Team Pings counting rule.
