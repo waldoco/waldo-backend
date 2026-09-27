@@ -56,4 +56,10 @@ export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
     { time: '22:45', trace: 'r-3a1', hop: 'reminder', ok: true, ms: 1900, note: '' },
     { time: '23:38', trace: 'console:1', hop: 'console_action', ok: true, ms: 0, note: 'spot.dismiss 2' },
   ],
+  runs: [
+    { id: 'bg:a1b2c3d4', kind: 'delegate_task', status: 'completed', summary: 'Pulled the last three invoices and totaled them.', parent_id: 'tg-812', started: '09-23 22:38', ended: '09-23 22:40' },
+    { id: 'bg:e5f6a7b8', kind: 'reminder', status: 'completed', summary: 'reminder sent', parent_id: 'r-3a1', started: '09-23 22:45', ended: '09-23 22:45' },
+    { id: 'bg:c9d0e1f2', kind: 'heartbeat', status: 'failed', summary: 'tick failed', parent_id: null, started: '09-23 23:00', ended: '09-23 23:00' },
+    { id: 'bg:11223344', kind: 'standing_order', status: 'running', summary: null, parent_id: 'so-77', started: '09-23 23:39', ended: null },
+  ],
 };

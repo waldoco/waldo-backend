@@ -30,6 +30,7 @@ import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
+import { runBook } from './background-runs';
 import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
@@ -732,6 +733,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
     // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
     const artifacts = artifactBook(storage.sql, this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS) : inMemoryArtifactBodies(), clock, () => deps.newRunId().slice(0, 8));
+    const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
     const ledger = async () =>
@@ -755,7 +757,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const responder = createTelegramResponder(
       key, indexedConversationStore(kv, episodes, () => Date.now()), memory, log,
       { download, transcribe: selectTranscriber(this.env)?.transcribe }, clock, [...reminderHandlers(book), ...healthLogHandlers(healthLogs), ...standingOrderHandlers(orders), ...artifactHandlers(artifacts), ...googleHandlers(google, desk, clock), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; }), undefined,
-      () => standingOrdersPrompt(orders),
+      () => standingOrdersPrompt(orders), runs,
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -780,6 +782,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const fire = async (entry: ScheduleEntry) => {
       const note = book.note(entry.id);
       if (note === null) return;
+      const run = runs.start('reminder', entry.id);
       const trace = `${entry.id}:${entry.occurrence_at}:${entry.attempts}`;
       const started = Date.now();
       const time: TurnTimer = async (hop, work) => {
@@ -797,8 +800,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const text = (await responder.remind(trace, owner, note, time)).trim() || note;
         await time('send', () => api.sendMessage({ chat_id: owner, text }));
         book.fired(entry);
+        runs.finish(run.id, 'completed', 'reminder sent');
         log({ trace, hop: 'reminder', ms: Date.now() - started, ok: true, text: { input: note, output: text } });
       } catch (error) {
+        runs.finish(run.id, 'failed', 'reminder failed');
         log({ trace, hop: 'reminder', ms: Date.now() - started, ok: false, error: String(error) });
         throw error;
       }
@@ -809,6 +814,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const fireOrder = async (entry: ScheduleEntry) => {
       const order = orders.byId(entry.id);
       if (order === null) return;
+      const run = runs.start('standing_order', entry.id);
       const trace = `${entry.id}:${entry.occurrence_at}:${entry.attempts}`;
       const started = Date.now();
       try {
@@ -824,8 +830,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           }
         })).trim();
         if (text) await api.sendMessage({ chat_id: owner, text });
+        runs.finish(run.id, 'completed', order.gate === 'confirm_first' ? 'confirm-first order asked' : 'order reported');
         log({ trace, hop: 'standing_order', ms: Date.now() - started, ok: true, detail: order.gate, text: { input: order.scope, output: text } });
       } catch (error) {
+        runs.finish(run.id, 'failed', 'order failed');
         if (order.escalation === 'message_owner') {
           await api.sendMessage({ chat_id: owner, text: 'One of your standing orders could not run just now. I will try again at its next scheduled time.' }).catch(() => undefined);
         }
@@ -854,11 +862,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const beat = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
       const started = Date.now();
-      await heartbeatTick({
-        scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(),
-        send: async (text) => { await api.sendMessage({ chat_id: owner, text }); },
-      })(entry);
-      log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: true });
+      const run = runs.start('heartbeat', entry.id);
+      try {
+        await heartbeatTick({
+          scheduler, sql: storage.sql, loops, plans, timezone: clock.timezone, now: () => Date.now(),
+          send: async (text) => { await api.sendMessage({ chat_id: owner, text }); },
+        })(entry);
+        runs.finish(run.id, 'completed', 'tick completed');
+        log({ trace, hop: 'heartbeat_tick', ms: Date.now() - started, ok: true });
+      } catch (error) {
+        runs.finish(run.id, 'failed', 'tick failed');
+        throw error;
+      }
     };
     const nightly = async (entry: ScheduleEntry) => {
       const trace = `${entry.id}:${entry.occurrence_at}`;
@@ -981,6 +996,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
           }),
           ledger: await ledger(), proactivity: loops.proactivity(), files: files.list(), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
+          runs: runs.list(20).map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
         };
       },
       act: async ({ action, id, value }) => {

@@ -23,6 +23,7 @@ import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispat
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
+import type { RunBook } from './background-runs';
 import { toolOutputLedger } from '../conversation/tool-output-ledger';
 
 const CANARIES = ['0123456789abcdef', 'fedcba9876543210', '0011223344556677'];
@@ -62,6 +63,9 @@ export const createTelegramResponder = (
   // A7: the owner's standing orders join every reply's system prompt (read-only context,
   // owner-authored via owner-confirmed turns). The supplier returns '' when none exist.
   standingOrders?: () => string,
+  // A5b: delegate children record background-run rows (parent = this turn's trace). Optional:
+  // the console and probes construct turns without the owner DO's run book.
+  runs?: RunBook,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -141,8 +145,12 @@ export const createTelegramResponder = (
       // One shared round budget per submitted turn: the parent loop and every child it spawns
       // draw from it, so the turn's stated cap is absolute (Codex #224 hold).
       const turnBudget = { remaining: MAX_TOOL_ROUNDS };
-      const delegate = delegateTaskHandler((task) =>
-        runChildLoop(task, {
+      const delegate = delegateTaskHandler(async (task) => {
+        // A5b: one run row per spawned child; the exit classification lands on the row, and
+        // the summary is the report's first line (capped by the book), never an error dump.
+        const run = runs?.start('delegate_task', trace) ?? null;
+        try {
+          const result = await runChildLoop(task, {
           handlers: activeHandlers,
           budget: turnBudget,
           ctx: { ...safety, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
@@ -152,8 +160,14 @@ export const createTelegramResponder = (
           onTool: (event) => {
             log({ trace, hop: `subagent_tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           },
-        }),
-      );
+        });
+          if (run) runs?.finish(run.id, result.exit === 'completed' ? 'completed' : result.exit === 'stopped' ? 'stopped' : 'failed', (result.text.split('\n')[0] ?? '').slice(0, 120));
+          return result;
+        } catch (error) {
+          if (run) runs?.finish(run.id, 'failed', String(error).slice(0, 120));
+          throw error;
+        }
+      });
       const turnHandlers = withDelegation(activeHandlers, delegate, ownerTurnActive);
       return runToolLoop({
         handlers: turnHandlers,
