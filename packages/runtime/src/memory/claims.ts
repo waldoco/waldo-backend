@@ -29,7 +29,7 @@ const ciRedact = (value: string, needle: string, marker: string): string =>
 
 export const FORGOTTEN = '[forgotten]';
 
-// Forget-intent gate (2026-09-27 staging receipt: gpt-5-nano echoed the barrier list's
+// Forget-intent gate (2026-09-27 staging receipt: the memory writer echoed the barrier list's
 // numeric ids into forget_claims on turns where the owner never asked to forget - a
 // calendar question wiped claims 1-6, a stress chat wiped 1-2). Forgetting is destructive
 // and irreversible once settled, so model-proposed forgets apply only when the owner text

@@ -215,7 +215,7 @@ export const createTelegramResponder = (
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
   // Bare affirmative/negative turns ("yes", "ok", "nahi") are context-binding-heavy: the
-  // reply model must attach them to the pending question. gpt-5-nano failed exactly this
+  // reply model must attach them to the pending question. The nano-tier reply model failed exactly this
   // class on 2026-09-27 (a "yes" to the greeting-alignment question was answered with a
   // hallucinated Gmail offer, with correct history in the prompt), so these turns escalate
   // to memoryModel for their reply hop. Set by respond() for the duration of one submit.
