@@ -22,6 +22,14 @@
       { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
     ]
   },
+  // A5 artifact bodies (metadata lives in the owner DO; DO namespaces are per-worker, so
+  // staging/prod metadata never mixes - only the body bucket is shared, keyed by random
+  // artifact ids). guard-wrangler-local-bindings requires env.staging to mirror this block
+  // exactly. wrangler creates the bucket on the next Mac-lane deploy; a missing binding
+  // degrades to in-memory bodies, never a crash.
+  "r2_buckets": [
+    { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts" }
+  ],
   "ratelimits": [
     {
       "name": "RESPONSIBILITY_RATE_LIMITER",
@@ -49,6 +57,9 @@
           { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
         ]
       },
+      "r2_buckets": [
+        { "binding": "ARTIFACTS", "bucket_name": "waldo-artifacts" }
+      ],
       "ratelimits": [
         {
           "name": "RESPONSIBILITY_RATE_LIMITER",
