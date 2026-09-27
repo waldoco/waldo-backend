@@ -176,6 +176,24 @@ describe('owner console', () => {
     expect(renderConsole(SAMPLE_CONSOLE_VIEW)).not.toContain('from shared content');
   });
 
+  it('renders chips from the semantic taxonomy, every state backed by view data', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    // danger: a failed removal must stand out, not render as a default sand chip
+    expect(html).toContain('chip danger">Removal incomplete');
+    // good: settled positive states only (a promoted spot, a sent card)
+    expect(html).toContain('chip good">In constellation');
+    // provisional: Waldo's inferences are unconfirmed, shared-content origin is untrusted-derived
+    expect(html).toContain('chip provisional">Waldo&#39;s inference');
+    const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] })).toContain('chip provisional">from shared content');
+    // neutral is the bare class: stated sources and kind labels carry no state
+    expect(html).toContain('chip">You said this');
+    expect(html).not.toContain('chip teal');
+    expect(html).not.toContain('chip red');
+    // honest consumers: with no forgetting spots, no danger chip renders
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, forgettingSpots: [] })).not.toContain('chip danger');
+  });
+
   it('renders real usage numbers with a total, and an honest empty state', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('id="usage"');

@@ -174,7 +174,14 @@ const empty = (text: string) => `<p class="empty">${esc(text)}</p>`;
 const form = (csrf: string, action: string, label: string, fields: Readonly<Record<string, string>> = {}, opts: Readonly<{ tone?: 'quiet' | 'danger' | 'primary'; confirm?: string; extra?: string }> = {}) =>
   `<form method="post" action="${CONSOLE_ACTION_PATH}"${opts.confirm ? ` onsubmit="return confirm('${esc(opts.confirm)}')"` : ''}><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="action" value="${action}">${Object.entries(fields).map(([name, value]) => `<input type="hidden" name="${name}" value="${esc(value)}">`).join('')}${opts.extra ?? ''}<button class="btn ${opts.tone ?? 'quiet'}">${esc(label)}</button></form>`;
 
-const chip = (text: string, tone: 'teal' | 'plain' | 'muted' | 'red' = 'plain') => `<span class="chip ${tone}">${esc(text)}</span>`;
+// Semantic status-chip taxonomy: a closed set of honest states, each derived from real view
+// data. good = settled positive state (Done, Sent, Connected; ontology Energized/Steady zones,
+// Protected window, Improving slope). neutral = informational label (kinds, sources, Holding/
+// Mixed slope). muted = not built, dismissed, stale. danger = wrong, needs action (Removal
+// incomplete; ontology Depleted zone). provisional = unconfirmed or untrusted-derived (inferred
+// spots, shared-content origin; ontology Drooping zone).
+type ChipState = 'good' | 'neutral' | 'muted' | 'danger' | 'provisional';
+const chip = (text: string, state: ChipState = 'neutral') => `<span class="chip${state === 'neutral' ? '' : ` ${state}`}">${esc(text)}</span>`;
 const status = (on: boolean, text: string) => `<span class="status ${on ? 'on' : 'off'}"><i></i>${esc(text)}</span>`;
 const meter = (value: number) => `<span class="meter"><span style="width:${Math.round(Math.max(0, Math.min(1, value)) * 100)}%"></span></span><span class="num">${value.toFixed(2)}</span>`;
 
@@ -211,7 +218,7 @@ const approvals = (view: ConsoleView) => {
     const actions = item.state === 'open'
       ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
       : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this change in your calendar?' }) : '';
-    return `<div class="row"><div class="main"><div class="line">${esc(item.summary)}</div></div>${chip(item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'open' ? 'plain' : 'teal')}<div class="act">${actions}</div></div>`;
+    return `<div class="row"><div class="main"><div class="line">${esc(item.summary)}</div></div>${chip(item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'open' ? 'neutral' : 'good')}<div class="act">${actions}</div></div>`;
   }).join('');
 };
 
@@ -238,7 +245,7 @@ const checklist = (view: ConsoleView) => {
 const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: 'Waldo\'s inference' };
 
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? spot.source, spot.source === 'inferred' ? 'plain' : 'teal')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'muted')}` : ''} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Why: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('');
+  : view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? spot.source, spot.source === 'inferred' ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Why: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('');
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
@@ -253,17 +260,17 @@ const constellation = (view: ConsoleView) => {
 // ever entering memory or this page.
 const held = (view: ConsoleView) => view.holds.length === 0 ? '' : `<details><summary>Held at the gate (${view.holds.length})</summary><div class="sub">Waldo declined to remember these - the words were never stored, only what kind of thing it was and why.</div>${view.holds.map((hold) => `<div class="row"><div class="main"><div class="line">${chip(hold.kind)} ${chip(hold.reason.replace(/-/g, ' '), 'muted')}</div></div><div class="sub">${esc(day(hold.created_at))}</div></div>`).join('')}</details>`;
 
-const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'In constellation' : 'Dismissed', spot.status === 'promoted' ? 'teal' : 'muted')}</div>`).join('')}</details>`;
+const retired = (view: ConsoleView) => view.retiredSpots.length === 0 ? '' : `<details><summary>Dismissed and promoted spots (${view.retiredSpots.length})</summary>${view.retiredSpots.map((spot) => `<div class="row"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip(spot.status === 'promoted' ? 'In constellation' : 'Dismissed', spot.status === 'promoted' ? 'good' : 'muted')}</div>`).join('')}</details>`;
 
 // A claim stuck mid-scrub (status 'purging') must stay visible with a working retry path -
 // the 'spot.forget.incomplete' notice tells the owner to try again, so the row and its Forget
 // action cannot just vanish. act() already selects purging rows for spot.forget.
-const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'red')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
+const forgetting = (view: ConsoleView) => view.forgettingSpots.length === 0 ? '' : `<div class="forgetting"><h3>Forget in progress (${view.forgettingSpots.length})</h3><div class="sub">These removals could not finish: part of memory storage still holds the text. Retry completes the removal.</div>${view.forgettingSpots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div></div>${chip('Removal incomplete', 'danger')}<div class="act">${form(view.csrf, 'spot.forget', 'Retry forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Retry forgetting this spot?' })}</div></div>`).join('')}</div>`;
 
 const cards = (view: ConsoleView) => [...view.cards].sort((a, b) => (a.time ?? a.defaultTime).localeCompare(b.time ?? b.defaultTime)).map((card) => {
   const when = card.time ?? 'Skipped today';
   const controls = card.sent ? '' : `<form class="card-edit" method="post" action="${CONSOLE_ACTION_PATH}"><input type="hidden" name="csrf" value="${view.csrf}"><input type="hidden" name="id" value="${esc(card.id)}"><input type="time" name="value" value="${esc(card.time ?? card.defaultTime)}" required><button class="btn quiet" name="action" value="card.today">Set for today</button><button class="btn quiet" name="action" value="card.pin">Always at this time</button></form>`;
-  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${card.sent ? chip('Sent', 'teal') : chip('Upcoming')} ${card.pin ? chip(`Pinned ${card.pin}`, 'teal') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
+  return `<div class="row card"><div class="time">${esc(when)}</div><div class="main"><div class="line"><b>${esc(card.name)}</b> ${card.sent ? chip('Sent', 'good') : chip('Upcoming')} ${card.pin ? chip(`Pinned ${card.pin}`, 'good') : ''}</div><div class="sub">${esc(card.reason)}</div>${controls}${card.pin ? form(view.csrf, 'card.unpin', 'Clear pin', { id: card.id }) : ''}</div></div>`;
 }).join('');
 
 const VOLUMES: readonly (readonly [string, string])[] = [['low', 'Low: only the three day cards'], ['normal', 'Normal: plus updates that change your day'], ['high', 'High: plus smaller useful updates']];
@@ -326,7 +333,7 @@ h3{font-size:14px;margin:24px 0 4px}.count{color:var(--ink2);margin-left:6px}
 .row{display:flex;align-items:center;gap:16px;padding:14px 0;border-bottom:1px solid var(--rule)}.row .main{flex:1;min-width:0}
 .line{}.sub{color:var(--ink2);font-size:13px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}.evidence{color:var(--ink2);font-size:13px;font-style:italic}
 .conn>div:first-child{flex:1}.conn .name{}.state{width:140px}.act{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
-.chip{display:inline-block;font-size:12px;line-height:20px;padding:0 8px;border-radius:999px;background:var(--sand);color:var(--ink2)}.chip.teal{background:#e6f0ed;color:var(--teal-ink)}.chip.muted{background:#f5f5f5;color:#8b8587}
+.chip{display:inline-block;font-size:12px;line-height:18px;padding:0 8px;border:1px solid transparent;border-radius:999px;background:var(--sand);color:var(--ink2)}.chip.good{background:#e6f0ed;color:var(--teal-ink)}.chip.muted{background:#f5f5f5;color:#8b8587}.chip.danger{background:#fdeaeb;color:var(--red)}.chip.provisional{background:#fff;border-style:dashed;border-color:var(--ink4)}
 .status{display:inline-flex;align-items:center;gap:6px}.status i{width:8px;height:8px;border-radius:50%;background:var(--ink4)}.status.on{color:var(--teal-ink)}.status.on i{background:var(--teal)}.status.off{color:var(--ink2)}
 .btn{font:500 13px Inter,sans-serif;border:1px solid var(--rule);background:#fff;color:var(--ink);border-radius:4px;padding:6px 12px;cursor:pointer;text-decoration:none;display:inline-block;line-height:18px;transition:border-color .15s ease-out,background-color .15s ease-out,color .15s ease-out,transform .06s ease-out}.btn:hover{border-color:var(--ink4)}.btn:active{transform:translateY(1px)}
 .btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}.btn.danger{color:var(--red)}form{display:inline-flex;gap:6px;align-items:center;margin:0}
@@ -349,7 +356,7 @@ footer{margin:48px 0 12px;color:var(--ink2);font-size:12px}
 a:focus-visible,.btn:focus-visible,button:focus-visible,summary:focus-visible,input:focus-visible{outline:2px solid var(--teal);outline-offset:2px}
 nav a,.line,summary{font-weight:var(--medium)}
 .stat b,h2,.count{font-weight:var(--regular)}
-h3,.conn .name,.chip.teal,.status,.num,.rel,.panel-title,.t.bad span:nth-child(2){font-weight:var(--semibold)}
+h3,.conn .name,.chip.good,.status,.num,.rel,.panel-title,.t.bad span:nth-child(2){font-weight:var(--semibold)}
 .mark{font-weight:var(--bold)}
 `;
 
