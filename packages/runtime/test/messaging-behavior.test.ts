@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MESSAGING_BEHAVIOR, messagingSystemPrompt, WALDO_VOCABULARY } from '../src/prompt/messaging-behavior';
+import { MESSAGING_BEHAVIOR, messagingSystemPrompt, ownerClockLine, WALDO_VOCABULARY } from '../src/prompt/messaging-behavior';
 
 describe('messagingSystemPrompt', () => {
   it('is the chat persona with no scheduled-brief fixture text', () => {
@@ -26,5 +26,19 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('Never send generic check-ins');
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');
+  });
+});
+
+describe('ownerClockLine', () => {
+  it('renders the owner local time and zone from the clock', () => {
+    const line = ownerClockLine({ timezone: 'Asia/Calcutta', now: () => new Date('2026-09-27T11:42:00Z') });
+    expect(line).toContain('Sunday, 27 September 2026');
+    expect(line).toContain('17:12');
+    expect(line).toContain('(Asia/Calcutta)');
+  });
+
+  it('falls back to UTC instead of throwing on a malformed stored timezone', () => {
+    const line = ownerClockLine({ timezone: 'Not/AZone', now: () => new Date('2026-09-27T11:42:00Z') });
+    expect(line).toContain('(UTC)');
   });
 });
