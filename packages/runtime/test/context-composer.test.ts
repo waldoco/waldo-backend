@@ -776,7 +776,7 @@ describe('ContextComposer', () => {
         },
       },
     }).compose(trustedEnvelope(), RUNTIME_INPUTS);
-    expect(unsafeExternal).toEqual({ ok: false, failure: { code: 'sanitisation_failed:untrusted_instruction:material' } });
+    expect(unsafeExternal).toEqual({ ok: false, failure: { code: 'sanitisation_failed:untrusted_instruction:material:workspace_snapshot' } });
 
     const mismatchedRecall = await createContextComposer({
       ...base,
