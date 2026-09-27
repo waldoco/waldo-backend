@@ -1,0 +1,86 @@
+import { describe, expect, it } from 'vitest';
+import { MAX_RUN_ROWS, runBook, type BackgroundRun } from '../src/channels/background-runs';
+
+const fakeSql = () => {
+  const rows = new Map<string, BackgroundRun>();
+  return {
+    rows,
+    exec(query: string, ...args: unknown[]) {
+      if (query.startsWith('CREATE TABLE')) return { toArray: () => [] as BackgroundRun[], rowsWritten: 0 };
+      if (query.startsWith('INSERT INTO background_runs')) {
+        const [id, kind, parent_id, started_at] = args as [string, BackgroundRun['kind'], string | null, number];
+        rows.set(id, { id, kind, status: 'running', summary: null, parent_id, started_at, ended_at: null });
+        return { toArray: () => [] as BackgroundRun[], rowsWritten: 1 };
+      }
+      if (query.startsWith('UPDATE background_runs')) {
+        const [status, summary, ended_at, id] = args as [BackgroundRun['status'], string, number, string];
+        const row = rows.get(id);
+        if (!row) return { toArray: () => [] as BackgroundRun[], rowsWritten: 0 };
+        rows.set(id, { ...row, status, summary, ended_at });
+        return { toArray: () => [] as BackgroundRun[], rowsWritten: 1 };
+      }
+      if (query.startsWith('DELETE FROM background_runs')) {
+        const keep = [...rows.values()].sort((a, b) => b.started_at - a.started_at).slice(0, args[0] as number);
+        const keepIds = new Set(keep.map((r) => r.id));
+        let written = 0;
+        for (const id of [...rows.keys()]) if (!keepIds.has(id)) { rows.delete(id); written += 1; }
+        return { toArray: () => [] as BackgroundRun[], rowsWritten: written };
+      }
+      if (query.startsWith('SELECT * FROM background_runs WHERE id')) {
+        const row = rows.get(args[0] as string);
+        return { toArray: () => (row ? [row] : []), rowsWritten: 0 };
+      }
+      if (query.startsWith('SELECT * FROM background_runs ORDER BY')) {
+        return { toArray: () => [...rows.values()].sort((a, b) => b.started_at - a.started_at).slice(0, args[0] as number), rowsWritten: 0 };
+      }
+      throw new Error(`unexpected query: ${query}`);
+    },
+  };
+};
+
+// OwnerClock.now() returns a Date; a strictly increasing clock keeps row ordering deterministic.
+let tick = 0;
+const seqClock = { timezone: 'Asia/Kolkata', now: () => new Date(new Date('2026-09-27T01:30:00Z').getTime() + ++tick * 1000) };
+
+describe('background run book (A5b)', () => {
+  it('start records a running row with the parent trace hop; finish lands status, capped summary and end time', () => {
+    const book = runBook(fakeSql() as never, seqClock, () => 'x1');
+    const run = book.start('delegate_task', 'turn:parent-9');
+    expect(run).toMatchObject({ id: 'bg:x1', kind: 'delegate_task', status: 'running', parent_id: 'turn:parent-9', ended_at: null });
+    expect(book.finish(run.id, 'completed', 'done: ' + 'y'.repeat(300))).toBe(true);
+    const row = book.byId(run.id)!;
+    expect(row.status).toBe('completed');
+    expect(row.summary).toHaveLength(200);
+    expect(row.ended_at).not.toBeNull();
+  });
+
+  it('finish on an unknown id reports false and writes nothing', () => {
+    const book = runBook(fakeSql() as never, seqClock, () => 'x2');
+    expect(book.finish('bg:ghost', 'failed', 'nope')).toBe(false);
+    expect(book.byId('bg:ghost')).toBeNull();
+  });
+
+  it('list returns newest first within the limit', () => {
+    let n = 0;
+    const book = runBook(fakeSql() as never, seqClock, () => `id${++n}`);
+    book.start('reminder', null);
+    book.start('loop', 'turn:a');
+    book.start('standing_order', null);
+    const listed = book.list(2);
+    expect(listed).toHaveLength(2);
+    expect(listed[0]!.kind).toBe('standing_order');
+    expect(listed[1]!.kind).toBe('loop');
+    expect(listed[1]!.parent_id).toBe('turn:a');
+  });
+
+  it('trims the oldest rows past the cap so the table never grows without bound', () => {
+    let n = 0;
+    const sql = fakeSql();
+    const book = runBook(sql as never, seqClock, () => `cap${++n}`);
+    for (let i = 0; i < MAX_RUN_ROWS + 5; i += 1) book.start('heartbeat', null);
+    expect(sql.rows.size).toBe(MAX_RUN_ROWS);
+    expect(book.list(MAX_RUN_ROWS + 10)).toHaveLength(MAX_RUN_ROWS);
+    // the newest rows survive the trim
+    expect(book.byId(`bg:cap${MAX_RUN_ROWS + 5}`)).not.toBeNull();
+  });
+});
