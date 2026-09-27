@@ -46,7 +46,7 @@ export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBo
       };
       sql.exec(
         'INSERT INTO background_runs (id, kind, status, summary, parent_id, started_at, ended_at) VALUES (?, ?, ?, NULL, ?, ?, NULL)',
-        run.id, run.kind, run.parent_id, run.started_at,
+        run.id, run.kind, run.status, run.parent_id, run.started_at,
       );
       sql.exec(
         'DELETE FROM background_runs WHERE id NOT IN (SELECT id FROM background_runs ORDER BY started_at DESC LIMIT ?)',
