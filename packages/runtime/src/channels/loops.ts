@@ -65,7 +65,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 export const loopHandlers = (book: LoopBook) => [
   {
     name: 'open_loop',
-    description: 'Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. Use it whenever you say you will do something later.',
+    description: 'Record something you took on for the owner (a check-back, a thing to find out, a follow-up) so it shows in their ledger until you close it. Use it whenever you say you will do something later. Never for remembering information - memory handles that on its own, no loop needed.',
     schema: openLoopArgsSchema,
     trigger_allowlist: allowlist('open_loop'),
     autonomy_gated: false,

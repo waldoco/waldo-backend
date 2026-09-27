@@ -1,5 +1,5 @@
 import {
-  acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
+  acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_5_MINI_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
 } from '@waldo/contracts';
 import type { ConversationModelMessage } from '@waldo/contracts';
@@ -66,6 +66,12 @@ export const createTelegramResponder = (
   // A5b: delegate children record background-run rows (parent = this turn's trace). Optional:
   // the console and probes construct turns without the owner DO's run book.
   runs?: RunBook,
+  // Memory-writer model (2026-09-27 staging receipt: nano hallucinated forget_claims that
+  // wiped claims 1-6 and persisted a bare "yes" as a Gmail-fetch agreement). Memory writes
+  // are durable state, so they escalate one rung under cheapest-passing: nano demonstrably
+  // does not pass for claim_ops. Bare affirmative/negative turns ("yes") escalate to it for
+  // the reply hop too - context-binding is where nano failed worst.
+  memoryModel: ModelName = OPENAI_GPT_5_MINI_MODEL,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -87,9 +93,11 @@ export const createTelegramResponder = (
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
   const handlers = [getContextHandler(clock), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
-  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[]) => {
+  const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
     const started = Date.now();
     let reasoning: string | undefined;
+    const effectivePolicy = modelOverride === undefined || modelOverride === model ? policy
+      : routingPolicySchema.parse({ routes: [{ trigger: 'user_message', primary: { provider: OPENAI_PROVIDER, model: modelOverride, cache: 'none', max_tokens: 4096 }, fallback: [], floor: 'template' }], escalation: [], template_fallback: false });
     // Entries stay separate typed messages so the provider's degrade path can actually reduce:
     // when one historical entry is unrenderable, the retry carries only the current text instead
     // of the identical joined string. Roles come from the typed entry seam, never guessed here.
@@ -101,7 +109,7 @@ export const createTelegramResponder = (
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const result = await new RuntimeLLMProvider({ gateway: adapter, circuitBreaker }).complete({
       trigger: 'user_message',
-      policy,
+      policy: effectivePolicy,
       renderRequest: () => ({
         cache_key: cacheKey,
         system, messages: userMessages.map(({ attachments: _names, ...message }) => message), max_tokens: 4096, temperature: 0.2,
@@ -190,6 +198,7 @@ export const createTelegramResponder = (
           pending,
           tools,
           turns,
+          replyModelOverride,
           );
         },
         onTool: (event) => {
@@ -205,6 +214,12 @@ export const createTelegramResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
+  // Bare affirmative/negative turns ("yes", "ok", "nahi") are context-binding-heavy: the
+  // reply model must attach them to the pending question. The nano-tier reply model failed exactly this
+  // class on 2026-09-27 (a "yes" to the greeting-alignment question was answered with a
+  // hallucinated Gmail offer, with correct history in the prompt), so these turns escalate
+  // to memoryModel for their reply hop. Set by respond() for the duration of one submit.
+  let replyModelOverride: ModelName | undefined;
   const restored = store ? restoreConversation(tree, store).then((leafId) => { parentId = leafId; }) : Promise.resolve();
   const converse = async (id: string, chatId: number, said: string, time: TurnTimer, fromOwner = false) => {
     traceId = id;
@@ -219,7 +234,10 @@ export const createTelegramResponder = (
     await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
     for (const entry of pendingToolOutputs.splice(0)) await toolLedger?.record(entry);
     parentId = publication.leafId;
-    return publication.text;
+    // Self-name prefix strip (2026-09-27 staging receipt: 8 of 22 replies opened with
+    // "Waldo:"/"Waldo here." - a friend texting never signs their own messages, and the
+    // prefixed history taught the model to keep doing it).
+    return publication.text.replace(/^\s*waldo(?:\s+here)?\s*[:.,!\-]\s*/i, '');
   };
   return {
     async respond(turn, time) {
@@ -229,11 +247,17 @@ export const createTelegramResponder = (
       const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers)) : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
-      const text = await converse(id, turn.chatId, said, time, true);
+      replyModelOverride = /^\s*(yes|yeah|yep|yup|sure|ok(?:ay)?|no|nope|nah|haan?|nahi|accha|theek(?:\s+hai)?|done|right|correct|exactly)\b[.!…? ]*$/i.test(turn.text ?? '') ? memoryModel : undefined;
+      let text: string;
+      try {
+        text = await converse(id, turn.chatId, said, time, true);
+      } finally {
+        replyModelOverride = undefined;
+      }
       const owner = [turn.text ?? '', ...control.end()].filter(Boolean).join('\n');
       if (memory && !probeGuard?.suppressMemory) {
         const started = Date.now();
-        settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA })
+        settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel)
           .then(async (raw) => {
             let purged: readonly string[] = [];
             let purgeIds: readonly number[] = [];
@@ -263,7 +287,7 @@ export const createTelegramResponder = (
     async consolidate(trace, day, sides) {
       await settling;
       if (!memory) return 'no memory';
-      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
+      const raw = await ask(trace, 'nightly_memory', NIGHTLY_MEMORY_INSTRUCTION, nightlyInput(memory, day), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
       // With speaker-split sides the full gate runs at night too (self-report holds, shared
@@ -276,10 +300,12 @@ export const createTelegramResponder = (
     },
     async migrate(trace, input) {
       if (!memory) return 'no memory';
-      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA });
+      const raw = await ask(trace, 'memory_migration', MIGRATION_INSTRUCTION, input, { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel);
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
-      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: input });
+      // Migration admits legacy facts only: the file payload can mention past forgets, so the
+      // forget-intent gate is pinned shut here - nothing purges during a migration.
+      const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: input }, false);
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;

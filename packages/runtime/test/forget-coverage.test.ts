@@ -54,7 +54,7 @@ describe('forget coverage', () => {
       // The real model-facing forget path.
       const result = applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
 
       expect(survivors(sql)).toEqual({
         claims: 0, episodes_fts: 0, memory_backups: 0, legacy_spots: 0, legacy_core_files: 0, constellation_nodes: 0,
@@ -68,7 +68,7 @@ describe('forget coverage', () => {
       const relearn = applyClaimOps(store, JSON.stringify({
         add: [{ kind: 'fact', text: CLAIM_TEXT, source: 'stated', evidence: 'owner said so again', touches_forgotten: false }],
         seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
       expect(relearn).toContain('held1');
       expect(store.claims()).toEqual([]);
       // The node survives (it is not forgotten) but no longer quotes the claim or references its id.
@@ -99,7 +99,7 @@ describe('forget coverage', () => {
       );
       applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
       const other = store.claims().find((claim) => claim.id === otherId)!;
       expect(other.text).toBe('Owner likes morning runs'); // unrelated claim text survives untouched
       expect(other.evidence).not.toContain(MARKER); // its quote of the forgotten text is redacted
@@ -118,7 +118,7 @@ describe('forget coverage', () => {
       let readyIds: readonly number[] = [];
       applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
-      }), AT, 'owner, test', (_texts, ids) => { readyIds = ids; });
+      }), AT, 'owner, test', (_texts, ids) => { readyIds = ids; }, undefined, true);
       expect(readyIds).toEqual([claimId]); // SQL clean, KV pending
       // KV survivor: caller does NOT settle. The claim and its marker survive for retry.
       expect(store.claims('purging').map((claim) => claim.id)).toEqual([claimId]);
@@ -127,7 +127,7 @@ describe('forget coverage', () => {
       // Retry (KV now clean): purge again (idempotent on already-redacted SQL), then settle.
       const retry = applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
-      }), AT, 'owner, retry', (_texts, ids) => { readyIds = ids; });
+      }), AT, 'owner, retry', (_texts, ids) => { readyIds = ids; }, undefined, true);
       expect(retry).toContain('purged');
       store.settle(readyIds);
       expect(store.claims()).toEqual([]);
@@ -149,7 +149,7 @@ describe('forget coverage', () => {
       // Force the KV-survivor state: SQL verifies clean, the caller KV step never settles.
       applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
-      }), AT, 'owner, test', () => undefined);
+      }), AT, 'owner, test', () => undefined, undefined, true);
       expect(store.claims('purging').map((claim) => claim.id)).toEqual([claimId]);
       // The console view the owner sees: the purging row renders with a Retry action and is
       // absent from the active spots list.
@@ -174,7 +174,7 @@ describe('forget coverage', () => {
         'Owner likes morning runs', `heard "${variant}" once`, AT, AT);
       const result = applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [forgottenId], forget_nodes: [], forget_topic: null,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
       expect(result).toContain('purged');
       // The variant is gone AND the source settled - no half-forgotten state.
       expect(sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE evidence LIKE ?`, `%${variant}%`).one().n).toBe(0);
@@ -202,7 +202,7 @@ describe('forget coverage', () => {
       const topic = `the ${MARKER} affair`;
       const result = applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: topic,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
       expect(result).toContain('barrier');
       const rows = sql.exec<{ topic: string; topic_hash: string | null }>('SELECT topic, topic_hash FROM forget_barriers').toArray();
       expect(rows).toHaveLength(1);
@@ -214,7 +214,7 @@ describe('forget coverage', () => {
       const second = applyClaimOps(store, JSON.stringify({
         add: [{ kind: 'fact', text: topic, source: 'stated', evidence: 'owner said', touches_forgotten: false }],
         seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
       expect(second).toContain('held1');
       expect(store.claims()).toEqual([]);
       // barrier insert is idempotent on the fingerprint - no duplicate rows
@@ -241,7 +241,7 @@ describe('forget coverage', () => {
 
       // First pass: episodes fails. The claim leaves the active set but KEEPS its text, and the
       // pending intent is durable - the receipt names the failure honestly.
-      const first = applyClaimOps(store, ops, AT);
+      const first = applyClaimOps(store, ops, AT, 'owner agreed', undefined, undefined, true);
       expect(first).toContain('purge-incomplete');
       expect(first).toContain('episodes(failed)');
       expect(store.claims()).toEqual([]); // out of the active set
@@ -253,7 +253,7 @@ describe('forget coverage', () => {
       // Retry (the owner asks again, the model re-lists the same id): the 'purging' claim is
       // still forgettable, redactions are idempotent no-ops, and the purge settles completely.
       failEpisodes = false;
-      const second = applyClaimOps(store, ops, AT);
+      const second = applyClaimOps(store, ops, AT, 'owner agreed', undefined, undefined, true);
       expect(second).toContain('purged');
       expect(second).not.toContain('purge-incomplete');
       expect(rawSql.exec<{ n: number }>('SELECT count(*) AS n FROM claims WHERE id = ?', claimId).one().n).toBe(0);
@@ -281,7 +281,7 @@ describe('forget coverage', () => {
       episodes.add('entry-1', 'owner', `remember: ${CLAIM_TEXT}`, Date.parse(AT));
       const result = applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
       expect(result).toContain('purge-incomplete');
       expect(result).toContain('episodes(failed)');
       expect(store.claims()).toEqual([]); // claims cleanup still happened
@@ -301,7 +301,7 @@ describe('forget coverage', () => {
       // No legacy tables exist on this DO: cleanup must skip absent stores, not fail.
       const result = applyClaimOps(store, JSON.stringify({
         add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
-      }), AT);
+      }), AT, 'owner agreed', undefined, undefined, true);
       expect(store.claims()).toEqual([]);
       expect(result).toContain('forgot1');
     });
@@ -340,7 +340,7 @@ describe('forget coverage - rolling conversation window', () => {
         ).one().id,
       );
       let purged: readonly string[] = [];
-      const summary = applyClaimOps(store, JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: 'code words' }), AT, 'owner, tg-1', (texts) => { purged = texts; });
+      const summary = applyClaimOps(store, JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: 'code words' }), AT, 'owner, tg-1', (texts) => { purged = texts; }, undefined, true);
       expect(summary).toContain('purged');
       expect(purged.length).toBe(1);
       const convResult = await redactConversationEntries(storage, purged, '[forgotten]');
