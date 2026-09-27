@@ -116,6 +116,14 @@ describe('owner console', () => {
     expect(none).toContain('No background tasks yet.');
   });
 
+  it('ships purpose-gated micro-interactions: pressed states, focus rings, and a reduced-motion off-ramp', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('.btn:active{transform:translateY(1px)}');
+    expect(html).toContain(':focus-visible{outline:2px solid var(--teal)');
+    expect(html).toContain('prefers-reduced-motion:reduce');
+    expect(html).toContain('transition:border-color .15s ease-out');
+  });
+
   it('renders pending approvals with acting buttons and an honest empty state', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('id="approvals"');
