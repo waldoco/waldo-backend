@@ -2,6 +2,7 @@ import {
   skillRowSchema,
   skillSchema,
   type CanaryTokens,
+  type SanitisationFailureSource,
   type Skill,
   type SourceTaint,
 } from '@waldo/contracts';
@@ -16,7 +17,7 @@ const MAX_SOURCE_FENCE_DECODE_PASSES = 2;
 
 // All untrusted or externally tainted bytes take this one private admission path before they
 // can become provider-ready prompt text. It rejects literal and bounded decoded fence closers.
-export function preparePromptSourceText(text: string, taint: SourceTaint, canaries: CanaryTokens): string {
+export function preparePromptSourceText(text: string, taint: SourceTaint, canaries: CanaryTokens, source: SanitisationFailureSource = 'unknown'): string {
   if (containsSourceFenceCloser(text)) throw new FailClosed('sanitisation_failed');
   const prepared = prepareWithScribe(
     text,
@@ -25,7 +26,7 @@ export function preparePromptSourceText(text: string, taint: SourceTaint, canari
     taint,
     canaries,
   );
-  if (!prepared.ok) throw new FailClosed(`sanitisation_failed:${prepared.reason}`);
+  if (!prepared.ok) throw new FailClosed(`sanitisation_failed:${prepared.reason}:${source}`);
   return prepared.value;
 }
 
@@ -51,8 +52,8 @@ export function prepareSystemSkill(
     null,
     canaries,
   );
-  if (!triggerCondition.ok) throw new FailClosed(`sanitisation_failed:${triggerCondition.reason}`);
-  if (!body.ok) throw new FailClosed(`sanitisation_failed:${body.reason}`);
+  if (!triggerCondition.ok) throw new FailClosed(`sanitisation_failed:${triggerCondition.reason}:skill`);
+  if (!body.ok) throw new FailClosed(`sanitisation_failed:${body.reason}:skill`);
   return skillSchema.parse({
     ...skill,
     trigger_condition: triggerCondition.value,
