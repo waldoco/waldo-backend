@@ -62,6 +62,11 @@ export const toolNameSchema = z.enum([
   'log_meal',
   'log_workout',
   'list_health_logs',
+  // set/list/cancel_standing_order 47-49 (A7): typed standing orders, owner-confirmed turns
+  // only; every-turn injection is read-only context, scheduled runs fire machine turns.
+  'set_standing_order',
+  'list_standing_orders',
+  'cancel_standing_order',
 ]);
 export type ToolName = z.infer<typeof toolNameSchema>;
 
@@ -187,6 +192,9 @@ export const TOOL_PERMISSIONS: Readonly<Record<TriggerType, readonly ToolName[]>
     'log_meal',
     'log_workout',
     'list_health_logs',
+    'set_standing_order',
+    'list_standing_orders',
+    'cancel_standing_order',
   ],
   dreaming_mode: ['read_memory', 'update_memory', 'search_episodes'],
   // Always carries send_message — a Spot is never silent (ADR-0042).
