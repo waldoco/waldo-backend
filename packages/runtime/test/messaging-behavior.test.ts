@@ -21,8 +21,8 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('point them to a physician');
   });
 
-  it('pins the record-first rule and the proactive never-list (archive adopt #4, owner-approved prompt-only)', () => {
-    expect(MESSAGING_BEHAVIOR).toContain('record it through the memory path BEFORE composing your reply');
+  it('pins the memory-write rule and the proactive never-list (archive adopt #4; ordering aligned to the post-reply settle, owner-ratified 2026-09-27)', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('memory records it automatically right after the exchange');
     expect(MESSAGING_BEHAVIOR).toContain('Never send generic check-ins');
     expect(MESSAGING_BEHAVIOR).toContain('congratulations on normal metrics');
     expect(MESSAGING_BEHAVIOR).toContain('new information or a decision');

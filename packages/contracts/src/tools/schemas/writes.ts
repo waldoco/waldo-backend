@@ -16,6 +16,9 @@ export const memoryWriteHallSchema = hallTypeSchema.exclude(['facts']);
 export type MemoryWriteHall = z.infer<typeof memoryWriteHallSchema>;
 
 // update_memory stages through the Scribe inbox (ADR-0006), never memory_blocks direct.
+// Single-write-path decision (owner, 2026-09-27, docs/planning/MEMORY_WRITE_PATH_DECISION_2026-09-27.md):
+// chat-surface memory writes flow exclusively through the post-reply claim_ops settle; this tool
+// stays dreaming_mode-only.
 export const updateMemoryArgsSchema = z.strictObject({
   hall: memoryWriteHallSchema,
   content: z.string().min(1).max(MEMORY_BLOCK_CONTENT_MAX),
