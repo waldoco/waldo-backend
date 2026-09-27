@@ -116,6 +116,13 @@ describe('owner console', () => {
     expect(none).toContain('No background tasks yet.');
   });
 
+  it('renders the stat row as Figma-style cards: uppercase small labels, serif values, hover affordance', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('text-transform:uppercase');
+    expect(html).toContain('.stat:hover{border-color:var(--ink4)}');
+    expect(html).toContain('border-radius:16px');
+  });
+
   it('paginates the activity lists with keyset cursors, keeping the other list in place', () => {
     const paged = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: 111, runs_before: 222, trace_applied: null, runs_applied: null } });
     expect(paged).toContain('href="/console?trace_before=111#activity"');

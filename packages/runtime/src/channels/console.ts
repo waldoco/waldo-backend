@@ -318,7 +318,7 @@ nav{position:sticky;top:0;background:rgba(255,255,255,.94);backdrop-filter:blur(
 nav a{color:var(--ink2);text-decoration:none;padding:12px 10px;white-space:nowrap;border-bottom:2px solid transparent;transition:color .15s ease-out,border-color .15s ease-out}nav a:hover{color:var(--ink);border-color:var(--teal)}
 .notice{margin-top:20px;background:var(--sand);border-radius:8px;padding:10px 14px}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:24px}
-.stat{border:1px solid var(--rule);border-radius:12px;padding:16px}.stat b{display:block;font-family:'Instrument Serif',Georgia,serif;font-size:34px;line-height:40px}.stat span{color:var(--ink2);font-size:12px}
+.stat{border:1px solid var(--rule);border-radius:16px;padding:18px 16px;transition:border-color .15s ease-out}.stat:hover{border-color:var(--ink4)}.stat b{display:block;font-family:'Instrument Serif',Georgia,serif;font-size:34px;line-height:40px;letter-spacing:-.02em}.stat span{display:block;margin-top:2px;color:var(--ink2);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
 section{margin-top:44px;scroll-margin-top:60px}
 h2{font-family:'Instrument Serif',Georgia,serif;font-size:26px;line-height:32px;letter-spacing:-.025em;margin:0 0 4px}
 .intro{color:var(--ink2);margin:0 0 12px;max-width:640px}
