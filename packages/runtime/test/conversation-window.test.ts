@@ -39,7 +39,7 @@ describe('conversation input window (F1)', () => {
   });
 
   it('ships a deliberate default budget far under the chat model window', () => {
-    // Policy constant, not a model spec: 100k of the 400k verified chat-model window reserved
+    // Wire ceiling 100k with tighten-only per-model derivation (contracts/model/context-budget pattern);
     // for history; headroom covers system prompt, tool turns and the 4096 output pin.
     expect(CONVERSATION_INPUT_BUDGET_TOKENS).toBe(100_000);
   });
