@@ -96,6 +96,25 @@ describe('otlpTurnExporter', () => {
     expect(reminder!.status.code).toBe(2);
   });
 
+  it('pins the typed halt identity onto failed tool hop spans, so a hook halt is diagnosable with capture off', async () => {
+    const { send, spans } = capture();
+    const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
+    await log({ trace: 'tg-9', hop: 'tool_draft_email', ms: 40, ok: false, error: 'hook halted', code: 'transient:approval_denied' });
+    await log({ trace: 'tg-9', hop: 'tool_web_search', ms: 300, ok: true });
+    await log({ trace: 'tg-9', hop: 'turn', ms: 900, ok: true });
+
+    const [, halted, okHop] = spans(0);
+    expect(halted!.name).toBe('tool_draft_email');
+    expect(halted!.status.code).toBe(2);
+    expect(attrs(halted!)['langfuse.observation.metadata.code']).toBe('transient:approval_denied');
+    // The human-facing client message stays on the status; the typed identity is the attribute.
+    expect(halted!.status.message).toBe('hook halted');
+    // No code attribute on a clean hop, and no argument/result content with capture off.
+    expect(attrs(okHop!)['langfuse.observation.metadata.code']).toBeUndefined();
+    expect(attrs(halted!)['langfuse.observation.input']).toBeUndefined();
+    expect(attrs(halted!)['langfuse.observation.output']).toBeUndefined();
+  });
+
   it('carries the emitting owner on every hop span, so an alarm or card is attributable in Langfuse', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
