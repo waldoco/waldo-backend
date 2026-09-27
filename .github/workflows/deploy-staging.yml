@@ -56,11 +56,14 @@ jobs:
           pnpm dlx supabase@2.109.1 link --project-ref "$SUPABASE_PROJECT_ID" --password "$SUPABASE_DB_PASSWORD"
           pnpm dlx supabase@2.109.1 db push --linked
 
-      - name: Deploy worker to staging
+      - name: Deploy worker to staging (release-stamped to the checked-out SHA)
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: pnpm --filter @waldo/runtime exec wrangler deploy --env staging
+        # scripts/deploy-runtime.sh stamps WALDO_RELEASE from the checkout SHA so /healthz and
+        # traces name the exact code deployed (Codex #271 review: bare wrangler leaves it
+        # "unreleased"). The script exists on the dispatched ref (beta-mvp), not on main.
+        run: scripts/deploy-runtime.sh --env staging
 
 # Required repo secrets (staging scope only; production stays Mac-lane until he says so):
 #   CLOUDFLARE_API_TOKEN      - Workers:Edit on the staging worker only
