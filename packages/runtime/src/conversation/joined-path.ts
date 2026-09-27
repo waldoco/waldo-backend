@@ -5,6 +5,7 @@ import {
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import type { ContextComposer, RuntimeOwnedContextInputs } from '../context-composer';
+import { windowModelMessages, type ConversationWindowStats } from './window';
 
 export type JoinedConversationModel = Readonly<{
   complete(request: Readonly<{
@@ -37,6 +38,7 @@ export class JoinedConversationPath {
     private readonly model: JoinedConversationModel,
     private readonly tree = new ConversationTree(),
     private readonly publications = new Map<string, JoinedConversationPublication>(),
+    private readonly observers?: { onWindow?: (stats: ConversationWindowStats) => void },
   ) {}
 
   async submit(request: JoinedConversationRequest): Promise<JoinedConversationPublication> {
@@ -52,9 +54,13 @@ export class JoinedConversationPath {
     this.tree.append({ ...request.userEntry, role: 'user' });
     const composition = await this.composer.compose(request.invocation, request.context);
     if (!composition.ok) throw new Error(`conversation context failed: ${composition.failure.code}`);
+    // F1: bound the model input before the call - the full ancestor path grows without limit
+    // otherwise, and provider-side overflow is a failed turn (paper audit, arXiv 2609.20804).
+    const windowed = windowModelMessages(this.tree.modelContext(request.userEntry.id));
+    this.observers?.onWindow?.(windowed.stats);
     const text = await this.model.complete({
       system: composition.prompt,
-      messages: this.tree.modelContext(request.userEntry.id),
+      messages: windowed.messages,
       tools: composition.evidence.tool_acl,
     });
     if (text.trim().length === 0) throw new Error('conversation model returned empty output');

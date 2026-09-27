@@ -129,6 +129,8 @@ export const createTelegramResponder = (
   const tree = new ConversationTree();
   let traceId = '';
   let pending: readonly LLMAttachment[] | undefined;
+  // F1 receipt: the window observer fires only when history was actually dropped (content-free).
+  const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
   const path = new JoinedConversationPath(adapters.contextComposer!, {
     complete: (request) => {
       const trace = traceId;
@@ -197,7 +199,7 @@ export const createTelegramResponder = (
         ...(offerConnect ? { onConnect: offerConnect } : {}),
       });
     },
-  }, tree);
+  }, tree, undefined, pathObservers);
   let parentId: string | null = null;
   let settling: Promise<unknown> = Promise.resolve();
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns

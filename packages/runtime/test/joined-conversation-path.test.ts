@@ -45,6 +45,26 @@ describe('JoinedConversationPath', () => {
     expect(reconnected.read(ownerId, 'assistant-user-1')).toEqual(result);
   });
 
+  it('applies the input window to the assembled history and reports stats to the observer', async () => {
+    const composer = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).contextComposer!;
+    let observed: { messages: readonly { role: string; content: string }[] } | undefined;
+    const statsSeen: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }[] = [];
+    const path = new JoinedConversationPath(composer, {
+      async complete(request) { observed = request; return 'Noted.'; },
+    }, undefined, undefined, { onWindow: (stats) => statsSeen.push(stats) });
+
+    const first = input('user-w1');
+    await path.submit(first);
+    const second = input('user-w2');
+    await path.submit({ ...second, userEntry: { ...second.userEntry, parentId: 'assistant-user-w1' } });
+
+    expect(statsSeen).toHaveLength(2);
+    expect(statsSeen[0]).toMatchObject({ kept: 1, dropped: 0, budget_tokens: 100_000 });
+    // Second submit: full ancestor path (user1, assistant1, user2) fits, nothing dropped.
+    expect(statsSeen[1]).toMatchObject({ kept: 3, dropped: 0 });
+    expect(observed?.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+  });
+
   it('fails closed before composition on authenticated-owner mismatch', async () => {
     const composer = resolveRunLoopAdapters({ WALDO_ENV: 'local' }).contextComposer!;
     const path = new JoinedConversationPath(composer, { async complete() { return 'no'; } });
