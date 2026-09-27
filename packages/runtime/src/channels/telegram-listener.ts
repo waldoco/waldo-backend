@@ -5,6 +5,8 @@ import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTu
 
 export const TURN_TIMEOUT_MS = 150_000;
 // Reactions are best-effort UX; one hung call must never gate the turn that follows it.
+import { turnFailureCode } from './turn-failure-code';
+
 export const REACTION_TIMEOUT_MS = 5_000;
 
 class TurnTimeout extends Error {
@@ -77,8 +79,8 @@ export class TelegramOwnerListener {
     const { api } = this.options;
     const now = this.options.now ?? Date.now;
     const trace = `tg-${turn.updateId}`;
-    const log = (hop: string, ms: number, ok: boolean, error?: string) =>
-      this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error });
+    const log = (hop: string, ms: number, ok: boolean, error?: string, code?: string) =>
+      this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error, ...(code === undefined ? {} : { code }) });
     const time: TurnTimer = async (hop, work) => {
       const start = now();
       try {
@@ -86,7 +88,9 @@ export class TelegramOwnerListener {
         log(hop, now() - start, true);
         return value;
       } catch (error) {
-        log(hop, now() - start, false, error instanceof Error ? error.message : String(error));
+        // The typed code is what survives capture-off: the privacy gate drops error text but
+        // keeps `code`, so a failed hop stays diagnosable without free-form content.
+        log(hop, now() - start, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
         throw error;
       }
     };
@@ -144,7 +148,7 @@ export class TelegramOwnerListener {
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
       await api.sendMessage({ chat_id, text: failure }).catch(() => undefined);
       await react('failed', this.options.failedEmoji ?? '😢');
-      log('turn', now() - started, false, error instanceof Error ? error.message : String(error));
+      log('turn', now() - started, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
       return 'failed';
     } finally {
       clearInterval(typingTimer);

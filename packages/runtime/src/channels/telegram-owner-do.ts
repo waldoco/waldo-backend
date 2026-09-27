@@ -50,6 +50,7 @@ import { TelegramOwnerListener, type TurnLogEntry, type TurnTimer } from './tele
 import { TelegramPollingAdapter } from './telegram-polling';
 import { createTelegramResponder } from './telegram-turn';
 import type { TurnControl } from './turn-control';
+import { turnFailureCode } from './turn-failure-code';
 import type { TelegramWebhookEnv } from './telegram-webhook';
 
 const WEBHOOK_UPDATES = ['message', 'callback_query'];
@@ -860,7 +861,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           log({ trace, hop, ms: Date.now() - at, ok: true });
           return result;
         } catch (error) {
-          log({ trace, hop, ms: Date.now() - at, ok: false, error: String(error) });
+          // code is the capture-off survivor: gate drops free-form error text, keeps the class.
+          log({ trace, hop, ms: Date.now() - at, ok: false, error: String(error), code: turnFailureCode(error) });
           throw error;
         }
       };
