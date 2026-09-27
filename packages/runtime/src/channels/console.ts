@@ -7,6 +7,8 @@ export const CONSOLE_PATH = '/console';
 export const CONSOLE_ACTION_PATH = `${CONSOLE_PATH}/action`;
 export const CONSOLE_GOOGLE_PATH = `${CONSOLE_PATH}/google`;
 export const CONSOLE_FILE_PATH = `${CONSOLE_PATH}/file`;
+// B9: the background task list as a first-class read-only JSON endpoint (same console session).
+export const CONSOLE_RUNS_PATH = `${CONSOLE_PATH}/runs`;
 export const CONSOLE_COOKIE = 'waldo_console';
 const LINK_MS = 10 * 60_000;
 const SESSION_MS = 12 * 60 * 60_000;

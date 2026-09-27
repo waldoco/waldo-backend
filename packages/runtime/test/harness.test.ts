@@ -38,6 +38,22 @@ describe('owner harness', () => {
     });
   });
 
+  it('pages the trace rows by keyset cursor until it runs out', async () => {
+    await withSql((sql) => {
+      const book = traceBook(sql, 50);
+      const base = Date.parse('2026-09-27T00:00:00Z');
+      for (let i = 0; i < 5; i += 1) book.record({ trace: `t${i}`, hop: 'llm_reply', ms: 10, ok: true }, base + i * 1000);
+      const first = book.rowsPage('UTC', 2);
+      expect(first.rows.map((r) => r.trace)).toEqual(['t3', 't4']);
+      expect(first.next).toBe(base + 3000);
+      const second = book.rowsPage('UTC', 2, first.next ?? undefined);
+      expect(second.rows.map((r) => r.trace)).toEqual(['t1', 't2']);
+      const third = book.rowsPage('UTC', 2, second.next ?? undefined);
+      expect(third.rows.map((r) => r.trace)).toEqual(['t0']);
+      expect(third.next).toBeNull();
+    });
+  });
+
   it('stores the emitting owner on every span so an alarm or card is attributable', async () => {
     await withSql((sql) => {
       const book = traceBook(sql, 3);

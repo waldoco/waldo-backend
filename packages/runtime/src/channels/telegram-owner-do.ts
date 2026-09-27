@@ -8,7 +8,7 @@ import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
@@ -82,7 +82,7 @@ type OwnerRuntime = Readonly<{
   briefs(entry: ScheduleEntry): Promise<void>;
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
-  view(session: ConsoleSession, notice: string | null): Promise<ConsoleView>;
+  view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null } }>;
   act(action: ConsoleAction): Promise<boolean | string>;
   googleConnectUrl(feature: GoogleFeature, channel?: 'telegram' | 'console'): Promise<string | null>;
   google: Readonly<{
@@ -302,10 +302,26 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // A string result is a NOTICES key (e.g. an honest partial-failure receipt); boolean keeps the old path.
       return back(typeof done === 'string' ? done : done && action ? action.action : 'invalid');
     }
+    // B9: the background task list as a first-class read-only endpoint (same console session).
+    if (url.pathname === CONSOLE_RUNS_PATH) {
+      const raw = url.searchParams.get('before');
+      const parsed = raw === null ? NaN : Number(raw);
+      const limitRaw = Number(url.searchParams.get('limit') ?? '20');
+      const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(Math.trunc(limitRaw), 1), 50) : 20;
+      const { rows: page, next } = this.setup().runs.listPage(limit, Number.isFinite(parsed) ? parsed : undefined);
+      return Response.json({ runs: page, next_before: next }, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
     if (url.pathname !== CONSOLE_PATH) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
     const dynamicNotice = NOTICES[mKey] ?? (mKey.length > 0 && mKey.length <= 200 ? mKey : null);
-    return new Response(renderConsole(await view(session, dynamicNotice)), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    // B9 dashboard bar: the same handlers serve JSON when asked (content-negotiated) - the
+    // worker keeps owning auth, data and actions; no new auth surface, no client secrets.
+    const num = (key: string) => { const raw = url.searchParams.get(key); const parsed = raw === null ? NaN : Number(raw); return Number.isFinite(parsed) ? parsed : undefined; };
+    const built = await view(session, dynamicNotice, { traceBefore: num('trace_before'), runsBefore: num('runs_before') });
+    if ((request.headers.get('accept') ?? '').includes('application/json')) {
+      return Response.json(built, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
+    return new Response(renderConsole(built), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
   }
 
   private async telegramLinkPage(): Promise<Response> {
@@ -1025,8 +1041,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
     const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, traces, log, google,
-      view: async (session, notice) => {
+      view: async (session, notice, page) => {
         const linked = await google.state();
+        const tracePage = traces.rowsPage(clock.timezone, 60, page?.traceBefore);
+        const runPage = runs.listPage(20, page?.runsBefore);
         const now = Date.now();
         const today = localIso(now, clock.timezone).slice(0, 10);
         const planned = new Map(plans.read(today).map((row) => [row.card, row]));
@@ -1043,8 +1061,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
             const row = planned.get(card.id);
             return { id: card.id, name: card.name, defaultTime: card.defaultTime, time: row ? row.time : card.defaultTime, reason: row?.reason ?? 'not planned yet', sent: row?.sent ?? false, pin: pins[card.id] ?? null };
           }),
-          ledger: await ledger(), proactivity: loops.proactivity(), files: files.list(), steps: traces.steps(clock.timezone), trace: traces.rows(clock.timezone, 60),
-          runs: runs.list(20).map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
+          ledger: await ledger(), proactivity: loops.proactivity(), files: files.list(), steps: traces.steps(clock.timezone), trace: tracePage.rows,
+          runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
+          page: { trace_before: tracePage.next, runs_before: runPage.next },
         };
       },
       act: async ({ action, id, value }) => {

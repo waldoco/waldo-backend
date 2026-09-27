@@ -30,6 +30,11 @@ const fakeSql = () => {
         const row = rows.get(args[0] as string);
         return { toArray: () => (row ? [row] : []), rowsWritten: 0 };
       }
+      if (query.startsWith('SELECT * FROM background_runs WHERE (?1 IS NULL OR started_at < ?1)')) {
+        const [before, take] = args as [number | null, number];
+        const all = [...rows.values()].filter((r) => before === null || r.started_at < before).sort((a, b) => b.started_at - a.started_at).slice(0, take);
+        return { toArray: () => all, rowsWritten: 0 };
+      }
       if (query.startsWith('SELECT * FROM background_runs ORDER BY')) {
         return { toArray: () => [...rows.values()].sort((a, b) => b.started_at - a.started_at).slice(0, args[0] as number), rowsWritten: 0 };
       }
@@ -82,5 +87,22 @@ describe('background run book (A5b)', () => {
     expect(book.list(MAX_RUN_ROWS + 10)).toHaveLength(MAX_RUN_ROWS);
     // the newest rows survive the trim
     expect(book.byId(`bg:cap${MAX_RUN_ROWS + 5}`)).not.toBeNull();
+  });
+
+  it('pages the run list by keyset cursor until it runs out', () => {
+    const sql = fakeSql();
+    const book = runBook(sql as never, { now: () => new Date(2000) } as never, () => `run-${sql.rows.size}`);
+    const base = Date.parse('2026-09-27T00:00:00Z');
+    for (let i = 0; i < 5; i += 1) {
+      sql.rows.set(`r${i}`, { id: `r${i}`, kind: 'loop', status: 'completed', summary: null, parent_id: null, started_at: base + i, ended_at: base + i + 1 });
+    }
+    const first = book.listPage(2);
+    expect(first.rows.map((r) => r.id)).toEqual(['r4', 'r3']);
+    expect(first.next).toBe(base + 3);
+    const second = book.listPage(2, first.next ?? undefined);
+    expect(second.rows.map((r) => r.id)).toEqual(['r2', 'r1']);
+    const third = book.listPage(2, second.next ?? undefined);
+    expect(third.rows.map((r) => r.id)).toEqual(['r0']);
+    expect(third.next).toBeNull();
   });
 });

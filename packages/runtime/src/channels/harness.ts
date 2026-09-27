@@ -78,6 +78,16 @@ export const traceBook = (sql: Sql, keep = 500) => {
         'SELECT at, trace, hop, ok, ms, note FROM trace_log ORDER BY id DESC LIMIT ?', limit,
       ).toArray().reverse().map((row) => ({ time: localIso(row.at, timezone).slice(11, 16), trace: row.trace, hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
     },
+    // B9 dashboard bar: cursor page over the activity list. `before` is the epoch ms of the
+    // oldest row the caller already has; `next` is the cursor for the page after this one,
+    // null when the page ran out (fetched limit+1 to know).
+    rowsPage(timezone: string, limit: number, before?: number): { rows: readonly TraceRow[]; next: number | null } {
+      const rows = sql.exec<{ at: number; trace: string; hop: string; ok: number; ms: number; note: string | null }>(
+        'SELECT at, trace, hop, ok, ms, note FROM trace_log WHERE (?1 IS NULL OR at < ?1) ORDER BY id DESC LIMIT ?2', before ?? null, limit + 1,
+      ).toArray();
+      const page = rows.slice(0, limit).reverse().map((row) => ({ time: localIso(row.at, timezone).slice(11, 16), trace: row.trace, hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
+      return { rows: page, next: rows.length > limit ? rows[limit - 1]!.at : null };
+    },
     usageRows(): readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[] {
       return sql.exec<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>(
         `SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(cached_tokens) AS cached, SUM(output_tokens) AS output, SUM(usd) AS usd
