@@ -50,22 +50,25 @@ export const scriptedGateway = (options: ScriptedGatewayOptions): LLMGatewayAdap
   return {
     async complete(input: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {
       const request = input.request;
+      // Echo the requested model: the provider rejects a response whose model differs from the
+      // route's (invalid_response), so the stub answers as whichever model the caller routed to.
+      const as = request.model;
       if (request.response_format?.name === 'claim_ops') {
-        return response(model, options.claimOps ?? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
+        return response(as, options.claimOps ?? '{"add":[],"seen":[],"confirm":[],"dismiss":[],"forget_claims":[],"forget_nodes":[],"forget_topic":null}');
       }
       const said = request.messages[request.messages.length - 1]?.content ?? '';
       // The responder packs conversation history into the same user message, so an earlier
       // turn's text still matches its rule. Scripts are written turn by turn, so search rules
       // in reverse: the latest turn's rule wins over an earlier turn's.
       const rule = [...options.rules].reverse().find((candidate) => candidate.match.test(said));
-      if (!rule) return response(model, options.unmatchedText ?? `[scripted-gateway: no rule matched "${said.slice(0, 80)}"]`);
+      if (!rule) return response(as, options.unmatchedText ?? `[scripted-gateway: no rule matched "${said.slice(0, 80)}"]`);
       if (!queues.has(rule)) queues.set(rule, [...rule.rounds]);
       const queue = queues.get(rule)!;
-      if (queue.length === 0) return response(model, options.unmatchedText ?? `[scripted-gateway: rule ${rule.match} exhausted]`);
+      if (queue.length === 0) return response(as, options.unmatchedText ?? `[scripted-gateway: rule ${rule.match} exhausted]`);
       const step = queue.shift()!;
       if ('error' in step) return { ok: false, code: step.error.code, error: step.error.message };
-      if ('text' in step) return response(model, step.text);
-      return response(model, '', step.toolCalls.map((call, index) => ({
+      if ('text' in step) return response(as, step.text);
+      return response(as, '', step.toolCalls.map((call, index) => ({
         call_id: `script-${round++}-${index}`,
         name: call.name,
         arguments: JSON.stringify(call.arguments ?? {}),
