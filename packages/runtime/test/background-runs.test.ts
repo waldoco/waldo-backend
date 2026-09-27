@@ -8,8 +8,12 @@ const fakeSql = () => {
     exec(query: string, ...args: unknown[]) {
       if (query.startsWith('CREATE TABLE')) return { toArray: () => [] as BackgroundRun[], rowsWritten: 0 };
       if (query.startsWith('INSERT INTO background_runs')) {
-        const [id, kind, parent_id, started_at] = args as [string, BackgroundRun['kind'], string | null, number];
-        rows.set(id, { id, kind, status: 'running', summary: null, parent_id, started_at, ended_at: null });
+        // Arity guard: the fake must fail the way D1 does when bindings and placeholders drift
+        // apart - the 2026-09-27 staging outage was exactly this drift passing CI.
+        const placeholders = (query.match(/\?/g) ?? []).length;
+        if (placeholders !== args.length) throw new Error(`placeholder/arg drift: ${placeholders} placeholders, ${args.length} args`);
+        const [id, kind, status, parent_id, started_at] = args as [string, BackgroundRun['kind'], BackgroundRun['status'], string | null, number];
+        rows.set(id, { id, kind, status, summary: null, parent_id, started_at, ended_at: null });
         return { toArray: () => [] as BackgroundRun[], rowsWritten: 1 };
       }
       if (query.startsWith('UPDATE background_runs')) {
