@@ -337,6 +337,35 @@ describe('gmail search + thread read (A1)', () => {
     expect(JSON.stringify(messages)).not.toContain('123456');
   });
 
+  it('owner-ruled OTP parity: read_thread relays the extracted code to the owner directly - never into model context', async () => {
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const access: GoogleAccess = { client: async () => googleClient(app, { refresh_token: 'rt' }, mailFetcher([])) };
+    const relays: { from: string; artifacts: readonly { kind: string; value: string }[] }[] = [];
+    const handlers = googleHandlers(access, desk, clock, async (from, artifacts) => { relays.push({ from, artifacts }); return true; });
+    const read = handlers.find((h) => h.name === 'read_thread')!;
+    const result = await read.handle({ thread_id: 't1', limit: 10 });
+    expect(result.ok).toBe(true);
+    expect(relays).toEqual([{ from: 'noreply@example.com', artifacts: [{ kind: 'otp', value: '123456' }] }]);
+    const { messages } = (result as { data: { messages: { id: string; body: string; subject: string; quarantined?: readonly string[] }[] } }).data;
+    expect(messages[0]!.body).toBe('Thursday works, 7pm.');
+    expect(messages[1]!.quarantined).toEqual(['otp']);
+    expect(messages[1]!.body).toContain('sent to the owner in a separate message');
+    // falsifier: the relayed code appears NOWHERE in the model-visible result
+    expect(JSON.stringify(messages)).not.toContain('123456');
+  });
+
+  it('a failed relay falls back to the source-app marker - never a false sent claim', async () => {
+    const desk = { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => {} };
+    const access: GoogleAccess = { client: async () => googleClient(app, { refresh_token: 'rt' }, mailFetcher([])) };
+    const handlers = googleHandlers(access, desk, clock, async () => { throw new Error('telegram down'); });
+    const read = handlers.find((h) => h.name === 'read_thread')!;
+    const result = await read.handle({ thread_id: 't1', limit: 10 });
+    expect(result.ok).toBe(true);
+    const { messages } = (result as { data: { messages: { body: string }[] } }).data;
+    expect(messages[1]!.body).toContain('[quarantined: otp artifact - view in the source app]');
+    expect(JSON.stringify(messages)).not.toContain('123456');
+  });
+
   it('both handlers return the typed connect intent (never a URL) when Google is not connected', async () => {
     const offline: GoogleAccess = { client: async () => null };
     const handlers = googleHandlers(offline, desk, clock);
