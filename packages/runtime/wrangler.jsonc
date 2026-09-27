@@ -13,7 +13,9 @@
   // Trace identity. WALDO_ENVIRONMENT must name the deploy target so Langfuse can split
   // staging from production; WALDO_RELEASE is the fallback only - the deploy wrapper
   // (scripts/deploy-runtime.sh) restamps it with the git SHA on every deploy.
-  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_RELEASE": "unreleased" },
+  // WALDO_OWNER_TELEGRAM_ID top level stays empty: production sets its own owner routing fresh
+  // (never copied from staging); empty string keeps the single-owner fallback disabled there.
+  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "" },
   "durable_objects": {
     "bindings": [
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
@@ -48,7 +50,7 @@
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },
-      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased" },
+      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350" },
       "durable_objects": {
         "bindings": [
           { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
