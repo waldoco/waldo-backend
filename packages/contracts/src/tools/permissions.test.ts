@@ -18,6 +18,7 @@
 // capability, an unbounded search_tools query or limit.
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { LLM_TOOLS_MAX } from '../adapters/llm';
 import { triggerTypeSchema } from '../core/trigger';
 import {
   ALWAYS_ON_TOOLS,
@@ -107,6 +108,16 @@ describe('TOOL_PERMISSIONS', () => {
     expect(Object.keys(TOOL_PERMISSIONS).sort()).toEqual([...triggerTypeSchema.options].sort());
     for (const trigger of triggerTypeSchema.options) {
       expect(z.array(toolNameSchema).safeParse(TOOL_PERMISSIONS[trigger]).success).toBe(true);
+    }
+  });
+
+  it('every ACL fits the LLM request tools cap - drift here killed every live turn (2026-09-27)', () => {
+    // contracts/adapters/llm.ts validates the declared tools array with .max(LLM_TOOLS_MAX).
+    // user_message grants the full ratified surface minus execute_code, so the union growing
+    // past the cap made EVERY user_message turn fail validation in 0ms. This parity check
+    // fails CI instead.
+    for (const trigger of triggerTypeSchema.options) {
+      expect(TOOL_PERMISSIONS[trigger].length).toBeLessThanOrEqual(LLM_TOOLS_MAX);
     }
   });
 
