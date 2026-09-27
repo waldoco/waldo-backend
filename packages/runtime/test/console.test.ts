@@ -116,6 +116,20 @@ describe('owner console', () => {
     expect(none).toContain('No background tasks yet.');
   });
 
+  it('paginates the activity lists with keyset cursors, keeping the other list in place', () => {
+    const paged = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: 111, runs_before: 222, trace_applied: null, runs_applied: null } });
+    expect(paged).toContain('href="/console?trace_before=111#activity"');
+    expect(paged).toContain('href="/console?runs_before=222#activity"');
+    expect(paged).toContain('Older activity');
+    expect(paged).not.toContain('&larr; Latest');
+    const deep = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: null, runs_before: 222, trace_applied: 90, runs_applied: null } });
+    expect(deep).toContain('href="/console#activity"');
+    expect(deep).toContain('href="/console?trace_before=90&runs_before=222#activity"');
+    const plain = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(plain).not.toContain('Older activity');
+    expect(plain).not.toContain('Older tasks');
+  });
+
   it('ships purpose-gated micro-interactions: pressed states, focus rings, and a reduced-motion off-ramp', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('.btn:active{transform:translateY(1px)}');
