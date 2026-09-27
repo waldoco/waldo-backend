@@ -20,9 +20,9 @@ for (const key of ['"ai"', '"vectorize"']) {
 const text = raw.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1');
 const cfg = JSON.parse(text);
 const staging = cfg?.env?.staging;
-// Fetch invocation logs persist the full URL, including /c/<ticket> and OAuth callback
-// code/state. Automatic traces also include url.full/url.path. Until #205 removes those
-// credentials from URLs and proves query redaction, retain only structured custom logs.
+// Even custom log metadata can include request URLs. OAuth callback code/state must have
+// query redaction pinned for every deploy. The remaining /c/<ticket> path cannot be
+// redacted by that setting, so automatic traces stay off until #205's cutover and proof.
 for (const [name, node] of [['top level', cfg], ['env.staging', staging]]) {
   const observability = node?.observability;
   if (observability?.enabled !== true || observability.logs?.enabled !== true) {
@@ -30,6 +30,9 @@ for (const [name, node] of [['top level', cfg], ['env.staging', staging]]) {
   }
   if (observability?.logs?.invocation_logs !== false) {
     bad.push(`${name} must disable full-URL invocation logs until #205`);
+  }
+  if (observability?.redact_query_string !== true) {
+    bad.push(`${name} must redact request query strings in logs and traces`);
   }
   if (observability?.traces?.enabled !== false) {
     bad.push(`${name} must disable automatic traces until #205`);

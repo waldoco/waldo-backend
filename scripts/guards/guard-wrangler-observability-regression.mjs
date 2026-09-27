@@ -27,6 +27,7 @@ try {
   for (const [before, after, expected] of [
     ['"invocation_logs": false', '"invocation_logs": true', 'full-URL invocation logs'],
     ['"traces": { "enabled": false }', '"traces": { "enabled": true }', 'automatic traces'],
+    ['"redact_query_string": true', '"redact_query_string": false', 'redact request query strings'],
   ]) {
     const parts = source.split(before);
     if (parts.length !== 3) throw new Error(`expected two ${before} settings`);
