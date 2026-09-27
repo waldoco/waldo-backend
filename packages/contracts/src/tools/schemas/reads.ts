@@ -63,6 +63,22 @@ export const getCommunicationArgsSchema = z.strictObject({
 });
 export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
 
+// A1 gmail parity: free-text mail search (Gmail q passthrough; the handler appends
+// after:/before: from the date range) and a single-thread body read. Both are read-only;
+// the E1 verification-artifact quarantine runs on results before they reach model context.
+export const searchCommunicationArgsSchema = z.strictObject({
+  query: z.string().min(1),
+  date_range: dateRangeSchema.optional(),
+  limit: z.int().min(1).max(20).default(10),
+});
+export type SearchCommunicationArgs = z.infer<typeof searchCommunicationArgsSchema>;
+
+export const readThreadArgsSchema = z.strictObject({
+  thread_id: z.string().min(1),
+  limit: z.int().min(1).max(20).default(10),
+});
+export type ReadThreadArgs = z.infer<typeof readThreadArgsSchema>;
+
 // 'all' is a read-filter sentinel, not a task state — write-side status vocabulary lives
 // with the update_task args.
 export const taskStatusFilterSchema = z.enum(['todo', 'in_progress', 'done', 'all']);

@@ -98,6 +98,8 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
 export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_calendar',
   'get_communication',
+  'search_communication',
+  'read_thread',
   'get_tasks',
   'web_search',
   'read_document',

@@ -215,6 +215,8 @@ describe('hook registry', () => {
         'query_calendar',
         'connect_service',
         'get_communication',
+        'search_communication',
+        'read_thread',
         'get_tasks',
         'get_master_metrics',
         'get_context',
