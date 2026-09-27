@@ -327,10 +327,41 @@ const activity = (view: ConsoleView) => {
   return `<div class="grid2 wide-left"><div><h3>End-to-end checklist <span class="count">${seen} of ${view.steps.length}</span></h3>${steps}</div><div><h3>Recent activity</h3>${trace}<p>${pageLinks(traceOlder, view.page?.trace_applied ? pageHref(null, view.page.runs_applied ?? null) : null)}</p></div></div><h3>Background tasks</h3>${runs}<p>${pageLinks(runsOlder, view.page?.runs_applied ? pageHref(view.page.trace_applied ?? null, null) : null)}</p><h3>Ledger and reminders</h3><pre>${esc(view.ledger)}</pre>`;
 };
 
+// Overview uses only persisted owner state. It is a summary, not a generated Brief:
+// no claim about a card's contents or an effect can be inferred from its schedule.
+const overview = (view: ConsoleView) => {
+  const hour = Number(view.now.split(' ')[1]?.split(':')[0]);
+  const greeting = Number.isFinite(hour) && hour < 12 ? 'Morning.' : Number.isFinite(hour) && hour < 18 ? 'Afternoon.' : 'Evening.';
+  const waiting = view.approvals.filter((approval) => approval.state === 'open');
+  const latestRun = view.page?.runs_applied ? undefined : view.runs[0];
+  const latestTrace = view.page?.trace_applied ? undefined : view.trace.at(-1);
+  const lastMovement = latestRun
+    ? `<div class="overview-event">${chip(latestRun.status, latestRun.status === 'failed' ? 'danger' : latestRun.status === 'completed' ? 'good' : 'neutral')} <span>${esc(latestRun.kind)} · ${esc(latestRun.started)}</span><p>${esc(latestRun.summary ?? 'No summary recorded.')}</p></div>`
+    : latestTrace ? `<div class="overview-event">${chip(latestTrace.ok ? 'Ran' : 'Failed', latestTrace.ok ? 'good' : 'danger')} <span>${esc(latestTrace.hop)} · ${esc(latestTrace.time)}</span><p>${esc(latestTrace.note || 'No detail recorded.')}</p></div>`
+      : empty('Nothing recorded yet. Activity appears when Waldo runs a task.');
+  const currentTime = view.now.split(' ')[1] ?? '';
+  const nextCard = [...view.cards].filter((card) => !card.sent && card.time !== null && card.time >= currentTime).sort((a, b) => (a.time ?? '').localeCompare(b.time ?? ''))[0];
+  const brief = view.cards.find((card) => card.id === 'card:brief');
+  const briefState = brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
+  const google = view.google.accounts.some((account) => !account.error);
+  return `<div class="overview-top"><div><div class="eyebrow">Your Waldo · ${esc(view.now)} ${esc(view.timezone)}</div><h1>${greeting}<br><em>Here is where things stand.</em></h1><p>What needs you, what ran, and what comes next. No guesswork.</p></div><div class="overview-status">${chip(waiting.length ? `${waiting.length} waiting on you` : 'Nothing waiting on you', waiting.length ? 'provisional' : 'good')}<span>${google ? 'Google access saved. Live reads still need a real check.' : 'Google is not connected.'}</span></div></div>
+<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="#day" class="text-link">See the day cards →</a></div>
+<div class="overview-side"><div class="eyebrow">The Handoff</div><h3>${waiting.length ? `${waiting.length} ${waiting.length === 1 ? 'decision' : 'decisions'} waiting.` : 'Nothing needs your approval.'}</h3><p>${waiting.length ? esc(waiting[0]!.summary) : 'If Waldo proposes a change, review its exact details before anything happens.'}</p><a href="#approvals" class="text-link">${waiting.length ? 'Review the proposal' : 'See approvals'} →</a></div>
+<div class="overview-side"><div class="eyebrow">Next on the day</div><h3>${nextCard ? `${esc(nextCard.time!)} · ${esc(nextCard.name)}` : 'No more cards scheduled ahead.'}</h3><p>${nextCard ? esc(nextCard.reason) : 'There is no future card recorded in today’s plan.'}</p><a href="#day" class="text-link">See the plan →</a></div></div>
+<div class="overview-foot"><div><div class="eyebrow">The Patrol · latest recorded movement</div>${lastMovement}</div><a href="#activity" class="text-link">All activity →</a></div>`;
+};
+
 const FONT_SHEET = 'https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600&display=swap';
 const FONTS = `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="${FONT_SHEET}">`;
 
 const STYLE = `
+.overview-top{display:flex;justify-content:space-between;gap:32px;align-items:flex-end;padding:24px 0 28px;border-bottom:1px solid var(--rule)}
+.overview-top h1{font:400 clamp(38px,5vw,68px)/1.05 'Instrument Serif',Georgia,serif;letter-spacing:-.035em;margin:14px 0 16px}.overview-top h1 em{font:400 1em 'Instrument Serif',Georgia,serif;color:var(--teal-ink)}
+.overview-top p,.overview-feature p,.overview-side p{color:var(--ink2);margin:0 0 16px}.overview-status{display:flex;flex-direction:column;gap:10px;max-width:200px;font-size:12px;color:var(--ink2);text-align:right;align-items:flex-end}
+.eyebrow{font:600 11px/1.3 Inter,system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase;color:var(--teal-ink)}
+.overview-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(245px,1fr);grid-template-rows:auto auto;gap:14px;margin-top:18px}.overview-feature,.overview-side{border:1px solid var(--rule);border-radius:16px;padding:22px;background:#fff}.overview-feature{grid-row:1/3;min-height:288px;background:var(--sand);display:flex;flex-direction:column;align-items:flex-start}.overview-feature h3,.overview-side h3{font:400 30px/1.12 'Instrument Serif',Georgia,serif;letter-spacing:-.02em;margin:20px 0 12px}.overview-feature h3{font-size:40px}.overview-feature .text-link{margin-top:auto}.overview-side h3{font-size:24px;margin:12px 0 8px}
+.text-link{font:600 14px/24px Inter,system-ui,sans-serif;color:var(--teal-ink);text-decoration:none}.text-link:hover{text-decoration:underline}.overview-foot{margin-top:14px;border-top:1px solid var(--rule);padding:18px 0;display:flex;align-items:center;justify-content:space-between;gap:20px}.overview-event{margin-top:8px}.overview-event span{color:var(--ink2)}.overview-event p{margin:4px 0 0}.overview-foot>.text-link{white-space:nowrap}
+@media(max-width:740px){.overview-top{display:block}.overview-status{max-width:none;text-align:left;align-items:flex-start;margin-top:18px}.overview-grid{display:block}.overview-feature,.overview-side{margin-top:12px;min-height:0}.overview-feature{min-height:230px}.overview-foot{align-items:flex-start;flex-direction:column}}
 :root{--regular:400;--medium:500;--semibold:600;--bold:700;--ink:#251f21;--ink2:#585254;--ink4:#c0bebf;--rule:#eae9ea;--sand:#f4efec;--teal:#73a89a;--teal-ink:#3f7568;--red:#ed313e}
 *{box-sizing:border-box}body{margin:0;background:#fff;color:var(--ink);font:400 14px/24px Inter,system-ui,sans-serif;letter-spacing:-.01em;-webkit-font-smoothing:antialiased}
 .wrap{max-width:1040px;margin:0 auto;padding:24px}@media(min-width:760px){.wrap{padding:36px}}
@@ -384,8 +415,9 @@ export const renderConsole = (view: ConsoleView, banner = ''): string => {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav><a href="#approvals">Waiting</a><a href="#checklist">Setup</a><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#usage">Usage</a><a href="#activity">Activity</a></nav>
+<nav><a href="#overview">Overview</a><a href="#approvals">Waiting</a><a href="#checklist">Setup</a><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#usage">Usage</a><a href="#activity">Activity</a></nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
+<section id="overview" aria-label="Overview">${overview(view)}</section>
 <div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
 ${section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view))}
 ${section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view))}
