@@ -8,7 +8,8 @@ import {
   type Skill,
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
-import { prepareWithScribe } from '../scribe/prepare';
+import { sanitiseVerifyOnly } from '../scribe/sanitiser';
+import { sanitiseInputSchema, sanitiseResultSchema } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
 import { FailClosed } from './faults';
 import type {
@@ -65,22 +66,35 @@ export async function renderProviderPrompt(
   if (new TextEncoder().encode(assembledPrompt).byteLength > MAX_PROMPT_BYTES) {
     return Object.freeze({ ok: false, failure: 'assembly_failed' });
   }
-  const prepared = prepareWithScribe(
-    assembledPrompt,
-    promptStringSchema,
-    'system_prompt',
-    'external',
-    canaries,
-  );
-  if (!prepared.ok || prepared.value !== assembledPrompt) {
+  if (!promptStringSchema.safeParse(assembledPrompt).success) {
+    return Object.freeze({ ok: false, failure: 'sanitisation_failed' });
+  }
+  // Verify-only final pass: composition already sanitised every fragment at its own source
+  // taint, so this pass must never rewrite - a rewrite used to fail the byte-identical check and
+  // crash the turn (2026-09-27 incident: owner-readable seam + external-taint final pass). Deny
+  // guards (canary/secret, health leak, injection block verdict, destination policy) still hold.
+  const input = sanitiseInputSchema.safeParse({
+    payload: assembledPrompt,
+    destination: 'system_prompt',
+    canary_tokens: canaries,
+    source_taint: null,
+  });
+  if (!input.success) return Object.freeze({ ok: false, failure: 'sanitisation_failed' });
+  let verified: ReturnType<typeof sanitiseVerifyOnly>;
+  try {
+    verified = sanitiseResultSchema.parse(sanitiseVerifyOnly(input.data));
+  } catch {
+    return Object.freeze({ ok: false, failure: 'sanitisation_failed' });
+  }
+  if (!verified.ok || verified.payload !== assembledPrompt) {
     return Object.freeze({ ok: false, failure: 'sanitisation_failed' });
   }
   return Object.freeze({
     ok: true,
-    prompt: prepared.value,
+    prompt: assembledPrompt,
     identity: Object.freeze({
       serializer_revision: CONTEXT_PROMPT_SERIALIZER_REVISION,
-      prompt_digest: await sha256Prefixed(prepared.value),
+      prompt_digest: await sha256Prefixed(assembledPrompt),
     }),
   });
 }

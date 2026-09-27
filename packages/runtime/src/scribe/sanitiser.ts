@@ -981,6 +981,38 @@ export function guardForOffload(raw: SanitiseInput): SanitiseResult {
   };
 }
 
+// Verify-only pass for the final assembled provider prompt (renderProviderPrompt). Every fragment
+// was already sanitised at its own source taint during composition, so the final pass must not
+// rewrite: a rewrite here fails the byte-identical check and fails the turn closed. Live incident
+// 2026-09-27: the owner-readable seam passed an owner email at null taint (per owner direction),
+// the final pass re-redacted it at 'external', the assembled prompt no longer matched, and every
+// turn failed with sanitisation_failed until the fragment left the window. Deny-level guards stay:
+// canary/secret, health leak, injection block verdict, and destination policy all still fail closed.
+export function sanitiseVerifyOnly(raw: SanitiseInput): SanitiseResult {
+  const input = prepareInput(raw);
+  if (!input) return deny('size_cap', 'invalid_payload');
+
+  const secret = containsCanaryOrSecret(input.payload, input);
+  if (secret === 'invalid_payload') return deny('size_cap', secret);
+  if (secret !== undefined) return deny('canary_token', secret);
+
+  const health = containsForbiddenHealth(input);
+  if (health.invalid) return deny('size_cap', 'invalid_payload');
+  if (health.matched) return deny('health_value', 'health_value_leak');
+
+  const matched = new Map<InjectionRuleId, GuardVerdict['matches'][number]>();
+  const scanned = visitStrings(input.payload, input.destination, (text) => {
+    for (const match of scoreInjection(text).matches) matched.set(match.id, match);
+    return false;
+  });
+  if (scanned.invalid) return deny('size_cap', 'invalid_payload');
+  if (verdictForMatches([...matched.values()]).decision === 'block') {
+    return deny('instruction_pattern', 'untrusted_instruction');
+  }
+
+  return applyDestinationPolicy(input, input.payload, []);
+}
+
 export function sanitise(raw: SanitiseInput): SanitiseResult {
   const input = prepareInput(raw);
   if (!input) return deny('size_cap', 'invalid_payload');
