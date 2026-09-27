@@ -99,7 +99,7 @@ export async function loadStagedInputs(
       stableJson({ input_ref: actual.input_ref, content_digest: actual.content_digest }),
       snapshot.revision_ref,
     );
-    texts.push(preparePromptSourceText(actual.text, actual.source.source_taint, inputs.canary_tokens));
+    texts.push(preparePromptSourceText(actual.text, actual.source.source_taint, inputs.canary_tokens, 'staged_input'));
   }
   return Object.freeze(texts);
 }
@@ -327,13 +327,13 @@ export function prepareHealth(
     null,
     canaries,
   );
-  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}`);
+  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}:narrative`);
   const preparedNarrative = {
     ...narrative.data,
-    day_summary: preparePromptSourceText(narrative.data.day_summary, null, canaries),
-    active_goals: narrative.data.active_goals.map((item) => preparePromptSourceText(item, null, canaries)),
+    day_summary: preparePromptSourceText(narrative.data.day_summary, null, canaries, 'narrative'),
+    active_goals: narrative.data.active_goals.map((item) => preparePromptSourceText(item, null, canaries, 'narrative')),
     upcoming_high_stakes: narrative.data.upcoming_high_stakes.map((item) =>
-      preparePromptSourceText(item, null, canaries),
+      preparePromptSourceText(item, null, canaries, 'narrative'),
     ),
   };
   return Object.freeze({
@@ -360,7 +360,7 @@ function prepareMandatoryFragment(
     throw new FailClosed('mandatory_context_missing');
   }
   const source = snapshotContextSource(record.source, 'provenance_invalid');
-  const prepared = preparePromptSourceText(record.text, source.source_taint, inputs.canary_tokens);
+  const prepared = preparePromptSourceText(record.text, source.source_taint, inputs.canary_tokens, 'material');
   if (!allowScribeRewrite && prepared !== record.text) {
     throw new FailClosed('sanitisation_failed');
   }

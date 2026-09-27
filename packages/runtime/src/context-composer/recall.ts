@@ -195,7 +195,7 @@ function admitRecallResult(
     }
     return {
       ...parsed.data,
-      content: preparePromptSourceText(parsed.data.content, taint, canaries),
+      content: preparePromptSourceText(parsed.data.content, taint, canaries, 'recall_memory'),
     };
   });
   const episode_hits = value.episode_hits.map((hit) => {
@@ -203,7 +203,7 @@ function admitRecallResult(
     if (!parsed.success) throw new FailClosed('recall_integrity');
     return {
       ...parsed.data,
-      summary: preparePromptSourceText(parsed.data.summary, taint, canaries),
+      summary: preparePromptSourceText(parsed.data.summary, taint, canaries, 'recall_episode'),
     };
   });
   return recallResultSchema.parse({ ...value, memory_hits, episode_hits });

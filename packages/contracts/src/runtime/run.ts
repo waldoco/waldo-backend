@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { briefVariantSchema, triggerTypeSchema } from '../core/trigger';
 import { formZoneSchema } from '../health/crs';
 import {
+  sanitisationFailureSourceSchema,
   sanitiseFailureReasonSchema,
   sourceTaintSchema,
 } from '../memory/sanitise';
@@ -133,6 +134,7 @@ export const runtimeContextFailureReasonSchema = z.union([
   // 'sanitisation_failed' hid which guard killed every staging conversation turn.
   z.literal('sanitisation_failed'),
   z.templateLiteral(['sanitisation_failed:', sanitiseFailureReasonSchema]),
+  z.templateLiteral(['sanitisation_failed:', sanitiseFailureReasonSchema, ':', sanitisationFailureSourceSchema]),
 ]);
 export type RuntimeContextFailureReason = z.infer<typeof runtimeContextFailureReasonSchema>;
 

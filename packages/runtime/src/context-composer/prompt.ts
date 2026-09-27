@@ -9,7 +9,7 @@ import {
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import { sanitiseVerifyOnly } from '../scribe/sanitiser';
-import { sanitiseInputSchema, sanitiseResultSchema, type SanitiseFailureReason } from '@waldo/contracts';
+import { sanitiseInputSchema, sanitiseResultSchema, type SanitisationFailureSource, type SanitiseFailureReason } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
 import { FailClosed } from './faults';
 import type {
@@ -37,7 +37,11 @@ export type RenderedProviderPrompt =
     }>
   | Readonly<{
       ok: false;
-      failure: 'assembly_failed' | 'sanitisation_failed' | `sanitisation_failed:${SanitiseFailureReason}`;
+      failure:
+        | 'assembly_failed'
+        | 'sanitisation_failed'
+        | `sanitisation_failed:${SanitiseFailureReason}`
+        | `sanitisation_failed:${SanitiseFailureReason}:${SanitisationFailureSource}`;
     }>;
 
 // This is the whole REASONS canvas serializer revision, not the narrower skill serializer.
@@ -86,7 +90,10 @@ export async function renderProviderPrompt(
   } catch {
     return Object.freeze({ ok: false, failure: 'sanitisation_failed' });
   }
-  if (!verified.ok || verified.payload !== assembledPrompt) {
+  if (!verified.ok) {
+    return Object.freeze({ ok: false, failure: `sanitisation_failed:${verified.reason}:final_pass` as const });
+  }
+  if (verified.payload !== assembledPrompt) {
     return Object.freeze({ ok: false, failure: 'sanitisation_failed' });
   }
   return Object.freeze({

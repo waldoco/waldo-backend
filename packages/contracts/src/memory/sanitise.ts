@@ -147,6 +147,21 @@ export const sanitiseFailureReasonSchema = z.enum([
 ]);
 export type SanitiseFailureReason = z.infer<typeof sanitiseFailureReasonSchema>;
 
+// Which composer layer rejected the fragment - the reason names the guard, this names where
+// the poisoned bytes entered, so a typed failure points at one store. Content-free like the
+// reason vocabulary (2026-09-27 P0: canary_leak with no source hid the fragment for hours).
+export const sanitisationFailureSourceSchema = z.enum([
+  'recall_memory',
+  'recall_episode',
+  'narrative',
+  'skill',
+  'staged_input',
+  'material',
+  'final_pass',
+  'unknown',
+]);
+export type SanitisationFailureSource = z.infer<typeof sanitisationFailureSourceSchema>;
+
 export const redactionKindSchema = z.enum([
   'email',
   'phone',
