@@ -25,7 +25,7 @@ export function preparePromptSourceText(text: string, taint: SourceTaint, canari
     taint,
     canaries,
   );
-  if (!prepared.ok) throw new FailClosed('sanitisation_failed');
+  if (!prepared.ok) throw new FailClosed(`sanitisation_failed:${prepared.reason}`);
   return prepared.value;
 }
 
@@ -51,7 +51,8 @@ export function prepareSystemSkill(
     null,
     canaries,
   );
-  if (!triggerCondition.ok || !body.ok) throw new FailClosed('sanitisation_failed');
+  if (!triggerCondition.ok) throw new FailClosed(`sanitisation_failed:${triggerCondition.reason}`);
+  if (!body.ok) throw new FailClosed(`sanitisation_failed:${body.reason}`);
   return skillSchema.parse({
     ...skill,
     trigger_condition: triggerCondition.value,

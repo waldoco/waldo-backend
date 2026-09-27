@@ -327,7 +327,7 @@ export function prepareHealth(
     null,
     canaries,
   );
-  if (!preparedView.ok) throw new FailClosed('sanitisation_failed');
+  if (!preparedView.ok) throw new FailClosed(`sanitisation_failed:${preparedView.reason}`);
   const preparedNarrative = {
     ...narrative.data,
     day_summary: preparePromptSourceText(narrative.data.day_summary, null, canaries),

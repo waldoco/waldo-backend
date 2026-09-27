@@ -9,7 +9,7 @@ import {
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import { sanitiseVerifyOnly } from '../scribe/sanitiser';
-import { sanitiseInputSchema, sanitiseResultSchema } from '@waldo/contracts';
+import { sanitiseInputSchema, sanitiseResultSchema, type SanitiseFailureReason } from '@waldo/contracts';
 import { sha256Prefixed } from './canonical';
 import { FailClosed } from './faults';
 import type {
@@ -37,7 +37,7 @@ export type RenderedProviderPrompt =
     }>
   | Readonly<{
       ok: false;
-      failure: 'assembly_failed' | 'sanitisation_failed';
+      failure: 'assembly_failed' | 'sanitisation_failed' | `sanitisation_failed:${SanitiseFailureReason}`;
     }>;
 
 // This is the whole REASONS canvas serializer revision, not the narrower skill serializer.

@@ -110,22 +110,29 @@ export type RuntimeProviderFailureReason = z.infer<typeof runtimeProviderFailure
 
 // ContextComposer keeps a content-free failure vocabulary at its public seam. The RunLoop carries
 // that vocabulary forward rather than serialising an adapter exception, source text, or prompt.
-export const runtimeContextFailureReasonSchema = z.enum([
-  'invalid_trusted_invocation',
-  'invalid_runtime_inputs',
-  'input_integrity',
-  'materials_unavailable',
-  'identity_mismatch',
-  'owner_binding_mismatch',
-  'skill_snapshot_invalid',
-  'skill_row_invalid',
-  'skill_content_oversize',
-  'mandatory_context_missing',
-  'health_context_invalid',
-  'recall_integrity',
-  'sanitisation_failed',
-  'provenance_invalid',
-  'assembly_failed',
+export const runtimeContextFailureReasonSchema = z.union([
+  z.enum([
+    'invalid_trusted_invocation',
+    'invalid_runtime_inputs',
+    'input_integrity',
+    'materials_unavailable',
+    'identity_mismatch',
+    'owner_binding_mismatch',
+    'skill_snapshot_invalid',
+    'skill_row_invalid',
+    'skill_content_oversize',
+    'mandatory_context_missing',
+    'health_context_invalid',
+    'recall_integrity',
+    'provenance_invalid',
+    'assembly_failed',
+  ]),
+  // Bare form stays for the fence-closer and byte-identity guards, which have no scribe
+  // reason; the template form carries the scribe's typed deny reason (still content-free -
+  // the reason vocabulary names the guard, never the payload). 2026-09-27 P0: an untyped
+  // 'sanitisation_failed' hid which guard killed every staging conversation turn.
+  z.literal('sanitisation_failed'),
+  z.templateLiteral(['sanitisation_failed:', sanitiseFailureReasonSchema]),
 ]);
 export type RuntimeContextFailureReason = z.infer<typeof runtimeContextFailureReasonSchema>;
 
