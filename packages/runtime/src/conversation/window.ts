@@ -6,7 +6,7 @@ import type { ConversationModelMessage } from '@waldo/contracts';
 // window over the assembled messages with a defined overflow behavior (drop oldest, never fail).
 //
 // Budget rationale: the current chat model\'s verified context window is 400k tokens
-// (gpt-5-nano; OpenAI/Azure model docs, verified 2026-09-27). 100k bounds the conversation-history
+// (OpenAI/Azure model docs, verified 2026-09-27). 100k bounds the conversation-history
 // share, leaving headroom for the composed system prompt, in-turn tool turns and the 4096-token
 // output pin, and caps per-turn input cost under the cheapest-passing routing rule.
 export const CONVERSATION_INPUT_BUDGET_TOKENS = 100_000;
