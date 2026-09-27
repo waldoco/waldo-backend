@@ -28,6 +28,15 @@ const ciRedact = (value: string, needle: string, marker: string): string =>
   needle ? value.replace(new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), marker) : value;
 
 export const FORGOTTEN = '[forgotten]';
+
+// Forget-intent gate (2026-09-27 staging receipt: gpt-5-nano echoed the barrier list's
+// numeric ids into forget_claims on turns where the owner never asked to forget - a
+// calendar question wiped claims 1-6, a stress chat wiped 1-2). Forgetting is destructive
+// and irreversible once settled, so model-proposed forgets apply only when the owner text
+// for this pass carries an explicit forget request. The bias is deliberate: a missed
+// forget makes the owner ask again; a false forget silently deletes memory.
+const FORGET_INTENT = /\bforget\b|\berase\b|\bstop (remembering|keeping|storing)\b|\bdon'?t (remember|keep|store|save) (this|that|it|the)\b|\bdelete (that|this|it|the (memory|note|claim))\b|\bdrop (that|this|it)\b/i;
+export const hasForgetIntent = (text: string): boolean => FORGET_INTENT.test(text);
 const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char}`);
 const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
 
@@ -270,7 +279,7 @@ export const memoryPrompt = (store: ClaimStore): string => {
 export const barrierPrompt = (store: ClaimStore): string => {
   const barriers = store.barriers();
   return barriers.length === 0 ? 'The owner has asked Waldo to forget nothing so far.'
-    : `The owner asked Waldo to forget these. Never add a claim about them, even if older conversation mentions them:\n${barriers.map((barrier) => `<forgotten id="${barrier.id}">${barrier.topic === FORGOTTEN ? 'a removed item' : fence(barrier.topic)}</forgotten>`).join('\n')}`;
+    : `The owner asked Waldo to forget these. Never add a claim about them, even if older conversation mentions them. These entries are not claims and carry no claim ids - never list them in forget_claims or forget_nodes:\n${barriers.map((barrier) => `<forgotten>${barrier.topic === FORGOTTEN ? 'a removed item' : fence(barrier.topic)}</forgotten>`).join('\n')}`;
 };
 
 const CLAIM_RULES = [
@@ -278,7 +287,8 @@ const CLAIM_RULES = [
   'Each claim is one short plain sentence. Keep conditions exactly as stated ("usually 11am; 7:30-8pm when mornings fail"), never flatten them.',
   'source is stated when the owner said it, inferred when it is your read. Quote or point to the evidence.',
   'When the exchange repeats a claim, list its id in seen. When the owner agrees with an inferred claim, list it in confirm. When the owner corrects a claim, dismiss it and add the corrected one.',
-  'When the owner asks to forget something, list the matching claim and node ids in forget_claims and forget_nodes, and name the subject in a few neutral words in forget_topic so it is never relearned. Otherwise forget_topic is null.',
+  'Only when the owner explicitly asks to forget something in the text you are reviewing, list the matching claim and node ids in forget_claims and forget_nodes, and name the subject in a few neutral words in forget_topic so it is never relearned. Without an explicit ask in that text, forget_claims and forget_nodes stay empty and forget_topic is null - never forget on your own read of the conversation.',
+  'Never record the owner\'s questions or one-off momentary states (asking the time, the weather, what is on the calendar today, a bare yes or no). Record what stays true: preferences, routines, plans, facts about the owner.',
   'Mark an added claim touches_forgotten when it is about anything the owner asked to forget.',
   'Health routines and how the owner says they feel are fine. Never record a diagnosis Waldo inferred.',
 ];
@@ -369,13 +379,17 @@ const ground = (evidence: string, sections: ClaimGrounding): GroundingVerdict =>
 
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding): string => {
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean): string => {
+  // Destructive ops need an explicit forget request in the text under review (see
+  // FORGET_INTENT above). Callers that pass no override derive it from the grounding owner
+  // section; migration-style callers with no live owner voice pass false explicitly.
+  const forgetsAllowed = forgetAllowed ?? hasForgetIntent(grounding?.owner ?? '');
   const ops = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)) as ClaimOps;
   const known = new Set(store.claims().map((claim) => claim.id));
   // Claims mid-scrub (a previous purge left survivors) are forgettable too: that is the retry path.
   const forgettable = new Set([...known, ...store.claims('purging').map((claim) => claim.id)]);
   const nodes = new Set(store.nodes().map((node) => node.id));
-  const topic = ops.forget_topic?.trim();
+  const topic = forgetsAllowed ? ops.forget_topic?.trim() : undefined;
   if (topic) store.barrier(topic, at);
   const barrierHashes = new Set(store.barriers().map((barrier) => barrier.topic_hash).filter(Boolean));
   const holdReasons = new Set<string>();
@@ -402,6 +416,18 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
         holdReasons.add('self-report');
         continue;
       }
+      // Thin evidence (2026-09-27 staging receipt: a bare "yes" was persisted as "Owner
+      // agreed to fetch Gmail inbox now" - an agreement the owner never made, grounded in
+      // three letters). Claims whose grounding span carries no content are held, not written.
+      const thin = verdict === 'owner'
+        ? groundingTargets(claim.evidence).every((target) => target.length < 12)
+        : verdict === 'ungrounded' && normalizeForGrounding(claim.evidence).length < 12;
+      if (thin) {
+        store.recordHold(claim.kind, 'thin-evidence', claim.text, at);
+        held.push(claim);
+        holdReasons.add('thin-evidence');
+        continue;
+      }
       origin = verdict === 'owner' ? 'owner' : verdict === 'shared' ? 'untrusted' : 'agent';
       if (source === 'stated' && verdict !== 'owner') {
         // Shared-content taint or ungrounded paraphrase: admitted, but 'stated' is reserved
@@ -416,7 +442,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   for (const id of ops.seen.filter((id) => known.has(id))) store.seen(id, at);
   for (const id of ops.confirm.filter((id) => known.has(id))) store.confirm(id, evidence, at);
   for (const id of ops.dismiss.filter((id) => known.has(id))) store.setStatus(id, 'dismissed');
-  const forgetIds = ops.forget_claims.filter((id) => forgettable.has(id));
+  const forgetIds = forgetsAllowed ? ops.forget_claims.filter((id) => forgettable.has(id)) : [];
   const purge = forgetIds.length ? store.purge(forgetIds, at) : null;
   if (purge && purge.texts.length > 0) {
     if (onPurged === undefined) {
@@ -427,10 +453,11 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
       onPurged(purge.texts, purge.ready ? forgetIds : []);
     }
   }
-  for (const id of ops.forget_nodes.filter((id) => nodes.has(id))) store.forgetNode(id);
+  for (const id of forgetsAllowed ? ops.forget_nodes.filter((id) => nodes.has(id)) : []) store.forgetNode(id);
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
-  return `+${written} held${held.length}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${ops.forget_claims.length + ops.forget_nodes.length}${downgraded ? ` downgraded${downgraded}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
+  const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
+  return `+${written} held${held.length}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
 };
 
 export const PROMOTION_INSTRUCTION = [

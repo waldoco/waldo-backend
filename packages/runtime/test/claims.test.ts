@@ -25,7 +25,7 @@ describe('claims', () => {
       expect(after.get(gym!.id)).toMatchObject({ seen_count: 2, source: 'stated' });
       expect(after.get(lunch!.id)).toMatchObject({ source: 'confirmed' });
       expect(after.get(lunch!.id)!.evidence).toContain('confirmed: owner, tg-9');
-      applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT);
+      applyClaimOps(store, ops({ dismiss: [gym!.id], forget_claims: [lunch!.id], forget_topic: 'lunch habits' }), AT, 'owner agreed', undefined, undefined, true);
       expect(store.claims()).toEqual([]);
       expect(store.claims('dismissed').map((claim) => claim.id)).toEqual([gym!.id]);
       // No barrier keeps raw words - the model-supplied topic label would ride every model
@@ -58,8 +58,47 @@ describe('claims', () => {
       expect(store.claims().map((claim) => claim.text)).toEqual(['Lives in Bengaluru']);
       // The barrier prompt carries the marker only: the forgotten words never return to the model.
       const input = nightlyInput(store, 'owner: hi');
-      expect(input).toContain('<forgotten id="1">a removed item</forgotten>');
+      expect(input).toContain('<forgotten>a removed item</forgotten>');
+      expect(input).not.toContain('<forgotten id=');
       expect(input).not.toContain("owner's ex");
+    });
+  });
+
+  it('blocks model-proposed forgets when the owner text carries no forget intent (2026-09-27 wipe receipt)', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'fact', text: 'Lives in Jabalpur', source: 'stated', evidence: '"I live in Jabalpur"' }, AT);
+      store.add({ kind: 'preference', text: 'Likes idli', source: 'stated', evidence: '"idli please"' }, AT);
+      const ids = store.claims().map((claim) => claim.id);
+      // The staging failure shape: an unrelated question, extractor hallucinates forgets.
+      const detail = applyClaimOps(store, ops({ forget_claims: ids, forget_nodes: [1], forget_topic: 'forgotten items' }), AT, 'owner, tg-cal', undefined,
+        { owner: "What's on my calendar tomorrow?", shared: '', waldo: 'Coffee chat at 2pm.' });
+      expect(detail).toContain('forget-blocked4(no-intent)'); // 2 claims + 1 node + 1 topic
+      expect(store.claims().map((claim) => claim.id)).toEqual(ids); // nothing purged
+      expect(store.barriers()).toEqual([]); // no barrier without intent either
+    });
+  });
+
+  it('applies forgets when the owner text explicitly asks to forget', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'preference', text: 'Post-workout: codeword-blue dosa', source: 'stated', evidence: '"codeword-blue dosa"' }, AT);
+      const [claim] = store.claims();
+      const detail = applyClaimOps(store, ops({ forget_claims: [claim!.id], forget_nodes: [], forget_topic: 'post-workout meal' }), AT, 'owner, tg-forget', undefined,
+        { owner: 'Forget the post-workout meal thing completely.', shared: '', waldo: 'Got it, dropped.' });
+      expect(detail).toContain('forgot1');
+      expect(store.claims()).toEqual([]);
+    });
+  });
+
+  it('holds claims grounded in content-free evidence (the bare-"yes" Gmail receipt)', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const detail = applyClaimOps(store, ops({ add: [
+        { kind: 'fact', text: 'Owner agreed to fetch Gmail inbox now', source: 'stated', evidence: '"yes"', touches_forgotten: false },
+      ] }), AT, 'owner, tg-yes', undefined, { owner: 'yes', shared: '', waldo: 'Morning. Do you want me to fetch your Gmail inbox now?' });
+      expect(detail).toContain('held1(thin-evidence)');
+      expect(store.claims()).toEqual([]);
     });
   });
 
