@@ -283,7 +283,7 @@ describe('gmail search + thread read (A1)', () => {
     const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher(calls));
     const items = await client.searchMail('from:sam@example.com after:1759000000', 10);
     expect(items).toHaveLength(2);
-    expect(items[0]).toEqual({ id: 'm1', thread_id: 't1', from: 'sam@example.com', subject: 'Dinner', snippet: 'snip', at: new Date(1759140000000).toISOString() });
+    expect(items[0]!).toEqual({ id: 'm1', thread_id: 't1', from: 'sam@example.com', subject: 'Dinner', snippet: 'snip', at: new Date(1759140000000).toISOString() });
     const listUrl = decodeURIComponent(calls.find((u) => u.includes('messages?'))!).replace(/\+/g, ' ');
     expect(listUrl).toContain('q=from:sam@example.com after:1759000000');
     expect(listUrl).toContain('maxResults=10');
@@ -293,7 +293,7 @@ describe('gmail search + thread read (A1)', () => {
     const calls: string[] = [];
     const handlers = googleHandlers(access(calls), desk, clock);
     const search = handlers.find((h) => h.name === 'search_communication')!;
-    const result = await search.handle({ query: 'code', date_range: { from: '2026-09-28T00:00:00Z', to: '2026-09-30T00:00:00Z' }, limit: 10 });
+    const result = await search.handle({ query: 'code', date_range: { from: '2026-09-28T00:00:00Z', to: '2026-09-30T00:00:00Z' }, limit: 10 } as never);
     expect(result.ok).toBe(true);
     const data = (result as { data: { messages: { id: string; subject: string; snippet: string; quarantined?: readonly string[] }[] } }).data;
     const normal = data.messages.find((m) => m.id === 'm1')!;
@@ -312,8 +312,8 @@ describe('gmail search + thread read (A1)', () => {
     const client = googleClient(app, { refresh_token: 'rt' }, mailFetcher([]));
     const messages = await client.readThread('t1', 10);
     expect(messages).toHaveLength(2);
-    expect(messages[0].body).toBe('Thursday works, 7pm.');
-    expect(messages[0].from).toBe('sam@example.com');
+    expect(messages[0]!.body).toBe('Thursday works, 7pm.');
+    expect(messages[0]!.from).toBe('sam@example.com');
     const big = 'x'.repeat(5000);
     const fetcher = (async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -321,7 +321,7 @@ describe('gmail search + thread read (A1)', () => {
       return Response.json({ messages: [{ id: 'm1', internalDate: '1759140000000', payload: { mimeType: 'text/plain', headers: [], body: { data: b64(big) } } }] });
     }) as typeof fetch;
     const [message] = await googleClient(app, { refresh_token: 'rt' }, fetcher).readThread('t1', 10);
-    expect(message.body).toHaveLength(4000);
+    expect(message!.body).toHaveLength(4000);
   });
 
   it('read_thread quarantines a body carrying an OTP - the raw code never reaches the model', async () => {
@@ -330,10 +330,10 @@ describe('gmail search + thread read (A1)', () => {
     const result = await read.handle({ thread_id: 't1', limit: 10 });
     expect(result.ok).toBe(true);
     const { messages } = (result as { data: { messages: { id: string; body: string; subject: string; quarantined?: readonly string[] }[] } }).data;
-    expect(messages[0].body).toBe('Thursday works, 7pm.');
-    expect(messages[1].quarantined).toEqual(['otp']);
-    expect(messages[1].body).toContain('[quarantined: otp artifact');
-    expect(messages[1].subject).toContain('[quarantined: otp artifact');
+    expect(messages[0]!.body).toBe('Thursday works, 7pm.');
+    expect(messages[1]!.quarantined).toEqual(['otp']);
+    expect(messages[1]!.body).toContain('[quarantined: otp artifact');
+    expect(messages[1]!.subject).toContain('[quarantined: otp artifact');
     expect(JSON.stringify(messages)).not.toContain('123456');
   });
 
