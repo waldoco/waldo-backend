@@ -3,6 +3,8 @@ import {
   narrativeContextSchema,
   type CanaryTokens,
   type NarrativeContext,
+  type RuntimeContextSourceKind,
+  type SanitiseFailureReason,
   type TrustedInvocationEnvelope,
 } from '@waldo/contracts';
 import { prepareWithScribe } from '../scribe/prepare';
@@ -360,7 +362,17 @@ function prepareMandatoryFragment(
     throw new FailClosed('mandatory_context_missing');
   }
   const source = snapshotContextSource(record.source, 'provenance_invalid');
-  const prepared = preparePromptSourceText(record.text, source.source_taint, inputs.canary_tokens, 'material');
+  let prepared: string;
+  try {
+    prepared = preparePromptSourceText(record.text, source.source_taint, inputs.canary_tokens, 'material');
+  } catch (error) {
+    if (error instanceof FailClosed && /^sanitisation_failed:[a-z_]+:material$/.test(error.message)) {
+      throw new FailClosed(
+        `${error.message}:${source.source_kind}` as `sanitisation_failed:${SanitiseFailureReason}:material:${RuntimeContextSourceKind}`,
+      );
+    }
+    throw error;
+  }
   if (!allowScribeRewrite && prepared !== record.text) {
     throw new FailClosed('sanitisation_failed');
   }

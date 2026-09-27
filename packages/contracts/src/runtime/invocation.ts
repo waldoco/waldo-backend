@@ -7,7 +7,7 @@ import {
   taintGateBlocksDirectExecution,
 } from '../tools/handler';
 import { TOOL_PERMISSIONS, toolNameSchema } from '../tools/permissions';
-import { runtimeRunRecordSchema, runtimeToolDispatchFailureReasonSchema } from './run';
+import { runtimeContextSourceKindSchema, runtimeRunRecordSchema, runtimeToolDispatchFailureReasonSchema } from './run';
 
 const opaqueRef = (prefix: string) =>
   z.string().regex(new RegExp(`^${prefix}_[a-f0-9]{32}$`), {
@@ -160,16 +160,7 @@ export type InvocationOutputDisposition = z.infer<typeof invocationOutputDisposi
 
 export const runtimeContextSourceSchema = z.strictObject({
   source_ref: opaqueRef('src'),
-  source_kind: z.enum([
-    'invocation_input',
-    'recall',
-    'skill',
-    'derived_health_view',
-    'connector_snapshot',
-    'workspace_snapshot',
-    'tool_result',
-    'runtime_metadata',
-  ]),
+  source_kind: runtimeContextSourceKindSchema,
   scope: z.enum(['invocation', 'principal', 'tenant', 'thread', 'system']),
   source_taint: sourceTaintSchema,
   produced_at: z.int().nonnegative(),
