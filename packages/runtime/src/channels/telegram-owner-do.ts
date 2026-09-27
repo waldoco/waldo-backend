@@ -142,9 +142,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return Response.json({ url: begin?.url ?? null });
     }
     const origin = request.headers.get('x-waldo-origin');
+    const prevOrigin = origin ? await this.ctx.storage.get<string>('origin') : undefined;
     if (origin) await this.ctx.storage.put('origin', origin);
     this.bindIdentity(request.headers);
-    if (origin && this.env.TELEGRAM_WEBHOOK_SECRET && (await this.ctx.storage.get('webhook_updates')) !== WEBHOOK_UPDATES.join(',')) {
+    // Re-register on an origin change too: the updates-list check alone leaves the webhook
+    // pointing at a stale worker URL after a rename/redeploy, and Telegram drops those updates.
+    const updatesStale = (await this.ctx.storage.get('webhook_updates')) !== WEBHOOK_UPDATES.join(',');
+    if (origin && this.env.TELEGRAM_WEBHOOK_SECRET && (updatesStale || prevOrigin !== origin)) {
       try {
         await this.setup().call('setWebhook', { url: `${origin}${TELEGRAM_WEBHOOK_PATH}`, secret_token: this.env.TELEGRAM_WEBHOOK_SECRET, allowed_updates: WEBHOOK_UPDATES });
         await this.ctx.storage.put('webhook_updates', WEBHOOK_UPDATES.join(','));
