@@ -15,7 +15,7 @@
   // (scripts/deploy-runtime.sh) restamps it with the git SHA on every deploy.
   // WALDO_OWNER_TELEGRAM_ID top level stays empty: production sets its own owner routing fresh
   // (never copied from staging); empty string keeps the single-owner fallback disabled there.
-  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "" },
+  "vars": { "WALDO_ENVIRONMENT": "production", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "LANGFUSE_CAPTURE_TEXT": "false" },
   "durable_objects": {
     "bindings": [
       { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
@@ -50,7 +50,7 @@
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },
-      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350" },
+      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "LANGFUSE_CAPTURE_TEXT": "true" },
       "durable_objects": {
         "bindings": [
           { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
