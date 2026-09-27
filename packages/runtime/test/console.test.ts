@@ -103,6 +103,19 @@ describe('owner console', () => {
     expect(await access.session(d)).toBeNull();
   });
 
+  it('renders background runs with status and an honest empty state', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('Background tasks');
+    expect(html).toContain('delegate_task');
+    expect(html).toContain('Pulled the last three invoices');
+    expect(html).toContain('from so-77');
+    expect(html).toContain('completed');
+    // Failed runs carry the bad-row marker.
+    expect(html).toContain('<div class="t bad"><span>09-23 23:00</span><span>heartbeat</span>');
+    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, runs: [] });
+    expect(none).toContain('No background tasks yet.');
+  });
+
   it('renders pending approvals with acting buttons and an honest empty state', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('id="approvals"');
