@@ -73,6 +73,7 @@ type OwnerRuntime = Readonly<{
   ledger(): Promise<string>;
   updates: UpdateBook;
   reminders: ReturnType<typeof reminderBook>;
+  runs: ReturnType<typeof runBook>;
   fireOrder(entry: ScheduleEntry): Promise<void>;
   scheduler: Scheduler;
   fire(entry: ScheduleEntry): Promise<void>;
@@ -154,6 +155,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (new URL(request.url).pathname === '/whatsapp-turn' && request.method === 'POST') {
       return this.whatsappTurn(request, body);
     }
+    if (new URL(request.url).pathname === '/event' && request.method === 'POST') {
+      return this.recordEvent(request, body);
+    }
     if (new URL(request.url).pathname === new URL(PROBE_TURN_DO_URL).pathname && request.method === 'POST') {
       return this.probeTurn(body);
     }
@@ -183,6 +187,42 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const { updates, seq } = whatsappIngressUpdates(value.messages ?? [], subject, (await this.ctx.storage.get<number>('wa_seq')) ?? 0);
     for (const update of updates) await this.serial(() => this.turn(update, 'whatsapp'));
     await this.ctx.storage.put('wa_seq', seq);
+    return new Response('ok');
+  }
+
+  // A8: a verified external event the ingress routed here. The record is a background run
+  // row (kind 'event', summary capped at the channel); the owner note is provider-free
+  // formatted text. The envelope is NEVER written to episodes or fed to a turn: external
+  // event text (a crafted commit message, say) must not ride episode recall into model
+  // context. The console shows it escaped; Telegram shows it as plain text.
+  private async recordEvent(request: Request, body: string): Promise<Response> {
+    const source = (request.headers.get('x-waldo-event-source') ?? 'unknown').slice(0, 60);
+    const notify = request.headers.get('x-waldo-event-notify') === '1';
+    type EventPayload = { subject?: unknown; kind?: unknown; title?: unknown; url?: unknown };
+    let envelope: EventPayload | null = null;
+    try {
+      envelope = JSON.parse(body) as EventPayload;
+    } catch {
+      envelope = null;
+    }
+    if (!envelope || typeof envelope.subject !== 'string' || typeof envelope.kind !== 'string' || typeof envelope.title !== 'string') {
+      return new Response('ok');
+    }
+    const { runs, api, owner, log } = this.setup();
+    const run = runs.start('event', null);
+    const summary = `${source}: ${envelope.title}`.slice(0, 180);
+    try {
+      if (notify) {
+        const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
+        await api.sendMessage({ chat_id: owner, text: `Event - ${summary}${url ? `\n${url}` : ''}` });
+      }
+      runs.finish(run.id, 'completed', summary);
+      log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, detail: `${source}:${envelope.kind.slice(0, 60)}` });
+    } catch (error) {
+      runs.finish(run.id, 'failed', `${source}: delivery failed`.slice(0, 180));
+      log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, error: String(error) });
+      throw error;
+    }
     return new Response('ok');
   }
 
@@ -976,7 +1016,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         throw error;
       }
     };
-    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, traces, log, google,
+    const runtime: OwnerRuntime = { owner, listener, control: responder.control, api, call, probeCapture, probeGuard, desk, ledger, updates, reminders: book, runs, scheduler, fire, fireOrder, beat, nightly, briefs, cards, updateCheck, traces, log, google,
       view: async (session, notice) => {
         const linked = await google.state();
         const now = Date.now();

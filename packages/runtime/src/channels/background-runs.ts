@@ -5,7 +5,7 @@ import type { OwnerClock } from '../tools/live/get-context';
 // fire, a proactive beat - records one row. parent_id carries the trace hop: a child run
 // points at the turn or run that spawned it, so the console can show what came from what.
 // Summaries are one-line outcomes written by the runner itself, never provider text.
-export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief'] as const;
+export const RUN_KINDS = ['delegate_task', 'reminder', 'loop', 'standing_order', 'heartbeat', 'brief', 'event'] as const;
 export type RunKind = (typeof RUN_KINDS)[number];
 export const RUN_STATUSES = ['running', 'completed', 'failed', 'stopped'] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
