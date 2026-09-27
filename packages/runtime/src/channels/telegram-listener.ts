@@ -144,7 +144,11 @@ export class TelegramOwnerListener {
         : this.options.failureText ?? 'Sorry - I hit a problem answering that. Please try again in a moment.';
       await api.sendMessage({ chat_id, text: failure }).catch(() => undefined);
       await react('failed', this.options.failedEmoji ?? '😢');
-      log('turn', now() - started, false, error instanceof Error ? error.message : String(error));
+      this.options.log?.({
+        trace, hop: 'turn', ms: now() - started, ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        text: { input: turn.text, output: failure },
+      });
       return 'failed';
     } finally {
       clearInterval(typingTimer);

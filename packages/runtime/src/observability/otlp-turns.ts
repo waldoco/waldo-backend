@@ -21,6 +21,7 @@ export const HOPS: Readonly<Record<string, Hop>> = {
   respond: { feature: 'reply', type: 'chain' }, joined_path: { feature: 'reply', type: 'chain' },
   memory: { feature: 'memory', type: 'chain' },
   llm_reply: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
+  llm_provider_failure: { feature: 'provider', type: 'span' },
 };
 export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';
 
