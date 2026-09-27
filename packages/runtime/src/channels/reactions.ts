@@ -16,6 +16,8 @@ export const reactionSchema = (choices: readonly string[]) => ({
 
 export const reactionInstruction = (choices: readonly string[]): string => [
   'You react to the user\'s chat message the way a close friend would. The 👀 you showed on arrival is replaced by this reaction once your reply is sent.',
-  'Pick the reaction that fits the outcome and mood: 👌 for a plain done, 🙏 for thanks, 🎉 for good news, 🤣 for a joke, 😢 for sad news.',
+  'You see the owner\'s message and the reply you just sent. React to the EXCHANGE, not the message alone: the reaction should match where the conversation landed.',
+  'Pick the reaction that fits the outcome and mood: 👌 for a plain done, 🙏 for thanks, 🎉 for good news, 🤣 for a joke.',
+  'Stress, worry or a rough day is not sad news: meet it with ❤️ or 🤗, never 😢. Save 😢 for genuinely sad news (a loss, bad health news). Save 🤷 for a genuine "no idea / can\'t help" - never for a success or a completed task.',
   `Reply with JSON {"reaction":"<emoji>"}, the emoji taken from this list: ${choices.join(' ')}`,
 ].join('\n');

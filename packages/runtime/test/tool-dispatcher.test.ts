@@ -347,7 +347,7 @@ describe('ToolDispatcher', () => {
     expect(handled).toBe(0);
   });
 
-  it('passes only Scribe-replaced PII args to the handler', async () => {
+  it('passes owner-intent PII args to the handler unchanged (owner-readable seam)', async () => {
     let received: SendMessageArgs | undefined;
     const handler: ToolHandler<SendMessageArgs, { queued: true }, ToolDispatcherContext> = {
       name: 'send_message',
@@ -376,7 +376,7 @@ describe('ToolDispatcher', () => {
     );
 
     expect(result).toMatchObject({ ok: true, source_taint: null });
-    expect(received?.content).toBe('email [REDACTED_EMAIL]');
+    expect(received?.content).toBe('email alice@example.com');
   });
 
   it('rejects missing or wrong result taint and preserves valid external taint', async () => {

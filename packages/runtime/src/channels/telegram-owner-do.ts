@@ -471,15 +471,23 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const handledDirectly = raw.callback_query !== undefined || harness !== null || (fromOwner && raw.message?.text?.trim() === '/ledger');
     if (handledDirectly) {
       if (raw.update_id === undefined || raw.update_id < offset) return;
-      if (harness?.kind === 'console') {
-        await this.ctx.storage.put(offsetKey, raw.update_id + 1);
+      // Commands run outside the listener turn pipeline, so without this receipt they left no
+      // Langfuse trace at all (2026-09-27 sweep #12). A command turn now closes with a
+      // machine_turn root like every other machine execution.
+      const updateId = raw.update_id;
+      const commandTrace = `tg-${updateId}`;
+      const commandStarted = Date.now();
+      const commandWhat = harness ? `/${harness.kind}` : raw.callback_query !== undefined ? 'callback' : '/ledger';
+      const run = async () => {
+        if (harness?.kind === 'console') {
+        await this.ctx.storage.put(offsetKey, updateId + 1);
         const origin = await this.ctx.storage.get<string>('origin');
         await call('sendMessage', { chat_id: owner, text: origin ? `Console (link works once, for 10 minutes): ${await consoleAccess(this.ctx.storage).mintLink(origin)}` : 'Console origin is not known yet; send any message first.', link_preview_options: { is_disabled: true } });
         return;
       }
       if (harness) {
-        await this.ctx.storage.put(offsetKey, raw.update_id + 1);
-        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, raw.update_id)).slice(0, 4000) });
+        await this.ctx.storage.put(offsetKey, updateId + 1);
+        await call('sendMessage', { chat_id: owner, text: (await this.runHarness(harness, updateId)).slice(0, 4000) });
         return;
       }
       const feedback = raw.callback_query?.data?.match(/^fb:(\d+):([un])$/);
@@ -488,9 +496,19 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const rated = query.from.id === owner && updates.rate(Number(feedback[1]), feedback[2] === 'u' ? 'useful' : 'not useful');
         await call('answerCallbackQuery', { callback_query_id: query.id, text: rated ? 'Thanks, noted.' : 'Already handled.' });
         if (rated && query.message) await call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      } else if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${raw.update_id}`);
-      else await call('sendMessage', { chat_id: owner, text: await ledger() });
-      await this.ctx.storage.put(offsetKey, raw.update_id + 1);
+      } else if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${updateId}`);
+        else await call('sendMessage', { chat_id: owner, text: await ledger() });
+        await this.ctx.storage.put(offsetKey, updateId + 1);
+      };
+      try {
+        await run();
+        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: true, detail: commandWhat });
+        log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: true, detail: 'command' });
+      } catch (error) {
+        log({ trace: commandTrace, hop: 'command', ms: Date.now() - commandStarted, ok: false, error: String(error), detail: commandWhat });
+        log({ trace: commandTrace, hop: 'machine_turn', ms: Date.now() - commandStarted, ok: false, detail: 'command' });
+        throw error;
+      }
       return;
     }
     await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
