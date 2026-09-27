@@ -211,10 +211,19 @@ describe('owner console', () => {
     const row = (label: string) => html.slice(html.indexOf(label), html.indexOf(label) + 400);
     expect(row('Link Telegram')).toContain('Done');
     expect(row('Connect Google')).toContain('To do');
-    expect(row('Allow Gmail')).toContain('To do');
+    expect(html).not.toContain('Allow Gmail');
     expect(row('Set quiet hours')).toContain('Done');
-    const done = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, mail: true }], connectAvailable: true } });
-    expect(done.slice(done.indexOf('Connect Google'), done.indexOf('Connect Google') + 400)).toContain('Done');
+    const done = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } });
+    expect(done.slice(done.indexOf('Connect Google'), done.indexOf('Connect Google') + 500)).toContain('Done');
+    expect(done).toContain('Access granted');
+    expect(done).toContain('Calendar, Gmail, Tasks');
+    expect(done).toContain('Access granted · read unverified');
+    expect(done).toContain('permission states, not proof');
+    expect(done).not.toContain('Gmail is a separate step');
+    expect(done).toContain('does not confirm that live reads work');
+    const unhealthy = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: 'invalid_grant', calendar: true, mail: true, tasks: true }], connectAvailable: true } });
+    expect(unhealthy).toContain('Needs reconnect');
+    expect(unhealthy.slice(unhealthy.indexOf('Connect Google'), unhealthy.indexOf('Connect Google') + 500)).toContain('To do');
   });
 
   it('shows the browser count and offers sign-out-everywhere only when more than one browser is signed in', () => {

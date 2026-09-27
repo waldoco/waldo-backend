@@ -144,7 +144,7 @@ export type ConsoleView = Readonly<{
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
-  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; mail: boolean }>[]; connectAvailable: boolean }>;
+  google: Readonly<{ accounts: readonly Readonly<{ id: string; email: string; error: string | null; calendar: boolean; mail: boolean; tasks: boolean }>[]; connectAvailable: boolean }>;
   telegram: Readonly<{ linked: boolean; unlinkAvailable: boolean }>;
   profile: ReturnType<typeof profile>;
   barriers: number;
@@ -193,14 +193,14 @@ const connectors = (view: ConsoleView) => {
     `<div class="row conn"><div><div class="name">${esc(name)}</div><div class="sub">${detail}</div></div><div class="state">${state}</div><div class="act">${action}</div></div>`;
   return [
     ...google.accounts.map((account) => {
-      const disconnect = form(csrf, 'google.disconnect', 'Disconnect', { id: account.id }, { tone: 'danger', confirm: `Disconnect ${account.email}? Waldo stops reading its calendar and mail.` });
-      const action = account.error && google.connectAvailable ? form(csrf, 'google.connect', 'Reconnect', { value: 'calendar' }, { tone: 'primary' }) + disconnect
-        : `${!account.mail && google.connectAvailable ? form(csrf, 'google.connect', 'Allow Gmail', { value: 'mail' }) : ''}${disconnect}`;
+      const disconnect = form(csrf, 'google.disconnect', 'Disconnect', { id: account.id }, { tone: 'danger', confirm: `Disconnect ${account.email}? Waldo loses this Google access.` });
+      const action = account.error && google.connectAvailable ? form(csrf, 'google.connect', 'Reconnect', { value: 'calendar' }, { tone: 'primary' }) + disconnect : disconnect;
+      const granted = [account.calendar ? 'Calendar' : '', account.mail ? 'Gmail' : '', account.tasks ? 'Tasks' : ''].filter(Boolean).join(', ');
       const detail = account.error ? `Waldo could not refresh access (${esc(account.error)}). Reconnect and pick <b>${esc(account.email)}</b> to fix it.`
-        : `Waldo reads this calendar${account.mail ? ' and mail, and sends mail only after you approve it' : '. Allow Gmail to let Waldo read mail and send what you approve'}.`;
-      return row(`Google: ${account.email}`, detail, status(!account.error, account.error ? 'Needs reconnect' : 'Connected'), action);
+        : `Google access granted${granted ? ` for ${granted}` : ''}. This does not confirm that live reads work; check a real request in chat. Mail is only sent with your approval.`;
+      return row(`Google: ${account.email}`, detail, status(!account.error, account.error ? 'Needs reconnect' : 'Access granted'), action);
     }),
-    row(google.accounts.length ? 'Another Google account' : 'Google Calendar and Gmail', google.accounts.length ? 'Connect a second account, such as work and personal. Google asks which one.' : 'Lets Waldo read your calendar. Gmail is a separate step. Nothing is sent without your approval.',
+    row(google.accounts.length ? 'Another Google account' : 'Google Calendar, Gmail and Tasks', google.accounts.length ? 'Connect a second account, such as work and personal. Google asks which one.' : 'Google asks for Calendar, Gmail and Tasks access together. A connected account is not proof that any tool works yet.',
       google.accounts.length ? '' : status(false, 'Not connected'),
       google.connectAvailable ? form(csrf, 'google.connect', google.accounts.length ? 'Add account' : 'Connect Google', { value: 'calendar' }, { tone: google.accounts.length ? 'quiet' : 'primary' }) : '<span class="note">OAuth app keys are not set on this server yet</span>'),
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
@@ -210,6 +210,23 @@ const connectors = (view: ConsoleView) => {
     row('Phone number and OTP sign-in', 'Sign in with your phone number and a one-time code instead of a Telegram link.', chip('Not built yet', 'muted'), ''),
     row('Health data', 'Apple Health / Apple Watch first, then Health Connect, Samsung and WHOOP.', chip('Not built yet', 'muted'), ''),
   ].join('');
+};
+
+// Service access is grant state, not a live capability test. Keep the same state in
+// the HTML dashboard and the session-protected JSON view for the future app client.
+const serviceStatus = (view: ConsoleView) => {
+  const healthy = view.google.accounts.filter((account) => !account.error);
+  const services = [
+    ['Calendar', 'calendar', 'Ask Waldo about an event to test a real read.'],
+    ['Gmail', 'mail', 'Ask Waldo to find an email to test a real read. Drafts are not sends.'],
+    ['Tasks', 'tasks', 'Ask Waldo to list your open tasks to test a real read.'],
+  ] as const;
+  return `<div class="service-grid">${services.map(([name, key, hint]) => {
+    const granted = healthy.filter((account) => account[key]);
+    const label = granted.length ? 'Access granted · read unverified' : 'No active access';
+    const accounts = granted.length ? `<div class="sub">${granted.map((account) => esc(account.email)).join(', ')}</div>` : '';
+    return `<div class="service-card"><div class="service-name">${name}</div>${chip(label, granted.length ? 'provisional' : 'muted')}${accounts}<p class="sub">${hint}</p></div>`;
+  }).join('')}</div><p class="note">These are permission states, not proof that a tool succeeded. Recent activity below shows requests Waldo actually ran.</p>`;
 };
 
 const approvals = (view: ConsoleView) => {
@@ -233,11 +250,10 @@ const usage = (view: ConsoleView) => {
 const checklist = (view: ConsoleView) => {
   const item = (done: boolean, label: string, hint: string) =>
     `<div class="row conn"><div><div class="name">${esc(label)}</div><div class="sub">${hint}</div></div><div class="state">${status(done, done ? 'Done' : 'To do')}</div><div class="act"></div></div>`;
-  const gmail = view.google.accounts.some((account) => account.mail);
+  const connected = view.google.accounts.some((account) => !account.error);
   return [
     item(view.telegram.linked, 'Link Telegram', 'Send /console to Waldo on Telegram so cards, reminders and sign-in links reach you.'),
-    item(view.google.accounts.length > 0, 'Connect Google', 'Lets Waldo read your calendar. Use the Connections section below.'),
-    item(gmail, 'Allow Gmail', 'A separate Google step so Waldo can read mail and send only what you approve.'),
+    item(connected, 'Connect Google', 'Calendar, Gmail and Tasks permissions are requested together. A successful connection does not prove a live read; try a real Calendar and Gmail request in chat.'),
     item(view.proactivity.quiet_start !== null, 'Set quiet hours', 'Tell Waldo when not to message you, in Your day below.'),
   ].join('');
 };
@@ -324,6 +340,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;fl
 nav{position:sticky;top:0;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--rule);margin:20px -24px 0;padding:0 24px;display:flex;gap:4px;overflow-x:auto;z-index:2}
 nav a{color:var(--ink2);text-decoration:none;padding:12px 10px;white-space:nowrap;border-bottom:2px solid transparent;transition:color .15s ease-out,border-color .15s ease-out}nav a:hover{color:var(--ink);border-color:var(--teal)}
 .notice{margin-top:20px;background:var(--sand);border-radius:8px;padding:10px 14px}
+.service-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:14px 0}.service-card{border:1px solid var(--rule);border-radius:12px;padding:16px;min-width:0}.service-name{font-family:'Instrument Serif',Georgia,serif;font-size:22px;margin-bottom:8px}.service-card p{margin:12px 0 0}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:24px}
 .stat{border:1px solid var(--rule);border-radius:16px;padding:18px 16px;transition:border-color .15s ease-out}.stat:hover{border-color:var(--ink4)}.stat b{display:block;font-family:'Instrument Serif',Georgia,serif;font-size:34px;line-height:40px;letter-spacing:-.02em}.stat span{display:block;margin-top:2px;color:var(--ink2);font-size:11px;letter-spacing:.06em;text-transform:uppercase}
 section{margin-top:44px;scroll-margin-top:60px}
@@ -371,8 +388,8 @@ ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class=
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
 <div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
 ${section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view))}
-${section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Everything here reflects real state.', checklist(view))}
-${section('connections', 'Connections', 'What Waldo can reach, and the switches to change it. Items marked not built yet are on the plan but not wired.', connectors(view))}
+${section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view))}
+${section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view))}
 ${section('spots', 'Spots', 'Small things Waldo has noticed about you. Dismiss one that is wrong, or forget it completely.', spots(view) + forgetting(view) + retired(view) + held(view))}
 ${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}
 ${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view))}
