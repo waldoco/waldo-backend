@@ -162,6 +162,9 @@ export type ConsoleView = Readonly<{
   trace: readonly TraceRow[];
   // A5b: recent background runs (delegate children, fires, beats) with their trace hops.
   runs: readonly Readonly<{ id: string; kind: string; status: string; summary: string | null; parent_id: string | null; started: string; ended: string | null }>[];
+  // Keyset cursors for the activity lists: *_before is the next older page, *_applied
+  // marks the page currently being viewed (null/absent = the latest page).
+  page?: { trace_before: number | null; runs_before: number | null; trace_applied?: number | null; runs_applied?: number | null };
 }>;
 
 const esc = (text: string) => text.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -284,12 +287,21 @@ const memory = (view: ConsoleView) => {
   return panels + (view.barriers ? `<div class="sub">${view.barriers} do-not-relearn ${view.barriers === 1 ? 'note' : 'notes'} from things you asked Waldo to forget.</div>` : '');
 };
 
+const pageHref = (trace: number | null | undefined, runs: number | null | undefined) => {
+  const params = [trace ? `trace_before=${trace}` : '', runs ? `runs_before=${runs}` : ''].filter(Boolean).join('&');
+  return `/console${params ? `?${params}` : ''}#activity`;
+};
+const pageLinks = (older: string | null, latestHref: string | null) =>
+  (latestHref ? `<a class="btn" href="${latestHref}">&larr; Latest</a> ` : '') + (older ?? '');
+
 const activity = (view: ConsoleView) => {
   const seen = view.steps.filter((step) => step.state === 'ok').length;
+  const traceOlder = view.page?.trace_before ? `<a class="btn" href="${pageHref(view.page.trace_before, view.page.runs_applied ?? null)}">Older activity &rarr;</a>` : null;
+  const runsOlder = view.page?.runs_before ? `<a class="btn" href="${pageHref(view.page.trace_applied ?? null, view.page.runs_before)}">Older tasks &rarr;</a>` : null;
   const steps = view.steps.map((step) => `<div class="row step"><span class="mark ${step.state}">${step.state === 'ok' ? '✓' : step.state === 'failed' ? '!' : ''}</span><div class="main"><div class="line">${esc(step.step)}</div>${step.at ? `<div class="sub">${step.state === 'failed' ? 'Failed' : 'Last ran'} ${esc(step.at)}${step.note ? ` · ${esc(step.note)}` : ''}</div>` : '<div class="sub">Not seen yet</div>'}</div></div>`).join('');
   const runs = view.runs.length === 0 ? empty('No background tasks yet.') : `<div class="trace">${view.runs.map((run) => `<div class="t ${run.status === 'failed' ? 'bad' : ''}"><span>${esc(run.started)}</span><span>${esc(run.kind)}</span><span>${esc(run.status)}</span><span class="note">${esc(run.summary ?? (run.parent_id ? 'from ' + run.parent_id : ''))}</span></div>`).join('')}</div>`;
   const trace = view.trace.length === 0 ? empty('No activity recorded yet.') : `<div class="trace">${[...view.trace].reverse().map((row) => `<div class="t ${row.ok ? '' : 'bad'}"><span>${esc(row.time)}</span><span>${esc(row.hop)}</span><span>${row.ms} ms</span><span class="note">${esc(row.note || row.trace)}</span></div>`).join('')}</div>`;
-  return `<div class="grid2 wide-left"><div><h3>End-to-end checklist <span class="count">${seen} of ${view.steps.length}</span></h3>${steps}</div><div><h3>Recent activity</h3>${trace}</div></div><h3>Background tasks</h3>${runs}<h3>Ledger and reminders</h3><pre>${esc(view.ledger)}</pre>`;
+  return `<div class="grid2 wide-left"><div><h3>End-to-end checklist <span class="count">${seen} of ${view.steps.length}</span></h3>${steps}</div><div><h3>Recent activity</h3>${trace}<p>${pageLinks(traceOlder, view.page?.trace_applied ? pageHref(null, view.page.runs_applied ?? null) : null)}</p></div></div><h3>Background tasks</h3>${runs}<p>${pageLinks(runsOlder, view.page?.runs_applied ? pageHref(view.page.trace_applied ?? null, null) : null)}</p><h3>Ledger and reminders</h3><pre>${esc(view.ledger)}</pre>`;
 };
 
 const FONT_SHEET = 'https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600&display=swap';
