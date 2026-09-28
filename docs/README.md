@@ -26,3 +26,5 @@ Live ownership/progress belongs in issues/PRs, not copied dashboards. Re-pin cur
 
 Retired dated plans, redirects and August ledger handoffs were removed on 23 September 2026. Full originals remain in Git history at `e91bee0`. This publication replaces the active build plan and preserves its detailed recovery contracts; it does not delete runtime modules. Cleanup requires caller/deployment inventory, tested replacement and rollback.
 - [Waldo product philosophy](foundation/WALDO_PHILOSOPHY.md) - intent, operating loop, personality, design language and proof boundaries.
+- [Waldo personality and voice](foundation/WALDO_PERSONALITY_AND_VOICE.md) - deck-derived character and reply rules, bounded by current behavior.
+- [Waldo design language](foundation/WALDO_DESIGN_LANGUAGE.md) - visual grammar, state hierarchy and responsive review checklist.
