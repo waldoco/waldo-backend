@@ -27,7 +27,9 @@ export const gatewayStepSchema = z
     provider: providerSchema,
     model: modelNameSchema,
     cache: gatewayCacheSchema,
-    max_tokens: z.int().min(1).max(8192).optional(),
+    // Same wire ceiling as llmRequestSchema (ego-audit S5): largest published roster output
+    // limit, not a request default. Per-model derivation lands with the roster window table.
+    max_tokens: z.int().min(1).max(128_000).optional(),
   })
   .refine((s) => PROVIDER_OF[s.model] === s.provider, {
     error: 'provider must be the roster provider of the model',

@@ -120,10 +120,10 @@ describe('gatewayStep', () => {
     );
   });
 
-  it('rejects max_tokens outside [1, 8192]', () => {
+  it('rejects max_tokens outside [1, 128000] (wire ceiling, S5)', () => {
     expect(gatewayStepSchema.safeParse({ ...baseStep, max_tokens: 0 }).success).toBe(false);
-    expect(gatewayStepSchema.safeParse({ ...baseStep, max_tokens: 8193 }).success).toBe(false);
-    expect(gatewayStepSchema.safeParse({ ...baseStep, max_tokens: 8192 }).success).toBe(true);
+    expect(gatewayStepSchema.safeParse({ ...baseStep, max_tokens: 128_001 }).success).toBe(false);
+    expect(gatewayStepSchema.safeParse({ ...baseStep, max_tokens: 128_000 }).success).toBe(true);
   });
 
   it('rejects an unknown extra key (strict drift guard)', () => {
