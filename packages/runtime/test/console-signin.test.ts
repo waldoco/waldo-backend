@@ -55,6 +55,13 @@ describe('handleConsole', () => {
     expect(await handleConsole(form('/console', { t: 'ticket123' }), { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
   });
 
+  it('lets a request carrying the DO console cookie fall through to the owner DO', async () => {
+    // The ticket session lives in the waldo_console cookie; without this fallthrough a
+    // redeemed ticket still 303'd every page to the email form.
+    const req = new Request('https://w.test/console', { headers: { cookie: 'waldo_console=abc.def.ghi' } });
+    expect(await handleConsole(req, { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
+  });
+
   it('sends a signed-out visitor to the email form', async () => {
     const response = await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, auth());
     expect(response?.status).toBe(303);

@@ -132,6 +132,10 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
   // belongs to the owner DO's ticket sign-in, handled by the caller's next console branch. The
   // email-code console must not swallow it, or the bot's /console links 303 here and never redeem.
   if (url.pathname === CONSOLE_PATH && (url.searchParams.get('t') !== null || request.method === 'POST')) return null;
+  // A request carrying the DO console cookie belongs to the ticket session: the owner DO
+  // validates it (invalid -> its own 401). Redirecting here would orphan a valid ticket
+  // session - redeemed, then every page 303s to the email form (staging receipt 2026-09-28).
+  if ((request.headers.get('cookie') ?? '').includes(`${CONSOLE_COOKIE}=`)) return null;
   const doName = await auth.readOwnerCookie(request);
   if (!doName) return new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } });
   const forwarded = new Request(request);
