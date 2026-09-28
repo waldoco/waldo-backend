@@ -2,7 +2,7 @@
 // then a model judge scores each case against its rubric. Usage: npx tsx evals/run.ts <chat|alternative>
 import { DatabaseSync } from 'node:sqlite';
 import { writeFileSync } from 'node:fs';
-import { TOOL_PERMISSIONS, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, WALDO_EVAL_ALTERNATIVE_MODEL, type ModelName, type WebSearchArgs } from '@waldo/contracts';
+import { TOOL_PERMISSIONS, modelNameSchema, triggerTypeSchema, webSearchArgsSchema, WALDO_CHAT_MODEL, type ModelName, type WebSearchArgs } from '@waldo/contracts';
 import { createTelegramResponder } from '../src/channels/telegram-turn';
 import { reminderHandlers, type ReminderBook } from '../src/channels/reminders';
 import { loopBook, loopHandlers } from '../src/channels/loops';
@@ -22,7 +22,10 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
 
 const key = process.env.OPENAI_API_KEY;
 if (!key) throw new Error('OPENAI_API_KEY is required');
-const model: ModelName = process.argv[2] === 'alternative' ? WALDO_EVAL_ALTERNATIVE_MODEL : WALDO_CHAT_MODEL;
+// Model selection: default WALDO_CHAT_MODEL, or an explicit roster model id as argv[2]
+// (post-Luna-everywhere there is no pinned alternative; compare by naming a roster model).
+const argvModel = process.argv[2] && process.argv[2] !== '-' ? modelNameSchema.parse(process.argv[2]) : undefined;
+const model: ModelName = argvModel ?? WALDO_CHAT_MODEL;
 const only = process.argv[3];
 const JUDGE: ModelName = WALDO_CHAT_MODEL;
 

@@ -2,8 +2,6 @@ import { z } from 'zod';
 import {
   ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
   ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
-  OPENAI_GPT_5_MINI_MODEL,
-  OPENAI_GPT_5_NANO_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
   WORKERS_AI_GEMMA_4_26B_MODEL,
   modelNameSchema,
@@ -32,8 +30,6 @@ export const modelContextSpecSchema = z.strictObject({
 export type ModelContextSpec = z.infer<typeof modelContextSpecSchema>;
 
 // Sources (verified 2026-09-26; keyed by the roster constants, which own the identifiers):
-// - OPENAI_GPT_5_NANO_MODEL / OPENAI_GPT_5_MINI_MODEL: OpenAI model pages - 400,000 context,
-//   128,000 max output (developers.openai.com/api/docs/models/<id>).
 // - OPENAI_GPT_6_LUNA_MODEL: OpenAI model page - 1,050,000 context, 128,000 max output
 //   (developers.openai.com/api/docs/models/<id>, verified 2026-09-28).
 // - ANTHROPIC_CLAUDE_SONNET_4_6_MODEL: Anthropic context-windows doc - listed in the 1M-window
@@ -57,16 +53,6 @@ export const MODEL_CONTEXT_SPECS = {
   [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: {
     context_window_tokens: 200_000,
     output_reserve_tokens: 64_000,
-    safety_margin_tokens: 8_192,
-  },
-  [OPENAI_GPT_5_NANO_MODEL]: {
-    context_window_tokens: 400_000,
-    output_reserve_tokens: 128_000,
-    safety_margin_tokens: 8_192,
-  },
-  [OPENAI_GPT_5_MINI_MODEL]: {
-    context_window_tokens: 400_000,
-    output_reserve_tokens: 128_000,
     safety_margin_tokens: 8_192,
   },
   [OPENAI_GPT_6_LUNA_MODEL]: {
