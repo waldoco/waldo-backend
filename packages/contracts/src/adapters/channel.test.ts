@@ -360,7 +360,10 @@ describe('telegram gate-2 shapes', () => {
       },
     };
     expect(telegramMessageUpdateSchema.safeParse(real).success).toBe(true);
-    expect(telegramMessageUpdateSchema.safeParse({ ...real, message: { ...real.message, entities: [{ type: 'text_link', offset: 0, length: 6, url: 'https://x.test' }] } }).success).toBe(false);
+    // Client markup drift must not sink a readable text message: unknown entity types and
+    // their payload keys are tolerated because entities are decorative and never read.
+    expect(telegramMessageUpdateSchema.safeParse({ ...real, message: { ...real.message, entities: [{ type: 'text_link', offset: 0, length: 6, url: 'https://x.test' }] } }).success).toBe(true);
+    expect(telegramMessageUpdateSchema.safeParse({ ...real, message: { ...real.message, entities: [{ type: 'custom_emoji', offset: 0, length: 2, custom_emoji_id: 'xyz' }, { type: 'blockquote', offset: 0, length: 6 }] } }).success).toBe(true);
   });
 
   it('accepts a photo or document with a caption, and rejects mixed or empty messages', () => {

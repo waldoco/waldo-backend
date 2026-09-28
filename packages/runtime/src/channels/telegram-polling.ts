@@ -22,7 +22,17 @@ export type TelegramInboundTurn = Readonly<{
   media?: TelegramMedia;
 }>;
 
-export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt' | 'media'>;
+export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt' | 'media'> & Readonly<{ note?: string }>;
+
+// Parse-failure detail for the hop log: field paths and schema codes only - never message
+// content - so an unsupported reply stays diagnosable when Telegram's payload shape drifts.
+const unsupportedNote = (issues: readonly { code: string; path: readonly PropertyKey[]; keys?: string[] }[]): string =>
+  issues.slice(0, 5).map((issue) => {
+    const path = issue.path.map(String).join('.') || 'update';
+    return issue.code === 'unrecognized_keys' && issue.keys !== undefined
+      ? `${path}:unknown_keys(${issue.keys.slice(0, 5).join(',')})`
+      : `${path}:${issue.code}`;
+  }).join('; ').slice(0, 300);
 
 export type TelegramPollResult = Readonly<{
   nextOffset: number;
@@ -67,7 +77,7 @@ export class TelegramPollingAdapter {
         const other = telegramUnsupportedMessageSchema.safeParse(raw);
         if (other.success) {
           const { message } = other.data;
-          unsupported.push(Object.freeze({ updateId, messageId: message.message_id ?? null, senderId: message.from.id, chatId: message.chat.id }));
+          unsupported.push(Object.freeze({ updateId, messageId: message.message_id ?? null, senderId: message.from.id, chatId: message.chat.id, note: unsupportedNote(parsed.error.issues) }));
         } else {
           dropped += 1;
         }
