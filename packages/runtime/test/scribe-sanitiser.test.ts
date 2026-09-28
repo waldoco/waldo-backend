@@ -41,6 +41,7 @@ const VIEW: DerivedHealthDestinationView = {
   destination_eligibility: ['volatile_run'],
 };
 
+// Structured members stay denied at every taint and destination (correlation scan unchanged).
 const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
   { motion: 'active' },
   { circadian: 'aligned' },
@@ -48,6 +49,14 @@ const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
   { samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 42, unit: 'ms' }] },
   { samples: { datum: 42, unit: 'ms' } },
   { series: { '2026-07-11T00:00:00.000Z': { datum: 37, unit: '°C' } } },
+  { series: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 37, unit: '°C' }] },
+  { samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 12_345, unit: 'steps' }] },
+];
+
+// Free-text members: owner/model conversation at null taint may persist these at the
+// conversation destinations (owner decision 2026-09-28, direction A); external-tainted
+// payloads and every egress/storage destination still deny them.
+const CATEGORICAL_FREE_TEXT_HEALTH: string[] = [
   'sleep stage: awake',
   encodeURIComponent('motion: active'),
   btoa('circadian: aligned'),
@@ -55,8 +64,6 @@ const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
   'sleep stage: slow-wave',
   encodeURIComponent('motion: sedentary'),
   btoa('circadian: delayed'),
-  { series: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 37, unit: '°C' }] },
-  { samples: [{ timestamp: '2026-07-11T00:00:00.000Z', value: 12_345, unit: 'steps' }] },
   'motion is active',
   'sleep stage was awake',
   'circadian rhythm is aligned',
@@ -64,6 +71,32 @@ const CATEGORICAL_AND_RAW_SERIES_HEALTH: SanitiseInput['payload'][] = [
   '%73%6C%65%65%70%5F%73%74%61%67%65%3D%73%6C%6F%77%5F%77%61%76%65',
   btoa('sleep_stage=slow_wave'),
   'motion=not_wearing',
+];
+
+// The 14 raw/derived free-text forms: conversation at null taint, payloads when external.
+const HEALTH_FREE_TEXT_FORMS: string[] = [
+  'HRV: 42 ms',
+  'heart rate was 88 bpm',
+  'SpO2,96,percent',
+  'slept about 7.5 hours',
+  'blood pressure 140/90',
+  'systolic 138 and diastolic 88',
+  'active energy was 850 kcal',
+  'CRS is 85',
+  'recovery score: "72"',
+  'steps: 12345',
+  'body temperature was 38.2 celsius',
+  'respiratory rate was 22 breaths per minute',
+  'glucose: 180 mg/dL',
+  'HRV: +.58e2',
+];
+
+const ENCODED_HEALTH_FREE_TEXT: string[] = [
+  'hrv%3A%2042%20ms',
+  'hrv\\u003a 42 ms',
+  btoa('hrv: 1 %'),
+  btoa('hrv: 42 ms'),
+  btoa('hrv: 42 ms').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_'),
 ];
 
 const INCOMPLETE_DERIVED_HEALTH_VIEWS: SanitiseInput['payload'][] = [
@@ -255,6 +288,35 @@ describe('Scribe sanitiser', () => {
 
   it.each(CATEGORICAL_AND_RAW_SERIES_HEALTH)('denies categorical and raw-series health: %j', (payload) => {
     expect(inspect(payload)).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+  });
+
+  // Owner decision 2026-09-28 (direction A): owner/model conversation is null-taint and may
+  // carry health free-text into internal_context - Waldo must be able to discuss sleep, form,
+  // recovery and weight. Bare strings fail internal_context shape policy for unrelated reasons,
+  // so the persistence pin wraps the sentence the way run context carries it.
+  it.each(CATEGORICAL_FREE_TEXT_HEALTH)('allows owner conversation categorical health text: %j', (payload) => {
+    expect(inspect({ note: payload })).toEqual({
+      ok: true,
+      payload: { note: payload },
+      source_taint: null,
+      redactions: [],
+    });
+  });
+
+  it.each(CATEGORICAL_FREE_TEXT_HEALTH)('still denies provider-payload categorical health text: %j', (payload) => {
+    expect(inspectExternal(payload)).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+  });
+
+  it.each(CATEGORICAL_FREE_TEXT_HEALTH)('still denies owner categorical health text at egress: %j', (payload) => {
+    expect(inspect(payload, 'send_message')).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
@@ -474,37 +536,68 @@ describe('Scribe sanitiser', () => {
     });
   });
 
-  it.each([
-    'HRV: 42 ms',
-    'heart rate was 88 bpm',
-    'SpO2,96,percent',
-    'slept about 7.5 hours',
-    'blood pressure 140/90',
-    'systolic 138 and diastolic 88',
-    'active energy was 850 kcal',
-    'CRS is 85',
-    'recovery score: "72"',
-    'steps: 12345',
-    'body temperature was 38.2 celsius',
-    'respiratory rate was 22 breaths per minute',
-    'glucose: 180 mg/dL',
-    'HRV: +.58e2',
-  ])('denies free-text raw and derived health forms: %s', (payload) => {
-    expect(inspect(payload)).toEqual({
+  it.each(HEALTH_FREE_TEXT_FORMS)('allows owner conversation health free-text at internal_context: %s', (payload) => {
+    expect(inspect({ note: payload })).toEqual({
+      ok: true,
+      payload: { note: payload },
+      source_taint: null,
+      redactions: [],
+    });
+  });
+
+  it.each(HEALTH_FREE_TEXT_FORMS)('still denies provider-payload health free-text: %s', (payload) => {
+    expect(inspectExternal(payload)).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+    expect(inspectExternal({ note: payload })).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
     });
   });
 
-  it.each([
-    'hrv%3A%2042%20ms',
-    'hrv\\u003a 42 ms',
-    btoa('hrv: 1 %'),
-    btoa('hrv: 42 ms'),
-    btoa('hrv: 42 ms').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_'),
-  ])('denies encoded health text: %s', (payload) => {
-    expect(inspect(payload)).toMatchObject({ ok: false, check: 'health_value' });
+  it.each(HEALTH_FREE_TEXT_FORMS)('still denies owner health free-text at egress: %s', (payload) => {
+    expect(inspect(payload, 'send_message')).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+  });
+
+  it.each(['send_message', 'audit_log', 'r2_summary', 'memory_block', 'outbox'] as const)(
+    'keeps the full free-text scan at every taint beyond the conversation destinations: %s',
+    (destination) => {
+      expect(inspect('heart rate was 88 bpm', destination)).toEqual({
+        ok: false,
+        check: 'health_value',
+        reason: 'health_value_leak',
+      });
+      expect(inspectExternal('heart rate was 88 bpm', destination)).toEqual({
+        ok: false,
+        check: 'health_value',
+        reason: 'health_value_leak',
+      });
+    },
+  );
+
+  it.each(ENCODED_HEALTH_FREE_TEXT)('allows encoded owner conversation health text at internal_context: %s', (payload) => {
+    expect(inspect({ note: payload })).toEqual({
+      ok: true,
+      payload: { note: payload },
+      source_taint: null,
+      redactions: [],
+    });
+  });
+
+  it.each(ENCODED_HEALTH_FREE_TEXT)('still denies encoded provider-payload health text: %s', (payload) => {
+    expect(inspectExternal(payload)).toMatchObject({ ok: false, check: 'health_value' });
+    expect(inspectExternal({ note: payload })).toMatchObject({ ok: false, check: 'health_value' });
+  });
+
+  it.each(ENCODED_HEALTH_FREE_TEXT)('still denies encoded owner health text at egress: %s', (payload) => {
+    expect(inspect(payload, 'send_message')).toMatchObject({ ok: false, check: 'health_value' });
   });
 
   it('allows ordinary numbers and targeted non-health prose', () => {
@@ -653,7 +746,7 @@ describe('Scribe sanitiser', () => {
       check: 'health_value',
       reason: 'health_value_leak',
     });
-    expect(inspect('CRS 85')).toEqual({
+    expect(inspectExternal('CRS 85')).toEqual({
       ok: false,
       check: 'health_value',
       reason: 'health_value_leak',
@@ -1345,6 +1438,37 @@ describe('sanitiseVerifyOnly (assembled provider prompt final pass)', () => {
       payload: prompt,
       source_taint: null,
       redactions: [],
+    });
+  });
+
+  // Owner decision 2026-09-28 (direction A): owner/model conversation at null taint may carry
+  // health free-text through the assembled prompt - otherwise every health turn fails closed at
+  // the final pass even after internal_context persistence is allowed.
+  it('passes owner health conversation in the assembled prompt byte-identical', () => {
+    const prompt = 'Owner asked: is it bad that I only sleep 5 hours most nights?';
+    expect(verify(prompt)).toEqual({
+      ok: true,
+      payload: prompt,
+      source_taint: null,
+      redactions: [],
+    });
+  });
+
+  it('still denies a raw provider health dump in the assembled prompt at external taint', () => {
+    const result = verify('provider payload: hrv: 42 ms, steps: 12345', 'external');
+    expect(result).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
+    });
+  });
+
+  it('still denies structured health correlation in the assembled prompt at null taint', () => {
+    const result = verify(JSON.stringify({ metric: 'hrv', measurement: 58, unit: 'ms' }));
+    expect(result).toEqual({
+      ok: false,
+      check: 'health_value',
+      reason: 'health_value_leak',
     });
   });
 });

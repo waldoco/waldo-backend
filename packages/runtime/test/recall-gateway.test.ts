@@ -664,23 +664,28 @@ describe('RuntimeRecallGateway — ADR-0031 fan-out', () => {
     expect(events).toEqual([]);
   });
 
-  it('drops provisional, invalidly tainted, and raw-health-looking memory rows locally', async () => {
+  it('drops provisional and invalidly tainted memory rows locally; health conversation rows persist', async () => {
+    // Owner decision 2026-09-28 (direction A): null-taint memory of owner health conversation is
+    // conversation, not a raw payload - it may be recalled into context. Provisional rows and
+    // external-tainted rows still drop.
     const provisional = memoryHit('provisional candidate');
     provisional.hit.source_trust = 'memory_provisional';
     const externallyTainted = memoryHit('tainted candidate', { source_taint: 'external' });
+    const healthConversation = memoryHit('heart rate 72 bpm');
     const events: unknown[] = [];
     const result = await createRuntimeRecallGateway({
-      reads: reads([provisional, externallyTainted, memoryHit('heart rate 72 bpm')]),
+      reads: reads([provisional, externallyTainted, healthConversation]),
       now: () => FIXED_NOW,
       telemetry: telemetry(events),
     })(context('user_message'));
 
-    expect(result.memory_hits).toEqual([]);
+    expect(result.memory_hits).toHaveLength(1);
+    expect(result.memory_hits[0]?.content).toBe('heart rate 72 bpm');
     expect(events).toEqual([
       {
         recall_status: 'partial',
         source_class: 'memory',
-        count: 3,
+        count: 2,
         error_class: 'row_rejected',
       },
     ]);

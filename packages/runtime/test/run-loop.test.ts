@@ -521,7 +521,7 @@ describe('RunLoopDO full contract FSM', () => {
       state.storage.sql.exec(
         'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
         JSON.stringify({
-          delivery_text: 'HRV: 58 ms',
+          delivery_text: 'aaaaaaaaaaaaaaaa',
           delivery_text_source: 'fallback',
         }),
         runId,
@@ -606,7 +606,7 @@ describe('RunLoopDO full contract FSM', () => {
       state.storage.sql.exec(
         'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
         JSON.stringify({
-          delivery_text: 'HRV: 58 ms',
+          delivery_text: 'aaaaaaaaaaaaaaaa',
           delivery_text_source: 'fallback',
           source_taint: null,
         }),
@@ -667,7 +667,7 @@ describe('RunLoopDO full contract FSM', () => {
         JSON.stringify({
           push_class: 'brief',
           trigger: 'brief',
-          event_id: 'HRV: 58 ms',
+          event_id: 'aaaaaaaaaaaaaaaa',
           expires_at: null,
         }),
         runId,
@@ -679,7 +679,7 @@ describe('RunLoopDO full contract FSM', () => {
     const replay = await stub.replayFixture(runId);
     expect(replay.current).toEqual({
       state: 'FAILED',
-      failure_reason: 'scribe:health_value_leak',
+      failure_reason: 'scribe:canary_leak',
     });
     expect(replay.trace.slice(-2).map((event) => event.event)).toEqual([
       'scribe_denied',
@@ -722,7 +722,7 @@ describe('RunLoopDO full contract FSM', () => {
         JSON.stringify({
           push_class: 'brief',
           trigger: 'brief',
-          event_id: 'HRV: 58 ms',
+          event_id: 'aaaaaaaaaaaaaaaa',
           expires_at: null,
         }),
         runId,
@@ -744,7 +744,7 @@ describe('RunLoopDO full contract FSM', () => {
     const failed = await stub.readRunProof(runId);
     expect(failed.current).toEqual({
       state: 'FAILED',
-      failure_reason: 'scribe:health_value_leak',
+      failure_reason: 'scribe:canary_leak',
     });
     expect(failed.delivery_journal).toEqual({ state: 'FAILED', verdict: 'send' });
     expect(failed.sink).toEqual({ deliveries: 0, attempts: 0 });
@@ -827,7 +827,7 @@ describe('RunLoopDO full contract FSM', () => {
       state.storage.sql.exec(
         'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
         JSON.stringify({
-          delivery_text: 'HRV: 58 ms',
+          delivery_text: 'aaaaaaaaaaaaaaaa',
           delivery_text_source: 'fallback',
           source_taint: null,
         }),
@@ -884,7 +884,7 @@ describe('RunLoopDO full contract FSM', () => {
       state.storage.sql.exec(
         'UPDATE runtime_runs SET scratch_json = ? WHERE run_id = ?',
         JSON.stringify({
-          delivery_text: 'HRV: 58 ms',
+          delivery_text: 'aaaaaaaaaaaaaaaa',
           delivery_text_source: 'fallback',
           source_taint: null,
         }),
@@ -923,19 +923,19 @@ describe('RunLoopDO full contract FSM', () => {
   });
 
   it.each([
-    ['default candidate event id', { scheduleId: 'brief:hrv:58' }],
+    ['default candidate event id', { scheduleId: 'brief:aaaaaaaaaaaaaaaa' }],
     [
       'explicit candidate event id',
       {
         candidate: {
           push_class: 'brief',
           trigger: 'brief',
-          event_id: 'event:hrv:58',
+          event_id: 'event:aaaaaaaaaaaaaaaa',
           expires_at: null,
         } satisfies DeliveryCandidate,
       },
     ],
-    ['user id', { userId: `${USER}-hrv:58` }],
+    ['user id', { userId: `${USER}-aaaaaaaaaaaaaaaa` }],
   ] as const)('rejects an unsafe %s before any run persistence', async (_case, unsafe) => {
     const stub = freshStub();
     const dueAt = soon();
@@ -954,7 +954,7 @@ describe('RunLoopDO full contract FSM', () => {
           input,
         ),
       ),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
 
     expect(await persistedRunRowCounts(stub)).toEqual(before);
   });
