@@ -109,9 +109,19 @@ export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem
   return projection;
 };
 
+// Live RCA 2026-09-28 (Close card denied 21:30 + retry 21:31, same scribe_sanitise
+// internal_context canary_leak): mail free text still trips the scan. Snippet and subject
+// are provider free text - verification codes, tracking and unsubscribe tokens in them are
+// exactly the 16-hex canary shape - and a stored update change loses the external taint that
+// exempts live provider ingestion (sanitiser.ts embeddedScan), so the embedded scan fires on
+// it at card-compose time. Scrub canary-shaped runs from both fields at the projection
+// boundary: the scan's target is real canary leakage, and a 16-hex run in a mail preview or
+// subject is never meaningful prompt content.
+const PROVIDER_TOKEN_SHAPE = /\b[a-f0-9]{16}\b/gi;
+const scrubProviderTokenShapes = (text: string): string => text.replace(PROVIDER_TOKEN_SHAPE, '[id]');
 export const mailPromptProjection = (item: MailItem): Omit<MailItem, 'id' | 'thread_id'> => {
   const { id: _id, thread_id: _threadId, ...projection } = item;
-  return projection;
+  return { ...projection, subject: scrubProviderTokenShapes(projection.subject), snippet: scrubProviderTokenShapes(projection.snippet) };
 };
 
 export class GoogleError extends Error {
