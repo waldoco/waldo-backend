@@ -463,14 +463,19 @@ const refForCorrection = (evidence: string): string | undefined => /^owner, tg-[
 // quotation being paired with an invented new value. False negatives hold for review.
 const correctionWords = (text: string): Set<string> => new Set((normalizeForGrounding(text).match(/[\p{L}\p{N}]{3,}/gu) ?? [])
   .filter((word) => !['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'was', 'are', 'has', 'have', 'now', 'back', 'instead', 'owner', 'usually', 'lives', 'likes', 'moved', 'prefers'].includes(word)));
-const correctionMatches = (old: Claim, replacement: { kind: string; text: string }, owner: string): boolean => {
+const correctionTopicMatches = (old: Claim, replacement: { kind: string; text: string }): boolean => {
   if (old.kind !== replacement.kind) return false;
   const previous = correctionWords(old.text);
   const current = correctionWords(replacement.text);
+  return [...current].some((word) => previous.has(word)) ||
+    (/^(lives|moved)\b/i.test(old.text) && /^(lives|moved)\b/i.test(replacement.text));
+};
+const correctionMatches = (old: Claim, replacement: { kind: string; text: string }, owner: string): boolean => {
+  if (!correctionTopicMatches(old, replacement)) return false;
+  const previous = correctionWords(old.text);
+  const current = correctionWords(replacement.text);
   const observed = correctionWords(owner);
-  return ([...current].some((word) => previous.has(word)) ||
-    (/^(lives|moved)\b/i.test(old.text) && /^(lives|moved)\b/i.test(replacement.text))) &&
-    [...current].some((word) => observed.has(word)) &&
+  return [...current].some((word) => observed.has(word)) &&
     [...current].filter((word) => !previous.has(word)).every((word) => observed.has(word));
 };
 
@@ -503,8 +508,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   // with a live old id, never an agent paraphrase or a forwarded statement.
   const corrected = new Set<number>();
   const correctionIds = new Set((ops.corrections ?? []).filter((item) => !(forgetsAllowed && ops.forget_claims.includes(item.old_id))).map((item) => item.old_id));
-  const correctedTexts = new Set((ops.corrections ?? []).map((item) => normalizeForGrounding(item.text)));
+  // Hold a replacement on a related but failed correction rather than leaving two
+  // contradictory active claims. An unrelated or nonexistent old id must not suppress
+  // a separately owner-grounded add.
+  const blockedReplacementTexts = new Set<string>();
   for (const correction of ops.corrections ?? []) {
+    const old = byClaimId.get(correction.old_id);
+    if (old && correctionTopicMatches(old, correction)) {
+      blockedReplacementTexts.add(normalizeForGrounding(correction.text));
+    }
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
       (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim() ||
@@ -522,7 +534,7 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   let written = 0;
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
   for (const claim of admitted) {
-    if (correctedTexts.has(normalizeForGrounding(claim.text))) continue;
+    if (blockedReplacementTexts.has(normalizeForGrounding(claim.text))) continue;
     if (looksTransient(claim.text)) {
       // Salience hold: provenance-clean but not durable. Audited like every other hold;
       // the nightly pass sees hold counts, and a wrong hold is one console Forget away

@@ -84,6 +84,22 @@ describe('claims', () => {
     });
   });
 
+  it('an unrelated or nonexistent correction cannot suppress an independently grounded add', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      store.add({ kind: 'fact', text: 'Likes black coffee', source: 'stated', evidence: 'old', origin: 'owner' }, AT);
+      const old = store.claims()[0]!;
+      const added = applyClaimOps(store, ops({ corrections: [
+        { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
+        { old_id: 999, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
+      ], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"actually I am back in Mumbai"', touches_forgotten: false }] }),
+      AT, 'owner, tg-mumbai', undefined, { owner: 'actually I am back in Mumbai' });
+      expect(added).toContain('+1 held0');
+      expect(added).not.toContain('corrected1');
+      expect(new Set(store.claims().map((claim) => claim.text))).toEqual(new Set(['Likes black coffee', 'Lives in Mumbai']));
+    });
+  });
+
   it('does not correct without a transaction or on a failed statement', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
