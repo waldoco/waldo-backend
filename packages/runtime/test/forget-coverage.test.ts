@@ -182,7 +182,7 @@ describe('forget coverage', () => {
       expect(store.claims('purging').map((claim) => claim.id)).toEqual([claimId]);
       // The console view the owner sees: the purging row renders with a Retry action and is
       // absent from the active spots list.
-      const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: store.claims(), forgettingSpots: store.claims('purging') });
+      const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: store.claims(), forgettingSpots: store.claims('purging') }, 'spots');
       expect(html).toContain('Forget in progress (1)');
       expect(html).toContain(CLAIM_TEXT);
       expect(html).toContain('Retry forget');

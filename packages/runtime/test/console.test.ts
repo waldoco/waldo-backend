@@ -104,7 +104,7 @@ describe('owner console', () => {
   });
 
   it('renders background runs with status and an honest empty state', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
     expect(html).toContain('Background tasks');
     expect(html).toContain('delegate_task');
     expect(html).toContain('Pulled the last three invoices');
@@ -112,7 +112,7 @@ describe('owner console', () => {
     expect(html).toContain('completed');
     // Failed runs carry the bad-row marker.
     expect(html).toContain('<div class="t bad"><span>09-23 23:00</span><span>heartbeat</span>');
-    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, runs: [] });
+    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, runs: [] }, 'activity');
     expect(none).toContain('No background tasks yet.');
   });
 
@@ -129,15 +129,15 @@ describe('owner console', () => {
     const empty = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [], runs: [], trace: [], google: { accounts: [], connectAvailable: true }, cards: SAMPLE_CONSOLE_VIEW.cards.map((card) => ({ ...card, sent: false })) });
     expect(empty).toContain('No Brief to read here yet.');
     expect(empty).toContain('Nothing needs your approval.');
-    expect(empty).toContain('Nothing recorded yet.');
     expect(empty).toContain('Google is not connected.');
+    expect(empty).toContain('Nothing recorded yet.');
   });
 
   it('does not mistake a past or skipped card for the next one, or an older activity page for latest movement', () => {
     const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, now: '2026-09-23 23:40', cards: SAMPLE_CONSOLE_VIEW.cards.map((card) => ({ ...card, sent: false })), page: { trace_before: null, runs_before: null, trace_applied: 1, runs_applied: 1 } });
     expect(html).toContain('No more cards scheduled ahead.');
-    expect(html).toContain('Nothing recorded yet.');
     expect(html).not.toContain('22:15 · The Close');
+    expect(html).toContain('Nothing recorded yet.');
   });
 
   it('renders the stat row as Figma-style cards: uppercase small labels, serif values, hover affordance', () => {
@@ -148,15 +148,15 @@ describe('owner console', () => {
   });
 
   it('paginates the activity lists with keyset cursors, keeping the other list in place', () => {
-    const paged = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: 111, runs_before: 222, trace_applied: null, runs_applied: null } });
-    expect(paged).toContain('href="/console?trace_before=111#activity"');
-    expect(paged).toContain('href="/console?runs_before=222#activity"');
+    const paged = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: 111, runs_before: 222, trace_applied: null, runs_applied: null } }, 'activity');
+    expect(paged).toContain('href="/console/activity?trace_before=111"');
+    expect(paged).toContain('href="/console/activity?runs_before=222"');
     expect(paged).toContain('Older activity');
     expect(paged).not.toContain('&larr; Latest');
-    const deep = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: null, runs_before: 222, trace_applied: 90, runs_applied: null } });
-    expect(deep).toContain('href="/console#activity"');
-    expect(deep).toContain('href="/console?trace_before=90&runs_before=222#activity"');
-    const plain = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const deep = renderConsole({ ...SAMPLE_CONSOLE_VIEW, page: { trace_before: null, runs_before: 222, trace_applied: 90, runs_applied: null } }, 'activity');
+    expect(deep).toContain('href="/console/activity"');
+    expect(deep).toContain('href="/console/activity?trace_before=90&runs_before=222"');
+    const plain = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
     expect(plain).not.toContain('Older activity');
     expect(plain).not.toContain('Older tasks');
   });
@@ -170,16 +170,16 @@ describe('owner console', () => {
   });
 
   it('renders pending approvals with acting buttons and an honest empty state', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'waiting');
     expect(html).toContain('id="approvals"');
     expect(html).toContain('Waiting on you');
     expect(html).toContain('Move &#34;Gym&#34;');
     expect(html).toContain('value="approval.approve"');
     expect(html).toContain('value="approval.skip"');
     expect(html).toContain(`value="p1"`);
-    const withUndo = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p9', kind: 'calendar_change', summary: 'Moved Gym', state: 'done' as const, undoable: true, review: { kind: 'calendar_change' as const, action: 'move' as const, title: 'Gym', event_id: 'gym-1', start: '2026-09-27T07:00:00+05:30', end: '2026-09-27T08:00:00+05:30', reason: 'Move' } }] });
+    const withUndo = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p9', kind: 'calendar_change', summary: 'Moved Gym', state: 'done' as const, undoable: true, review: { kind: 'calendar_change' as const, action: 'move' as const, title: 'Gym', event_id: 'gym-1', start: '2026-09-27T07:00:00+05:30', end: '2026-09-27T08:00:00+05:30', reason: 'Move' } }] }, 'waiting');
     expect(withUndo).toContain('value="approval.undo"');
-    const noneLeft = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [] });
+    const noneLeft = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [] }, 'waiting');
     expect(noneLeft).toContain('Nothing waiting on you');
   });
 
@@ -190,7 +190,7 @@ describe('owner console', () => {
       { id: 'mcp', kind: 'mcp_call', summary: 'Run lookup on MCP server', state: 'open' as const, undoable: false, review: null },
       { id: 'browser', kind: 'browser_submit', summary: 'Click submit', state: 'open' as const, undoable: false, review: null },
     ];
-    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: proposals });
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: proposals }, 'waiting');
     expect(html).toContain('To: me@example.test');
     expect(html).toContain('CC: team@example.test');
     expect(html).toContain('BCC: audit@example.test');
@@ -207,7 +207,7 @@ describe('owner console', () => {
     // Exactly the two open send proposals are dismissible; mcp/browser stay undecidable here.
     expect((html.match(/value="approval.skip"/g) ?? []).length).toBe(2);
     expect(html).not.toContain('Modify</button>');
-    const wrongKind = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ ...proposals[0]!, review: { kind: 'message_send' as const, channel: 'Telegram', content: 'Wrong' } }] });
+    const wrongKind = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ ...proposals[0]!, review: { kind: 'message_send' as const, channel: 'Telegram', content: 'Wrong' } }] }, 'waiting');
     expect(wrongKind).not.toContain('value="approval.approve"');
     expect(consoleMayApprove(proposals[0])).toBe(false);
     expect(consoleMayApprove(SAMPLE_CONSOLE_VIEW.approvals[0])).toBe(true);
@@ -216,35 +216,35 @@ describe('owner console', () => {
   });
 
   it('shows gate holds as kind + reason + day only - refused words never reach the page', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
     expect(html).toContain('Held at the gate (1)');
     expect(html).toContain('self report');
     expect(html).toContain('2026-09-25');
     expect(html).not.toContain('fingerprint');
-    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, holds: [] });
+    const none = renderConsole({ ...SAMPLE_CONSOLE_VIEW, holds: [] }, 'spots');
     expect(none).not.toContain('Held at the gate');
   });
 
   it('distinguishes stored evidence notes from original-source links and does not fake a correction action', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
     expect(html).toContain('Evidence note:');
     expect(html).toContain('not a link to the original message');
     expect(html).toContain('tell Waldo the correction in chat');
     expect(html).not.toContain('name="action" value="spot.correct"');
-    const unknown = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, source: 'legacy' }] });
+    const unknown = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, source: 'legacy' }] }, 'spots');
     expect(unknown).toContain('Source unverified');
     expect(unknown).not.toContain('chip">You said this');
   });
 
   it('marks spots grounded only in shared content', () => {
     const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
-    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] });
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] }, 'spots');
     expect(html).toContain('from shared content');
-    expect(renderConsole(SAMPLE_CONSOLE_VIEW)).not.toContain('from shared content');
+    expect(renderConsole(SAMPLE_CONSOLE_VIEW, 'spots')).not.toContain('from shared content');
   });
 
   it('renders chips from the semantic taxonomy, every state backed by view data', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
     // danger: a failed removal must stand out, not render as a default sand chip
     expect(html).toContain('chip danger">Removal incomplete');
     // good: settled positive states only (a promoted spot, a sent card)
@@ -252,27 +252,27 @@ describe('owner console', () => {
     // provisional: Waldo's inferences are unconfirmed, shared-content origin is untrusted-derived
     expect(html).toContain('chip provisional">Waldo&#39;s inference');
     const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
-    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] })).toContain('chip provisional">from shared content');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] }, 'spots')).toContain('chip provisional">from shared content');
     // neutral is the bare class: stated sources and kind labels carry no state
     expect(html).toContain('chip">You said this');
     expect(html).not.toContain('chip teal');
     expect(html).not.toContain('chip red');
     // honest consumers: with no forgetting spots, no danger chip renders
-    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, forgettingSpots: [] })).not.toContain('chip danger');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, forgettingSpots: [] }, 'spots')).not.toContain('chip danger');
   });
 
   it('renders real usage numbers with a total, and an honest empty state', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'usage');
     expect(html).toContain('id="usage"');
     expect(html).toContain(OPENAI_GPT_6_LUNA_MODEL);
     expect(html).toContain('12 calls, 48.2k in (25% cached), 3.9k out');
     expect(html).toContain('$0.0231');
     expect(html).toContain('Total');
-    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, usage: [] })).toContain('No model calls recorded yet');
+    expect(renderConsole({ ...SAMPLE_CONSOLE_VIEW, usage: [] }, 'usage')).toContain('No model calls recorded yet');
   });
 
   it('checklist reflects real connection state, honestly marking what is not done', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'setup');
     expect(html).toContain('id="checklist"');
     // Fixture: telegram linked, no google account, quiet hours set.
     const row = (label: string) => html.slice(html.indexOf(label), html.indexOf(label) + 400);
@@ -280,21 +280,23 @@ describe('owner console', () => {
     expect(row('Connect Google')).toContain('To do');
     expect(html).not.toContain('Allow Gmail');
     expect(row('Set quiet hours')).toContain('Done');
-    const done = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } });
+    const done = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'setup');
     expect(done.slice(done.indexOf('Connect Google'), done.indexOf('Connect Google') + 500)).toContain('Done');
-    expect(done).toContain('Access granted');
-    expect(done).toContain('Calendar, Gmail, Tasks');
-    expect(done).toContain('Access granted · read unverified');
-    expect(done).toContain('permission states, not proof');
+    const doneConnections = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: null, calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'connections');
+    expect(doneConnections).toContain('Access granted');
+    expect(doneConnections).toContain('Calendar, Gmail, Tasks');
+    expect(doneConnections).toContain('Access granted · read unverified');
+    expect(doneConnections).toContain('permission states, not proof');
     expect(done).not.toContain('Gmail is a separate step');
-    expect(done).toContain('does not confirm that live reads work');
-    const unhealthy = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: 'invalid_grant', calendar: true, mail: true, tasks: true }], connectAvailable: true } });
-    expect(unhealthy).toContain('Needs reconnect');
+    expect(doneConnections).toContain('does not confirm that live reads work');
+    const unhealthy = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: 'invalid_grant', calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'setup');
     expect(unhealthy.slice(unhealthy.indexOf('Connect Google'), unhealthy.indexOf('Connect Google') + 500)).toContain('To do');
+    const unhealthyConnections = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { accounts: [{ id: 'g1', email: 'a@b.c', error: 'invalid_grant', calendar: true, mail: true, tasks: true }], connectAvailable: true } }, 'connections');
+    expect(unhealthyConnections).toContain('Needs reconnect');
   });
 
   it('keeps connection health separate from access and does not call the WhatsApp route missing', () => {
-    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'work@example.test', error: 'invalid_grant', calendar: true, mail: true, tasks: true }] } });
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'work@example.test', error: 'invalid_grant', calendar: true, mail: true, tasks: true }] } }, 'connections');
     expect(html).toContain('Reconnect needed');
     expect(html).toContain('Needs reconnect');
     expect(html).toContain('Status unknown here');
@@ -303,10 +305,10 @@ describe('owner console', () => {
   });
 
   it('shows the browser count and offers sign-out-everywhere only when more than one browser is signed in', () => {
-    const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 });
+    const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 }, 'connections');
     expect(one).toContain('on 1 browser.');
     expect(one).not.toContain('session.signout.all');
-    const two = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2 });
+    const two = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 2 }, 'connections');
     expect(two).toContain('on 2 browsers.');
     expect(two).toContain('session.signout.all');
   });
@@ -322,24 +324,42 @@ describe('owner console', () => {
     expect(parseConsoleAction(formOf({ action: 'drop.tables', csrf: 'good' }), 'good')).toBeNull();
   });
 
-  it('renders every section with working controls and escapes stored text', () => {
+  it('renders every page with working controls and escapes stored text', () => {
     const view = { ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, text: '<script>x</script>' }] };
-    const html = renderConsole(view);
-    for (const id of ['checklist', 'approvals', 'connections', 'spots', 'constellation', 'day', 'memory', 'usage', 'activity']) expect(html).toContain(`id="${id}"`);
-    expect(html).toContain('&#60;script&#62;x&#60;/script&#62;');
-    expect(html).not.toContain('<zz>');
+    const byPage: Readonly<Record<string, string>> = { setup: 'checklist', waiting: 'approvals', connections: 'connections', spots: 'spots', constellation: 'constellation', day: 'day', memory: 'memory', usage: 'usage', activity: 'activity', account: 'account' };
+    for (const [slug, id] of Object.entries(byPage)) expect(renderConsole(view, slug)).toContain(`id="${id}"`);
+    const spots = renderConsole(view, 'spots');
+    expect(spots).toContain('&#60;script&#62;x&#60;/script&#62;');
+    expect(spots).not.toContain('<zz>');
+    expect(spots).toContain('value="spot.forget"');
+    const connections = renderConsole(view, 'connections');
     // S5: connect is a CSRF-checked POST that 303s to a /c/<ticket>; no GET link that a preview could mint from.
-    expect(html).toContain('<input type="hidden" name="action" value="google.connect"><input type="hidden" name="value" value="calendar">');
-    expect(html).not.toContain('href="/console/google');
-    expect(html).toContain(`name="csrf" value="${view.csrf}"`);
-    expect(html).toContain('value="spot.forget"');
-    expect(html).toContain('Not built yet');
-    expect(html.indexOf('The Brief')).toBeLessThan(html.indexOf('Check-in'));
-    expect(renderConsole({ ...view, google: { accounts: [], connectAvailable: false } })).toContain('OAuth app keys are not set');
+    expect(connections).toContain('<input type="hidden" name="action" value="google.connect"><input type="hidden" name="value" value="calendar">');
+    expect(connections).not.toContain('href="/console/google');
+    expect(connections).toContain(`name="csrf" value="${view.csrf}"`);
+    expect(connections).toContain('Not built yet');
+    const day = renderConsole(view, 'day');
+    expect(day.indexOf('The Brief')).toBeLessThan(day.indexOf('Check-in'));
+    expect(renderConsole({ ...view, google: { accounts: [], connectAvailable: false } }, 'connections')).toContain('OAuth app keys are not set');
+  });
+
+  it('splits the console into pages: nav links to page paths, the active page marked, other pages absent', () => {
+    const overview = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(overview).toContain('<a href="/console" aria-current="page">Overview</a>');
+    expect(overview).toContain('<a href="/console/waiting">Waiting</a>');
+    expect(overview).toContain('id="overview"');
+    expect(overview).not.toContain('id="approvals"');
+    const waiting = renderConsole(SAMPLE_CONSOLE_VIEW, 'waiting');
+    expect(waiting).toContain('<a href="/console/waiting" aria-current="page">Waiting</a>');
+    expect(waiting).toContain('id="approvals"');
+    expect(waiting).not.toContain('id="checklist"');
+    expect(waiting).not.toContain('id="overview"');
+    const activity = renderConsole(SAMPLE_CONSOLE_VIEW, 'activity');
+    expect(activity).toContain('<a href="/console/activity" aria-current="page">Activity</a>');
   });
 
   it('a spot stuck mid-forget stays visible with a working Retry action', () => {
-    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
     expect(html).toContain('Forget in progress (1)');
     expect(html).toContain('Old phone number ending 4123');
     expect(html).toContain('Retry forget');

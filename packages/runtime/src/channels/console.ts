@@ -344,7 +344,7 @@ const memory = (view: ConsoleView) => {
 
 const pageHref = (trace: number | null | undefined, runs: number | null | undefined) => {
   const params = [trace ? `trace_before=${trace}` : '', runs ? `runs_before=${runs}` : ''].filter(Boolean).join('&');
-  return `/console${params ? `?${params}` : ''}#activity`;
+  return `${CONSOLE_PATH}/activity${params ? `?${params}` : ''}`;
 };
 const pageLinks = (older: string | null, latestHref: string | null) =>
   (latestHref ? `<a class="btn" href="${latestHref}">&larr; Latest</a> ` : '') + (older ?? '');
@@ -377,10 +377,10 @@ const overview = (view: ConsoleView) => {
   const briefState = brief?.sent ? 'Sent today' : brief?.time === null ? 'Not scheduled today' : 'Not sent yet';
   const google = view.google.accounts.some((account) => !account.error);
   return `<div class="overview-top"><div><div class="eyebrow">Your Waldo · ${esc(view.now)} ${esc(view.timezone)}</div><h1>${greeting}<br><em>Here is where things stand.</em></h1><p>What needs you, what ran, and what comes next. No guesswork.</p></div><div class="overview-status">${chip(waiting.length ? `${waiting.length} waiting on you` : 'Nothing waiting on you', waiting.length ? 'provisional' : 'good')}<span>${google ? 'Google access saved. Live reads still need a real check.' : 'Google is not connected.'}</span></div></div>
-<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="#day" class="text-link">See the day cards →</a></div>
-<div class="overview-side"><div class="eyebrow">The Handoff</div><h3>${waiting.length ? `${waiting.length} ${waiting.length === 1 ? 'decision' : 'decisions'} waiting.` : 'Nothing needs your approval.'}</h3><p>${waiting.length ? esc(waiting[0]!.summary) : 'If Waldo proposes a change, review its exact details before anything happens.'}</p><a href="#approvals" class="text-link">${waiting.length ? 'Review the proposal' : 'See approvals'} →</a></div>
-<div class="overview-side"><div class="eyebrow">Next on the day</div><h3>${nextCard ? `${esc(nextCard.time!)} · ${esc(nextCard.name)}` : 'No more cards scheduled ahead.'}</h3><p>${nextCard ? esc(nextCard.reason) : 'There is no future card recorded in today’s plan.'}</p><a href="#day" class="text-link">See the plan →</a></div></div>
-<div class="overview-foot"><div><div class="eyebrow">The Patrol · latest recorded movement</div>${lastMovement}</div><a href="#activity" class="text-link">All activity →</a></div>`;
+<div class="overview-grid"><div class="overview-feature"><div class="eyebrow">The Brief · ${esc(briefState)}</div><h3>${brief?.sent ? 'The Brief is marked sent.' : 'No Brief to read here yet.'}</h3><p>${brief?.sent ? 'Waldo recorded a send. This does not confirm delivery or show the message text; open your chat to check it.' : 'Waldo has not recorded a sent Brief for today. This page will not make one up.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the day cards →</a></div>
+<div class="overview-side"><div class="eyebrow">The Handoff</div><h3>${waiting.length ? `${waiting.length} ${waiting.length === 1 ? 'decision' : 'decisions'} waiting.` : 'Nothing needs your approval.'}</h3><p>${waiting.length ? esc(waiting[0]!.summary) : 'If Waldo proposes a change, review its exact details before anything happens.'}</p><a href="${CONSOLE_PATH}/waiting" class="text-link">${waiting.length ? 'Review the proposal' : 'See approvals'} →</a></div>
+<div class="overview-side"><div class="eyebrow">Next on the day</div><h3>${nextCard ? `${esc(nextCard.time!)} · ${esc(nextCard.name)}` : 'No more cards scheduled ahead.'}</h3><p>${nextCard ? esc(nextCard.reason) : 'There is no future card recorded in today’s plan.'}</p><a href="${CONSOLE_PATH}/day" class="text-link">See the plan →</a></div></div>
+<div class="overview-foot"><div><div class="eyebrow">The Patrol · latest recorded movement</div>${lastMovement}</div><a href="${CONSOLE_PATH}/activity" class="text-link">All activity →</a></div>`;
 };
 
 const FONT_SHEET = 'https://fonts.googleapis.com/css2?family=Instrument+Serif&family=Inter:wght@400;500;600&display=swap';
@@ -402,6 +402,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:16px;fl
 .env{color:var(--ink2);font-size:12px}
 nav{position:sticky;top:0;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--rule);margin:20px -24px 0;padding:0 24px;display:flex;gap:4px;overflow-x:auto;z-index:2}
 nav a{color:var(--ink2);text-decoration:none;padding:12px 10px;white-space:nowrap;border-bottom:2px solid transparent;transition:color .15s ease-out,border-color .15s ease-out}nav a:hover{color:var(--ink);border-color:var(--teal)}
+nav a[aria-current="page"]{color:var(--ink);border-color:var(--teal)}
 .notice{margin-top:20px;background:var(--sand);border-radius:8px;padding:10px 14px}
 .service-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:14px 0}.service-card{border:1px solid var(--rule);border-radius:12px;padding:16px;min-width:0}.service-name{font-family:'Instrument Serif',Georgia,serif;font-size:22px;margin-bottom:8px}.service-card p{margin:12px 0 0}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-top:24px}
@@ -441,28 +442,50 @@ h3,.conn .name,.chip.good,.status,.num,.rel,.panel-title,.t.bad span:nth-child(2
 .mark{font-weight:var(--bold)}
 `;
 
-export const renderConsole = (view: ConsoleView, banner = ''): string => {
+// Console pages: the console is one page per concern. The slug is the path segment under
+// /console ('' = the overview at /console itself); action/google/file/runs/admin paths are
+// matched before pages in the handler and are not pages.
+export const CONSOLE_PAGES = [
+  { slug: '', title: 'Overview' },
+  { slug: 'waiting', title: 'Waiting' },
+  { slug: 'setup', title: 'Setup' },
+  { slug: 'connections', title: 'Connections' },
+  { slug: 'spots', title: 'Spots' },
+  { slug: 'constellation', title: 'Constellation' },
+  { slug: 'day', title: 'Your day' },
+  { slug: 'memory', title: 'Memory' },
+  { slug: 'files', title: 'Files' },
+  { slug: 'usage', title: 'Usage' },
+  { slug: 'activity', title: 'Activity' },
+  { slug: 'account', title: 'Account' },
+] as const;
+
+export const renderConsole = (view: ConsoleView, page: string = '', banner = ''): string => {
   const sentToday = view.cards.filter((card) => card.sent).length;
   const seen = view.steps.filter((step) => step.state === 'ok').length;
   const section = (id: string, title: string, intro: string, body: string) => `<section id="${id}"><h2>${esc(title)}</h2><p class="intro">${esc(intro)}</p>${body}</section>`;
+  const pages: Readonly<Record<string, string>> = {
+    '': `<section id="overview" aria-label="Overview">${overview(view)}</section>
+<div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>`,
+    waiting: section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view)),
+    setup: section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view)),
+    connections: section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view)),
+    spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view)),
+    constellation: section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view)),
+    day: section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view)),
+    memory: section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view)),
+    files: section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view)),
+    usage: section('usage', 'Usage and cost', 'Real per-model totals from Waldo\'s own trace log, most expensive first.', usage(view)),
+    activity: section('activity', 'Activity', 'What ran, when, and whether it worked.', activity(view)),
+    account: section('account', 'Account', 'Deleting your account erases your memory, connections, settings and files. This cannot be undone.', `<div class="row conn"><div><div class="name">Delete your Waldo account</div><div class="sub">Everything Waldo knows and every connection goes. You can sign up again later, but nothing is recovered.</div></div><div class="state"></div><div class="act">${form(view.csrf, 'account.delete', 'Delete account', {}, { tone: 'danger', confirm: 'Delete your Waldo account? Memory, connections and settings are erased and cannot be recovered.' })}</div></div>`),
+  };
+  const nav = CONSOLE_PAGES.map((item) => `<a href="${CONSOLE_PATH}${item.slug ? `/${item.slug}` : ''}"${item.slug === page ? ' aria-current="page"' : ''}>${item.title}</a>`).join('');
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Waldo console</title>
 ${FONTS}<style>${STYLE}</style></head><body><div class="wrap">
 ${banner}<header><div class="brand">Waldo<small>Console</small></div><div class="env">Staging · ${esc(view.release)} · ${esc(view.now)} ${esc(view.timezone)}</div></header>
-<nav><a href="#overview">Overview</a><a href="#approvals">Waiting</a><a href="#checklist">Setup</a><a href="#connections">Connections</a><a href="#spots">Spots</a><a href="#constellation">Constellation</a><a href="#day">Your day</a><a href="#memory">Memory</a><a href="#files">Files</a><a href="#usage">Usage</a><a href="#activity">Activity</a></nav>
+<nav>${nav}</nav>
 ${view.notice ? `<div class="notice">${esc(view.notice)}</div>` : ''}
-<section id="overview" aria-label="Overview">${overview(view)}</section>
-<div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>
-${section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view))}
-${section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view))}
-${section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view))}
-${section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view))}
-${section('constellation', 'Constellation', 'Lasting patterns built each night from repeated spots, and how they link. Strength is Waldo\'s confidence, from 0 to 1.', constellation(view))}
-${section('day', 'Your day', 'Waldo plans when each card arrives. Change a time for today, or pin it so Waldo always uses it.', cards(view) + '<h3>Time zone</h3>' + timezone(view) + '<h3>Quiet hours and volume</h3>' + proactivity(view))}
-${section('memory', 'Memory', 'What Waldo keeps about you. It updates after chats and each night.', memory(view))}
-${section('files', 'Files', 'What you have sent Waldo on Telegram. Files stay stored with Telegram; this list keeps a reference so you can open them again.', files(view))}
-${section('usage', 'Usage and cost', 'Real per-model totals from Waldo\'s own trace log, most expensive first.', usage(view))}
-${section('activity', 'Activity', 'What ran, when, and whether it worked.', activity(view))}
-${section('danger', 'Account', 'Deleting your account erases your memory, connections, settings and files. This cannot be undone.', `<div class="row conn"><div><div class="name">Delete your Waldo account</div><div class="sub">Everything Waldo knows and every connection goes. You can sign up again later, but nothing is recovered.</div></div><div class="state"></div><div class="act">${form(view.csrf, 'account.delete', 'Delete account', {}, { tone: 'danger', confirm: 'Delete your Waldo account? Memory, connections and settings are erased and cannot be recovered.' })}</div></div>`)}
+${pages[page] ?? pages['']}
 <footer>Only you can open this page. Links come from your Telegram DM and expire after 10 minutes; a session lasts 12 hours.</footer>
 </div></body></html>`;
 };

@@ -8,7 +8,7 @@ import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
-import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
+import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
 import { gateTraceEntry, resolveCaptureText } from '../observability/trace-privacy';
@@ -322,7 +322,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const { rows: page, next } = this.setup().runs.listPage(limit, Number.isFinite(parsed) ? parsed : undefined);
       return Response.json({ runs: page, next_before: next }, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
     }
-    if (url.pathname !== CONSOLE_PATH) return new Response('not found', { status: 404 });
+    // Page routing: /console serves the overview; /console/<slug> serves one page. Action,
+    // google, file, runs and admin paths were matched above, so only page slugs remain.
+    const pageSlug = url.pathname === CONSOLE_PATH ? '' : url.pathname.startsWith(`${CONSOLE_PATH}/`) ? url.pathname.slice(CONSOLE_PATH.length + 1) : null;
+    if (pageSlug === null || !CONSOLE_PAGES.some((item) => item.slug === pageSlug)) return new Response('not found', { status: 404 });
     const mKey = url.searchParams.get('m') ?? '';
     const dynamicNotice = NOTICES[mKey] ?? (mKey.length > 0 && mKey.length <= 200 ? mKey : null);
     // B9 dashboard bar: the same handlers serve JSON when asked (content-negotiated) - the
@@ -332,7 +335,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if ((request.headers.get('accept') ?? '').includes('application/json')) {
       return Response.json(built, { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
     }
-    return new Response(renderConsole(built), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    return new Response(renderConsole(built, pageSlug), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
   }
 
   private async telegramLinkPage(): Promise<Response> {
