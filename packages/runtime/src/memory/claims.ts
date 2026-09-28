@@ -502,10 +502,11 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   // A correction is all-or-nothing at the admission gate: one owner-quoted replacement
   // with a live old id, never an agent paraphrase or a forwarded statement.
   const corrected = new Set<number>();
-  const correctionIds = new Set((ops.corrections ?? []).map((item) => item.old_id));
+  const correctionIds = new Set((ops.corrections ?? []).filter((item) => !(forgetsAllowed && ops.forget_claims.includes(item.old_id))).map((item) => item.old_id));
   const correctedTexts = new Set((ops.corrections ?? []).map((item) => normalizeForGrounding(item.text)));
   for (const correction of ops.corrections ?? []) {
     if (!known.has(correction.old_id) || corrected.has(correction.old_id) ||
+      (forgetsAllowed && ops.forget_claims.includes(correction.old_id)) ||
       !CLAIM_KINDS.includes(correction.kind as never) || !correction.text.trim() ||
       !correctionMatches(byClaimId.get(correction.old_id)!, correction, grounding?.owner ?? '') ||
       looksTransient(correction.text) ||
