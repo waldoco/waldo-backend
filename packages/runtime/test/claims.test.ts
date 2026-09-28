@@ -261,6 +261,59 @@ describe('claim admission gate (slice 4)', () => {
     });
   });
 });
+describe('claim salience screen (2026-09-28 staging noise receipts)', () => {
+  it('holds the four observed noise classes as transient and never writes them', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const detail = applyClaimOps(store, ops({ add: [
+        { kind: 'followup', text: 'verify the Waldo task list tomorrow', source: 'stated', evidence: '"verify the Waldo task list tomorrow"', touches_forgotten: false },
+        { kind: 'observation', text: 'Give me the page title and URL, and say if the search tool failed', source: 'stated', evidence: '"Give me the page title and URL, and say if the search tool failed"', touches_forgotten: false },
+        { kind: 'followup', text: 'Use your web search tool to find the official Cloudflare Durable Objects documentation', source: 'stated', evidence: '"Use your web search tool to find the official Cloudflare Durable Objects documentation"', touches_forgotten: false },
+        { kind: 'observation', text: 'Calendar QA tool failed to fetch calendar', source: 'stated', evidence: '"Calendar QA tool failed to fetch calendar"', touches_forgotten: false },
+      ] }), AT);
+      expect(detail).toContain('+0 held4(transient)');
+      expect(store.claims()).toEqual([]);
+      // The hold audit carries the fingerprint, not the text - same rule as every hold.
+      expect(store.holds().map((hold) => hold.reason)).toEqual(['transient', 'transient', 'transient', 'transient']);
+    });
+  });
+  it('durable claims still admit: conditions kept, one-off events without errand verbs, health routines', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const detail = applyClaimOps(store, ops({ add: [
+        { kind: 'routine', text: 'Gym usually 11am; 7:30-8pm when mornings fail', source: 'stated', evidence: '"gym at 11, or 7:30 if the morning goes"', touches_forgotten: false },
+        { kind: 'event', text: 'Marathon race is tomorrow', source: 'stated', evidence: '"the race is tomorrow"', touches_forgotten: false },
+        { kind: 'health', text: 'Started a magnesium supplement in the evening', source: 'stated', evidence: '"started taking magnesium in the evening"', touches_forgotten: false },
+      ] }), AT);
+      expect(detail).toContain('+3 held0');
+      expect(store.claims()).toHaveLength(3);
+    });
+  });
+  it('never holds durable look-alikes: a QA career, a named review event, a probe as health context', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const detail = applyClaimOps(store, ops({ add: [
+        { kind: 'fact', text: 'Works as a QA engineer', source: 'stated', evidence: '"I work as a QA engineer"', touches_forgotten: false },
+        { kind: 'event', text: 'The design review is tomorrow', source: 'stated', evidence: '"design review is tomorrow"', touches_forgotten: false },
+        { kind: 'health', text: 'Has a probe appointment next month', source: 'stated', evidence: '"probe appointment next month"', touches_forgotten: false },
+      ] }), AT);
+      expect(detail).toContain('+3 held0');
+      expect(store.claims()).toHaveLength(3);
+    });
+  });
+
+  it('a bare question is transient even when the extractor frames it as a claim', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const detail = applyClaimOps(store, ops({ add: [
+        { kind: 'observation', text: 'What is on the calendar today?', source: 'stated', evidence: '"what is on the calendar today?"', touches_forgotten: false },
+      ] }), AT);
+      expect(detail).toContain('+0 held1(transient)');
+      expect(store.claims()).toEqual([]);
+    });
+  });
+});
+
 describe('claim origin classes (gate provenance)', () => {
   it('persists the grounding verdict as origin: owner, untrusted, agent, or null when ungated', async () => {
     await withSql((sql) => {
