@@ -222,6 +222,17 @@ describe('owner console', () => {
     expect(none).not.toContain('Held at the gate');
   });
 
+  it('distinguishes stored evidence notes from original-source links and does not fake a correction action', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW);
+    expect(html).toContain('Evidence note:');
+    expect(html).toContain('not a link to the original message');
+    expect(html).toContain('tell Waldo the correction in chat');
+    expect(html).not.toContain('name="action" value="spot.correct"');
+    const unknown = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [{ ...SAMPLE_CONSOLE_VIEW.spots[0]!, source: 'legacy' }] });
+    expect(unknown).toContain('Source unverified');
+    expect(unknown).not.toContain('chip">You said this');
+  });
+
   it('marks spots grounded only in shared content', () => {
     const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
     const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] });
