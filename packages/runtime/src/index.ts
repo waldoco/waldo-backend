@@ -17,6 +17,7 @@ import { handleGoogleCallback } from './channels/google-oauth';
 import { CONNECT_LINK_PREFIX, handleConnectTicket } from './channels/connect-link';
 import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
+import { ownerDirectory } from './identity/owner-directory';
 import { handleConsole } from './channels/console-signin';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
@@ -140,7 +141,15 @@ export default {
       if (signedIn) return signedIn;
     }
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
-      return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(env.WALDO_OWNER_TELEGRAM_ID)).fetch(request);
+      // The console must land on the owner's REAL DO - the one the Telegram webhook routes his
+      // turns to. With Supabase configured that name comes from the owner directory (e.g.
+      // 'owner-<uuid>' from console signup), not the env telegram id. Routing by the env id
+      // served an empty shell DO: one-time links minted in the turn DO never redeemed (403),
+      // and account.delete would have wiped the wrong DO. Directory errors propagate loudly;
+      // no fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
+      const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
+      const consoleDoName = ownerRoute?.doName ?? env.WALDO_OWNER_TELEGRAM_ID;
+      return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(consoleDoName)).fetch(request);
     }
     if (new URL(request.url).pathname.startsWith(CONNECT_LINK_PREFIX)) {
       return handleConnectTicket(request, env);
