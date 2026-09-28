@@ -28,6 +28,15 @@ export const EGRESS_TARGET_PATHS: Readonly<
   browse_act: [{ kind: 'url', path: ['url'] }],
 });
 
+// Deploy config feeds the hook: WALDO_EGRESS_ALLOWLIST is a comma-separated host list. Empty or
+// unset means no allowlist - the hook then fails closed ('allowlist_unavailable'), which is the
+// intended posture until an owner names hosts.
+export const parseEgressAllowlistEnv = (raw: string | undefined): readonly string[] | undefined => {
+  if (raw === undefined) return undefined;
+  const hosts = raw.split(',').map((host) => host.trim().toLowerCase()).filter(Boolean);
+  return hosts.length ? hosts : undefined;
+};
+
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 const IPV4 = (first: number, second: number, third: number, fourth: number): number =>
   ((first * 0x100 + second) * 0x100 + third) * 0x100 + fourth;
