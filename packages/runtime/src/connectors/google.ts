@@ -146,6 +146,12 @@ export type GoogleClient = Readonly<{
   tasks(status: TaskStatusFilter, limit: number): Promise<readonly TaskItem[]>;
 }>;
 
+// Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
+// connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
+// missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
+export const GOOGLE_METHODS = ['events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks'] as const satisfies readonly (keyof GoogleClient)[];
+export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
+
 const b64urlDecode = (data: string): string => {
   const binary = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
   return new TextDecoder().decode(Uint8Array.from(binary, (char) => char.charCodeAt(0)));
