@@ -95,6 +95,25 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string }>;
 
+// Model-facing prompt projections (live RCA 2026-09-28: pre-event brief denied
+// scribe_sanitise internal_context canary_leak at 13:40; brief card denied at 08:46 and
+// 14:01). Provider-internal fields never belong in trusted null-taint prompt context:
+// Google Calendar etags are 16-digit strings and Gmail message/thread ids are exactly 16
+// hex chars, and both collide with the scribe's embedded canary-shape scan
+// (CANARY_REGEX /\b[a-f0-9]{16}\b/i), failing every populated card/brief turn closed - and
+// canary_leak is a hard reason, so the softScribe degrade cannot save the turn. The etag
+// still flows through the connector API for If-Match concurrency (moveEvent/cancelEvent);
+// only the prompt projection drops it. The card prompt also never acts on provider ids.
+export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag'> => {
+  const { etag: _etag, ...projection } = event;
+  return projection;
+};
+
+export const mailPromptProjection = (item: MailItem): Omit<MailItem, 'id' | 'thread_id'> => {
+  const { id: _id, thread_id: _threadId, ...projection } = item;
+  return projection;
+};
+
 export class GoogleError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }

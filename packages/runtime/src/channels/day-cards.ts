@@ -1,5 +1,5 @@
 import { DAY_CARDS, dayCardPrompt, SKIP_CARD, type CardId, type DayCard } from '../prompt/day-cards';
-import type { CalendarItem, GoogleClient } from '../connectors/google';
+import { calendarPromptProjection, type CalendarItem, type GoogleClient } from '../connectors/google';
 import type { Scheduler } from '../scheduler/multiplexer';
 import { localIso, localToEpoch } from './reminders';
 
@@ -126,7 +126,7 @@ export const cardWindow = (card: DayCard, now: number, timezone: string): Readon
 };
 
 const eventLine = (event: CalendarItem, timezone: string) =>
-  JSON.stringify({ ...event, start: event.all_day ? event.start : localIso(Date.parse(event.start), timezone), end: event.all_day ? event.end : localIso(Date.parse(event.end), timezone) });
+  JSON.stringify({ ...calendarPromptProjection(event), start: event.all_day ? event.start : localIso(Date.parse(event.start), timezone), end: event.all_day ? event.end : localIso(Date.parse(event.end), timezone) });
 
 export const readCalendar = async (
   window: Readonly<{ from: number; to: number }>, timezone: string, google: GoogleClient | null, connectable: boolean,
