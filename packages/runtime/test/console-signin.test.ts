@@ -47,6 +47,14 @@ describe('handleConsole', () => {
     expect(await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, null)).toBeNull();
   });
 
+  it('lets the Telegram one-time ticket link fall through to the owner DO console', async () => {
+    // Staging receipt 2026-09-28: with Supabase console auth configured, GET /console?t=<ticket>
+    // 303'd to the email form and the bot's sign-in link could never redeem. The ticket flow
+    // (GET with ?t=, and the redeem POST back to /console) belongs to the owner DO's branch.
+    expect(await handleConsole(new Request('https://w.test/console?t=ticket123'), { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
+    expect(await handleConsole(form('/console', { t: 'ticket123' }), { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
+  });
+
   it('sends a signed-out visitor to the email form', async () => {
     const response = await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, auth());
     expect(response?.status).toBe(303);

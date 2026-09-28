@@ -128,6 +128,10 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     if (doName) await auth.signOutAll(doName);
     return new Response(null, { status: 303, headers });
   }
+  // The Telegram one-time console link (GET /console?t=... and its form POST back to /console)
+  // belongs to the owner DO's ticket sign-in, handled by the caller's next console branch. The
+  // email-code console must not swallow it, or the bot's /console links 303 here and never redeem.
+  if (url.pathname === CONSOLE_PATH && (url.searchParams.get('t') !== null || request.method === 'POST')) return null;
   const doName = await auth.readOwnerCookie(request);
   if (!doName) return new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } });
   const forwarded = new Request(request);
