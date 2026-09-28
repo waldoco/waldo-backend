@@ -19,8 +19,6 @@ const row = (overrides: Partial<HealthContextRow> = {}): HealthContextRow => ({
     tags: ['travel'],
   },
   previous: { day: '2026-09-27', form_score: 64 },
-  sources: ['apple_healthkit'],
-  input_keys: ['sleep_duration_min', 'steps'],
   ...overrides,
 });
 
@@ -34,7 +32,7 @@ describe('toContextHealthMaterial', () => {
       form_zone: 'steady',
       trend: 'improving',
       freshness: 'fresh',
-      missing_components: ['hrv', 'circadian'],
+      missing_components: [],
       confidence_band: 'high',
       provenance_refs: [`hpr_${md5Hex('health-context.ctx-1')}`],
       destination_eligibility: ['trigger_prompt'],
@@ -43,7 +41,7 @@ describe('toContextHealthMaterial', () => {
       zone: 'steady',
       recovery_descriptor: 'solid',
       load_descriptor: 'moderate',
-      day_summary: 'Form steady; recovery solid; load moderate. Drivers: sleep below baseline. Tags: travel. Missing pillars: hrv, circadian.',
+      day_summary: 'Form steady; recovery solid; load moderate. Drivers: sleep below baseline. Tags: travel.',
       active_goals: [],
       upcoming_high_stakes: [],
       compiled_at: NOW.toISOString(),
@@ -111,7 +109,7 @@ describe('toContextHealthMaterial', () => {
       clock,
     );
     expect(material!.narrative.day_summary).toBe(
-      'Form steady; recovery solid; load moderate. Drivers: sleep below baseline. Tags: travel. Missing pillars: hrv, circadian.',
+      'Form steady; recovery solid; load moderate. Drivers: sleep below baseline. Tags: travel.',
     );
     expect(material!.narrative.day_summary).not.toMatch(/\d/);
   });

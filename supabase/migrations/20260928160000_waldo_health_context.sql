@@ -1,11 +1,14 @@
 -- D5 health context read (Art-9 read-only slice): the owner's derived daily health context
 -- rides the signed router RPC from the owner's DO into the composer's health material slot.
--- Read-only: returns derived pillar scores/zones and the day's input-key coverage, never raw
--- metric streams. The redact-to-zone transform (ADR-0024) happens runtime-side before any of
--- this reaches a prompt; the model never touches these tables. The app-owned public tables
--- (health_context_daily, health_daily) are applied by the companion app repo's migrations;
--- plpgsql bodies bind late, so this function deploys cleanly ahead of them and errors
--- (caught, logged, degraded to absence) until they exist.
+-- Read-only: returns derived pillar scores/zones, never raw metric streams. The
+-- redact-to-zone transform (ADR-0024) happens runtime-side before any of this reaches a
+-- prompt; the model never touches these tables. The app-owned public.health_context_daily
+-- table is applied by the companion app repo's migrations; plpgsql bodies bind late, so this
+-- function deploys cleanly ahead of it and errors (caught, logged, degraded to absence)
+-- until it exists. It deliberately does not touch public.health_daily: that name is owned by
+-- this repo's older HEY-9 columnar schema (a cross-repo collision with the app repo's
+-- same-named jsonb table), so pillar coverage derives from which context pillars are present
+-- instead.
 create function waldo.health_context_read(p_do_name text, p_at bigint, p_sig text) returns jsonb
 language plpgsql security definer set search_path = '' as $$
 declare v_auth uuid;
@@ -35,19 +38,6 @@ begin
         order by p2.day desc
         limit 1
       ),
-      'sources', coalesce((
-        select jsonb_agg(d.source order by d.source)
-        from public.health_daily d
-        where d.user_id = v_auth and d.day = c.day
-      ), '[]'::jsonb),
-      'input_keys', coalesce((
-        select jsonb_agg(k.key order by k.key)
-        from (
-          select distinct k2.key
-          from public.health_daily d2, lateral jsonb_each(d2.inputs) k2
-          where d2.user_id = v_auth and d2.day = c.day and k2.value is not null and k2.value <> 'null'::jsonb
-        ) k
-      ), '[]'::jsonb)
     )
     from public.health_context_daily c
     where c.user_id = v_auth

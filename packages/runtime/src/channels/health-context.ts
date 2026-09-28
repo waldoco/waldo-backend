@@ -34,8 +34,6 @@ export type HealthContextRow = Readonly<{
     tags: unknown;
   }> | null;
   previous: Readonly<{ day: string; form_score: unknown }> | null;
-  sources: readonly string[];
-  input_keys: readonly string[];
 }>;
 
 // The app's PillarScore vocabulary (supabase/functions/_shared/contracts.ts): zone words are
@@ -56,14 +54,11 @@ const LOAD_DESCRIPTOR: Readonly<Record<string, NarrativeContext['load_descriptor
   high: 'peak',
 };
 
-// Form pillar coverage (ADR-0011) from the day's input keys (app HealthDailyInputs): a pillar
-// with no key present on the day is reported missing instead of silently absent.
-const PILLAR_KEYS: Readonly<Record<'sleep' | 'hrv' | 'circadian' | 'motion', readonly string[]>> = {
-  sleep: ['sleep_duration_min', 'sleep_deep_min', 'sleep_rem_min', 'sleep_light_min', 'sleep_awake_min', 'sleep_efficiency'],
-  hrv: ['hrv_overnight_ms', 'hrv_method', 'hrv_confidence', 'rhr_bpm'],
-  circadian: ['daylight_minutes', 'sleep_onset', 'sleep_end'],
-  motion: ['steps', 'active_energy_kcal', 'exercise_min'],
-};
+// The material builds only from a complete pillar set (Recovery/Load descriptors require the
+// app's own zone words; an absent or 'unknown' pillar degrades the whole material to truthful
+// absence rather than an invented descriptor), so an emitted view always reports no missing
+// components. Finer per-pillar absence needs the app to publish pillar coverage explicitly -
+// a contracts change, deliberately not guessed here.
 
 // A previous-day Form swing beyond this delta is a trend; smaller moves are steady. Pinned
 // here (single owner) rather than derived per turn.
@@ -131,10 +126,6 @@ export const toContextHealthMaterial = (
     const freshness: DerivedHealthDestinationView['freshness'] =
       context.day === today || context.day === yesterday ? 'fresh' : 'stale';
 
-    const keys = new Set(Array.isArray(row.input_keys) ? row.input_keys : []);
-    const missing = (Object.keys(PILLAR_KEYS) as ReadonlyArray<keyof typeof PILLAR_KEYS>).filter(
-      (pillar) => !PILLAR_KEYS[pillar].some((key) => keys.has(key)),
-    );
 
     const confidence = typeof context.confidence === 'number' && Number.isFinite(context.confidence) ? context.confidence : null;
     const confidenceBand: DerivedHealthDestinationView['confidence_band'] =
@@ -146,7 +137,7 @@ export const toContextHealthMaterial = (
       form_zone: zone,
       trend,
       freshness,
-      missing_components: missing,
+      missing_components: [],
       confidence_band: confidenceBand,
       provenance_refs: [`hpr_${md5Hex(`health-context.${context.id}`)}`],
       destination_eligibility: ['trigger_prompt'],
@@ -157,7 +148,6 @@ export const toContextHealthMaterial = (
     const summaryParts = [`Form ${zone}; recovery ${recovery}; load ${load}.`];
     if (drivers.length > 0) summaryParts.push(`Drivers: ${drivers.join('; ')}.`);
     if (tags.length > 0) summaryParts.push(`Tags: ${tags.join(', ')}.`);
-    if (missing.length > 0) summaryParts.push(`Missing pillars: ${missing.join(', ')}.`);
 
     // Fail closed before compose: a material that violates the contracts schemas degrades to
     // absence here (logged) instead of throwing 'health_context_invalid' inside the composer
