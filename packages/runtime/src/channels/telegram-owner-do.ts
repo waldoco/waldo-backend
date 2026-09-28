@@ -16,6 +16,7 @@ import { Scheduler } from '../scheduler/multiplexer';
 import { productionDeps } from '../seams/deps';
 import { redactConversationEntries, durableConversationStore, scrubConversationHistory } from './conversation-store';
 import { egressGuardedCaller } from './egress-guard';
+import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
 import { armBriefSweep, eventBriefs } from './event-briefs';
@@ -897,6 +898,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       () => {
         void api.sendMessage({ chat_id: owner, text: 'Heads up - I could not save that to memory just now, so your last message was not stored. If you told me something to remember, say it again and I will retry.' }).catch(() => undefined);
       },
+      parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);

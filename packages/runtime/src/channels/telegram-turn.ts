@@ -97,6 +97,10 @@ export const createTelegramResponder = (
   // leaving the owner believing it stuck. Fires once per failure streak; the latch resets
   // on the next successful settle. The owner DO wires this to a direct message.
   onMemoryWriteFailed?: (error: unknown) => void,
+  // Browse-tool egress: the owner DO passes the parsed WALDO_EGRESS_ALLOWLIST deploy config.
+  // Undefined keeps the hook fail-closed - browse tools deny every destination until the owner
+  // names hosts. The non-global-address blocks apply regardless.
+  egressAllowlist?: readonly string[],
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -113,7 +117,7 @@ export const createTelegramResponder = (
   const offloadStore = offload ? inMemoryToolOutputStore() : undefined;
   const safety = {
     authenticatedUserId: ownerId, trigger: 'user_message' as const, canaryTokens: CANARIES,
-    sourceTaint: null, toolArgSourceTaint: null,
+    sourceTaint: null, toolArgSourceTaint: null, egressAllowlist,
     hasApproval: telegramOwnerApproval,
     sanitise: adapters.safety.sanitise, medicalGate: adapters.safety.medicalGate,
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
