@@ -1,4 +1,4 @@
-import type { CalendarChange, GoogleClient } from '../connectors/google';
+import { calendarPromptProjection, mailPromptProjection, type CalendarChange, type GoogleClient } from '../connectors/google';
 import { localIso } from './reminders';
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -54,14 +54,14 @@ export type UpdateBook = ReturnType<typeof updateBook>;
 const toChange = (item: CalendarChange, since: number): Change => {
   const { status, created, ...event } = item;
   const kind = status === 'cancelled' ? 'cancelled' : Date.parse(created) >= since ? 'added' : 'changed';
-  return { source: 'calendar', kind, detail: JSON.stringify(event) };
+  return { source: 'calendar', kind, detail: JSON.stringify(calendarPromptProjection(event)) };
 };
 
 export const collectChanges = async (book: UpdateBook, google: GoogleClient, now: number): Promise<readonly Change[]> => {
   const calendarSince = book.since('calendar_since');
   const mailSince = book.since('mail_since');
   const calendar = calendarSince === null ? [] : (await google.changedEvents(calendarSince, now, now + 2 * DAY_MS)).map((item) => toChange(item, calendarSince));
-  const mail = mailSince === null ? [] : (await google.newMail(mailSince, 10)).map((item): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify(item) }));
+  const mail = mailSince === null ? [] : (await google.newMail(mailSince, 10)).map((item): Change => ({ source: 'mail', kind: 'new', detail: JSON.stringify(mailPromptProjection(item)) }));
   book.mark('calendar_since', now);
   book.mark('mail_since', now);
   return [...calendar, ...mail];
