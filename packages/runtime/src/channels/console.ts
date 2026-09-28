@@ -207,8 +207,8 @@ const connectors = (view: ConsoleView) => {
     row('Telegram', 'Your owner DM. Chat, cards and reminders arrive here, and it is how you sign in to this console.', status(telegram.linked, telegram.linked ? 'Connected' : 'Unlinked'), telegramAction),
     row('Console session', `Signed in until ${esc(view.sessionUntil)} on ${view.sessionCount} ${view.sessionCount === 1 ? 'browser' : 'browsers'}. Send /console on Telegram for a fresh link.`, status(true, 'Active'),
       form(csrf, 'session.signout', 'Sign out') + (view.sessionCount > 1 ? form(csrf, 'session.signout.all', 'Sign out everywhere', {}, { tone: 'danger', confirm: 'Sign out of every browser?' }) : '')),
-    row('WhatsApp', 'Chat with Waldo on WhatsApp. Needs a Meta WhatsApp Business number and token.', chip('Not built yet', 'muted'), ''),
-    row('Phone number and OTP sign-in', 'Sign in with your phone number and a one-time code instead of a Telegram link.', chip('Not built yet', 'muted'), ''),
+    row('WhatsApp', 'The channel route exists, but this page cannot verify a linked WhatsApp number or live delivery. Ask Waldo in chat before relying on it.', chip('Status unknown here', 'provisional'), ''),
+    row('Phone number and OTP sign-in', 'This console currently offers invite-gated email OTP and Telegram one-time links, not phone OTP sign-in.', chip('Not available', 'muted'), ''),
     row('Health data', 'Apple Health / Apple Watch first, then Health Connect, Samsung and WHOOP.', chip('Not built yet', 'muted'), ''),
   ].join('');
 };
@@ -226,7 +226,8 @@ const serviceStatus = (view: ConsoleView) => {
     const granted = healthy.filter((account) => account[key]);
     const label = granted.length ? 'Access granted · read unverified' : 'No active access';
     const accounts = granted.length ? `<div class="sub">${granted.map((account) => esc(account.email)).join(', ')}</div>` : '';
-    return `<div class="service-card"><div class="service-name">${name}</div>${chip(label, granted.length ? 'provisional' : 'muted')}${accounts}<p class="sub">${hint}</p></div>`;
+    const reconnect = view.google.accounts.some((account) => account.error && account[key]);
+    return `<div class="service-card"><div class="service-name">${name}</div>${chip(label, granted.length ? 'provisional' : 'muted')}${reconnect ? ` ${chip('Reconnect needed', 'danger')}` : ''}${accounts}<p class="sub">${hint}</p></div>`;
   }).join('')}</div><p class="note">These are permission states, not proof that a tool succeeded. Recent activity below shows requests Waldo actually ran.</p>`;
 };
 
