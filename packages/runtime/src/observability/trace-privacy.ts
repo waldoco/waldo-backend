@@ -21,6 +21,11 @@ const SAFE_DETAIL_HOPS = new Set([
   'day_plan', 'nightly_memory', 'brief_sweep', 'day_card', 'update_card', 'console_action',
 ]);
 
+// These receipts are strictly enum/count-only, even if a caller supplies a free-form
+// code or detail. Never promote raw claim text or provider payload into a safe hop.
+const MEMORY_EVIDENCE = /^(?:admitted:supported|held:(?:same_day|too_few_claims|untrusted_or_missing)):owner_observation_pattern:1$/;
+const HEALTH_READ = /^(?:present|absent|read_failed)$/;
+
 // Gates one turn-log entry for every sink that consumes it (the DO trace table, the wrangler
 // console JSON line and the OTLP exporter): with capture off, detail survives only for hops
 // whose producers are verified content-free, error text is dropped entirely, and a typed
@@ -29,6 +34,12 @@ const SAFE_DETAIL_HOPS = new Set([
 // same switch).
 export const gateTraceEntry = (entry: TurnLogEntry, captureText: boolean): TurnLogEntry => {
   if (captureText) return entry;
+  if (entry.hop === 'constellation_evidence' || entry.hop === 'health_context') {
+    const detail = entry.hop === 'constellation_evidence'
+      ? (typeof entry.detail === 'string' && MEMORY_EVIDENCE.test(entry.detail) ? entry.detail : undefined)
+      : (typeof entry.code === 'string' && HEALTH_READ.test(entry.code) ? entry.code : undefined);
+    return { ...entry, detail, code: detail, error: undefined, text: undefined, guard: undefined };
+  }
   return {
     ...entry,
     detail: SAFE_DETAIL_HOPS.has(entry.hop) ? entry.detail : entry.code,

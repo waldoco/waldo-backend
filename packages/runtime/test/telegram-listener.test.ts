@@ -145,6 +145,16 @@ describe('TelegramOwnerListener', () => {
     expect(entries).toContainEqual(expect.objectContaining({ hop: 'respond', ok: false, error: 'model down' }));
   });
 
+  it('does not mark a failed provider send as an answered turn', async () => {
+    const entries: Array<{ hop: string; ok: boolean; code?: string }> = [];
+    const api = { ...recorder().api, sendMessage: async () => { throw new Error('provider failed'); } };
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, api, saveOffset: async () => undefined, respond: async () => 'answer', log: (entry) => entries.push(entry) });
+    expect(await listener.handle({ updateId: 42, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' })).toBe('failed');
+    expect(entries).toContainEqual(expect.objectContaining({ hop: 'send', ok: false }));
+    expect(entries.at(-1)).toMatchObject({ hop: 'turn', ok: false });
+    expect(entries).not.toContainEqual(expect.objectContaining({ hop: 'turn', ok: true }));
+  });
+
   it('rejects an invalid owner id', () => {
     const { api } = recorder();
     expect(() => new TelegramOwnerListener({ ownerTelegramId: 0, api, respond: async () => '', saveOffset: async () => undefined })).toThrow('owner id');

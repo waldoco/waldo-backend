@@ -1,3 +1,4 @@
+import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/console-correlation';
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
@@ -32,31 +33,34 @@ const emailForm = (note = '') => page(`<form method="post" action="${CONSOLE_SIG
 // unverified contact data until the account-bound SMS OTP verifies the number.
 const codeForm = (email: string, phone: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}"><p>${note ? esc(note) : `If ${esc(email)} has access, a code is on its way.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form>`);
 
-// With Supabase configured, the console signs in by invite-gated email code and a signed owner cookie picks the owner DO.
+// With Supabase configured, the console signs in by email code (currently open signup) and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
-export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env)): Promise<Response | null> => {
+export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env), requestTrace: string = consoleTrace()): Promise<Response | null> => {
   const owners = env.TELEGRAM_OWNER_DO;
   if (!auth || !owners) return null;
   const url = new URL(request.url);
-  if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return emailForm();
+  const trace = requestTrace;
+  const event = (hop: string, ok: boolean, code: string) => consoleLog(trace, hop, ok, code);
+  const finish = (response: Response) => withConsoleTrace(response, trace);
+  if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'GET') return finish(emailForm());
   if (url.pathname === CONSOLE_SIGNIN_PATH && request.method === 'POST') {
     const form = await request.formData();
     const email = String(form.get('email') ?? '').trim().toLowerCase();
     const phone = normalizePhone(String(form.get('phone') ?? ''));
-    if (!email.includes('@')) return emailForm('Enter your email address.');
-    if (!phone) return emailForm('Enter your phone number with country code, e.g. +91 98765 43210.');
+    if (!email.includes('@')) return finish(emailForm('Enter your email address.'));
+    if (!phone) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.'));
     // OTP bombing guard: per-email and per-IP throttle, fail-closed: a public signup endpoint
     // without its limiter refuses codes rather than spraying OTPs.
     if (!env.RESPONSIBILITY_RATE_LIMITER) {
-      console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'limiter_absent' }));
-      return emailForm('Sign-in is temporarily unavailable. Try again shortly.');
+      event('console_signin', false, 'limiter_absent');
+      return finish(emailForm('Sign-in is temporarily unavailable. Try again shortly.'));
     }
     const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
     const emailOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-signin:${email}` })).success;
     const ipOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-signin-ip:${ip}` })).success;
     if (!emailOk || !ipOk) {
-      console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'rate_limited' }));
-      return emailForm('Too many attempts. Wait a minute and try again.');
+      event('console_signin', false, 'rate_limited');
+      return finish(emailForm('Too many attempts. Wait a minute and try again.'));
     }
     const address = email.trim().toLowerCase();
     let admitted = false;
@@ -67,32 +71,32 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       admitted = false;
     }
     if (!admitted) {
-      console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'throttled' }));
-      return emailForm('Too many attempts. Try again in a few minutes.');
+      event('console_signin', false, 'throttled');
+      return finish(emailForm('Too many attempts. Try again in a few minutes.'));
     }
     const sent = await auth.sendCode(email);
-    if (!sent) console.log(JSON.stringify({ hop: 'console_signin', ok: false, detail: 'not_allowed' }));
-    return codeForm(email, phone);
+    event('console_signin', sent, sent ? 'sent' : 'not_allowed');
+    return finish(codeForm(email, phone));
   }
   if (url.pathname === CONSOLE_VERIFY_PATH && request.method === 'POST') {
     const form = await request.formData();
     const email = String(form.get('email') ?? '');
     const phone = normalizePhone(String(form.get('phone') ?? ''));
-    if (!phone) return emailForm('Enter your phone number with country code, e.g. +91 98765 43210.');
+    if (!phone) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.'));
     // A verification code is guessable, so verify attempts are throttled like code sends,
     // fail-closed: without the limiter this public endpoint refuses rather than allowing
     // unlimited guesses.
     if (!env.RESPONSIBILITY_RATE_LIMITER) {
-      console.log(JSON.stringify({ hop: 'console_verify', ok: false, detail: 'limiter_absent' }));
-      return codeForm(email, phone, 'Sign-in is temporarily unavailable. Try again shortly.');
+      event('console_verify', false, 'limiter_absent');
+      return finish(codeForm(email, phone, 'Sign-in is temporarily unavailable. Try again shortly.'));
     }
     const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
     const address = email.trim().toLowerCase();
     const emailOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-verify:${address}` })).success;
     const ipOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-verify-ip:${ip}` })).success;
     if (!emailOk || !ipOk) {
-      console.log(JSON.stringify({ hop: 'console_verify', ok: false, detail: 'rate_limited' }));
-      return codeForm(email, phone, 'Too many attempts. Wait a minute and try again.');
+      event('console_verify', false, 'rate_limited');
+      return finish(codeForm(email, phone, 'Too many attempts. Wait a minute and try again.'));
     }
     let admitted = false;
     try {
@@ -102,20 +106,31 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       admitted = false;
     }
     if (!admitted) {
-      console.log(JSON.stringify({ hop: 'console_verify', ok: false, detail: 'throttled' }));
-      return codeForm(email, phone, 'Too many attempts. Try again in a few minutes.');
+      event('console_verify', false, 'throttled');
+      return finish(codeForm(email, phone, 'Too many attempts. Try again in a few minutes.'));
     }
     const doName = await auth.verify(email, String(form.get('code') ?? ''), phone);
-    if (!doName) return codeForm(email, phone, 'That code did not work. Try again.');
+    if (!doName) {
+      event('console_verify', false, 'invalid');
+      return finish(codeForm(email, phone, 'That code did not work. Try again.'));
+    }
     const grant = await owners.get(owners.idFromName(doName))
       .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName } });
+    if (!grant.ok) {
+      event('console_verify', false, 'grant_failed');
+      return finish(codeForm(email, phone, 'Sign-in is having trouble. Try again in a moment.'));
+    }
     const ownerCookieValue = await auth.ownerCookie(doName);
-    if (ownerCookieValue === null) return codeForm(email, phone, 'Sign-in is having trouble. Try again in a moment.');
+    if (ownerCookieValue === null) {
+      event('console_verify', false, 'session_unavailable');
+      return finish(codeForm(email, phone, 'Sign-in is having trouble. Try again in a moment.'));
+    }
     const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
     const headers = new Headers({ location: CONSOLE_PATH });
     headers.append('set-cookie', `${CONSOLE_COOKIE}=${await grant.text()}; ${cookie}`);
     headers.append('set-cookie', `${OWNER_COOKIE}=${ownerCookieValue}; ${cookie}`);
-    return new Response(null, { status: 303, headers });
+    event('console_verify', true, 'signed_in');
+    return finish(new Response(null, { status: 303, headers }));
   }
   // D1: sign-out-everywhere. Drops every server-side session, so all live cookies - including
   // this one - die at their next validation, then clears the cookies on this browser too.
@@ -126,19 +141,31 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     headers.append('set-cookie', `${CONSOLE_COOKIE}=; ${clear}`);
     headers.append('set-cookie', `${OWNER_COOKIE}=; ${clear}`);
     if (doName) await auth.signOutAll(doName);
-    return new Response(null, { status: 303, headers });
+    event('console_route', true, 'signed_out_all');
+    return finish(new Response(null, { status: 303, headers }));
   }
   // The Telegram one-time console link (GET /console?t=... and its form POST back to /console)
   // belongs to the owner DO's ticket sign-in, handled by the caller's next console branch. The
   // email-code console must not swallow it, or the bot's /console links 303 here and never redeem.
-  if (url.pathname === CONSOLE_PATH && (url.searchParams.get('t') !== null || request.method === 'POST')) return null;
+  if (url.pathname === CONSOLE_PATH && (url.searchParams.get('t') !== null || request.method === 'POST')) {
+    event('console_route', true, 'ticket_passthrough');
+    return null;
+  }
   // A request carrying the DO console cookie belongs to the ticket session: the owner DO
   // validates it (invalid -> its own 401). Redirecting here would orphan a valid ticket
   // session - redeemed, then every page 303s to the email form (staging receipt 2026-09-28).
-  if ((request.headers.get('cookie') ?? '').includes(`${CONSOLE_COOKIE}=`)) return null;
+  if ((request.headers.get('cookie') ?? '').includes(`${CONSOLE_COOKIE}=`)) {
+    event('console_route', true, 'session_passthrough');
+    return null;
+  }
   const doName = await auth.readOwnerCookie(request);
-  if (!doName) return new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } });
+  if (!doName) {
+    event('console_route', false, 'no_owner_cookie');
+    return finish(new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } }));
+  }
   const forwarded = new Request(request);
   forwarded.headers.set('x-waldo-do-name', doName);
-  return owners.get(owners.idFromName(doName)).fetch(forwarded);
+  const response = await owners.get(owners.idFromName(doName)).fetch(forwarded);
+  event('console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+  return finish(response);
 };

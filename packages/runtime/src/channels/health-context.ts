@@ -202,26 +202,30 @@ export const toContextHealthMaterial = (
 
 export type HealthContextBook = Readonly<{
   linked(): boolean;
-  latest(): Promise<ContextHealthMaterial | null>;
+  latest(trace?: string): Promise<ContextHealthMaterial | null>;
 }>;
 
 export const healthContextBook = (
   call: SignedCall | null,
   doName: string | null,
   clock: OwnerClock,
-  onReadError?: (error: unknown) => void,
+  onReadError?: (error: unknown, trace?: string) => void,
+  onReadSuccess?: (present: boolean, trace?: string) => void,
 ): HealthContextBook => ({
   linked: () => call !== null && doName !== null,
-  async latest() {
+  async latest(trace) {
     if (!call || !doName) return null;
     let row: unknown;
     try {
       row = await call('health_context_read', `healthctx.read.${doName}`, { p_do_name: doName });
     } catch (error) {
-      onReadError?.(error);
+      onReadError?.(error, trace);
       return null;
     }
-    if (row === null || typeof row !== 'object') return null;
-    return toContextHealthMaterial(row as HealthContextRow, clock, onReadError);
+    if (row === null || typeof row !== 'object') { onReadSuccess?.(false, trace); return null; }
+    let invalid = false;
+    const material = toContextHealthMaterial(row as HealthContextRow, clock, (error) => { invalid = true; onReadError?.(error, trace); });
+    if (!invalid) onReadSuccess?.(material !== null, trace);
+    return material;
   },
 });

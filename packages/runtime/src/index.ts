@@ -19,6 +19,7 @@ import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { ownerDirectory } from './identity/owner-directory';
 import { handleConsole } from './channels/console-signin';
+import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
 import {
@@ -136,8 +137,10 @@ export default {
     if (new URL(request.url).pathname === PROBE_TURN_PATH) {
       return handleProbeTurn(request, env);
     }
-    if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) {
-      const signedIn = await handleConsole(request, env);
+    const consoleRequest = new URL(request.url).pathname.startsWith(CONSOLE_PATH);
+    const consoleRequestTrace = consoleRequest ? consoleTrace() : null;
+    if (consoleRequestTrace) {
+      const signedIn = await handleConsole(request, env, undefined, consoleRequestTrace);
       if (signedIn) return signedIn;
     }
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH) && env.TELEGRAM_OWNER_DO && env.WALDO_OWNER_TELEGRAM_ID) {
@@ -149,7 +152,12 @@ export default {
       // no fallback to a possibly-wrong DO beyond the designed no-directory single-owner path.
       const ownerRoute = await ownerDirectory(env).byPresence('telegram', env.WALDO_OWNER_TELEGRAM_ID);
       const consoleDoName = ownerRoute?.doName ?? env.WALDO_OWNER_TELEGRAM_ID;
-      return env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(consoleDoName)).fetch(request);
+      const response = await env.TELEGRAM_OWNER_DO.get(env.TELEGRAM_OWNER_DO.idFromName(consoleDoName)).fetch(request);
+      if (consoleRequestTrace) {
+        consoleLog(consoleRequestTrace, 'console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+        return withConsoleTrace(response, consoleRequestTrace);
+      }
+      return response;
     }
     if (new URL(request.url).pathname.startsWith(CONNECT_LINK_PREFIX)) {
       return handleConnectTicket(request, env);

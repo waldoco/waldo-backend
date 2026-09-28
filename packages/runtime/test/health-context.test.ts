@@ -158,6 +158,15 @@ describe('healthContextBook', () => {
     expect(calls[0]).toEqual({ fn: 'health_context_read', message: 'healthctx.read.do-health', args: { p_do_name: 'do-health' } });
   });
 
+  it('emits present/absent success receipt on a same-trace read, never private values', async () => {
+    const successes: unknown[] = [];
+    const present = healthContextBook(call, 'do-health', clock, undefined, (value, trace) => successes.push({ value, trace }));
+    await present.latest('tg-test');
+    const absent = healthContextBook(async () => null, 'do-health', clock, undefined, (value, trace) => successes.push({ value, trace }));
+    await absent.latest('tg-empty');
+    expect(successes).toEqual([{ value: true, trace: 'tg-test' }, { value: false, trace: 'tg-empty' }]);
+  });
+
   it('reads null when unlinked, without calling', async () => {
     const before = calls.length;
     expect(healthContextBook(null, 'do-health', clock).linked()).toBe(false);
