@@ -1137,17 +1137,24 @@ describe('Scribe sanitiser', () => {
     expect(inspect('hrv%E0%A4%A', 'memory_block')).toMatchObject({ ok: true });
     for (const payload of [thirdPass, btoa('x'.repeat(3_000))]) {
       expect(() => inspect(payload, 'memory_block')).not.toThrow();
-      expect(inspect(payload, 'memory_block')).toEqual({
-        ok: false,
-        check: 'size_cap',
-        reason: 'invalid_payload',
-      });
     }
-    expect(inspect('\\u0061'.repeat(160) + '%61'.repeat(160), 'memory_block')).toEqual({
+    // Third-pass nesting is real obfuscation: denied by the recursion guard at any size.
+    expect(inspect(thirdPass, 'memory_block')).toEqual({
       ok: false,
       check: 'size_cap',
       reason: 'invalid_payload',
     });
+    // Over-cap content is denied by the destination size cap with its truthful reason; the
+    // uniform 4x decode budget (2026-09-28 RCA) no longer masks it as invalid_payload.
+    expect(inspect(btoa('x'.repeat(3_000)), 'memory_block')).toEqual({
+      ok: false,
+      check: 'size_cap',
+      reason: 'oversize',
+    });
+    // Two-layer encoding fully decoded and scanned within the two-pass bound: passes (the
+    // old sub-4x budget denied this same content only above a size threshold - the 2026-09-28
+    // brief-card false-positive class). Only genuinely deeper nesting fails closed.
+    expect(inspect('\\u0061'.repeat(160) + '%61'.repeat(160), 'memory_block')).toMatchObject({ ok: true });
     expect(inspect('%61'.repeat(2_048), 'memory_block')).toEqual({
       ok: false,
       check: 'size_cap',
@@ -1396,6 +1403,27 @@ describe('issue #152 - malformed percent escapes are plain text, not a payload d
     const result = inspect([{ role: 'user', content: `check this ${outer}` }]);
     expect(result.ok).toBe(false);
     expect((result as { reason?: string }).reason).toBe('canary_leak');
+  });
+
+  it('uniform decode budget: large prompt with nested encoding passes; nested canary still denied', () => {
+    // Live RCA 2026-09-28 (brief card internal_context invalid_payload, 08:46 + 14:01): the
+    // old min(max_chars, 4x) budget shrank below 4x for strings over max_chars/4, so a legal
+    // 20k card prompt with ordinary nested encoding generated two full-length decode views
+    // and died on a shape false positive. The uniform 4x budget passes it; the scan itself
+    // is unchanged, so a nested-encoded canary at the same size is still caught.
+    const filler = 'ordinary calendar and conversation text. '.repeat(500); // ~20k chars
+    const benignNested = btoa(btoa('see you at the venue'));
+    expect(inspect([{ role: 'user', content: `${filler} token ${benignNested}` }])).toMatchObject({ ok: true });
+    const canaryNested = btoa(btoa(`token ${CANARIES[0]}`));
+    const denied = inspect([{ role: 'user', content: `${filler} token ${canaryNested}` }]);
+    expect(denied).toMatchObject({ ok: false, reason: 'canary_leak' });
+  });
+
+  it('still denies encoding nested beyond the two-pass bound at any size', () => {
+    const triple = btoa(btoa(btoa('see you at the venue')));
+    const filler = 'ordinary calendar and conversation text. '.repeat(500);
+    const result = inspect([{ role: 'user', content: `${filler} token ${triple}` }]);
+    expect(result).toMatchObject({ ok: false, reason: 'invalid_payload' });
   });
 });
 

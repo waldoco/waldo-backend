@@ -259,13 +259,20 @@ function canDecodeAgain(text: string): boolean {
   return false;
 }
 
-function decodedViews(text: string, destination: SanitiseDestination): DecodeBundle {
+function decodedViews(text: string): DecodeBundle {
   const views = [text];
   const known = new Set(views);
-  const maxDecodedChars = Math.min(
-    SANITISE_DESTINATION_POLICIES[destination].max_chars,
-    Math.max(text.length, 1) * 4,
-  );
+  // Uniform 4x decode budget (live RCA 2026-09-28: brief card failed internal_context
+  // invalid_payload at 08:46 and 14:01). The old min(destination.max_chars, 4x) formula let
+  // the budget SHRINK below 4x for strings over max_chars/4, so a legal 17k+ card prompt
+  // carrying ordinary nested encodings (a redirect-wrapped URL, an encoded token) generated
+  // two full-length decode views and died on a shape false positive - while the identical
+  // content in a shorter string passed. The payload itself is already capped at
+  // destination.max_chars by applyDestinationPolicy, so total decode work stays bounded at
+  // 4x that cap either way; the recursion defense (MAX_DECODE_PASSES + canDecodeAgain) is
+  // unchanged and still denies genuinely deeper nesting. The context-composer fence scan
+  // (source-sanitisation.ts) has always used this uniform 4x form.
+  const maxDecodedChars = Math.max(text.length, 1) * 4;
   let frontier = [text];
   let decodedChars = 0;
 
@@ -300,7 +307,7 @@ function hasDecodedHealthIndicator(
   text: string,
   destination: SanitiseDestination,
 ): boolean {
-  const decoded = decodedViews(text, destination);
+  const decoded = decodedViews(text);
   return decoded.views.some(isHealthIndicatorText);
 }
 
@@ -316,7 +323,7 @@ function visitStrings(
     if (!current) continue;
     const { value } = current;
     if (typeof value === 'string') {
-      const decoded = decodedViews(value, destination);
+      const decoded = decodedViews(value);
       if (decoded.invalid) return { invalid: true, matched: false };
       if (decoded.views.some((view) => visitor(view, current.key))) {
         return { invalid: false, matched: true };
@@ -386,7 +393,7 @@ function containsStructuredSecret(
       continue;
     }
     for (const [key, item] of Object.entries(value)) {
-      const keyViews = decodedViews(key, destination);
+      const keyViews = decodedViews(key);
       if (
         typeof item === 'string' &&
         item.trim().length >= 12 &&
@@ -477,8 +484,8 @@ function subtreeHealthFlags(
       indicator,
       strongIndicator: indicator,
       measurement: false,
-      numeric: decodedViews(value, destination).views.some(isNumeric) || numericFromBase64(value) !== undefined,
-      unit: decodedViews(value, destination).views.some((view) => HEALTH_UNIT_VALUE.test(view.trim())),
+      numeric: decodedViews(value).views.some(isNumeric) || numericFromBase64(value) !== undefined,
+      unit: decodedViews(value).views.some((view) => HEALTH_UNIT_VALUE.test(view.trim())),
     };
   }
   if (typeof value !== 'object' || value === null) {
@@ -674,7 +681,7 @@ function isShortUnpaddedBase64Ipv6(text: string): boolean {
 }
 
 function encodedPiiKind(text: string, destination: SanitiseDestination): RedactionKind | undefined {
-  const decoded = decodedViews(text, destination);
+  const decoded = decodedViews(text);
   if (decoded.invalid) return undefined;
   for (const view of decoded.views.slice(1)) {
     if (matches(PII_PATTERNS.email, view)) return 'email';
@@ -847,7 +854,7 @@ function inspectInstructions(
       instructionCount += Array.from(text.matchAll(global)).length;
       output = output.replace(global, '[REDACTED_INSTRUCTION]');
     }
-    const decoded = decodedViews(output, destination);
+    const decoded = decodedViews(output);
     if (decoded.views.slice(1).some((view) => scoreInjection(view).decision !== 'allow')) {
       instructionCount += 1;
       return '[REDACTED_INSTRUCTION]';
