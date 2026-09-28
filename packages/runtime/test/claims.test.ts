@@ -100,6 +100,22 @@ describe('claims', () => {
     });
   });
 
+  it('a correction cannot create a duplicate active replacement already present', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'old', origin: 'owner' }, AT);
+      const old = store.claims().find((claim) => claim.text === 'Lives in Pune')!;
+      store.add({ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: 'new', origin: 'owner' }, AT);
+      const detail = applyClaimOps(store, ops({ corrections: [
+        { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
+      ], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"actually I am back in Mumbai"', touches_forgotten: false }] }),
+      AT, 'owner, tg-mumbai', undefined, { owner: 'actually I am back in Mumbai' });
+      expect(detail).not.toContain('corrected1');
+      expect(store.claims().filter((claim) => claim.text === 'Lives in Mumbai')).toHaveLength(1);
+      expect(store.claims('superseded')).toEqual([]);
+    });
+  });
+
   it('does not correct without a transaction or on a failed statement', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);

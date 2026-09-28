@@ -136,6 +136,10 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       return transaction(() => {
         const old = sql.exec<Claim>("SELECT * FROM claims WHERE id = ? AND status = 'active'", id).one();
         if (!old) return false;
+        // A prior independent mention may already have created the replacement. Do not
+        // retire one row only to insert a second active copy of that same fact.
+        if (sql.exec<Claim>("SELECT * FROM claims WHERE status = 'active' AND id != ?", id).toArray()
+          .some((active) => normalizeForGrounding(active.text) === normalizeForGrounding(claim.text))) return false;
         sql.exec('INSERT INTO claims (kind, text, source, evidence, origin, status, created_at, last_seen_at, source_ref, learned_at, valid_from, supersedes_id, verification_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           claim.kind, claim.text, claim.source, claim.evidence, claim.origin, 'active', at, at, claim.source_ref, at, null, id, 'owner-grounded');
         const retired = sql.exec("UPDATE claims SET status = 'superseded', valid_to = ? WHERE id = ? AND status = 'active'", at, id);
