@@ -236,6 +236,25 @@ describe('owner console', () => {
     expect(unknown).not.toContain('chip">You said this');
   });
 
+  it('shows source reference only as escaped audit hint, never as a provider link', () => {
+    const fresh = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, source_ref: 'owner, tg-123', verification_status: 'owner-grounded' };
+    const legacy = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, id: 44, source_ref: 'https://evil.example/x', verification_status: null };
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [fresh, legacy] }, 'spots');
+    expect(html).toContain('Owner-grounded');
+    expect(html).toContain('Source ID: owner, tg-123');
+    expect(html).toContain('Provenance unverified');
+    expect(html).not.toContain('evil.example');
+    expect(html).not.toContain('href="https://evil.example');
+  });
+
+  it('labels constellation links tentative and lists supporting claim ids', () => {
+    const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'constellation');
+    if (SAMPLE_CONSOLE_VIEW.nodes.length) {
+      expect(html).toContain('Tentative association');
+      expect(html).toContain('supporting spots');
+    }
+  });
+
   it('marks spots grounded only in shared content', () => {
     const untrusted = { ...SAMPLE_CONSOLE_VIEW.spots[0]!, origin: 'untrusted' };
     const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, spots: [untrusted] }, 'spots');

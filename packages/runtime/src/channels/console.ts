@@ -293,13 +293,25 @@ const checklist = (view: ConsoleView) => {
 
 const SOURCE_LABEL: Readonly<Record<string, string>> = { stated: 'You said this', confirmed: 'You confirmed this', inferred: 'Waldo\'s inference' };
 
+// A source pointer is an audit hint, never proof that the note is true. Only the
+// owner-DO source id may become a local episode search link; never emit a guessed
+// provider or cross-origin URL from claim data.
+const spotProvenance = (spot: Claim): string => {
+  const status = spot.verification_status === 'owner-grounded' ? chip('Owner-grounded', 'good')
+    : chip('Provenance unverified', 'provisional');
+  const source = spot.source_ref && /^owner, tg-[\w-]+$/.test(spot.source_ref)
+    ? ` <span>Source ID: ${esc(spot.source_ref)}</span>` : '';
+  const validity = spot.valid_to ? ` <span>Valid until ${esc(day(spot.valid_to))}</span>` : '';
+  return `${status}${source}${validity}`;
+};
+
 const spots = (view: ConsoleView) => view.spots.length === 0 ? empty('No spots yet. Waldo adds them as it learns from your chats.')
-  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. If one is wrong, dismiss it and tell Waldo the correction in chat. Forget removes it from memory; if that cannot finish, the spot stays here for retry.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', spot.source === 'inferred' || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('')}`;
+  : `<div class="memory-guide">A spot is a claim Waldo holds. Its evidence note is not a link to the original message. Source IDs are audit hints, not proof of current truth. If one is wrong, dismiss it and tell Waldo the correction in chat. Forget removes it from memory; if that cannot finish, the spot stays here for retry.</div>${view.spots.map((spot) => `<div class="row spot"><div class="main"><div class="line">${esc(spot.text)}</div><div class="sub">${chip(spot.kind)} ${chip(SOURCE_LABEL[spot.source] ?? 'Source unverified', spot.source === 'inferred' || !SOURCE_LABEL[spot.source] ? 'provisional' : 'neutral')}${spot.origin === 'untrusted' ? ` ${chip('from shared content', 'provisional')}` : ''} ${spotProvenance(spot)} <span>Seen ${spot.seen_count}×, last ${esc(day(spot.last_seen_at))}</span></div><div class="evidence">Evidence note: ${esc(spot.evidence)}</div></div><div class="act">${spot.source === 'inferred' ? form(view.csrf, 'spot.confirm', 'That\'s right', { id: String(spot.id) }) : ''}${form(view.csrf, 'spot.dismiss', 'Dismiss', { id: String(spot.id) })}${form(view.csrf, 'spot.forget', 'Forget', { id: String(spot.id) }, { tone: 'danger', confirm: 'Forget this spot for good?' })}</div></div>`).join('')}`;
 
 const constellation = (view: ConsoleView) => {
   if (view.nodes.length === 0) return empty('No constellation yet. Each night Waldo turns repeated spots into lasting patterns.');
   const label = new Map(view.nodes.map((node) => [node.id, node.label]));
-  const nodes = view.nodes.map((node) => `<div class="row node"><div class="main"><div class="line"><b>${esc(node.label)}</b> ${chip(node.domain)}${node.status === 'stale' ? ` ${chip('stale', 'muted')}` : ''}</div><div class="sub">${esc(node.summary)} · confirmed ${esc(day(node.last_confirmed))}</div></div><div class="strength">${meter(node.strength)}</div><div class="act">${form(view.csrf, 'node.forget', 'Forget', { id: String(node.id) }, { tone: 'danger', confirm: 'Forget this pattern and its links?' })}</div></div>`).join('');
+  const nodes = view.nodes.map((node) => `<div class="row node"><div class="main"><div class="line"><b>${esc(node.label)}</b> ${chip(node.domain)} ${chip('Tentative association', 'provisional')}${node.status === 'stale' ? ` ${chip('stale', 'muted')}` : ''}</div><div class="sub">${esc(node.summary)} · confirmed ${esc(day(node.last_confirmed))} · supporting spots ${esc(node.supporting_spots)}</div></div><div class="strength">${meter(node.strength)}</div><div class="act">${form(view.csrf, 'node.forget', 'Forget', { id: String(node.id) }, { tone: 'danger', confirm: 'Forget this pattern and its links?' })}</div></div>`).join('');
   const edges = view.edges.length === 0 ? '' : `<h3>Links</h3>${view.edges.map((edge) => `<div class="row edge"><div class="main"><b>${esc(label.get(edge.from_id) ?? `#${edge.from_id}`)}</b> <span class="rel">${esc(edge.relation)}</span> <b>${esc(label.get(edge.to_id) ?? `#${edge.to_id}`)}</b><div class="sub">${edge.evidence_count} supporting observations</div></div><div class="strength">${meter(edge.strength)}</div></div>`).join('')}`;
   return nodes + edges;
 };
