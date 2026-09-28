@@ -21,6 +21,14 @@ describe('messagingSystemPrompt', () => {
     expect(MESSAGING_BEHAVIOR).toContain('point them to a physician');
   });
 
+  it('keeps calendar, inbox, and due-reminder copy lean without inventing facts', () => {
+    expect(MESSAGING_BEHAVIOR).toContain('end after the last event instead of repeating');
+    expect(MESSAGING_BEHAVIOR).toContain('send just the reminder');
+    expect(MESSAGING_BEHAVIOR).toContain('A due reminder is the message they requested');
+    expect(MESSAGING_BEHAVIOR).toContain('offer to open that message');
+    expect(MESSAGING_BEHAVIOR).toContain('Do not invent a sender, subject, urgency');
+  });
+
   it('pins the memory-write rule and the proactive never-list (archive adopt #4; ordering aligned to the post-reply settle, owner-ratified 2026-09-27)', () => {
     expect(MESSAGING_BEHAVIOR).toContain('memory records it automatically right after the exchange');
     expect(MESSAGING_BEHAVIOR).toContain('Never send generic check-ins');

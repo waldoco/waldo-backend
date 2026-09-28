@@ -328,7 +328,7 @@ export const createTelegramResponder = (
       await restored;
       await settling;
       pending = undefined;
-      return converse(id, chatId, `[Reminder due now, set earlier by the owner: "${note}"] Send them this reminder now, in your own words.`, time);
+      return converse(id, chatId, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time);
     },
     async prompt(id, chatId, said, time) {
       await restored;
