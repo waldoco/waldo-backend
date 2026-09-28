@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
+import { b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -214,6 +214,16 @@ describe('gmail send rail bytes', () => {
     const sendCall = calls.find((c) => c.url.includes('/messages/send'))!;
     expect(JSON.parse(String(sendCall.init!.body))).toEqual({ raw: 'xJ7', threadId: 't1' });
     expect(await client.findSentByMessageId('<m1@waldo-send>')).toBe(true);
+    // Regression: the approved bytes are base64url MIME (google 400 'Base64 decoding failed'
+    // when unencoded MIME text crosses messages/send). The tool binds exactly these bytes.
+    const wire = b64url(new TextEncoder().encode(buildMime({ to: ['a@x.test'], subject: 'Hi', body: 'b', messageId: '<m2@waldo-send>' })));
+    expect(await client.sendRaw(wire)).toEqual({ message_id: 'sent1', thread_id: 't1' });
+    const wireCall = calls.filter((c) => c.url.includes('/messages/send')).at(-1)!;
+    const posted = JSON.parse(String(wireCall.init!.body)) as { raw: string };
+    expect(posted.raw).toBe(wire);
+    const decoded = new TextDecoder().decode(Uint8Array.from(atob(wire.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)));
+    expect(decoded).toContain('Subject: Hi');
+    expect(decoded).toContain('Message-ID: <m2@waldo-send>');
     const findCall = calls.find((c) => c.url.includes('/messages?'))!;
     expect(decodeURIComponent(findCall.url.replace(/\+/g, ' '))).toContain('in:sent rfc822msgid:m1@waldo-send');
   });

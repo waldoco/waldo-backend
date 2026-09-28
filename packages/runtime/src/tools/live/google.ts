@@ -3,7 +3,7 @@ import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { b64url, buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import type { EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -191,10 +191,13 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const gate = await withGoogle(google, 'mail', async () => null);
       if (!gate.ok) return { ...gate, source_taint: null };
       const message_id = `<${crypto.randomUUID()}@waldo-send>`;
-      const raw = buildMime({
+      // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME.
+      // (buildMime returns the MIME TEXT; messages/send rejects it unencoded - google 400
+      // "Base64 decoding failed" on the approved send path.)
+      const raw = b64url(new TextEncoder().encode(buildMime({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,
-      });
+      })));
       const proposal_id = await desk.proposeSendEmail({
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown,
