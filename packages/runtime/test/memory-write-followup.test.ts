@@ -21,6 +21,7 @@ const { createTelegramResponder } = await import('../src/channels/telegram-turn'
 
 const fakeMemory = {
   claims: () => [],
+  recall: () => [],
   nodes: () => [],
   edges: () => [],
   barriers: () => [],
