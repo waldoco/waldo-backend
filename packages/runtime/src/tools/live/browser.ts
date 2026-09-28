@@ -10,6 +10,31 @@ import type { BrowserSubmitProposal } from '../../channels/approvals';
 const BASE = 'https://api.stagehand.browserbase.com';
 const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
 
+
+// Failure bodies from the browser service carry the actionable reason (e.g. schema rejections).
+// Surface a short sanitized slice - never keys, project ids or session ids.
+const failDetail = async (res: Response, secrets: readonly (string | undefined | null)[]): Promise<string> => {
+  try {
+    const text = await res.text();
+    let msg = text;
+    try {
+      const parsed = JSON.parse(text) as { message?: unknown; error?: unknown };
+      const m = parsed.message ?? parsed.error;
+      if (typeof m === 'string') msg = m;
+      else if (m !== undefined) msg = JSON.stringify(m);
+    } catch { /* plain text body */ }
+    let clean = msg.replace(/[\x00-\x1f\x7f]+/g, ' ').trim();
+    for (const s of secrets) {
+      if (s && s.length > 3) clean = clean.split(s).join('[redacted]');
+    }
+    clean = clean.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '[session]');
+    if (clean.length > 200) clean = `${clean.slice(0, 200)}...`;
+    return clean ? ` - ${clean}` : '';
+  } catch {
+    return '';
+  }
+};
+
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
 export const browsePageHandler = (
@@ -32,18 +57,18 @@ export const browsePageHandler = (
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
       if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.` };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})` };
+      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})${await failDetail(started, [apiKey, projectId])}` };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
       if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.' };
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
-      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})` };
+      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})${await failDetail(navigated, [apiKey, projectId, session])}` };
 
       const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction, options: { model, timeout: 30000 } });
       if (extracted.status === 401 || extracted.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${extracted.status}) - it needs replacing.` };
-      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})` };
+      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})${await failDetail(extracted, [apiKey, projectId, session])}` };
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
       if (!extractBody.success) return { ok: false, code: 'transient', error: 'Extraction was rejected by the browser service.' };
       return { ok: true, data: { url, data: extractBody.data?.result ?? null }, source_taint: 'external' };
@@ -98,19 +123,19 @@ export const browseActHandler = (
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
       if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.` };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})` };
+      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})${await failDetail(started, [apiKey, projectId])}` };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
       if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.' };
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
-      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})` };
+      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})${await failDetail(navigated, [apiKey, projectId, session])}` };
 
       let stopped: BrowseActResult['stopped'] = 'cap_reached';
       let blocked: string | undefined;
       for (let step = 0; step < max_actions; step += 1) {
         const observed = await call(`/v1/sessions/${session}/observe`, { instruction: task, options: { model, timeout: 30000 } });
-        if (!observed.ok) return { ok: false, code: 'transient', error: `Observe failed (HTTP ${observed.status})` };
+        if (!observed.ok) return { ok: false, code: 'transient', error: `Observe failed (HTTP ${observed.status})${await failDetail(observed, [apiKey, projectId, session])}` };
         const observeBody = (await observed.json()) as { success?: boolean; data?: { result?: BrowserAction[] } };
         const action = observeBody.data?.result?.[0];
         if (!observeBody.success || !action) { stopped = step === 0 ? 'no_action_found' : 'task_done'; break; }
@@ -130,7 +155,7 @@ export const browseActHandler = (
           stopped = 'irreversible_blocked'; blocked = action.description; break;
         }
         const acted = await call(`/v1/sessions/${session}/act`, { input: action, options: { model, timeout: 30000 } });
-        if (!acted.ok) return { ok: false, code: 'transient', error: `Act failed (HTTP ${acted.status})` };
+        if (!acted.ok) return { ok: false, code: 'transient', error: `Act failed (HTTP ${acted.status})${await failDetail(acted, [apiKey, projectId, session])}` };
         const actBody = (await acted.json()) as { success?: boolean };
         if (!actBody.success) { stopped = 'no_action_found'; break; }
         taken.push(action.description);
@@ -138,7 +163,7 @@ export const browseActHandler = (
       }
 
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction: 'Summarise what this page now shows, relative to the task.', options: { model, timeout: 30000 } });
-      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})` };
+      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})${await failDetail(extracted, [apiKey, projectId, session])}` };
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
       const data: BrowseActResult = {
         url, actions_taken: taken, stopped,
