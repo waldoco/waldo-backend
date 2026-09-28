@@ -29,7 +29,7 @@ describe('owner files', () => {
   });
 
   it('lists files in the console with open and remove controls', () => {
-    const page = renderConsole(SAMPLE_CONSOLE_VIEW);
+    const page = renderConsole(SAMPLE_CONSOLE_VIEW, 'files');
     expect(page).toContain('id="files"');
     expect(page).toContain('href="/console/file?id=2"');
     expect(page).toContain('value="file.remove"');
