@@ -94,6 +94,20 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   const describeEmail = (p: EmailSendProposal) => `Send email to ${p.to.join(', ')}: "${p.subject}"`;
   const describeMessage = (p: MessageSendProposal) => `Send this on ${p.channel}: "${p.content.length > 120 ? `${p.content.slice(0, 117)}...` : p.content}"`;
   const describeMcp = (p: McpCallProposal) => `Run ${p.tool} on the ${p.server} MCP server`;
+
+  // The approval card IS the owner's review of a send. Telegram caps a message at 4096 chars:
+  // when the full content fits, the card shows every recipient + the complete body and carries
+  // the Send it / Modify buttons; when it cannot fit, the card says so and carries NO approve
+  // button, because approving would send content the owner never saw.
+  const REVIEW_BUDGET = 3800;
+  const reviewEmail = (p: EmailSendProposal) =>
+    [`To: ${p.to.join(', ')}`,
+      ...(p.cc?.length ? [`Cc: ${p.cc.join(', ')}`] : []),
+      ...(p.bcc?.length ? [`Bcc: ${p.bcc.join(', ')}`] : []),
+      `Subject: ${p.subject}`, '', p.body].join('\n');
+  const reviewMessage = (p: MessageSendProposal) => p.content;
+  const unreviewable = (kind: string, summary: string) =>
+    `${kind} ${summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Tap Not now and ask me to show you the full text first.`;
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
@@ -262,21 +276,27 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await say(`Send this email? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      const text = `Send this email? ${reviewEmail(payload)}`;
+      await say(text.length <= REVIEW_BUDGET ? text : unreviewable('Send this email?', summary),
+        text.length <= REVIEW_BUDGET ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
     async proposeSendMessage(payload) {
       const id = `p${deps.newId()}`;
       const summary = describeMessage(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'message_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await say(`Send this message? ${summary}`, [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]]);
+      const text = `Send this message on ${payload.channel}?\n\n${reviewMessage(payload)}`;
+      await say(text.length <= REVIEW_BUDGET ? text : unreviewable('Send this message?', summary),
+        text.length <= REVIEW_BUDGET ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
     async proposeMcpCall(payload) {
       const id = `p${deps.newId()}`;
       const summary = describeMcp(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await say(`Run this MCP tool? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
+      const text = `Run this MCP tool? ${summary}\n\nArgs:\n${JSON.stringify(payload.args, null, 2)}`;
+      await say(text.length <= REVIEW_BUDGET ? text : unreviewable('Run this MCP tool?', summary),
+        text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
     async propose(p) {

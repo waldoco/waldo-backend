@@ -73,7 +73,7 @@ describe('approval desk', () => {
         sendMessage: async (p) => { delivered.push(`${p.channel}:${p.content}`); },
       });
       const id = await desk.proposeSendMessage({ channel: 'telegram', content: 'Running 10 late', idempotency_key: 'k'.repeat(64) });
-      expect(sent[0]!.body.text).toBe('Send this message? Send this on telegram: "Running 10 late"');
+      expect(sent[0]!.body.text).toBe('Send this message on telegram?\n\nRunning 10 late');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`e:${id}`);
@@ -129,7 +129,7 @@ describe('approval desk', () => {
         mcpCall: async (p) => { executed.push(`${p.server}.${p.tool}`); return 'Result (external content, bounded): {"ok":true} (protocol 2025-06-18)'; },
       });
       const id = await desk.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: { n: 1 } });
-      expect(sent[0]!.body.text).toBe('Run this MCP tool? Run merge_pr on the github MCP server');
+      expect(sent[0]!.body.text).toBe('Run this MCP tool? Run merge_pr on the github MCP server\n\nArgs:\n{\n  "n": 1\n}');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`s:${id}`);
@@ -342,11 +342,45 @@ describe('approval desk - email_send rail', () => {
     return { desk, id, sent, sentRaw, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
+  it('the card is the full review: cc/bcc and the complete body are shown verbatim', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-review'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => '7', now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      await desk.proposeSendEmail({
+        to: ['a@x.test'], cc: ['c@x.test'], bcc: ['b@x.test'], subject: 'Quarterly', body: 'Line one\nLine two', message_id: '<m2@waldo-send>', raw: 'raw', digest: 'd',
+      });
+      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nCc: c@x.test\nBcc: b@x.test\nSubject: Quarterly\n\nLine one\nLine two');
+    });
+  });
+
+  it('over-budget content is not approvable from the card: no Send it button, explicit notice', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-long'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => '8', now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      await desk.proposeSendEmail({
+        to: ['a@x.test'], subject: 'Long', body: 'x'.repeat(4000), message_id: '<m3@waldo-send>', raw: 'raw', digest: 'd',
+      });
+      const text = String(sent[0]!.body.text);
+      expect(text).toContain("can't be approved here");
+      const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
+      expect(keyboard).not.toContain('a:p8');
+      expect(keyboard).toContain('s:p8');
+    });
+  });
+
   it('proposes with Send it / Modify / Not now, sends the exact stored bytes on approve, never undoes, expires', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-1'));
     await runInDurableObject(stub, async (_i, state) => {
       const { desk, id, sent, sentRaw, tick } = await setup(state, {});
-      expect(sent[0]!.body.text).toBe('Send this email? Send email to a@x.test: "Hello"');
+      expect(sent[0]!.body.text).toBe('Send this email? To: a@x.test\nSubject: Hello\n\nBody text');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`e:${id}`);
