@@ -129,7 +129,7 @@ describe('approval desk', () => {
         mcpCall: async (p) => { executed.push(`${p.server}.${p.tool}`); return 'Result (external content, bounded): {"ok":true} (protocol 2025-06-18)'; },
       });
       const id = await desk.proposeMcpCall({ server: 'github', tool: 'merge_pr', args: { n: 1 } });
-      expect(sent[0]!.body.text).toBe('Run this MCP tool? Run merge_pr on the github MCP server');
+      expect(sent[0]!.body.text).toBe('Run this MCP tool? Run merge_pr on the github MCP server\n\nArgs:\n{\n  "n": 1\n}');
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).toContain(`a:${id}`);
       expect(keyboard).toContain(`s:${id}`);

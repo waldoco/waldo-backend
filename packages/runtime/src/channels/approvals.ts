@@ -294,7 +294,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const id = `p${deps.newId()}`;
       const summary = describeMcp(payload);
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'mcp_call', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
-      await say(`Run this MCP tool? ${summary}`, [['Do it', `a:${id}`], ['Not now', `s:${id}`]]);
+      const text = `Run this MCP tool? ${summary}\n\nArgs:\n${JSON.stringify(payload.args, null, 2)}`;
+      await say(text.length <= REVIEW_BUDGET ? text : unreviewable('Run this MCP tool?', summary),
+        text.length <= REVIEW_BUDGET ? [['Do it', `a:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
       return id;
     },
     async propose(p) {
