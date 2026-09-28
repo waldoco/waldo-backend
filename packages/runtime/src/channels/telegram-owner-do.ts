@@ -21,6 +21,7 @@ import { egressGuardedCaller } from './egress-guard';
 import { parseEgressAllowlistEnv } from '../hooks/egress-policy';
 import { toolOutputLedger , redactToolOutputLedger } from '../conversation/tool-output-ledger';
 import { armNightly, backfillEpisodes, episodeIndex, indexedConversationStore, transcript } from './episodes';
+import { nightlyDiagnostic } from './nightly-diagnostic';
 import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
@@ -262,6 +263,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401 });
+    // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
+    if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
+      return Response.json(await nightlyDiagnostic(this.ctx.storage), { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
     const { ready, view, act, googleConnectUrl, openFile, desk } = this.setup();
     await ready;
     const back = (notice: string) => new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${notice}` } });
