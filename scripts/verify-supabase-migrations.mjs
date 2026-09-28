@@ -28,6 +28,7 @@ const expectedMigrations = [
   '20260926110000_waldo_proxy_idempotency.sql',
   '20260926120000_waldo_connect_session_ttl.sql',
   '20260927000000_waldo_health_logs.sql',
+  '20260928130000_waldo_delete_owner_vault_portable.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);
