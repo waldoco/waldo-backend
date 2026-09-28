@@ -26,7 +26,7 @@ select is(waldo.issue_member_invite('root-do','other@test.invalid',repeat('c',64
 select is(waldo.issue_member_invite('root-do','root@test.invalid',repeat('d',64),pg_temp.at(),pg_temp.sig('memberinvite.root-do.root@test.invalid.'||repeat('d',64))),false,'existing owner cannot be re-invited');
 select is(waldo.issue_member_invite('root-do','bad@test.invalid','not-a-hash',pg_temp.at(),pg_temp.sig('memberinvite.root-do.bad@test.invalid.not-a-hash')),false,'non-hash code rejected');
 select is(waldo.signin_allowed('other@test.invalid',pg_temp.at(),pg_temp.sig('signin.other@test.invalid.'||repeat('b',64)),repeat('b',64)),true,'member-issued code admits scoped email');
-select is(jsonb_array_length(waldo.member_invites('root-do',pg_temp.at(),pg_temp.sig('memberinvites.root-do'))),1,'issuer sees only its own invite');
+select is(jsonb_array_length(waldo.member_invites('root-do',pg_temp.at(),pg_temp.sig('memberinvites.root-do'))),2,'issuer sees own admin and member invites');
 select is(jsonb_array_length(waldo.member_invites('ordinary-do',pg_temp.at(),pg_temp.sig('memberinvites.ordinary-do'))),0,'other member sees no root invites');
 select is((waldo.member_invites('root-do',pg_temp.at(),pg_temp.sig('memberinvites.root-do'))::text like '%'||repeat('b',64)||'%'),false,'list never exposes code hash');
 update waldo.invites set expires_at=now()-interval '1 second' where code_hash=repeat('b',64);
