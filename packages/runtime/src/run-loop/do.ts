@@ -3546,10 +3546,12 @@ export class RunLoopDO extends DurableObject<Cloudflare.Env> {
       return this.#gateTrustedOutput(run, state, text);
     }
     if (disposition === 'solicited_reply') {
+      // Owner-bound reply on his own channel: owner_reply destination (owner ruling
+      // 2026-09-28, direction A completion - merge held for his explicit confirmation).
       const candidate = prepareWithScribe(
         text,
         deliveryTextSchema,
-        'send_message',
+        'owner_reply',
         this.#trustedEffectiveSourceTaint(state),
         CANARY_TOKENS,
       );

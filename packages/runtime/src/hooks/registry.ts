@@ -475,7 +475,12 @@ export const scribeSanitisePostLlmCallHook: HookHandler<HookRuntimeContext> = {
       return ok();
     }
 
-    return sanitiseHookPayload(payload, ctx, 'send_message');
+    // The response TEXT is owner-bound reply prose -> owner_reply destination (owner decision
+    // 2026-09-28, direction A completion). Tool calls are split out inside sanitiseHookPayload
+    // and run reject-only executable-args checks; every egress tool (send_message, draft_email,
+    // send_email, ...) then crosses its own pre-tool scribe pass at its own egress destination,
+    // so third-party sends stay fully blocked.
+    return sanitiseHookPayload(payload, ctx, 'owner_reply');
   },
 };
 
