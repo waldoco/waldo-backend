@@ -46,6 +46,28 @@ const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char
 // exact semantics - the SQL LIKE only ever selects a superset of the real matches.
 const LIKE_PREFILTER_MAX = 40;
 const likePrefilter = (text: string) => `%${likeEscape(text.slice(0, LIKE_PREFILTER_MAX))}%`;
+
+// Salience screen (owner direction 2026-09-28: memory still saves messaging noise). The gate's
+// grounding checks prove WHO said a thing; none of them prove it is WORTH KEEPING. Staging
+// receipts: "verify the Waldo task list tomorrow" (a one-off errand), "Give me the page title
+// and URL" (a question), "Use your web search tool to..." (an instruction), "Calendar QA tool
+// failed" (tool chatter) all grounded fine and were admitted. These shapes are moments in the
+// conversation, never facts about the owner: questions, imperatives aimed at Waldo, tool/QA
+// status chatter, and one-off time-bound errands (a durable time-qualified routine like
+// "gym usually 11am" carries no one-off marker and stays admissible). Held as 'transient'
+// through the same observable hold path as self-report and thin-evidence - never written.
+const TRANSIENT_QUESTION = /\?\s*$/;
+const TRANSIENT_IMPERATIVE = /^(verify|give( me)?|tell me|show me|get me|fetch|use (your|the|a|my)|check (the|my|if|whether)|find (the|a|me|out)|list|search|open|read|send|reply|remind me to)\b/i;
+const TRANSIENT_TOOL_CHATTER = /smoke test|acceptance[- ]test|\b\w+ tool (failed|worked|succeeded)\b/i;
+const TRANSIENT_ONE_OFF_MARKER = /\b(today|tomorrow|tonight|right now|this (morning|afternoon|evening))\b/i;
+const TRANSIENT_ERRAND_VERB = /\b(verify|check|fetch|find|send|reply|use|give|get|remind)\b/i;
+export const looksTransient = (text: string): boolean => {
+  const trimmed = text.trim();
+  if (TRANSIENT_QUESTION.test(trimmed)) return true;
+  if (TRANSIENT_IMPERATIVE.test(trimmed)) return true;
+  if (TRANSIENT_TOOL_CHATTER.test(trimmed)) return true;
+  return TRANSIENT_ONE_OFF_MARKER.test(trimmed) && TRANSIENT_ERRAND_VERB.test(trimmed);
+};
 const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
 
 export const claimStore = (sql: Sql) => {
@@ -321,6 +343,7 @@ const CLAIM_RULES = [
   'When the exchange repeats a claim, list its id in seen. When the owner agrees with an inferred claim, list it in confirm. When the owner corrects a claim, dismiss it and add the corrected one.',
   'Only when the owner explicitly asks to forget something in the text you are reviewing, list the matching claim and node ids in forget_claims and forget_nodes, and name the subject in a few neutral words in forget_topic so it is never relearned. Without an explicit ask in that text, forget_claims and forget_nodes stay empty and forget_topic is null - never forget on your own read of the conversation.',
   'Never record the owner\'s questions or one-off momentary states (asking the time, the weather, what is on the calendar today, a bare yes or no). Record what stays true: preferences, routines, plans, facts about the owner.',
+  'Requests aimed at Waldo and tool or QA chatter are moments, not memory, in any wording: "verify the task list tomorrow", "give me the page title and URL", "use your web search tool to find X", "the calendar tool failed". Record none of these.',
   'Sources stay sources: a claim about something that lives in a connected source (an email, an event, a file) records what it means for the owner and a pointer to where it lives, never a copy of its contents. Current state of those sources is read live at ask time, not recalled from a claim.',
   'Mark an added claim touches_forgotten when it is about anything the owner asked to forget.',
   'Health routines and how the owner says they feel are fine. Never record a diagnosis Waldo inferred.',
@@ -435,6 +458,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   let written = 0;
   const admitted = ops.add.filter((claim) => !held.includes(claim) && CLAIM_KINDS.includes(claim.kind as never) && claim.text.trim() && claim.evidence.trim());
   for (const claim of admitted) {
+    if (looksTransient(claim.text)) {
+      // Salience hold: provenance-clean but not durable. Audited like every other hold;
+      // the nightly pass sees hold counts, and a wrong hold is one console Forget away
+      // from never mattering anyway.
+      store.recordHold(claim.kind, 'transient', claim.text, at);
+      held.push(claim);
+      holdReasons.add('transient');
+      continue;
+    }
     let source = claim.source === 'inferred' ? 'inferred' : 'stated';
     // Origin is the gate's provenance column: where the evidence actually lives. The model
     // proposes; only code writes it (OpenClaw's origin classes - untrusted never promotes).
