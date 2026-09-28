@@ -25,6 +25,13 @@ describe('google proxy', () => {
   const proxyOf = (fetcher: ReturnType<typeof vi.fn>) => googleProxy(env, fetcher as unknown as typeof fetch, () => at * 1000)!;
   const sent = (fetcher: ReturnType<typeof vi.fn>, call = 0) => fetcher.mock.calls[call] as [string, RequestInit];
 
+  it('drops an omitted trailing optional arg instead of sending null across the wire', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { message_id: 'm1' } })));
+    await proxyOf(fetcher).client('do-a', 'c-1').sendRaw('raw-mime');
+    expect(JSON.parse(String(sent(fetcher)[1].body))).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'sendRaw', args: ['raw-mime'] });
+  });
+
+
   it('is off without Supabase', () => {
     expect(googleProxy({})).toBeNull();
   });

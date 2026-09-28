@@ -35,7 +35,11 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     adopt: async (doName, tokens) => link(await post({ do_name: doName, op: 'adopt', refresh_token: tokens.refresh_token, email: tokens.email ?? 'google', scopes: tokens.scopes ?? [] })),
     client: (doName, connection, health) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
       try {
-        const { data } = await post({ do_name: doName, op: 'call', connection, method, args });
+        // JSON arrays cannot hold undefined: an omitted trailing optional arg (sendRaw's threadId,
+        // moveEvent/cancelEvent's etag) would cross the wire as null and fail typed validation.
+        const wireArgs = [...args];
+        while (wireArgs.length > 0 && wireArgs[wireArgs.length - 1] === undefined) wireArgs.pop();
+        const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs });
         health?.('');
         return data;
       } catch (error) {
