@@ -432,18 +432,20 @@ async function readDurableDeliveryFixture(
 }
 
 describe('DeliveryGate runtime policy state', () => {
-  it('rejects a forbidden user identity before opening durable run state', async () => {
+  // Direction A (owner decision 2026-09-28): free-text health pins moved to provider-payload
+  // taint; the identity hard line is the canary scan.
+  it('rejects a canary-bearing user identity before opening durable run state', async () => {
     const runtime = freshRuntimeStub();
 
     await expect(
       runInDurableObject(runtime, (instance) =>
         (instance as TracerDO).startRun({
-          userId: 'user:hrv:58',
+          userId: 'user:aaaaaaaaaaaaaaaa',
           trigger: FETCH_ALERT,
           occurrenceAt: futureOccurrence(),
         }),
       ),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
 
     const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
       journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
@@ -495,12 +497,12 @@ describe('DeliveryGate runtime policy state', () => {
           candidate: {
             push_class: FETCH_ALERT,
             trigger: FETCH_ALERT,
-            event_id: 'HRV: 58 ms',
+            event_id: 'aaaaaaaaaaaaaaaa',
             expires_at: null,
           },
         }),
       ),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
 
     const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
       journal: state.storage.sql.exec<{ n: number }>('SELECT count(*) AS n FROM journal').one().n,
@@ -572,7 +574,7 @@ describe('DeliveryGate runtime policy state', () => {
 
   it('scrubs a forbidden held candidate instead of reopening it', async () => {
     const runtime = freshRuntimeStub();
-    const eventId = 'HRV: 58 ms';
+    const eventId = 'aaaaaaaaaaaaaaaa';
     await runInDurableObject(runtime, (_instance, state) => {
       state.storage.sql.exec(
         `INSERT INTO held_candidates
@@ -593,7 +595,7 @@ describe('DeliveryGate runtime policy state', () => {
 
     await expect(
       releaseHeld(runtime, { userId: USER, eventId, occurrenceAt: futureOccurrence() }),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
 
     expect(await heldCount(runtime, eventId)).toBe(0);
     const reopened = await runInDurableObject(runtime, (_instance, state) => ({
@@ -677,7 +679,7 @@ describe('DeliveryGate runtime policy state', () => {
         JSON.stringify({
           push_class: FETCH_ALERT,
           trigger: FETCH_ALERT,
-          event_id: 'HRV: 58 ms',
+          event_id: 'aaaaaaaaaaaaaaaa',
           expires_at: null,
         }),
         runId,
@@ -686,7 +688,7 @@ describe('DeliveryGate runtime policy state', () => {
 
     await expect(
       runInDurableObject(runtime, (instance) => (instance as TracerDO).admitRun(runId)),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
     const persisted = await runInDurableObject(runtime, (_instance, state) => ({
       journalState: state.storage.sql
         .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
@@ -717,7 +719,7 @@ describe('DeliveryGate runtime policy state', () => {
         JSON.stringify({
           push_class: FETCH_ALERT,
           trigger: FETCH_ALERT,
-          event_id: 'HRV: 58 ms',
+          event_id: 'aaaaaaaaaaaaaaaa',
           expires_at: null,
         }),
         runId,
@@ -727,7 +729,7 @@ describe('DeliveryGate runtime policy state', () => {
 
     await expect(
       runInDurableObject(runtime, (instance) => (instance as TracerDO).resumeRun(runId)),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
 
     const durableRows = await runInDurableObject(runtime, (_instance, state) => ({
       journalState: state.storage.sql
@@ -761,14 +763,14 @@ describe('DeliveryGate runtime policy state', () => {
         JSON.stringify({
           push_class: FETCH_ALERT,
           trigger: FETCH_ALERT,
-          event_id: 'HRV: 58 ms',
+          event_id: 'aaaaaaaaaaaaaaaa',
           expires_at: null,
         }),
       );
     });
     await expect(
       runInDurableObject(runtime, (instance) => (instance as TracerDO).resumeRun(runId)),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
     const terminalRepair = await runInDurableObject(runtime, (_instance, state) => ({
       journalState: state.storage.sql
         .exec<{ state: string }>('SELECT state FROM journal WHERE run_id = ?', runId)
@@ -940,7 +942,7 @@ describe('DeliveryGate runtime policy state', () => {
         JSON.stringify({
           push_class: FETCH_ALERT,
           trigger: FETCH_ALERT,
-          event_id: 'HRV: 58 ms',
+          event_id: 'aaaaaaaaaaaaaaaa',
           expires_at: null,
         }),
         runId,
@@ -949,7 +951,7 @@ describe('DeliveryGate runtime policy state', () => {
 
     await expect(
       runInDurableObject(runtime, (instance) => (instance as TracerDO).flushOutbox(runId)),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
     expect(sink.observedSendAttempts()).toBe(0);
     const durable = await runInDurableObject(runtime, (_instance, state) => ({
       journalState: state.storage.sql

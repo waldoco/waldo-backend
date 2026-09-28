@@ -573,15 +573,31 @@ function containsForbiddenHealth(
   if (objectHasHealthCorrelation(input.payload, input.destination)) {
     return { invalid: false, matched: true };
   }
+  // Free-text scan scope (owner decision 2026-09-28, direction A): the scan exists to keep raw
+  // PROVIDER payloads out of the model's context. Owner/model conversation is null-taint, and at
+  // the two conversation destinations - internal_context persistence and the system_prompt
+  // admission/verify passes - it is conversation, not a payload: Waldo's health-awareness promise
+  // is that the owner can discuss sleep, form, recovery and weight, and that curated aggregated
+  // metrics reach the model (eval case clinical-general-health failed closed before this change:
+  // "is it bad that I only sleep 5 hours most nights?" never reached the model). The free-text
+  // scan still applies to EVERY external-tainted payload at EVERY destination, and to every taint
+  // at every egress/storage destination (send_message, audit_log, r2_summary, memory_block,
+  // offload, ...) - nothing about what leaves the system changes. Structured health correlation
+  // (indicator + measurement objects, above) and curated-view eligibility are unaffected.
+  const freeTextScan = !(
+    input.source_taint === null &&
+    (input.destination === 'internal_context' || input.destination === 'system_prompt')
+  );
   let nestedInvalid = false;
   const visited = visitStrings(
     input.payload,
     input.destination,
     (text) => {
       if (
-        RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
-        DERIVED_SCORE_PATTERNS.some((pattern) => matches(pattern, text)) ||
-        HEALTH_FREE_TEXT.some((pattern) => pattern.test(text))
+        freeTextScan &&
+        (RAW_SENSOR_PATTERNS.some((pattern) => matches(pattern, text)) ||
+          DERIVED_SCORE_PATTERNS.some((pattern) => matches(pattern, text)) ||
+          HEALTH_FREE_TEXT.some((pattern) => pattern.test(text)))
       ) {
         return true;
       }

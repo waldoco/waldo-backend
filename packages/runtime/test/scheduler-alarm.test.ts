@@ -175,21 +175,24 @@ async function dispatchRecurringBrief(input: {
 }
 
 describe('scheduler alarm multiplexer', () => {
-  it('rejects a forbidden proactive schedule identity before persistence', async () => {
+  // Owner decision 2026-09-28 (direction A): null-taint free-text health values may persist at
+  // internal_context, so the hard line for operational identities is the canary scan (denied at
+  // every taint and destination).
+  it('rejects a canary-bearing proactive schedule identity before persistence', async () => {
     const stub = freshStub();
     const dueAt = soon();
 
     await expect(
       runInDurableObject(stub, (instance) =>
         (instance as TracerDO).scheduleProactiveWake({
-          id: 'brief:hrv:58',
+          id: 'brief:aaaaaaaaaaaaaaaa',
           kind: 'brief',
           userId: 'user-scheduler-brief',
           dueAt,
           occurrenceAt: dueAt,
         }),
       ),
-    ).rejects.toThrow('scribe:health_value_leak');
+    ).rejects.toThrow('scribe:canary_leak');
 
     expect(await readScheduleRows(stub)).toEqual([]);
   });

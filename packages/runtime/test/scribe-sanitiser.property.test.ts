@@ -121,6 +121,15 @@ function inspect(payload: SanitiseInput['payload']) {
   });
 }
 
+function inspectExternal(payload: SanitiseInput['payload']) {
+  return sanitise({
+    payload,
+    destination: 'internal_context',
+    canary_tokens: CANARIES,
+    source_taint: 'external',
+  });
+}
+
 function unicodeEscape(text: string): string {
   return [...text]
     .map((character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`)
@@ -304,7 +313,10 @@ describe('Scribe sanitiser properties', () => {
                 return unicodeEscape(text);
             }
           })();
-          expect(inspect(wrapAtDepth(encoded, depth))).toMatchObject({
+          // Owner decision 2026-09-28 (direction A): free-text scans pin at provider-payload
+          // taint; owner/model conversation at null taint may carry these at the conversation
+          // destinations.
+          expect(inspectExternal(wrapAtDepth(encoded, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
@@ -342,11 +354,36 @@ describe('Scribe sanitiser properties', () => {
                 return unicodeEscape(text);
             }
           })();
-          expect(inspect(wrapAtDepth(encoded, depth))).toMatchObject({
+          expect(inspectExternal(wrapAtDepth(encoded, depth))).toMatchObject({
             ok: false,
             check: 'health_value',
             reason: 'health_value_leak',
           });
+          // Nested-JSON free text is parsed and still denied as structured correlation at any taint.
+          if (encoding === 'json') {
+            expect(inspect(wrapAtDepth(encoded, depth))).toMatchObject({
+              ok: false,
+              check: 'health_value',
+              reason: 'health_value_leak',
+            });
+          }
+        },
+      ),
+      { numRuns: RUNS },
+    );
+  });
+
+  it('allows owner conversation health text at null taint (owner decision 2026-09-28, direction A)', () => {
+    fc.assert(
+      fc.property(
+        metricArbitrary,
+        numericArbitrary,
+        unitArbitrary,
+        fc.integer({ min: 0, max: 4 }),
+        (metric, value, unit, depth) => {
+          const textMetric = metric === 'bodyWeightKg' ? 'body_weight' : metric;
+          const sentence = `owner said their ${textMetric} was ${value} ${unit} last night`;
+          expect(inspect(wrapAtDepth({ note: sentence }, depth))).toMatchObject({ ok: true });
         },
       ),
       { numRuns: RUNS },
@@ -390,13 +427,18 @@ describe('Scribe sanitiser properties', () => {
                 return unicodeEscape(text);
             }
           })();
-          for (const hostile of [{ [metric]: value }, encoded]) {
-            expect(inspect(wrapAtDepth(hostile, depth))).toMatchObject({
-              ok: false,
-              check: 'health_value',
-              reason: 'health_value_leak',
-            });
-          }
+          // Structured categorical values stay denied at every taint; the free-text/encoded
+          // form pins at provider-payload taint (owner decision 2026-09-28, direction A).
+          expect(inspect(wrapAtDepth({ [metric]: value }, depth))).toMatchObject({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          });
+          expect(inspectExternal(wrapAtDepth(encoded, depth))).toMatchObject({
+            ok: false,
+            check: 'health_value',
+            reason: 'health_value_leak',
+          });
         },
       ),
       { numRuns: RUNS },
