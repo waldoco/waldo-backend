@@ -290,6 +290,19 @@ describe('claims', () => {
     });
   });
 
+  it('claim recall is isolated to its owner DO, and rejected shared text stays out of the profile', async () => {
+    const first = await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'fact', text: 'Secret blue bicycle', source: 'stated', evidence: 'owner quote', origin: 'owner', source_ref: 'owner, tg-bike' }, AT);
+      store.add({ kind: 'preference', text: 'Likes red bicycles', source: 'stated', evidence: 'shared article', origin: 'untrusted' }, AT);
+      expect(turnMemoryPrompt(store, 'What bicycles?')).not.toContain('Likes red bicycles');
+      return store.recall('bicycle').map((claim) => claim.text);
+    });
+    const other = await withSql((sql) => claimStore(sql).recall('bicycle').map((claim) => claim.text));
+    expect(first).toEqual(['Secret blue bicycle']);
+    expect(other).toEqual([]);
+  });
+
   it('emits only typed evidence receipts for held nodes without private claim data', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
