@@ -108,6 +108,17 @@ describe('TelegramOwnerListener', () => {
     expect(calls.some(([kind, r]) => kind !== 'typing' && (r as { chat_id: number }).chat_id === 42)).toBe(false);
   });
 
+  it('logs the unsupported hop with the sanitized parse note', async () => {
+    const { api } = recorder();
+    const entries: { hop: string; detail?: string }[] = [];
+    const listener = new TelegramOwnerListener({
+      ownerTelegramId: OWNER, api, saveOffset: async () => undefined, respond: async () => 'ok',
+      log: (entry) => entries.push(entry as { hop: string; detail?: string }),
+    });
+    await listener.handleUnsupported({ updateId: 31, messageId: 5, senderId: OWNER, chatId: OWNER, note: 'message:unknown_keys(video_note)' });
+    expect(entries).toEqual([{ trace: 'tg-31', hop: 'unsupported', ms: 0, ok: true, detail: 'message:unknown_keys(video_note)' }]);
+  });
+
   it('logs every hop of a turn with one trace id and real durations', async () => {
     const { api } = recorder();
     const entries: unknown[] = [];

@@ -52,7 +52,7 @@
         "logs": { "enabled": true, "invocation_logs": false },
         "traces": { "enabled": false }
       },
-      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "example.com,en.wikipedia.org,github.com,news.ycombinator.com,developer.mozilla.org" },
+      "vars": { "WALDO_ENVIRONMENT": "staging", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "5458446350", "LANGFUSE_CAPTURE_TEXT": "true", "WALDO_EGRESS_ALLOWLIST": "example.com,en.wikipedia.org,github.com,news.ycombinator.com,developer.mozilla.org,heywaldo.in" },
       "durable_objects": {
         "bindings": [
           { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },

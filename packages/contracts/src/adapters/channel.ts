@@ -194,8 +194,13 @@ const telegramPrivateChatSchema = z.strictObject({
   username: telegramProfileName,
 });
 
-const telegramTextEntitySchema = z.strictObject({
-  type: z.enum(['mention', 'hashtag', 'cashtag', 'bot_command', 'url', 'email', 'phone_number', 'bold', 'italic', 'underline', 'strikethrough', 'spoiler', 'code']),
+// Entities are decorative markup around the text. The runtime reads the text only, so
+// unknown entity types (text_link, custom_emoji, blockquote, whatever clients add next)
+// and their payload keys are tolerated - a markup drift must never sink a readable text
+// message into the unsupported path. The message gate below stays strict: forwards and
+// unknown top-level content still get the honest static reply.
+const telegramTextEntitySchema = z.looseObject({
+  type: z.string().min(1).max(64),
   offset: z.int().nonnegative(),
   length: z.int().positive(),
 });

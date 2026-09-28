@@ -39,7 +39,7 @@ describe('TelegramPollingAdapter', () => {
     expect(await adapter.poll(0)).toEqual({
       nextOffset: 14,
       accepted: [{ updateId: 10, messageId: null, senderId: 7, chatId: 9, sentAt: null, text: 'hello' }],
-      unsupported: [{ updateId: 13, messageId: null, senderId: 7, chatId: 9 }],
+      unsupported: [{ updateId: 13, messageId: null, senderId: 7, chatId: 9, note: expect.stringContaining('message') }],
       dropped: 3,
     });
   });
@@ -62,7 +62,18 @@ describe('TelegramPollingAdapter', () => {
       { updateId: 2, messageId: null, senderId: 7, chatId: 7, sentAt: null, text: '', media: { kind: 'document', fileId: 'doc', fileName: 'plan.pdf', mimeType: 'application/pdf', fileSize: 4096 } },
     ]);
     expect(polled.accepted[2]).toMatchObject({ updateId: 3, text: '', media: { kind: 'voice', fileId: 'v', fileName: 'voice.ogg', mimeType: 'audio/ogg', fileSize: 900 } });
-    expect(polled.unsupported).toEqual([{ updateId: 4, messageId: null, senderId: 7, chatId: 7 }]);
+    expect(polled.unsupported).toEqual([{ updateId: 4, messageId: null, senderId: 7, chatId: 7, note: expect.stringContaining('unknown_keys(video_note)') }]);
+  });
+
+  it('accepts a text message carrying decorative entity drift (text_link), keeps forwards unsupported with a naming note', async () => {
+    const linked = { ...message(20), message: { ...message(20).message, text: 'browse https://x.test', entities: [{ type: 'text_link', offset: 7, length: 14, url: 'https://x.test' }] } };
+    const forwarded = { ...message(21), message: { ...message(21).message, forward_origin: { type: 'hidden_user', date: 1 } } };
+    const adapter = new TelegramPollingAdapter({ async getUpdates() { return [linked, forwarded]; } }, 20);
+    const polled = await adapter.poll(0);
+    expect(polled.accepted).toEqual([{ updateId: 20, messageId: null, senderId: 7, chatId: 9, sentAt: null, text: 'browse https://x.test' }]);
+    expect(polled.unsupported).toHaveLength(1);
+    expect(polled.unsupported[0]).toMatchObject({ updateId: 21 });
+    expect(polled.unsupported[0]!.note).toContain('unknown_keys(forward_origin)');
   });
 
   it('does not advance the offset when the transport fails', async () => {
