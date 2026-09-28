@@ -853,7 +853,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const episodes = episodeIndex(storage.sql);
     const kv = durableConversationStore(storage);
     const plans = dayPlanBook(storage.sql);
-    const memory = claimStore(storage.sql);
+    const memory = claimStore(storage.sql, (work) => storage.transactionSync(work));
     const copied = backupAndCopySpots(storage.sql, memory, new Date().toISOString());
     if (copied) log({ trace: 'memory:migration', hop: 'memory_backup', ms: 0, ok: true, detail: copied });
     const files = fileBook(storage.sql);
