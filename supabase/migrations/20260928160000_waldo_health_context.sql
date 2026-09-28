@@ -37,7 +37,7 @@ begin
         where p2.user_id = v_auth and p2.day < c.day
         order by p2.day desc
         limit 1
-      ),
+      )
     )
     from public.health_context_daily c
     where c.user_id = v_auth
