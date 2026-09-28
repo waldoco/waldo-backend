@@ -8,7 +8,7 @@ const step = (name: string, at: string | null, note: string | null = null, state
 
 // Made-up console state for render tests and design previews. Not owner data.
 export const SAMPLE_CONSOLE_VIEW: ConsoleView = {
-  release: 'sample', timezone: 'Asia/Kolkata', now: '2026-09-23 23:40', sessionUntil: '2026-09-24 11:40', sessionCount: 1, approvals: [{id: 'p1', summary: 'Move "Gym" to Sat 27 Sep, 07:00 to 08:00. Legs day shifted.', state: 'open', undoable: false }], usage: [{ model: OPENAI_GPT_5_MINI_MODEL, calls: 12, input: 48200, cached: 12000, output: 3900, usd: 0.0231 }], csrf: 'c'.repeat(64), notice: 'Spot dismissed. Waldo will stop using it.',
+  release: 'sample', timezone: 'Asia/Kolkata', now: '2026-09-23 23:40', sessionUntil: '2026-09-24 11:40', sessionCount: 1, approvals: [{id: 'p1', kind: 'calendar_change', summary: 'Move "Gym" to Sat 27 Sep, 07:00 to 08:00. Legs day shifted.', state: 'open', undoable: false, review: { kind: 'calendar_change', action: 'move', title: 'Gym', event_id: 'gym-1', start: '2026-09-27T07:00:00+05:30', end: '2026-09-27T08:00:00+05:30', reason: 'Legs day shifted.' } }], usage: [{ model: OPENAI_GPT_5_MINI_MODEL, calls: 12, input: 48200, cached: 12000, output: 3900, usd: 0.0231 }], csrf: 'c'.repeat(64), notice: 'Spot dismissed. Waldo will stop using it.',
   telegram: { linked: true, unlinkAvailable: true },
   google: { accounts: [], connectAvailable: true },
   profile: [

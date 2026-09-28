@@ -1,6 +1,6 @@
 import { OPENAI_GPT_5_MINI_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
-import { consoleAccess, signInPage, parseConsoleAction, renderConsole, sessionCookie } from '../src/channels/console';
+import { consoleAccess, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 
 const memoryStore = () => {
@@ -177,10 +177,39 @@ describe('owner console', () => {
     expect(html).toContain('value="approval.approve"');
     expect(html).toContain('value="approval.skip"');
     expect(html).toContain(`value="p1"`);
-    const withUndo = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p9', summary: 'Moved Gym', state: 'done' as const, undoable: true }] });
+    const withUndo = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ id: 'p9', kind: 'calendar_change', summary: 'Moved Gym', state: 'done' as const, undoable: true, review: { kind: 'calendar_change' as const, action: 'move' as const, title: 'Gym', event_id: 'gym-1', start: '2026-09-27T07:00:00+05:30', end: '2026-09-27T08:00:00+05:30', reason: 'Move' } }] });
     expect(withUndo).toContain('value="approval.undo"');
     const noneLeft = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [] });
     expect(noneLeft).toContain('Nothing waiting on you');
+  });
+
+  it('shows the stored recipients and full words before a send, and refuses summary-only approval', () => {
+    const proposals = [
+      { id: 'mail', kind: 'email_send', summary: 'Send email to me@example.test: "Deck"', state: 'open' as const, undoable: false, review: { kind: 'email_send' as const, to: ['me@example.test'], cc: ['team@example.test'], bcc: ['audit@example.test'], subject: 'Deck', body: 'First line\nSecond line with <script>x</script>' } },
+      { id: 'msg', kind: 'message_send', summary: 'Send this on Telegram: "Hello"', state: 'open' as const, undoable: false, review: { kind: 'message_send' as const, channel: 'Telegram', content: 'Hello, full message.' } },
+      { id: 'mcp', kind: 'mcp_call', summary: 'Run lookup on MCP server', state: 'open' as const, undoable: false, review: null },
+      { id: 'browser', kind: 'browser_submit', summary: 'Click submit', state: 'open' as const, undoable: false, review: null },
+    ];
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: proposals });
+    expect(html).toContain('To: me@example.test');
+    expect(html).toContain('CC: team@example.test');
+    expect(html).toContain('BCC: audit@example.test');
+    expect(html).toContain('First line\nSecond line with &#60;script&#62;');
+    expect(html).not.toContain('<script>x</script>');
+    expect(html).toContain('Channel: Telegram');
+    expect(html).toContain('Hello, full message.');
+    expect(html).not.toContain('>Send it</button>');
+    expect(html).not.toContain('value="approval.approve"');
+    expect(html).toContain('This console cannot approve or dismiss this send yet.');
+    expect(html).not.toContain('value="approval.skip"');
+    expect(html).toContain('This console cannot approve or dismiss it.');
+    expect(html).not.toContain('Modify</button>');
+    const wrongKind = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ ...proposals[0]!, review: { kind: 'message_send' as const, channel: 'Telegram', content: 'Wrong' } }] });
+    expect(wrongKind).not.toContain('value="approval.approve"');
+    expect(consoleMayApprove(proposals[0])).toBe(false);
+    expect(consoleMayApprove(SAMPLE_CONSOLE_VIEW.approvals[0])).toBe(true);
+    expect(consoleMayApprove(proposals[2])).toBe(false);
+    expect(consoleMayApprove({ ...proposals[0]!, review: null })).toBe(false);
   });
 
   it('shows gate holds as kind + reason + day only - refused words never reach the page', () => {

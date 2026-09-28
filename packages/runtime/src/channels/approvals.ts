@@ -41,7 +41,11 @@ export type MessageSendProposal = Readonly<{ channel: string; content: string; i
 export type McpCallProposal = Readonly<{ server: string; tool: string; args: Record<string, unknown> }>;
 
 export type ApprovalDecision = Readonly<{ toast: string; message: string }>;
-export type ApprovalItem = Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>;
+export type ApprovalReview =
+  | Readonly<{ kind: 'email_send'; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
+  | Readonly<{ kind: 'message_send'; channel: string; content: string }>
+  | Readonly<{ kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
+export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
@@ -312,12 +316,36 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     record(kind, summary, payload) {
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, ?, 'done', ?, ?, NULL, ?, ?)", `l${deps.newId()}`, kind, summary, JSON.stringify(payload), deps.now(), deps.now());
     },
+    // The console must show the *stored* recipient, words and final calendar effect before
+    // offering an approval action. Never expose raw MIME, tokens or arbitrary MCP args here.
     pending(now) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
       const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
+      const review = (r: LedgerRow): ApprovalReview | null => {
+        try {
+          if (r.kind === 'email_send') {
+            const p = JSON.parse(r.payload_json) as EmailSendProposal;
+            if (!Array.isArray(p.to) || !p.to.length || !p.to.every((address) => typeof address === 'string') || !Array.isArray(p.cc ?? []) || !Array.isArray(p.bcc ?? []) || !(p.cc ?? []).every((address) => typeof address === 'string') || !(p.bcc ?? []).every((address) => typeof address === 'string') || typeof p.subject !== 'string' || typeof p.body !== 'string') return null;
+            return { kind: 'email_send', to: p.to, cc: p.cc ?? [], bcc: p.bcc ?? [], subject: p.subject, body: p.body };
+          }
+          if (r.kind === 'message_send') {
+            const p = JSON.parse(r.payload_json) as MessageSendProposal;
+            return typeof p.channel === 'string' && typeof p.content === 'string' ? { kind: 'message_send', channel: p.channel, content: p.content } : null;
+          }
+          if (r.kind === 'calendar_change') {
+            const p = JSON.parse(r.payload_json) as Stored;
+            if (!['create', 'move', 'cancel'].includes(p.action) || typeof p.reason !== 'string') return null;
+            if (p.action === 'create' && (!p.title || !p.start || !p.end)) return null;
+            if (p.action === 'move' && (!p.event_id || !p.title || !p.start || !p.end)) return null;
+            if (p.action === 'cancel' && (!p.event_id || !p.title)) return null;
+            return { kind: 'calendar_change', action: p.action, title: p.title ?? null, event_id: p.event_id ?? null, start: p.start ?? null, end: p.end ?? null, reason: p.reason };
+          }
+          return null;
+        } catch { return null; }
+      };
       return [
-        ...open.map((r) => ({ id: r.id, summary: r.summary, state: 'open' as const, undoable: false })),
-        ...undoable.map((r) => ({ id: r.id, summary: r.summary, state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS })),
+        ...open.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'open' as const, undoable: false, review: review(r) })),
+        ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
       ];
     },
     async callback(query, trace) {

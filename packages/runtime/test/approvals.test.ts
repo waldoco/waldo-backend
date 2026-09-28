@@ -286,7 +286,7 @@ describe('approval desk', () => {
       const id = await desk.propose({ action: 'move', event_id: 'e1', title: 'Gym', start: iso('2026-09-23T19:00:00+05:30'), end: iso('2026-09-23T20:00:00+05:30'), reason: 'call at 6' });
       const listed = desk.pending(now);
       expect(listed).toHaveLength(1);
-      expect(listed[0]).toMatchObject({ id, state: 'open', undoable: false });
+      expect(listed[0]).toMatchObject({ id, kind: 'calendar_change', state: 'open', undoable: false });
       expect(listed[0]!.summary).toContain('Move "Gym"');
 
       // The console decision applies the change with no Telegram round-trip.
