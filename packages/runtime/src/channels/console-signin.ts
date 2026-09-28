@@ -146,23 +146,25 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     event('console_route', true, 'signed_out_all');
     return finish(new Response(null, { status: 303, headers }));
   }
-  // The Telegram one-time console link (GET /console?t=... and its form POST back to /console)
-  // belongs to the owner DO's ticket sign-in, handled by the caller's next console branch. The
-  // email-code console must not swallow it, or the bot's /console links 303 here and never redeem.
-  if (url.pathname === CONSOLE_PATH && (url.searchParams.get('t') !== null || request.method === 'POST')) {
+  // Ticket-link sign-in belongs to the owner DO. An existing signed owner cookie,
+  // however, must never be silently switched to the deploy owner's DO by a ticket
+  // URL: a link minted by another owner cannot select this browser's account.
+  const hasOwnerCookie = (request.headers.get('cookie') ?? '').split(';').some((part) => part.trim().startsWith(`${OWNER_COOKIE}=`));
+  if (!hasOwnerCookie && url.pathname === CONSOLE_PATH && (url.searchParams.get('t') !== null || request.method === 'POST')) {
     event('console_route', true, 'ticket_passthrough');
     return null;
   }
-  // A request carrying the DO console cookie belongs to the ticket session: the owner DO
-  // validates it (invalid -> its own 401). Redirecting here would orphan a valid ticket
-  // session - redeemed, then every page 303s to the email form (staging receipt 2026-09-28).
-  if ((request.headers.get('cookie') ?? '').includes(`${CONSOLE_COOKIE}=`)) {
-    event('console_route', true, 'session_passthrough');
+  // Email-code sessions carry BOTH cookies. Resolve the signed owner cookie first,
+  // before the ticket-session fallback: otherwise every new member's console is routed
+  // to the deploy Telegram owner's DO by index.ts. An invalid owner cookie must fail
+  // closed rather than falling back to someone else's ticket route.
+  if (!hasOwnerCookie && (request.headers.get('cookie') ?? '').includes(`${CONSOLE_COOKIE}=`)) {
+    event('console_route', true, 'ticket_session_passthrough');
     return null;
   }
   const doName = await auth.readOwnerCookie(request);
   if (!doName) {
-    event('console_route', false, 'no_owner_cookie');
+    event('console_route', false, 'no_valid_owner_cookie');
     return finish(new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } }));
   }
   const forwarded = new Request(request);
