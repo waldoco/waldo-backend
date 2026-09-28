@@ -5,10 +5,10 @@ import { applyClaimOps, applyPromotion, claimStore, exchangeInput, memoryPrompt,
 import { backupAndCopySpots, LEGACY_BACKUP, markCoreFilesMigrated, pendingCoreFiles } from '../src/memory/migration';
 
 let sequence = 0;
-const withSql = <T>(fn: (sql: SqlStorage) => T) =>
-  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`claims-${sequence++}`)), (_instance, state) => fn(state.storage.sql));
+const withSql = <T>(fn: (sql: SqlStorage, transaction: <R>(work: () => R) => R) => T) =>
+  runInDurableObject(env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`claims-${sequence++}`)), (_instance, state) => fn(state.storage.sql, (work) => state.storage.transactionSync(work)));
 
-const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...partial });
+const ops = (partial: Record<string, unknown>) => JSON.stringify({ add: [], corrections: [], seen: [], confirm: [], dismiss: [], forget_claims: [], forget_nodes: [], forget_topic: null, ...partial });
 const AT = '2026-09-24T04:00:00Z';
 
 describe('claims', () => {
@@ -32,6 +32,91 @@ describe('claims', () => {
       // prompt too. Marker + exact-match fingerprint is all that remains of either row.
       expect(store.barriers().map((barrier) => barrier.topic)).toEqual([FORGOTTEN, FORGOTTEN]);
       expect(store.barriers().map((barrier) => barrier.topic_hash)).toEqual([textFingerprint('lunch habits'), textFingerprint('Skips lunch on meeting-heavy days')]);
+    });
+  });
+
+  it('golden correction: owner-quoted Mumbai replaces Pune with a source pointer and valid-time close', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      const first = applyClaimOps(store, ops({ add: [
+        { kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I moved to Pune"', touches_forgotten: false },
+      ] }), AT, 'owner, tg-pune', undefined, { owner: 'I moved to Pune' });
+      expect(first).toContain('+1 held0');
+      const old = store.claims()[0]!;
+      expect(old).toMatchObject({ source_ref: 'owner, tg-pune', origin: 'owner', valid_from: null, learned_at: AT, verification_status: 'owner-grounded' });
+      const later = '2026-09-26T04:00:00Z';
+      const corrected = applyClaimOps(store, ops({ corrections: [
+        { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
+      ], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"actually I am back in Mumbai"', touches_forgotten: false }], dismiss: [old.id] }), later, 'owner, tg-mumbai', undefined, { owner: 'actually I am back in Mumbai' });
+      expect(corrected).toContain('corrected1');
+      expect(store.claims()).toHaveLength(1);
+      expect(store.claims()[0]).toMatchObject({ text: 'Lives in Mumbai', supersedes_id: old.id, source_ref: 'owner, tg-mumbai', origin: 'owner' });
+      expect(store.claims('superseded')[0]).toMatchObject({ id: old.id, valid_to: later });
+      expect(memoryPrompt(store)).toContain('Lives in Mumbai');
+      expect(memoryPrompt(store)).not.toContain('Lives in Pune');
+      // Reopening the DO/store is an additive migration, not a destructive rebuild.
+      expect(claimStore(sql).claims()[0]!.supersedes_id).toBe(old.id);
+    });
+  });
+
+  it('holds an ungrounded or shared correction without retiring the old claim', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I moved to Pune"', origin: 'owner' }, AT);
+      const old = store.claims()[0]!;
+      const proposed = ops({ corrections: [{ old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"back in Mumbai"' }], add: [{ kind: 'fact', text: 'Lives in Mumbai', source: 'stated', evidence: '"back in Mumbai"', touches_forgotten: false }], dismiss: [old.id] });
+      expect(applyClaimOps(store, proposed, AT, 'owner, tg-x', undefined, { owner: 'I read an article', shared: 'back in Mumbai' })).not.toContain('corrected1');
+      expect(store.claims()).toMatchObject([{ id: old.id, text: 'Lives in Pune' }]);
+      expect(store.claims('superseded')).toEqual([]);
+    });
+  });
+
+  it('refuses a correction attached to an unrelated old claim or an invented replacement', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      store.add({ kind: 'fact', text: 'Likes black coffee', source: 'stated', evidence: 'old', origin: 'owner' }, AT);
+      const old = store.claims()[0]!;
+      const proposal = (text: string) => ops({ corrections: [{ old_id: old.id, kind: 'fact', text, evidence: '"actually I am back in Mumbai"' }] });
+      expect(applyClaimOps(store, proposal('Lives in Mumbai'), AT, 'owner, tg-x', undefined, { owner: 'actually I am back in Mumbai' })).not.toContain('corrected1');
+      expect(applyClaimOps(store, proposal('Likes black tea'), AT, 'owner, tg-x', undefined, { owner: 'actually I am back in Mumbai' })).not.toContain('corrected1');
+      expect(applyClaimOps(store, proposal('Likes black tea and owns a yacht'), AT, 'owner, tg-x', undefined, { owner: 'actually I prefer black tea' })).not.toContain('corrected1');
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Likes black coffee']);
+    });
+  });
+
+  it('does not correct without a transaction or on a failed statement', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: '"I moved to Pune"', origin: 'owner' }, AT);
+      const old = store.claims()[0]!;
+      const detail = applyClaimOps(store, ops({ corrections: [
+        { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"I moved back to Mumbai"' },
+      ] }), AT, 'owner, tg-mumbai', undefined, { owner: 'I moved back to Mumbai' });
+      expect(detail).not.toContain('corrected1');
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Lives in Pune']);
+      expect(store.claims('superseded')).toEqual([]);
+    });
+  });
+
+  it('nightly mixed transcript cannot silently supersede a claim', async () => {
+    await withSql((sql, transaction) => {
+      const store = claimStore(sql, transaction);
+      store.add({ kind: 'fact', text: 'Lives in Pune', source: 'stated', evidence: 'old', origin: 'owner' }, AT);
+      const old = store.claims()[0]!;
+      const result = applyClaimOps(store, ops({ corrections: [
+        { old_id: old.id, kind: 'fact', text: 'Lives in Mumbai', evidence: '"actually I am back in Mumbai"' },
+      ] }), AT, 'owner, day of nightly', undefined, { owner: 'actually I am back in Mumbai' });
+      expect(result).not.toContain('corrected1');
+      expect(store.claims().map((claim) => claim.text)).toEqual(['Lives in Pune']);
+    });
+  });
+
+  it('legacy rows carry no invented source reference or validity', async () => {
+    await withSql((sql) => {
+      sql.exec("CREATE TABLE claims (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL, evidence TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, seen_count INTEGER NOT NULL DEFAULT 1)");
+      sql.exec("INSERT INTO claims (kind,text,source,evidence,status,created_at,last_seen_at) VALUES ('fact','Old fact','stated','old text','active',?,?)", AT, AT);
+      const old = claimStore(sql).claims()[0]!;
+      expect(old).toMatchObject({ source_ref: null, learned_at: null, valid_from: null, valid_to: null, supersedes_id: null, verification_status: null });
     });
   });
 
