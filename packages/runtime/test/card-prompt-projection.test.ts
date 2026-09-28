@@ -81,6 +81,38 @@ describe('trusted card and brief context survives real Google field shapes', () 
     expect(changes.find((item) => item.source === 'calendar')?.detail).toContain('Design review');
   });
 
+  it('update changes scrub canary-shaped tokens from mail free text and sanitise clean', async () => {
+    // Repro of the 21:30 Close card denial: a stored mail change whose snippet carries a
+    // 16-hex run (verification-code / tracking-token shape) used to fail the card closed.
+    const hexRun = 'a1b2c3d4e5f60718';
+    const codedMail: MailItem = {
+      ...mail,
+      subject: `Your sign-in code ${hexRun}`,
+      snippet: `confirm with ${hexRun} or tap the link, expires in 10 minutes`,
+    };
+    const google = {
+      changedEvents: async () => [],
+      newMail: async () => [codedMail],
+    } as unknown as GoogleClient;
+    const book = { since: () => 0, mark: () => undefined } as unknown as UpdateBook;
+    const changes = await collectChanges(book, google, Date.parse('2026-09-28T12:00:00Z'));
+    expect(changes).toHaveLength(1);
+    const change = changes[0]!;
+    expect(change.detail).not.toContain(hexRun);
+    expect(change.detail).toContain('expires in 10 minutes');
+    expect(sanitisesClean(change.detail)).toBe(true);
+  });
+
+  it('scrub stays narrow: ordinary snippet text and non-16 hex runs survive untouched', () => {
+    const projection = mailPromptProjection({
+      ...mail,
+      subject: 'Friday plan',
+      snippet: 'deadbeef is 8 hex and cafebabe12345 is 12 - both stay, are we still on',
+    });
+    expect(projection.subject).toBe('Friday plan');
+    expect(projection.snippet).toBe('deadbeef is 8 hex and cafebabe12345 is 12 - both stay, are we still on');
+  });
+
   it('pins the collision: the same fields unprojected still trip the canary-shape scan', () => {
     // Guard against a future scribe change silently weakening the embedded scan this
     // projection works around: raw etagged/mail JSON must STILL be denied at null taint.
