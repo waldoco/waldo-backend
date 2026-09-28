@@ -290,6 +290,15 @@ describe('owner console', () => {
     expect(unhealthy.slice(unhealthy.indexOf('Connect Google'), unhealthy.indexOf('Connect Google') + 500)).toContain('To do');
   });
 
+  it('keeps connection health separate from access and does not call the WhatsApp route missing', () => {
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, google: { connectAvailable: true, accounts: [{ id: 'g1', email: 'work@example.test', error: 'invalid_grant', calendar: true, mail: true, tasks: true }] } });
+    expect(html).toContain('Reconnect needed');
+    expect(html).toContain('Needs reconnect');
+    expect(html).toContain('Status unknown here');
+    expect(html).not.toContain('WhatsApp</div><div class="sub">Chat with Waldo on WhatsApp. Needs');
+    expect(html).toContain('invite-gated email OTP');
+  });
+
   it('shows the browser count and offers sign-out-everywhere only when more than one browser is signed in', () => {
     const one = renderConsole({ ...SAMPLE_CONSOLE_VIEW, sessionCount: 1 });
     expect(one).toContain('on 1 browser.');
