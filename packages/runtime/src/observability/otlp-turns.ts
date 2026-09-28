@@ -20,7 +20,7 @@ export const HOPS: Readonly<Record<string, Hop>> = {
   typing: { feature: 'channel', type: 'tool' }, progress: { feature: 'channel', type: 'tool' }, send: { feature: 'channel', type: 'tool' },
   receipt: { feature: 'reactions', type: 'tool' }, resolved: { feature: 'reactions', type: 'tool' }, choose_reaction: { feature: 'reactions', type: 'chain' },
   respond: { feature: 'reply', type: 'chain' }, joined_path: { feature: 'reply', type: 'chain' },
-  memory: { feature: 'memory', type: 'chain' },
+  memory: { feature: 'memory', type: 'chain' }, constellation_evidence: { feature: 'memory', type: 'span' }, health_context: { feature: 'health', type: 'span' },
   llm_reply: { feature: 'reply', type: 'span' }, llm_reaction: { feature: 'reactions', type: 'span' }, llm_memory: { feature: 'memory', type: 'span' },
 };
 export const hopFeature = (hop: string) => HOPS[hop]?.feature ?? 'other';

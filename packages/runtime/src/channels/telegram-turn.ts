@@ -104,7 +104,7 @@ export const createTelegramResponder = (
   egressAllowlist?: readonly string[],
   // D5: derived health context (zones only) for the system prompt's health material. The
   // owner DO wires the signed-rail book; undefined composes with no health material.
-  health?: () => Promise<ContextHealthMaterial | null>,
+  health?: (trace?: string) => Promise<ContextHealthMaterial | null>,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -113,7 +113,8 @@ export const createTelegramResponder = (
   const ownerId = invocation.verified_authority.principal_ref;
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
-  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { toolOutputs: async () => toolLedger?.recent() ?? [], ...(health === undefined ? {} : { health }) });
+  let traceId = '';
+  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { toolOutputs: async () => toolLedger?.recent() ?? [], ...(health === undefined ? {} : { health: () => health(traceId) }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
@@ -170,7 +171,6 @@ export const createTelegramResponder = (
   const ask = async (...args: Parameters<typeof complete>) => (await complete(...args)).text;
   const control = turnControl();
   const tree = new ConversationTree();
-  let traceId = '';
   let pending: readonly LLMAttachment[] | undefined;
   // F1 receipt: the window observer fires only when history was actually dropped (content-free).
   const pathObservers = { onWindow: (stats: { kept: number; dropped: number; estimated_tokens: number; budget_tokens: number }) => { if (stats.dropped > 0) log({ trace: traceId, hop: 'context_window', ms: 0, ok: true, detail: `kept ${stats.kept} dropped ${stats.dropped} ~${stats.estimated_tokens}/${stats.budget_tokens} tokens` }); } };
@@ -366,7 +366,11 @@ export const createTelegramResponder = (
       await settling;
       if (!memory || memory.claims().length === 0) return 'no claims';
       const raw = await ask(trace, 'constellation', PROMOTION_INSTRUCTION, promotionInput(memory), { name: 'promotion', schema: PROMOTION_SCHEMA });
-      return applyPromotion(memory, raw, new Date().toISOString());
+      return applyPromotion(memory, raw, new Date().toISOString(), (receipt) => log({
+        trace, hop: 'constellation_evidence', ms: 0, ok: true,
+        code: receipt.reason ?? receipt.outcome,
+        detail: `${receipt.outcome}:${receipt.reason ?? 'supported'}:${receipt.source_kind}:${receipt.count}`,
+      }));
     },
     control,
     planDay: (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),

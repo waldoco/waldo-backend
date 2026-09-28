@@ -552,7 +552,10 @@ type Promotion = Readonly<{
   promoted: readonly number[];
 }>;
 
-export const applyPromotion = (store: ClaimStore, raw: string, at: string): string => {
+export type PromotionEvidenceReason = 'untrusted_or_missing' | 'too_few_claims' | 'same_day';
+export type PromotionEvidenceReceipt = Readonly<{ outcome: 'admitted' | 'held'; reason?: PromotionEvidenceReason; source_kind: 'owner_observation_pattern'; count: number }>;
+
+export const applyPromotion = (store: ClaimStore, raw: string, at: string, onEvidence?: (receipt: PromotionEvidenceReceipt) => void): string => {
   const plan = JSON.parse(raw) as Promotion;
   // Validation at the consolidation seam: model output is a proposal. Strengths
   // clamp to [0,1]; supporting_spots must name real claims; edge endpoints must
@@ -569,7 +572,14 @@ export const applyPromotion = (store: ClaimStore, raw: string, at: string): stri
   const ids = plan.nodes.map((node) => {
     const valid = [...new Set(node.supporting_spots)].filter((id) => eligible.has(id));
     const dates = new Set(valid.map((id) => eligible.get(id)!.created_at.slice(0, 10)));
-    if (valid.length < 2 || dates.size < 2) return undefined; // preserve existing node; reject any new:<index> edge
+    if (valid.length < 2 || dates.size < 2) {
+      const reason: PromotionEvidenceReason = valid.length < 2
+        ? node.supporting_spots.length > valid.length ? 'untrusted_or_missing' : 'too_few_claims'
+        : 'same_day';
+      onEvidence?.({ outcome: 'held', reason, source_kind: 'owner_observation_pattern', count: 1 });
+      return undefined; // preserve existing node; reject any new:<index> edge
+    }
+    onEvidence?.({ outcome: 'admitted', source_kind: 'owner_observation_pattern', count: 1 });
     for (const id of valid) supported.add(id);
     return store.saveNode({ ...node, strength: clamp01(node.strength), supporting_spots: valid, id: node.id !== null && existing.has(node.id) ? node.id : null }, at);
   });

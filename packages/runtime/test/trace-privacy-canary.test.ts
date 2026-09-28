@@ -59,6 +59,28 @@ describe('trace privacy canary', () => {
     expect(consoleLines).not.toContain(MARKER);
   });
 
+  it('keeps typed memory and health receipt codes without private text when capture is off', async () => {
+    const entries = [
+      { trace: 'night:constellation', hop: 'constellation_evidence', ms: 0, ok: false, code: 'same_day', detail: 'held:same_day:owner_observation_pattern:1', error: MARKER },
+      { trace: 'tg-test', hop: 'health_context', ms: 5, ok: true, code: 'absent', detail: MARKER, error: MARKER },
+    ].map((entry) => gateTraceEntry(entry, false));
+    expect(entries.map((entry) => entry.detail)).toEqual(['held:same_day:owner_observation_pattern:1', 'absent']);
+    const payload = await exportBodies([...entries, { trace: 'night:constellation', hop: 'machine_turn', ms: 1, ok: true }, { trace: 'tg-test', hop: 'turn', ms: 6, ok: true }], false);
+    expect(payload).not.toContain(MARKER);
+    expect(payload).toContain('same_day');
+    expect(payload).toContain('absent');
+    const failed = gateTraceEntry({ trace: 'tg-failed', hop: 'health_context', ms: 0, ok: false, code: 'read_failed', error: MARKER }, false);
+    expect(failed.detail).toBe('read_failed');
+    expect(JSON.stringify(failed)).not.toContain(MARKER);
+  });
+
+  it('rejects forged safe-hop codes that carry a private marker', () => {
+    const bad = gateTraceEntry({ trace: 't', hop: 'constellation_evidence', ms: 0, ok: false, detail: `held:same_day:owner_observation_pattern:1 ${MARKER}`, code: MARKER }, false);
+    expect(bad.detail).toBeUndefined();
+    expect(bad.code).toBeUndefined();
+    expect(JSON.stringify(bad)).not.toContain(MARKER);
+  });
+
   it('keeps the marker in the OTLP body when capture is on (the test is not vacuous)', async () => {
     const bodies = await exportBodies(markerTurn().map((entry) => gateTraceEntry(entry, true)), true);
     expect(bodies).toContain(MARKER);

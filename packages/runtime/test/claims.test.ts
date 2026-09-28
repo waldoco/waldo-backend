@@ -118,6 +118,19 @@ describe('claims', () => {
     });
   });
 
+  it('emits only typed evidence receipts for held nodes without private claim data', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'observation', text: 'Private owner sleep statement', source: 'stated', evidence: 'private', origin: 'owner' }, AT);
+      const claim = store.claims()[0]!;
+      const receipts: unknown[] = [];
+      applyPromotion(store, JSON.stringify({ nodes: [{ id: null, domain: 'sleep', label: 'Private label', summary: 'Private summary', strength: 0.8, status: 'active', supporting_spots: [claim.id, 999999] }], edges: [], promoted: [] }), AT, (receipt) => receipts.push(receipt));
+      expect(receipts).toEqual([{ outcome: 'held', reason: 'untrusted_or_missing', source_kind: 'owner_observation_pattern', count: 1 }]);
+      expect(JSON.stringify(receipts)).not.toContain('Private');
+      expect(store.nodes()).toEqual([]);
+    });
+  });
+
   it('golden: a once-seen, shared, legacy or unknown claim cannot create a node or edge', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);

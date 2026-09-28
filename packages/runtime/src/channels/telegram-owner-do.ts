@@ -612,8 +612,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     );
     // D5: derived health context for the system prompt's health material (zones only). Read
     // failures degrade to absence and log; they never block the turn.
-    const healthContext = healthContextBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, (error) =>
-      log({ trace: `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error) }),
+    const healthContext = healthContextBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, clock,
+      (error, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error), code: 'read_failed' }),
+      (present, trace) => log({ trace: trace ?? `health:${channel}`, hop: 'health_context', ms: 0, ok: true, code: present ? 'present' : 'absent' }),
     );
     const baseCall = channel === 'whatsapp'
       ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
@@ -910,7 +911,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         void api.sendMessage({ chat_id: owner, text: 'Heads up - I could not save that to memory just now, so your last message was not stored. If you told me something to remember, say it again and I will retry.' }).catch(() => undefined);
       },
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
-      () => healthContext.latest(),
+      (trace) => healthContext.latest(trace),
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
@@ -1062,7 +1063,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           }
         }
         const promoting = Date.now();
-        await responder.promote(`${trace}:constellation`)
+        await responder.promote(trace)
           .then((detail) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: true, detail }))
           .catch((error: unknown) => log({ trace, hop: 'constellation', ms: Date.now() - promoting, ok: false, error: String(error) }));
         await armDayCards(scheduler, plans, clock.timezone, Date.now());

@@ -43,6 +43,33 @@ describe('handleConsole', () => {
     expect(cleared).toContain('Max-Age=0');
   });
 
+  it('correlates a failed auth request without logging email, phone, or code', async () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const response = await handleConsole(form('/console/signin', { email: 'private@example.com', phone: '+14155550100' }), { TELEGRAM_OWNER_DO: owners().ns }, auth());
+      expect(response?.status).toBe(200);
+      const trace = response?.headers.get('x-waldo-trace');
+      expect(trace).toMatch(/^console-[0-9a-f-]{36}$/);
+      const logged = spy.mock.calls.map(([line]) => String(line)).join('\n');
+      expect(logged).toContain(trace!);
+      expect(logged).toContain('limiter_absent');
+      expect(logged).not.toContain('private@example.com');
+      expect(logged).not.toContain('+14155550100');
+    } finally { spy.mockRestore(); }
+  });
+
+  it('does not call a failed DO session grant a successful sign-in', async () => {
+    const fetch = vi.fn(async () => new Response('unavailable', { status: 503 }));
+    const ns = { idFromName: (name: string) => name, get: () => ({ fetch }) } as unknown as DurableObjectNamespace;
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const ownerCookie = vi.fn(async () => 'cookie');
+    const response = await handleConsole(form('/console/verify', { email: 'owner@example.com', phone: '+14155550100', code: '123456' }),
+      { TELEGRAM_OWNER_DO: ns, RESPONSIBILITY_RATE_LIMITER: limiter }, auth({ verify: vi.fn(async () => 'do-a'), ownerCookie }));
+    expect(response?.status).toBe(200);
+    expect(await response?.text()).toContain('Sign-in is having trouble');
+    expect(ownerCookie).not.toHaveBeenCalled();
+  });
+
   it('stays out of the way when Supabase sign-in is not configured', async () => {
     expect(await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, null)).toBeNull();
   });

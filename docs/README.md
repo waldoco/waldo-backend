@@ -8,6 +8,7 @@
 3. [Worker guide](planning/waldo-agent-mvp/WORKER_GUIDE.md) and [first S0 assignment](planning/waldo-agent-mvp/FIRST_WORKER_ASSIGNMENT.md): libraries, role-specific reading, context/tool/harness engineering, verification and completion evidence.
 4. [Next session](foundation/NEXT-SESSION-PLAN.md), [ledger](foundation/EXECUTION-LEDGER.md), [#116](https://github.com/Pin4sf/waldo-backend/issues/116), [onboarding](foundation/CONTRIBUTOR-ONBOARDING.md), [operating workflow](foundation/AGENT-OPERATING-WORKFLOW.md), and [verification pipeline](foundation/LOCAL-DEV-TESTING-PIPELINE.md): bounded delivery workflow.
 
+- [Trace lookup (September 29)](architecture/OBSERVABILITY_LOOKUP_2026-09-29.md): Activity trace keys, privacy-safe reason codes, console request correlation and receipt caveats.
 - [New developer map (September 28)](architecture/NEW_DEVELOPER_GUIDE_2026-09-28.md): current owner routing, turn, tool, memory, dashboard, health and verification paths. This supersedes old capability assumptions in dated source maps; it is not a release receipt.
 
 ## Supporting references
