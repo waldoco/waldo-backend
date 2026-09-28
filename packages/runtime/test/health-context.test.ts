@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { healthContextBook, toContextHealthMaterial, type HealthContextRow } from '../src/channels/health-context';
+import { localTrustedBriefTurnSnapshot } from '../src/run-loop/adapters';
 import { md5Hex } from '../src/channels/md5';
 
 // Fixed clock: 2026-09-28 10:00 UTC = 15:30 IST, local day 2026-09-28.
@@ -17,6 +18,7 @@ const row = (overrides: Partial<HealthContextRow> = {}): HealthContextRow => ({
     confidence: 0.8,
     freshness: 'fresh',
     tags: ['travel'],
+    compiled_at: '2026-09-28T04:30:00.000Z',
   },
   previous: { day: '2026-09-27', form_score: 64 },
   ...overrides,
@@ -44,7 +46,7 @@ describe('toContextHealthMaterial', () => {
       day_summary: 'Form steady; recovery solid; load moderate. Drivers: sleep below baseline. Tags: travel.',
       active_goals: [],
       upcoming_high_stakes: [],
-      compiled_at: NOW.toISOString(),
+      compiled_at: '2026-09-28T04:30:00.000Z',
     });
     expect(material!.source).toEqual({
       source_key: 'health-context.2026-09-28',
@@ -114,6 +116,17 @@ describe('toContextHealthMaterial', () => {
     expect(material!.narrative.day_summary).not.toMatch(/\d/);
   });
 
+  it('stamps the narrative with the row compilation time, satisfying the composer provenance bound', () => {
+    // Regression pin: compose receives localTrustedBriefTurnSnapshot() (Date.now() per turn,
+    // telegram-turn.ts) and prepareHealth requires compiled_at <= snapshot_at. A read-time
+    // stamp is always later and would throw health_context_invalid on every turn with health
+    // data; the row's own compilation time is the truthful, always-earlier stamp.
+    const fixture = localTrustedBriefTurnSnapshot();
+    const material = toContextHealthMaterial(row(), clock);
+    expect(material).not.toBeNull();
+    expect(Date.parse(material!.narrative.compiled_at)).toBeLessThanOrEqual(fixture.snapshot_at);
+  });
+
   it('degrades to absence: no context, no Form score, or an unmapped pillar', () => {
     expect(toContextHealthMaterial(row({ context: null }), clock)).toBeNull();
     expect(toContextHealthMaterial(row({ context: { ...row().context!, form: null } }), clock)).toBeNull();
@@ -121,6 +134,11 @@ describe('toContextHealthMaterial', () => {
     expect(toContextHealthMaterial(row({ context: { ...row().context!, recovery: { zone: 'unknown' } } }), clock)).toBeNull();
     expect(toContextHealthMaterial(row({ context: { ...row().context!, weight: null } }), clock)).toBeNull();
     expect(toContextHealthMaterial(row({ context: { ...row().context!, form: { score: 101 } } }), clock)).toBeNull();
+    const errors: unknown[] = [];
+    expect(
+      toContextHealthMaterial(row({ context: { ...row().context!, compiled_at: 'not-a-date' } }), clock, (error) => errors.push(error)),
+    ).toBeNull();
+    expect(errors).toHaveLength(1);
   });
 });
 

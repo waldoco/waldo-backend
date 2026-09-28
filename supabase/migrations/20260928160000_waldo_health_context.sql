@@ -29,7 +29,8 @@ begin
         'drivers', c.drivers,
         'confidence', c.confidence,
         'freshness', c.freshness,
-        'tags', c.tags
+        'tags', c.tags,
+        'compiled_at', c.updated_at
       ),
       'previous', (
         select jsonb_build_object('day', p2.day, 'form_score', (p2.form ->> 'score')::numeric)

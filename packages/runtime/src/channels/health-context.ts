@@ -32,6 +32,10 @@ export type HealthContextRow = Readonly<{
     confidence: unknown;
     freshness: unknown;
     tags: unknown;
+    // The row's updated_at: when the app last compiled this derived context. It becomes the
+    // narrative's compiled_at - the truthful as-of the prepareHealth provenance bound checks
+    // against the turn's snapshot time, which a read-time stamp would always violate.
+    compiled_at: unknown;
   }> | null;
   previous: Readonly<{ day: string; form_score: unknown }> | null;
 }>;
@@ -152,6 +156,18 @@ export const toContextHealthMaterial = (
     // Fail closed before compose: a material that violates the contracts schemas degrades to
     // absence here (logged) instead of throwing 'health_context_invalid' inside the composer
     // and killing the owner's turn. Parsing also stamps the branded ISO8601 compiled_at type.
+    // compiled_at is the row's own compilation time (app updated_at), never the read time:
+    // prepareHealth requires it at or before the turn's snapshot time, and a read-time stamp
+    // is always after the fixture snapshot created at responder construction. An unparseable
+    // stamp degrades to absence rather than guessing one.
+    const compiledAt =
+      typeof context.compiled_at === 'string' && Number.isSafeInteger(Date.parse(context.compiled_at))
+        ? new Date(Date.parse(context.compiled_at)).toISOString()
+        : null;
+    if (compiledAt === null) {
+      onError?.(new Error('health context row has no valid compiled_at'));
+      return null;
+    }
     const viewParsed = derivedHealthDestinationViewSchema.safeParse(view);
     const narrativeParsed = narrativeContextSchema.safeParse({
       zone,
@@ -160,7 +176,7 @@ export const toContextHealthMaterial = (
       day_summary: summaryParts.join(' '),
       active_goals: [],
       upcoming_high_stakes: [],
-      compiled_at: new Date(now).toISOString(),
+      compiled_at: compiledAt,
     });
     if (!viewParsed.success || !narrativeParsed.success) {
       onError?.(new Error('health context material failed contract validation'));
