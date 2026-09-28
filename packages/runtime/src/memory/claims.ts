@@ -66,6 +66,10 @@ export const claimStore = (sql: Sql) => {
   // fingerprint - never the text. A held claim can quote forgotten or waldo-side text, so
   // persisting the words would re-create the leak the hold prevented.
   sql.exec('CREATE TABLE IF NOT EXISTS claim_holds (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, reason TEXT NOT NULL, fingerprint TEXT NOT NULL, created_at TEXT NOT NULL)');
+  // Durable settle marker: written before the memory-writer call, cleared when it completes.
+  // A row that outlives its cutoff means the write was interrupted (DO eviction before
+  // waitUntil protection) - the next settle sweeps and reports it instead of staying silent.
+  sql.exec('CREATE TABLE IF NOT EXISTS settle_pending (trace TEXT PRIMARY KEY, started_at TEXT NOT NULL)');
   sql.exec(`CREATE TABLE IF NOT EXISTS constellation_nodes (
     id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL, strength REAL NOT NULL,
     status TEXT NOT NULL DEFAULT 'active', first_seen TEXT NOT NULL, last_confirmed TEXT NOT NULL, supporting_spots TEXT NOT NULL DEFAULT '[]')`);
@@ -102,6 +106,19 @@ export const claimStore = (sql: Sql) => {
     },
     recordHold(kind: string, reason: string, text: string, at: string): void {
       sql.exec('INSERT INTO claim_holds (kind, reason, fingerprint, created_at) VALUES (?, ?, ?, ?)', kind, reason, textFingerprint(text.trim()), at);
+    },
+    beginSettle(trace: string, at: string): void {
+      sql.exec('INSERT OR REPLACE INTO settle_pending (trace, started_at) VALUES (?, ?)', trace, at);
+    },
+    endSettle(trace: string): void {
+      sql.exec('DELETE FROM settle_pending WHERE trace = ?', trace);
+    },
+    // Interrupted settles are re-derivable: the next turns carry the same owner words, so
+    // the sweep reports the count and clears rather than retrying a stale extraction.
+    sweepInterruptedSettles(beforeIso: string): number {
+      const stale = sql.exec<{ trace: string }>('SELECT trace FROM settle_pending WHERE started_at < ?', beforeIso).toArray();
+      for (const row of stale) sql.exec('DELETE FROM settle_pending WHERE trace = ?', row.trace);
+      return stale.length;
     },
     holds: () => sql.exec<{ id: number; kind: string; reason: string; fingerprint: string; created_at: string }>('SELECT * FROM claim_holds ORDER BY id').toArray(),
     backedUp: (reason: string) => sql.exec('SELECT 1 FROM memory_backups WHERE reason = ?', reason).toArray().length > 0,

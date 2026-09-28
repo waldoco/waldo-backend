@@ -139,6 +139,20 @@ describe('claims', () => {
   });
 });
 
+  it('settle markers: begin/end clears, and the sweep reports and clears only stale interruptions', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.beginSettle('tg-1', '2026-09-28T08:06:00Z');
+      store.beginSettle('tg-2', '2026-09-28T08:07:00Z');
+      store.endSettle('tg-1');
+      // tg-2 was left pending (interrupted mid-write): not stale against an 08:06:30 cutoff,
+      // swept against an 08:20 cutoff, and gone once swept.
+      expect(store.sweepInterruptedSettles('2026-09-28T08:06:30Z')).toBe(0);
+      expect(store.sweepInterruptedSettles('2026-09-28T08:20:00Z')).toBe(1);
+      expect(store.sweepInterruptedSettles('2026-09-28T08:20:00Z')).toBe(0);
+    });
+  });
+
 describe('memory migration', () => {
   it('backs up core files and spots once, copies spots with their ids and evidence, then hands core files to the extractor', async () => {
     await withSql((sql) => {

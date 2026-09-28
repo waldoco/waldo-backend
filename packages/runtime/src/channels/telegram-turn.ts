@@ -88,6 +88,10 @@ export const createTelegramResponder = (
   // does not pass for claim_ops. Bare affirmative/negative turns ("yes") escalate to it for
   // the reply hop too - context-binding is where nano failed worst.
   memoryModel: ModelName = OPENAI_GPT_6_LUNA_MODEL,
+  // Durable settle: the owner DO passes ctx.waitUntil here so an in-flight memory write
+  // survives the reply returning. Without it, hibernation kills the write silently
+  // (2026-09-28 staging receipt: three acknowledged corrections produced no memory hop).
+  background?: (work: Promise<unknown>) => void,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -280,6 +284,7 @@ export const createTelegramResponder = (
       const owner = [turn.text ?? '', ...control.end()].filter(Boolean).join('\n');
       if (memory && !probeGuard?.suppressMemory) {
         const started = Date.now();
+        memory.beginSettle(id, new Date().toISOString());
         settling = ask(id, 'memory', MEMORY_INSTRUCTION, exchangeInput(memory, owner, media?.note ?? '', text), { name: 'claim_ops', schema: CLAIM_OPS_SCHEMA }, undefined, undefined, undefined, memoryModel)
           .then(async (raw) => {
             let purged: readonly string[] = [];
@@ -289,9 +294,12 @@ export const createTelegramResponder = (
             // Settle only once the KV conversation/ledger stores verify clean too; a KV
             // survivor leaves the claim 'purging' so a later retry can still find it.
             if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
-            log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}` });
+            const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
+            log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
           })
-          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' }));
+          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' }))
+          .finally(() => memory.endSettle(id));
+        background?.(settling);
       }
       return text;
     },
