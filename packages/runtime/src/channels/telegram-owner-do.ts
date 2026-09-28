@@ -868,7 +868,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
       }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; }), undefined,
-      () => standingOrdersPrompt(orders), runs,
+      () => standingOrdersPrompt(orders), runs, undefined, (work) => this.ctx.waitUntil(work),
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
