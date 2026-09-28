@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { OPENAI_GPT_5_NANO_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { modelCost } from '../src/llm/pricing';
 import { hopFeature, langfuseOtlpConfig, otlpTurnExporter } from '../src/observability/otlp-turns';
 
@@ -35,7 +35,7 @@ describe('langfuse OTLP config', () => {
 
 describe('model cost', () => {
   it('prices cached input separately and returns null for unknown models', () => {
-    expect(modelCost({ model: OPENAI_GPT_5_NANO_MODEL, input: 2_000_000, cached: 1_000_000, output: 1_000_000 })).toEqual({ input: 0.055, output: 0.4, total: 0.455 });
+    expect(modelCost({ model: OPENAI_GPT_6_LUNA_MODEL, input: 2_000_000, cached: 1_000_000, output: 1_000_000 })).toEqual({ input: 0.11, output: 0.5, total: 0.61 });
     expect(modelCost({ model: 'mystery', input: 1, cached: 0, output: 1 })).toBeNull();
   });
 });
@@ -145,14 +145,14 @@ describe('otlpTurnExporter', () => {
   it('marks model hops as generations with tokens and cost, and totals them on the trace', async () => {
     const { send, spans } = capture();
     const log = otlpTurnExporter({ endpoint: 'https://x/v1/traces', headers: {} }, context, send, () => 5_000);
-    await log({ trace: 'tg-3', hop: 'llm_reply', ms: 900, ok: true, usage: { model: OPENAI_GPT_5_NANO_MODEL, input: 1200, output: 80, cached: 1024 } });
+    await log({ trace: 'tg-3', hop: 'llm_reply', ms: 900, ok: true, usage: { model: OPENAI_GPT_6_LUNA_MODEL, input: 1200, output: 80, cached: 1024 } });
     await log({ trace: 'tg-3', hop: 'turn', ms: 1000, ok: true });
     const [root, reply] = spans(0);
     const gen = attrs(reply!);
     expect(gen['langfuse.observation.type']).toBe('generation');
-    expect(gen['langfuse.observation.model.name']).toBe(OPENAI_GPT_5_NANO_MODEL);
+    expect(gen['langfuse.observation.model.name']).toBe(OPENAI_GPT_6_LUNA_MODEL);
     expect(JSON.parse(gen['langfuse.observation.usage_details'] as string)).toEqual({ input: 176, input_cached_tokens: 1024, output: 80 });
-    expect(JSON.parse(gen['langfuse.observation.cost_details'] as string).total).toBeCloseTo((176 * 0.05 + 1024 * 0.005 + 80 * 0.4) / 1e6, 12);
+    expect(JSON.parse(gen['langfuse.observation.cost_details'] as string).total).toBeCloseTo((176 * 0.1 + 1024 * 0.01 + 80 * 0.5) / 1e6, 12);
     expect(attrs(root!)).toMatchObject({ 'langfuse.trace.metadata.model_calls': '1', 'langfuse.trace.metadata.tokens_input': '1200', 'langfuse.trace.metadata.tokens_output': '80' });
     expect(attrs(root!)['langfuse.observation.type']).toBe('agent');
   });

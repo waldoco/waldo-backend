@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  OPENAI_GPT_5_NANO_MODEL,
+  OPENAI_GPT_6_LUNA_MODEL,
   OPENAI_PROVIDER,
   type LLMRequest,
 } from '@waldo/contracts';
@@ -12,7 +12,7 @@ import type { LLMGatewayRequest } from '../src/llm/provider';
 
 function gatewayRequest(): LLMGatewayRequest {
   const request: LLMRequest = {
-    model: OPENAI_GPT_5_NANO_MODEL,
+    model: OPENAI_GPT_6_LUNA_MODEL,
     system: 'Be concise.',
     messages: [{ role: 'user', content: 'Say hello.' }],
     max_tokens: 32,
@@ -22,11 +22,11 @@ function gatewayRequest(): LLMGatewayRequest {
     request,
     route: {
       trigger: 'user_message',
-      primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none' },
+      primary: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_6_LUNA_MODEL, cache: 'none' },
       fallback: [],
       floor: 'template',
     },
-    step: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_5_NANO_MODEL, cache: 'none' },
+    step: { provider: OPENAI_PROVIDER, model: OPENAI_GPT_6_LUNA_MODEL, cache: 'none' },
     context: 'full_context',
     fallback_step: 'configured_model',
     headers: { 'cf-aig-collect-log-payload': 'false' },
@@ -54,7 +54,7 @@ describe('OpenAIResponsesAdapter', () => {
     await expect(adapter.complete(gatewayRequest())).resolves.toEqual({
       ok: true,
       data: {
-        model: OPENAI_GPT_5_NANO_MODEL,
+        model: OPENAI_GPT_6_LUNA_MODEL,
         text: 'Hello from OpenAI.',
         input_tokens: 4,
         output_tokens: 3,
@@ -63,7 +63,7 @@ describe('OpenAIResponsesAdapter', () => {
         output_items: [{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'Greet briefly.' }] }],
       },
     });
-    expect(metadata).toMatchObject({ response_id: 'resp_test_1', model: OPENAI_GPT_5_NANO_MODEL, reasoning: 'Greet briefly.' });
+    expect(metadata).toMatchObject({ response_id: 'resp_test_1', model: OPENAI_GPT_6_LUNA_MODEL, reasoning: 'Greet briefly.' });
   });
 
   it('asks for strict structured output when the request carries a schema', async () => {

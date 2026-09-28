@@ -1,8 +1,6 @@
 import { z } from 'zod';
 
-export const OPENAI_GPT_5_NANO_MODEL = 'gpt-5-nano' as const;
 export const OPENAI_GPT_6_LUNA_MODEL = 'gpt-6-luna' as const;
-export const OPENAI_GPT_5_MINI_MODEL = 'gpt-5-mini' as const;
 export const WORKERS_AI_GEMMA_4_26B_MODEL = '@cf/google/gemma-4-26b-a4b-it' as const;
 export const ANTHROPIC_CLAUDE_SONNET_4_6_MODEL = 'claude-sonnet-4-6' as const;
 export const ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL = 'claude-haiku-4-5' as const;
@@ -16,8 +14,6 @@ export const modelNameSchema = z.enum([
   WORKERS_AI_GEMMA_4_26B_MODEL,
   ANTHROPIC_CLAUDE_SONNET_4_6_MODEL,
   ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL,
-  OPENAI_GPT_5_NANO_MODEL,
-  OPENAI_GPT_5_MINI_MODEL,
   OPENAI_GPT_6_LUNA_MODEL,
 ]);
 export type ModelName = z.infer<typeof modelNameSchema>;
@@ -28,9 +24,6 @@ export type ModelName = z.infer<typeof modelNameSchema>;
 // GPT-6 Luna pin (owner grant 2026-09-27, WhatsApp 11:56pm): newer OpenAI model at any
 // reasoning effort, ceiling GPT-6 Luna, nothing beyond.
 export const WALDO_CHAT_MODEL: ModelName = OPENAI_GPT_6_LUNA_MODEL;
-
-// The alternative the W7 evals measure against WALDO_CHAT_MODEL. Nothing routes to it in production.
-export const WALDO_EVAL_ALTERNATIVE_MODEL: ModelName = OPENAI_GPT_5_MINI_MODEL;
 
 // Speech-to-text for owner voice notes. Not chat routes, so they stay outside modelNameSchema.
 // Recommended default is ElevenLabs Scribe v2 (docs/planning/STT_SELECTION.md); smallest.ai Pulse and
@@ -46,8 +39,6 @@ export const PROVIDER_OF: Readonly<Record<ModelName, Provider>> = {
   [WORKERS_AI_GEMMA_4_26B_MODEL]: 'workers_ai',
   [ANTHROPIC_CLAUDE_SONNET_4_6_MODEL]: 'anthropic',
   [ANTHROPIC_CLAUDE_HAIKU_4_5_MODEL]: 'anthropic',
-  [OPENAI_GPT_5_NANO_MODEL]: OPENAI_PROVIDER,
-  [OPENAI_GPT_5_MINI_MODEL]: OPENAI_PROVIDER,
   [OPENAI_GPT_6_LUNA_MODEL]: OPENAI_PROVIDER,
 };
 

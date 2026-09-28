@@ -1,4 +1,4 @@
-import { OPENAI_GPT_5_MINI_MODEL } from '@waldo/contracts';
+import { OPENAI_GPT_6_LUNA_MODEL } from '@waldo/contracts';
 import { describe, expect, it } from 'vitest';
 import { consoleAccess, signInPage, parseConsoleAction, consoleMayApprove, renderConsole, sessionCookie } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
@@ -261,7 +261,7 @@ describe('owner console', () => {
   it('renders real usage numbers with a total, and an honest empty state', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW);
     expect(html).toContain('id="usage"');
-    expect(html).toContain(OPENAI_GPT_5_MINI_MODEL);
+    expect(html).toContain(OPENAI_GPT_6_LUNA_MODEL);
     expect(html).toContain('12 calls, 48.2k in (25% cached), 3.9k out');
     expect(html).toContain('$0.0231');
     expect(html).toContain('Total');
