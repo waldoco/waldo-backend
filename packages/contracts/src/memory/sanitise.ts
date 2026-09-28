@@ -17,6 +17,7 @@ export const sanitiseDestinationSchema = z.enum([
   'draft_document',
   'draft_email',
   'send_message',
+  'owner_reply',
   'sandbox_stdout',
   'skill_body',
   'audit_log',
@@ -77,6 +78,18 @@ export const SANITISE_DESTINATION_POLICIES = {
     max_key_chars: 128,
   },
   send_message: {
+    payload_kind: 'text_or_structured',
+    max_chars: 4_096,
+    max_depth: 4,
+    max_object_fields: 8,
+    max_array_items: 16,
+    max_key_chars: 128,
+  },
+  // Owner-bound reply text (ADR-0024 amendment, owner decision 2026-09-28, direction A
+  // completion): identical caps to send_message; the behavioural difference lives in the
+  // runtime health free-text gate, which treats null-taint owner/model conversation as
+  // conversation here, exactly as at internal_context/system_prompt.
+  owner_reply: {
     payload_kind: 'text_or_structured',
     max_chars: 4_096,
     max_depth: 4,
@@ -337,6 +350,7 @@ export const HEALTH_DESTINATION_RULES: Readonly<Record<SanitiseDestination, Heal
   draft_document: { raw_sensor: 'reject', derived_score: 'reject' },
   draft_email: { raw_sensor: 'reject', derived_score: 'reject' },
   send_message: { raw_sensor: 'reject', derived_score: 'reject' },
+  owner_reply: { raw_sensor: 'reject', derived_score: 'reject' },
   sandbox_stdout: { raw_sensor: 'reject', derived_score: 'reject' },
   skill_body: { raw_sensor: 'reject', derived_score: 'reject' },
   audit_log: { raw_sensor: 'reject', derived_score: 'reject' },

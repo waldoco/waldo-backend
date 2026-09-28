@@ -1420,7 +1420,7 @@ describe('RuntimeLLMProvider', () => {
     expect(destinations.filter((destination) => destination === 'internal_context')).toHaveLength(1);
   });
 
-  it('runs terminal core hooks after a custom PostLLM hook and rejects injected health data', async () => {
+  it('runs terminal core hooks after a custom PostLLM hook; owner-conversation health values pass on the owner channel (direction A completion, owner ruling 2026-09-28)', async () => {
     const injectHealth: HookHandler<HookRuntimeContext> = {
       name: 'inject_health',
       event: 'PostLLMCall',
@@ -1465,12 +1465,12 @@ describe('RuntimeLLMProvider', () => {
       runtimeCtx(),
     );
 
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'hook_halt',
-      code: 'forbidden',
-      scribe: { destination: 'send_message', reason: 'health_value_leak' },
-    });
+    // Direction A completion (owner ruling 2026-09-28): null-taint health values in
+    // owner-bound reply text are conversation, allowed at the owner_reply destination.
+    // Hard lines still hold here: canary/secret/injection rejects at this hook are pinned by
+    // neighbouring tests, and third-party sends keep the send_message destination with the
+    // full health scan.
+    expect(result).toMatchObject({ ok: true });
   });
 
   it.each([
@@ -1509,7 +1509,7 @@ describe('RuntimeLLMProvider', () => {
   it.each([
     ['route exhaustion', undefined],
     ['spend cap', { spent_cents_today: 70, cap_cents: 70 }],
-  ] as const)('applies terminal output hooks to unsafe templates on %s', async (_case, spend) => {
+  ] as const)('passes owner-channel health template output on %s (direction A completion, owner ruling 2026-09-28)', async (_case, spend) => {
     const gateway = new ScriptedGateway(() => ({
       ok: false,
       error: 'gateway unavailable',
@@ -1533,12 +1533,8 @@ describe('RuntimeLLMProvider', () => {
       runtimeCtx(),
     );
 
-    expect(result).toMatchObject({
-      ok: false,
-      reason: 'hook_halt',
-      fallback_step: 'template',
-      code: 'forbidden',
-    });
+    // Template fallback text is owner-channel reply prose: health values pass at owner_reply.
+    expect(result).toMatchObject({ ok: true });
   });
 
   it.each([

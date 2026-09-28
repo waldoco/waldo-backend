@@ -558,6 +558,22 @@ describe('Scribe sanitiser', () => {
     });
   });
 
+  // Direction A completion (owner ruling 2026-09-28, confirmed on his own channel): the owner's
+  // own channel reply may carry the null-taint health values he told Waldo; every other
+  // destination keeps the full scan (pinned below), and external-tainted health is denied
+  // everywhere including owner_reply.
+  it.each(HEALTH_FREE_TEXT_FORMS)('allows owner health free-text on his own channel reply: %s', (payload) => {
+    expect(inspect(payload, 'owner_reply')).toMatchObject({ ok: true, source_taint: null });
+  });
+
+  it.each(HEALTH_FREE_TEXT_FORMS)('still denies external-tainted health free-text on the owner channel: %s', (payload) => {
+    expect(inspectExternal(payload, 'owner_reply')).toMatchObject({ ok: false, check: 'health_value' });
+  });
+
+  it('still denies structured health correlation on the owner channel', () => {
+    expect(inspect({ ...VIEW }, 'owner_reply')).toMatchObject({ ok: false, check: 'health_value' });
+  });
+
   it.each(HEALTH_FREE_TEXT_FORMS)('still denies owner health free-text at egress: %s', (payload) => {
     expect(inspect(payload, 'send_message')).toEqual({
       ok: false,

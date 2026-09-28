@@ -581,12 +581,22 @@ function containsForbiddenHealth(
   // metrics reach the model (eval case clinical-general-health failed closed before this change:
   // "is it bad that I only sleep 5 hours most nights?" never reached the model). The free-text
   // scan still applies to EVERY external-tainted payload at EVERY destination, and to every taint
-  // at every egress/storage destination (send_message, audit_log, r2_summary, memory_block,
-  // offload, ...) - nothing about what leaves the system changes. Structured health correlation
-  // (indicator + measurement objects, above) and curated-view eligibility are unaffected.
+  // at every third-party egress/storage destination (send_message, audit_log, r2_summary,
+  // memory_block, offload, ...) - nothing about what leaves the system changes. Direction A
+  // completion (owner ruling 2026-09-28, relayed via main; merge held for his explicit
+  // confirmation): the owner_reply destination -
+  // the reply on the owner's OWN channel - is conversation too, so null-taint health values the
+  // owner told Waldo may be spoken back to him; otherwise the agent could know his sleep but
+  // never answer a question about it (live incident 2026-09-28: reply denied
+  // send_message: health_value_leak). Third-party sends keep the send_message destination and
+  // stay fully blocked (send_message/draft_email tool args cross their own pre-tool scribe pass).
+  // Structured health correlation (indicator + measurement objects, above) and curated-view
+  // eligibility are unaffected.
   const freeTextScan = !(
     input.source_taint === null &&
-    (input.destination === 'internal_context' || input.destination === 'system_prompt')
+    (input.destination === 'internal_context' ||
+      input.destination === 'system_prompt' ||
+      input.destination === 'owner_reply')
   );
   let nestedInvalid = false;
   const visited = visitStrings(
@@ -711,6 +721,7 @@ const OWNER_READABLE_DESTINATIONS: ReadonlySet<SanitiseDestination> = new Set([
   'internal_context',
   'draft_email',
   'send_message',
+  'owner_reply',
 ]);
 const OWNER_SKIPPABLE_KINDS: ReadonlySet<RedactionKind> = new Set(['email', 'phone', 'address']);
 
