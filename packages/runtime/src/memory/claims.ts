@@ -38,6 +38,14 @@ export const FORGOTTEN = '[forgotten]';
 const FORGET_INTENT = /\bforget\b|\berase\b|\bstop (remembering|keeping|storing)\b|\bdon'?t (remember|keep|store|save) (this|that|it|the)\b|\bdelete (that|this|it|the (memory|note|claim))\b|\bdrop (that|this|it)\b/i;
 export const hasForgetIntent = (text: string): boolean => FORGET_INTENT.test(text);
 const likeEscape = (text: string) => text.replace(/[\\%_]/g, (char) => `\\${char}`);
+
+// Durable-object SQLite rejects long LIKE/GLOB patterns ("LIKE or GLOB pattern too complex"):
+// a full claim text as the pattern is over the engine cap, which crashed purge's verification
+// queries mid-action and stranded claims in 'purging' (2026-09-28 staging receipt). Prefilter
+// on a short literal prefix chunk instead; the JS-side case-insensitive full-text match keeps
+// exact semantics - the SQL LIKE only ever selects a superset of the real matches.
+const LIKE_PREFILTER_MAX = 40;
+const likePrefilter = (text: string) => `%${likeEscape(text.slice(0, LIKE_PREFILTER_MAX))}%`;
 const tableExists = (sql: Sql, name: string) => sql.exec('SELECT 1 FROM sqlite_master WHERE name = ?', name).toArray().length > 0;
 
 export const claimStore = (sql: Sql) => {
@@ -183,7 +191,9 @@ export const claimStore = (sql: Sql) => {
       // the forgotten text would match the predicate yet survive the redaction. Fetch the
       // matching rows and redact in JS with a case-insensitive literal replace instead.
       for (const text of texts) {
-        const like = `%${likeEscape(text)}%`;
+        // Bounded prefilter: fetched rows are a superset; ciRedact below applies the
+        // case-insensitive FULL-text replace, so only true matches are rewritten.
+        const like = likePrefilter(text);
         const ci = (value: string) => ciRedact(value, text, FORGOTTEN);
         // Episodes and spots are append-only history: rows are redacted in place, never
         // deleted, so the record's shape survives while the forgotten text does not.
@@ -234,15 +244,20 @@ export const claimStore = (sql: Sql) => {
       });
       const remaining: Record<string, number> = {};
       for (const text of texts) {
-        const like = `%${likeEscape(text)}%`;
+        const like = likePrefilter(text);
+        // The LIKE above is only a prefilter; exactness is the case-insensitive full-text
+        // substring check here, matching what the redaction loops rewrote.
+        const exact = (value: string) => value.toLowerCase().includes(text.toLowerCase());
         const add = (store: string, n: number) => { if (n > 0) remaining[store] = (remaining[store] ?? 0) + n; };
+        // Same honesty contract as the redaction loops: a store that errors lands in failed,
+        // the claim stays 'purging', and the console reports incomplete - no worker crash.
         // The purged claims themselves still hold their text until settle below - exclude them.
-        add('claims', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, like, like, ...idList).one().n);
-        if (hasEpisodes) add('episodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
-        add('memory_backups', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like, ).one().n);
-        if (hasSpots) add('legacy_spots', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).one().n);
-        if (hasRevisions) add('legacy_core_files', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).one().n);
-        add('constellation_nodes', sql.exec<{ n: number }>(`SELECT count(*) AS n FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).one().n);
+        attempt('claims', () => add('claims', sql.exec<{ text: string; evidence: string }>(`SELECT text, evidence FROM claims WHERE (text LIKE ? ESCAPE '\\' OR evidence LIKE ? ESCAPE '\\')${notPurging}`, like, like, ...idList).toArray().filter((row) => exact(row.text) || exact(row.evidence)).length));
+        if (hasEpisodes) attempt('episodes', () => add('episodes', sql.exec<{ text: string }>(`SELECT text FROM episodes WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
+        attempt('memory_backups', () => add('memory_backups', sql.exec<{ payload: string }>(`SELECT payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.payload)).length));
+        if (hasSpots) attempt('legacy_spots', () => add('legacy_spots', sql.exec<{ text: string }>(`SELECT text FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
+        if (hasRevisions) attempt('legacy_core_files', () => add('legacy_core_files', sql.exec<{ content: string }>(`SELECT content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.content)).length));
+        attempt('constellation_nodes', () => add('constellation_nodes', sql.exec<{ label: string; summary: string }>(`SELECT label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray().filter((row) => exact(row.label) || exact(row.summary)).length));
       }
       // No deletion here: settlement is a separate step (settle()) the caller runs only after
       // the ASYNC KV stores (conversation, tool-output ledger) verify clean too. Deleting the

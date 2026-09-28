@@ -87,6 +87,35 @@ describe('forget coverage', () => {
     });
   });
 
+  it('long claim texts purge and settle cleanly (2026-09-28 staging 1101 receipt: full-text LIKE pattern tripped "LIKE or GLOB pattern too complex")', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const episodes = episodeIndex(sql);
+      // Mirrors the stuck staging spots: long instruction-style texts whose full-length LIKE
+      // pattern exceeded the DO SQLite pattern cap, crashing the console forget action.
+      const longText = 'Google QA: use get_communication to check recent primary-inbox mail. Tell me whether the tool succeeded and how many messages it returned. Do not include sender, subject, snippet, or message contents. Do not draft or send anything.';
+      expect(longText.length).toBeGreaterThan(40);
+      const claimId = Number(
+        sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, longText, AT, AT).one().id,
+      );
+      episodes.add('entry-long', 'owner', `please: ${longText}`, Date.parse(AT));
+      store.backup('test-backup-long', { note: `payload: ${longText}` }, AT);
+      const result = applyClaimOps(store, JSON.stringify({
+        add: [], seen: [], confirm: [], dismiss: [], forget_claims: [claimId], forget_nodes: [], forget_topic: null,
+      }), AT, 'owner agreed', undefined, undefined, true);
+      // Before the fix: verification threw, the claim sat in 'purging' forever. Now it settles.
+      expect(result).toContain('purged');
+      expect(result).not.toContain('purge-incomplete');
+      expect(store.claims()).toEqual([]);
+      expect(store.claims('purging')).toEqual([]);
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).toContain(FORGOTTEN);
+      expect(sql.exec<{ text: string }>('SELECT text FROM episodes').one().text).not.toContain('get_communication');
+      const backup = sql.exec<{ payload: string }>('SELECT payload FROM memory_backups ORDER BY id DESC LIMIT 1').one().payload;
+      expect(backup).toContain(FORGOTTEN);
+      expect(backup).not.toContain('get_communication');
+    });
+  });
+
   it("a surviving claim's own text and evidence are redacted when they quote the forgotten text", async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
