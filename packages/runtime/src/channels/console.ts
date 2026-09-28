@@ -232,7 +232,10 @@ const serviceStatus = (view: ConsoleView) => {
 };
 
 // Sends need a bound sender account and exact destination in addition to words. The current
-// proposal stores neither for every channel, so console review stays read-only for sends.
+// proposal stores neither for every channel, so console APPROVAL stays chat-only for sends.
+// Dismissal is the safe direction - it can only prevent a send, never cause one - so the
+// console offers Not now for open send proposals. That also un-strands proposals whose
+// Telegram approval card lost its inline keyboard (2026-09-28 staging receipt).
 export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change');
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
@@ -250,13 +253,17 @@ const approvals = (view: ConsoleView) => {
     const label = APPROVAL_LABELS[item.kind] ?? 'Proposed action';
     const safeReview = item.review?.kind === item.kind ? item.review : null;
     const canApprove = consoleMayApprove(item) && safeReview !== null;
+    // Open send proposals are dismissible here: skipping changes nothing external, it only
+    // closes the loop. Approving a send stays in chat with the exact words on the card.
+    const dismissible = item.state === 'open' && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
     const actions = canApprove
       ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
-      : item.state === 'open' ? ''
+      : item.state === 'open'
+        ? dismissible ? form(view.csrf, 'approval.skip', 'Not now', { id: item.id }) : ''
         : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this calendar change?' }) : '';
     const review = safeReview ? reviewDetails(safeReview) : '';
     const holdReason = item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
-      ? '<div class="sub">Review the exact sender, recipient and words in your chat. This console cannot approve or dismiss this send yet.</div>'
+      ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Not now dismisses it, here or in chat.</div>'
       : '<div class="sub">Full action details are not available here. This console cannot approve or dismiss it. Ask Waldo to show the proposal in full before deciding.</div>';
     const changeHint = item.state === 'open' && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
       ? '<div class="sub">Want to change it? Ask Waldo to prepare a new proposal before approving.</div>' : '';

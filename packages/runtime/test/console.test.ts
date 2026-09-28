@@ -200,9 +200,12 @@ describe('owner console', () => {
     expect(html).toContain('Hello, full message.');
     expect(html).not.toContain('>Send it</button>');
     expect(html).not.toContain('value="approval.approve"');
-    expect(html).toContain('This console cannot approve or dismiss this send yet.');
-    expect(html).not.toContain('value="approval.skip"');
+    expect(html).toContain('approving this send happens there. Not now dismisses it');
+    // Dismissal is the safe direction: open send proposals carry Not now, never Do it.
+    expect(html).toContain('value="approval.skip"');
     expect(html).toContain('This console cannot approve or dismiss it.');
+    // Exactly the two open send proposals are dismissible; mcp/browser stay undecidable here.
+    expect((html.match(/value="approval.skip"/g) ?? []).length).toBe(2);
     expect(html).not.toContain('Modify</button>');
     const wrongKind = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [{ ...proposals[0]!, review: { kind: 'message_send' as const, channel: 'Telegram', content: 'Wrong' } }] });
     expect(wrongKind).not.toContain('value="approval.approve"');
