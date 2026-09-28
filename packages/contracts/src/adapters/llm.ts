@@ -39,7 +39,11 @@ export const toolParameters = (schema: z.ZodType): Record<string, unknown> => {
 export const llmToolCallSchema = z.strictObject({
   call_id: z.string().min(1).max(128),
   name: z.string().min(1).max(64),
-  arguments: z.string().max(16_384),
+  // Wire ceiling only (ego-audit S4): a legitimately long tool call - a long email body, a
+  // big doc - must not die in schema validation before any policy sees it. 128 Ki chars is a
+  // pragmatic ceiling, not a proven provider bound: it is far above any real tool call, and
+  // per-destination size POLICY belongs to the scribe (contracts/memory/sanitise.ts).
+  arguments: z.string().max(131_072),
 });
 export type LLMToolCall = z.infer<typeof llmToolCallSchema>;
 
