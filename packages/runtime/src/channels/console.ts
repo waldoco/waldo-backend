@@ -1,3 +1,4 @@
+import type { ApprovalItem, ApprovalReview } from './approvals';
 import type { Claim, ConstellationEdge, ConstellationNode, profile } from '../memory/claims';
 import type { Proactivity } from './loops';
 import type { E2EStep, TraceRow } from './harness';
@@ -140,7 +141,7 @@ export type ConsoleView = Readonly<{
   now: string;
   sessionUntil: string;
   sessionCount: number;
-  approvals: readonly Readonly<{ id: string; summary: string; state: 'open' | 'done'; undoable: boolean }>[];
+  approvals: readonly ApprovalItem[];
   usage: readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[];
   csrf: string;
   notice: string | null;
@@ -229,13 +230,36 @@ const serviceStatus = (view: ConsoleView) => {
   }).join('')}</div><p class="note">These are permission states, not proof that a tool succeeded. Recent activity below shows requests Waldo actually ran.</p>`;
 };
 
+// Sends need a bound sender account and exact destination in addition to words. The current
+// proposal stores neither for every channel, so console review stays read-only for sends.
+export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change');
+
+const APPROVAL_LABELS: Readonly<Record<string, string>> = {
+  calendar_change: 'Calendar adjustment', email_send: 'Email send', message_send: 'Message send',
+  browser_submit: 'Browser action', mcp_call: 'MCP tool call',
+};
+const reviewDetails = (review: ApprovalReview): string => {
+  if (review.kind === 'email_send') return `<div class="approval-review"><div>To: ${esc(review.to.join(', '))}</div>${review.cc.length ? `<div>CC: ${esc(review.cc.join(', '))}</div>` : ''}${review.bcc.length ? `<div>BCC: ${esc(review.bcc.join(', '))}</div>` : ''}<div>Subject: ${esc(review.subject)}</div><pre>${esc(review.body)}</pre></div>`;
+  if (review.kind === 'message_send') return `<div class="approval-review"><div>Channel: ${esc(review.channel)}</div><pre>${esc(review.content)}</pre></div>`;
+  return `<div class="approval-review"><div>Action: ${esc(review.action)}</div>${review.title ? `<div>Event: ${esc(review.title)}</div>` : ''}${review.event_id ? `<div>Event ID: ${esc(review.event_id)}</div>` : ''}${review.start ? `<div>Start: ${esc(review.start)}</div>` : ''}${review.end ? `<div>End: ${esc(review.end)}</div>` : ''}<div>Reason: ${esc(review.reason)}</div></div>`;
+};
 const approvals = (view: ConsoleView) => {
-  if (view.approvals.length === 0) return empty('Nothing waiting on you. When Waldo proposes a calendar change, it lands here and in Telegram.');
+  if (view.approvals.length === 0) return empty('Nothing waiting on you. When Waldo proposes a change, it appears here and in your chat.');
   return view.approvals.map((item) => {
-    const actions = item.state === 'open'
+    const label = APPROVAL_LABELS[item.kind] ?? 'Proposed action';
+    const safeReview = item.review?.kind === item.kind ? item.review : null;
+    const canApprove = consoleMayApprove(item) && safeReview !== null;
+    const actions = canApprove
       ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
-      : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this change in your calendar?' }) : '';
-    return `<div class="row"><div class="main"><div class="line">${esc(item.summary)}</div></div>${chip(item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'open' ? 'neutral' : 'good')}<div class="act">${actions}</div></div>`;
+      : item.state === 'open' ? ''
+        : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this calendar change?' }) : '';
+    const review = safeReview ? reviewDetails(safeReview) : '';
+    const holdReason = item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
+      ? '<div class="sub">Review the exact sender, recipient and words in your chat. This console cannot approve or dismiss this send yet.</div>'
+      : '<div class="sub">Full action details are not available here. This console cannot approve or dismiss it. Ask Waldo to show the proposal in full before deciding.</div>';
+    const changeHint = item.state === 'open' && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
+      ? '<div class="sub">Want to change it? Ask Waldo to prepare a new proposal before approving.</div>' : '';
+    return `<div class="row approval-row"><div class="main"><div class="sub">${chip(label)}</div><div class="line">${esc(item.summary)}</div>${review}${holdReason}${changeHint}</div>${chip(item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'open' ? 'neutral' : 'good')}<div class="act">${actions}</div></div>`;
   }).join('');
 };
 
@@ -378,6 +402,7 @@ section{margin-top:44px;scroll-margin-top:60px}
 h2{font-family:'Instrument Serif',Georgia,serif;font-size:26px;line-height:32px;letter-spacing:-.025em;margin:0 0 4px}
 .intro{color:var(--ink2);margin:0 0 12px;max-width:640px}
 h3{font-size:14px;margin:24px 0 4px}.count{color:var(--ink2);margin-left:6px}
+.approval-row{align-items:flex-start}.approval-review{margin:10px 0;padding:12px;border:1px solid var(--rule);border-radius:8px;overflow-wrap:anywhere}.approval-review pre{max-height:320px;overflow:auto;margin-top:10px;white-space:pre-wrap;overflow-wrap:anywhere}
 .row{display:flex;align-items:center;gap:16px;padding:14px 0;border-bottom:1px solid var(--rule)}.row .main{flex:1;min-width:0}
 .line{}.sub{color:var(--ink2);font-size:13px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}.evidence{color:var(--ink2);font-size:13px;font-style:italic}
 .conn>div:first-child{flex:1}.conn .name{}.state{width:140px}.act{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
