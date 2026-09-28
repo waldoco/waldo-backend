@@ -118,21 +118,78 @@ describe('claims', () => {
     });
   });
 
-  it('promotes only observation and pattern claims, and forgetting a node drops its edges', async () => {
+  it('golden: a once-seen, shared, legacy or unknown claim cannot create a node or edge', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
-      store.add({ kind: 'observation', text: 'Short sleep before long meeting days', source: 'inferred', evidence: 'three weeks' }, AT);
-      store.add({ kind: 'goal', text: 'Sleep 7 hours', source: 'stated', evidence: 'said' }, AT);
-      const [observed, goal] = [...store.claims()].sort((a, b) => a.id - b.id);
-      store.seen(observed!.id, AT); // recurrence earns promotion: seen_count 2
+      store.add({ kind: 'observation', text: 'Owner sleep once', source: 'stated', evidence: 'I slept badly', origin: 'owner' }, AT);
+      store.add({ kind: 'observation', text: 'Shared sleep', source: 'inferred', evidence: 'forwarded article', origin: 'untrusted' }, '2026-09-25T04:00:00Z');
+      store.add({ kind: 'observation', text: 'Legacy sleep', source: 'stated', evidence: 'old text' }, '2026-09-26T04:00:00Z');
+      const [once, shared, legacy] = [...store.claims()].sort((a, b) => a.id - b.id);
       const detail = applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', supporting_spots: [observed!.id] },
-          { id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', supporting_spots: [] }],
-        edges: [{ from: 'new:1', to: 'new:0', relation: 'tends to precede', strength: 0.5, evidence_count: 3 }],
-        promoted: [observed!.id, goal!.id],
+        nodes: [{ id: null, domain: 'sleep', label: 'Unsupported', summary: 'Should be held', strength: 0.9, status: 'active', supporting_spots: [once!.id, shared!.id, legacy!.id, 9999] }],
+        edges: [{ from: 'new:0', to: '12345', relation: 'co-occurs with', strength: 1, evidence_count: 9 }],
+        promoted: [once!.id, shared!.id, legacy!.id],
       }), AT);
-      expect(detail).toBe('nodes2 edges1 promoted1 rejected1'); // goal: kind-excluded
-      expect(store.claims().map((claim) => claim.id)).toEqual([goal!.id]);
+      expect(detail).toContain('nodes0 edges0');
+      expect(store.nodes()).toEqual([]);
+      expect(store.edges()).toEqual([]);
+      expect(store.claims('promoted')).toEqual([]);
+    });
+  });
+
+  it('golden: rejected edits do not overwrite an existing node or create an edge to it', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      const old = store.saveNode({ id: null, domain: 'sleep', label: 'Prior', summary: 'Prior evidence', strength: 0.4, status: 'active', supporting_spots: [] }, AT);
+      store.add({ kind: 'observation', text: 'One new account', source: 'stated', evidence: 'one', origin: 'owner' }, AT);
+      const once = store.claims()[0]!;
+      const detail = applyPromotion(store, JSON.stringify({
+        nodes: [{ id: old, domain: 'sleep', label: 'Unsupported edit', summary: 'Injected', strength: 1, status: 'active', supporting_spots: [once.id] }],
+        edges: [{ from: 'new:0', to: String(old), relation: 'co-occurs with', strength: 1, evidence_count: 1 }],
+        promoted: [],
+      }), AT);
+      expect(detail).toBe('nodes0 edges0 promoted0');
+      expect(store.nodes()[0]).toMatchObject({ label: 'Prior', summary: 'Prior evidence', strength: 0.4 });
+      expect(store.edges()).toEqual([]);
+    });
+  });
+
+  it('golden: two owner-grounded supports from separate timestamps earn a node; an orphan edge does not', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'pattern', text: 'Short sleep before busy days', source: 'stated', evidence: 'first', origin: 'owner' }, AT);
+      store.add({ kind: 'observation', text: 'Low energy after busy evenings', source: 'stated', evidence: 'second', origin: 'owner' }, '2026-09-25T04:00:00Z');
+      const claims = [...store.claims()].sort((a, b) => a.id - b.id);
+      for (const claim of claims) store.seen(claim.id, '2026-09-26T04:00:00Z');
+      const detail = applyPromotion(store, JSON.stringify({
+        nodes: [{ id: null, domain: 'sleep', label: 'Busy-day sleep', summary: 'Owner supported', strength: 0.8, status: 'active', supporting_spots: claims.map((claim) => claim.id) }],
+        edges: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with', strength: 0.6, evidence_count: 2 }],
+        promoted: claims.map((claim) => claim.id),
+      }), '2026-09-26T04:00:00Z');
+      expect(detail).toBe('nodes1 edges0 promoted2');
+      expect(store.nodes()).toHaveLength(1);
+      expect(JSON.parse(store.nodes()[0]!.supporting_spots)).toEqual(claims.map((claim) => claim.id));
+      expect(store.edges()).toEqual([]);
+    });
+  });
+
+  it('promotes supported observations and forgetting a node drops its edges', async () => {
+    await withSql((sql) => {
+      const store = claimStore(sql);
+      store.add({ kind: 'observation', text: 'Short sleep before long meeting days', source: 'stated', evidence: 'day one', origin: 'owner' }, AT);
+      store.add({ kind: 'pattern', text: 'Low energy after short sleep', source: 'stated', evidence: 'day two', origin: 'owner' }, '2026-09-25T04:00:00Z');
+      store.add({ kind: 'observation', text: 'Heavy meetings before short sleep', source: 'stated', evidence: 'day three', origin: 'owner' }, '2026-09-26T04:00:00Z');
+      store.add({ kind: 'goal', text: 'Sleep 7 hours', source: 'stated', evidence: 'said', origin: 'owner' }, AT);
+      const [first, second, third, goal] = [...store.claims()].sort((a, b) => a.id - b.id);
+      store.seen(first!.id, AT);
+      const detail = applyPromotion(store, JSON.stringify({
+        nodes: [{ id: null, domain: 'sleep', label: 'Short sleep', summary: 'Sleeps less before big days', strength: 0.7, status: 'active', supporting_spots: [first!.id, second!.id] },
+          { id: null, domain: 'work rhythm', label: 'Long meeting days', summary: 'Heavy days', strength: 0.6, status: 'active', supporting_spots: [second!.id, third!.id] }],
+        edges: [{ from: 'new:1', to: 'new:0', relation: 'tends to precede', strength: 0.5, evidence_count: 3 }],
+        promoted: [first!.id, goal!.id],
+      }), AT);
+      expect(detail).toBe('nodes2 edges1 promoted1 rejected1');
+      expect(store.claims().map((claim) => claim.id)).toEqual([third!.id, second!.id, goal!.id]);
       store.forgetNode(store.nodes()[0]!.id);
       expect(store.edges()).toEqual([]);
     });
@@ -354,49 +411,46 @@ describe('claim origin classes (gate provenance)', () => {
         promoted: [byText.get('External-content observation')!.id, byText.get('Owner observation')!.id],
       }), AT);
       // Only the owner-origin observation promotes; the untrusted one is excluded structurally.
-      expect(detail).toBe('nodes1 edges0 promoted1 rejected1');
+      expect(detail).toBe('nodes0 edges0 promoted0 rejected2');
       expect(store.claims().find((claim) => claim.text === 'External-content observation')).toMatchObject({ status: 'active' });
-      expect(store.claims('promoted').map((claim) => claim.text)).toEqual(['Owner observation']);
+      expect(store.claims('promoted')).toEqual([]);
     });
   });
 
   it('a claim seen once can never promote - recurrence is enforced in code, not prompted', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
-      store.add({ kind: 'observation', text: 'Single episode', source: 'stated', evidence: 'said once' }, AT);
+      store.add({ kind: 'observation', text: 'Single episode', source: 'stated', evidence: 'said once', origin: 'owner' }, AT);
       const once = store.claims()[0]!;
       const detail = applyPromotion(store, JSON.stringify({
         nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 0.5, status: 'active', supporting_spots: [] }],
         edges: [],
         promoted: [once.id],
       }), AT);
-      expect(detail).toBe('nodes1 edges0 promoted0 rejected1');
+      expect(detail).toBe('nodes0 edges0 promoted0 rejected1');
       expect(store.claims()[0]!.status).toBe('active');
       store.seen(once.id, AT);
       const second = applyPromotion(store, JSON.stringify({ nodes: [], edges: [], promoted: [once.id] }), AT);
-      expect(second).toBe('nodes0 edges0 promoted1');
-      expect(store.claims('promoted').map((claim) => claim.text)).toEqual(['Single episode']);
+      expect(second).toBe('nodes0 edges0 promoted0 rejected1');
+      expect(store.claims('promoted')).toEqual([]);
     });
   });
 
-  it('clamps model-proposed strengths, filters supporting_spots to real claims, floors evidence_count', async () => {
+  it('clamps model-proposed strengths and keeps only eligible supporting claims', async () => {
     await withSql((sql) => {
       const store = claimStore(sql);
-      store.add({ kind: 'observation', text: 'Real claim', source: 'stated', evidence: 'said' }, AT);
-      const real = store.claims()[0]!;
+      store.add({ kind: 'observation', text: 'First owner pattern', source: 'stated', evidence: 'first', origin: 'owner' }, AT);
+      store.add({ kind: 'pattern', text: 'Second owner pattern', source: 'stated', evidence: 'second', origin: 'owner' }, '2026-09-25T04:00:00Z');
+      const [first, second] = [...store.claims()].sort((a, b) => a.id - b.id);
       applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 4.7, status: 'active', supporting_spots: [real.id, 9999] }],
-        edges: [],
+        nodes: [{ id: null, domain: 'sleep', label: 'X', summary: 'x', strength: 4.7, status: 'active', supporting_spots: [first!.id, second!.id, 9999] },
+          { id: null, domain: 'work', label: 'Y', summary: 'y', strength: -2, status: 'active', supporting_spots: [first!.id, second!.id] }],
+        edges: [{ from: 'new:0', to: 'new:1', relation: 'co-occurs with', strength: 9, evidence_count: 0 }],
         promoted: [],
       }), AT);
-      const node = store.nodes()[0]!;
+      const node = store.nodes().find((n) => n.label === 'X')!;
       expect(node.strength).toBe(1);
-      expect(JSON.parse(node.supporting_spots)).toEqual([real.id]);
-      applyPromotion(store, JSON.stringify({
-        nodes: [{ id: null, domain: 'work', label: 'Y', summary: 'y', strength: -2, status: 'active', supporting_spots: [] }],
-        edges: [{ from: 'new:0', to: String(node.id), relation: 'relates', strength: 9, evidence_count: 0 }],
-        promoted: [],
-      }), AT);
+      expect(JSON.parse(node.supporting_spots)).toEqual([first!.id, second!.id]);
       const edge = store.edges()[0]!;
       expect(edge.strength).toBe(1);
       expect(edge.evidence_count).toBe(1);
