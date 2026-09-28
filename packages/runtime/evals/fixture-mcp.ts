@@ -23,6 +23,10 @@ export const fixtureMcpFetch = (async (input: RequestInfo | URL, init?: RequestI
   const body = JSON.parse(String(init?.body ?? '{}')) as { id?: number; method?: string; params?: { name?: string } };
   if (body.method === 'initialize') return rpcReply(body.id, { protocolVersion: '2025-06-18' }, true);
   if (body.method === 'notifications/initialized') return new Response(null, { status: 202 });
+  if (body.method === 'tools/list') return rpcReply(body.id, { tools: [
+    { name: 'pipeline_status', description: 'Return synthetic deploy pipeline status', inputSchema: { type: 'object', properties: {} } },
+    { name: 'weather_today', description: 'Return synthetic weather data', inputSchema: { type: 'object', properties: {} } },
+  ] });
   if (body.method === 'tools/call') {
     if (body.params?.name === 'pipeline_status') {
       return rpcReply(body.id, { content: [{ type: 'text', text: PIPELINE_STATUS }] });
