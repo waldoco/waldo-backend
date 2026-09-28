@@ -28,6 +28,7 @@ import { searchEpisodesHandler } from '../tools/live/search-episodes';
 import { browseActHandler, browsePageHandler, executeBrowserSubmit } from '../tools/live/browser';
 import { webSearchHandler } from '../tools/live/web-search';
 import { healthLogBook, healthLogHandlers, healthSection } from './health-log';
+import { healthContextBook } from './health-context';
 import { localIso, localToEpoch, reminderBook, reminderHandlers } from './reminders';
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
@@ -604,6 +605,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, channel, clock, (error) =>
       log({ trace: `health:${channel}`, hop: 'health_log', ms: 0, ok: false, error: String(error) }),
     );
+    // D5: derived health context for the system prompt's health material (zones only). Read
+    // failures degrade to absence and log; they never block the turn.
+    const healthContext = healthContextBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, clock, (error) =>
+      log({ trace: `health:${channel}`, hop: 'health_context', ms: 0, ok: false, error: String(error) }),
+    );
     const baseCall = channel === 'whatsapp'
       ? whatsappTelegramShim(this.env.WHATSAPP_ACCESS_TOKEN!, this.env.WHATSAPP_PHONE_NUMBER_ID!, identity.get<string>('whatsapp_subject') ?? '')
       : createTelegramCaller(token!);
@@ -899,6 +905,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         void api.sendMessage({ chat_id: owner, text: 'Heads up - I could not save that to memory just now, so your last message was not stored. If you told me something to remember, say it again and I will retry.' }).catch(() => undefined);
       },
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
+      () => healthContext.latest(),
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);

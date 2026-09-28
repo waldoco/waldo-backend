@@ -15,7 +15,7 @@ import {
   type ContextComposerDependencies,
   type ContextSource,
 } from '../context-composer';
-import type { ContextFragment } from '../context-composer/types';
+import type { ContextFragment, ContextHealthMaterial } from '../context-composer/types';
 import type { HookRuntimeContext } from '../hooks/registry';
 import {
   CloudflareAIGatewayAdapter,
@@ -113,6 +113,9 @@ export type RunLoopTestOverrides = {
 type ResolveRunLoopAdaptersOptions = {
   deps?: Deps;
   toolOutputs?: () => Promise<readonly ContextFragment[]>;
+  // D5: derived health context (zones only, Art-9) for the composer's health material slot.
+  // The loader owns absence: it returns null and logs when no derived context exists.
+  health?: () => Promise<ContextHealthMaterial | null>;
 };
 
 export function resolveRunLoopAdapters(
@@ -139,7 +142,7 @@ export function resolveRunLoopAdapters(
       deliveryTextFallback: RUN_LOOP_DELIVERY_TEXT,
       providerMode: 'fake',
       safety: localPermissiveSafety(),
-      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs),
+      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs, options.health),
       replayArtifacts: localTrustedBriefReplayArtifacts(),
     };
   }
@@ -282,6 +285,7 @@ export function localTrustedBriefScheduleInput(): Readonly<{
 
 function createLocalTrustedBriefContextComposer(
   toolOutputs: () => Promise<readonly ContextFragment[]> = async () => [],
+  health: () => Promise<ContextHealthMaterial | null> = async () => null,
 ): ContextComposer {
   const dependencies: ContextComposerDependencies = {
     staged_inputs: {
@@ -338,7 +342,9 @@ function createLocalTrustedBriefContextComposer(
             'Never expose private source content.',
             'local-trusted-safeguards',
           ),
-          health: null,
+          // A health-material failure degrades to truthful absence (the loader logs the
+          // underlying error); a health bug must never kill the owner's turn.
+          health: await health().catch(() => null),
           workspace: [],
           tool_outputs: await toolOutputs(),
         };
