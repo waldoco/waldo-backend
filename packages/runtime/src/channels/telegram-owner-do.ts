@@ -291,7 +291,9 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       if (action && ['approval.approve', 'approval.skip', 'approval.undo'].includes(action.action)) {
         const key = { 'approval.approve': 'a', 'approval.skip': 's', 'approval.undo': 'u' } as const;
-        if (action.action !== 'approval.undo' && !consoleMayApprove(desk.pending(Date.now()).find((item) => item.id === action.id))) return back('invalid');
+        // Approve stays gated to calendar changes with full review (consoleMayApprove); skip
+        // and undo are safe-direction decisions desk.decide validates by ledger state.
+        if (action.action === 'approval.approve' && !consoleMayApprove(desk.pending(Date.now()).find((item) => item.id === action.id))) return back('invalid');
         const out = await desk.decide(action.id, key[action.action as keyof typeof key], 'console:approval');
         return new Response(null, { status: 303, headers: { location: `${CONSOLE_PATH}?m=${encodeURIComponent(out.message.slice(0, 200))}` } });
       }
