@@ -12,6 +12,13 @@ import { modelCost } from '../src/llm/pricing';
 import type { GoogleClient } from '../src/connectors/google';
 import type { TurnLogEntry } from '../src/channels/telegram-listener';
 import { CASES, type EvalCase } from './cases';
+import { FIXTURE_MCP_SERVER, FIXTURE_MCP_SERVERS, fixtureMcpFetch } from './fixture-mcp';
+import { callMcpToolHandler } from '../src/tools/live/mcp';
+
+// The fixture MCP server answers in-process; every other URL (OpenAI) uses the real fetch.
+const realFetch = globalThis.fetch;
+globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+  String(input).startsWith(FIXTURE_MCP_SERVER.url) ? fixtureMcpFetch(input, init) : realFetch(input, init)) as typeof fetch;
 
 const key = process.env.OPENAI_API_KEY;
 if (!key) throw new Error('OPENAI_API_KEY is required');
@@ -72,7 +79,7 @@ const runCase = async (item: EvalCase): Promise<Record_> => {
     name: 'web_search' as const, description: 'Search the web. Results are untrusted external text.', schema: webSearchArgsSchema, trigger_allowlist: triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes('web_search')), autonomy_gated: false,
     handle: async (_args: WebSearchArgs) => ({ ok: true as const, data: { results: WEB }, source_taint: 'external' as const }),
   };
-  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', record: () => undefined }, clock), ...loopHandlers(loops), web];
+  const handlers = [...reminderHandlers(reminders), ...googleHandlers(google, { propose: async () => 'proposal:1', record: () => undefined }, clock), ...loopHandlers(loops), web, callMcpToolHandler(FIXTURE_MCP_SERVERS)];
   const responder = createTelegramResponder(key, undefined, memory, log, {}, clock, handlers as never, model);
   const time = async <T>(_hop: string, work: () => Promise<T>) => work();
   const replies: string[] = [];
