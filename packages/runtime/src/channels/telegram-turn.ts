@@ -92,6 +92,11 @@ export const createTelegramResponder = (
   // survives the reply returning. Without it, hibernation kills the write silently
   // (2026-09-28 staging receipt: three acknowledged corrections produced no memory hop).
   background?: (work: Promise<unknown>) => void,
+  // Honest follow-up (ack-binding): the reply has already acknowledged the owner's turn by
+  // the time this write runs, so a failed memory write must correct the record instead of
+  // leaving the owner believing it stuck. Fires once per failure streak; the latch resets
+  // on the next successful settle. The owner DO wires this to a direct message.
+  onMemoryWriteFailed?: (error: unknown) => void,
 ): Pick<TelegramOwnerListenerOptions, 'respond' | 'chooseReaction'> & { remind(id: string, chatId: number, note: string, time: TurnTimer): Promise<string>; prompt(id: string, chatId: number, said: string, time: TurnTimer): Promise<string>; consolidate(trace: string, day: string, sides?: { owner: string; waldo: string }): Promise<string>; migrate(trace: string, input: string): Promise<string>; promote(trace: string): Promise<string>; planDay(trace: string, input: string): Promise<string>; control: typeof control } => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -242,6 +247,7 @@ export const createTelegramResponder = (
   // hallucinated Gmail offer, with correct history in the prompt), so these turns escalate
   // to memoryModel for their reply hop. Set by respond() for the duration of one submit.
   let replyModelOverride: ModelName | undefined;
+  let memoryFailureNotified = false;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
   let lastReply: string | undefined;
@@ -296,8 +302,15 @@ export const createTelegramResponder = (
             if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
             const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
             log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
+            memoryFailureNotified = false;
           })
-          .catch((error: unknown) => log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' }))
+          .catch((error: unknown) => {
+            log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error' });
+            if (!memoryFailureNotified) {
+              memoryFailureNotified = true;
+              try { onMemoryWriteFailed?.(error); } catch { /* the notifier must never break the turn */ }
+            }
+          })
           .finally(() => memory.endSettle(id));
         background?.(settling);
       }
