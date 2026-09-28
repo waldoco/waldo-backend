@@ -1,0 +1,40 @@
+# Waldo backend: new developer map
+
+Code pin: `beta-mvp` `d2244c45` (September 28, 2026). This is a source map, not a production-readiness certificate. Read current code and live receipts before making a capability claim. Some older docs, including `docs/CURRENT_SYSTEM.md` pinned to September 23, describe a much earlier runtime and must not be treated as today's state.
+
+## Five-minute orientation
+
+1. `packages/runtime/src/index.ts` is the Cloudflare Worker entrypoint. It routes health, Telegram/WhatsApp webhooks, event ingress, probes, OAuth callbacks, console, and other public endpoints. `packages/runtime/wrangler.jsonc` owns Worker bindings, environment and R2 configuration. `/healthz` returns the deployed release string, not a full dependency check.
+2. `packages/runtime/src/identity/owner-directory.ts` resolves provider subjects into an owner DO using HMAC-signed Supabase RPCs. The Worker has a publishable key, not a Supabase service-role key. `supabase/migrations/` owns signed functions and row policies. The fallback single-owner deploy route exists only when directory config is absent; do not treat it as a multi-user path.
+3. `packages/runtime/src/channels/telegram-webhook.ts` validates the Telegram secret, resolves the sender, then dispatches to `TelegramOwnerDO` in `channels/telegram-owner-do.ts`. Unknown senders can redeem one-time `/link CODE` in a private bot DM; another owner's presence cannot be taken over. The DO is the owner-state boundary, not a global chat store.
+4. `channels/telegram-turn.ts` composes a turn through `conversation/joined-path.ts`, prompt/context composition, model gateway and `conversation/tool-loop.ts`. Tool handlers live under `tools/live/`, with contract schemas in `packages/contracts/`. The loop bounds rounds, caps/offloads output, prevents repeat/no-progress calls and passes external taint to the effect gate. `channels/telegram-listener.ts` owns channel delivery and progress. Inspect both a model reply and the actual delivery trace before calling a turn successful.
+5. `channels/console-signin.ts`, `identity/console-auth.ts`, `channels/console.ts`, `channels/console-admin.ts`, and the DO's `/console` branch are the web control plane. Email OTP verifies an address; a phone is collected at signup but remains unverified. An owner cookie routes to that owner's DO; a separate DO session cookie controls console access. `/console/admin` requires a live admin owner. At this pin signup is OPEN (`20260925130000_waldo_open_signup.sql`); an admin Invite creates attribution only and does **not** send email or gate signup. Some UI copy still calls it invite-gated. Never tell a new user that the Invite button emailed them.
+
+## State and data authority
+
+| Concern | Owner/source | Key code | What not to assume |
+|---|---|---|---|
+| Owner, presences, settings, sign-in throttle, link codes | Supabase `waldo` schema | `identity/owner-directory.ts`, `identity/console-auth.ts`, `supabase/migrations/` | A matching email/phone is not an authenticated Telegram presence. Signed RPC and active state matter. |
+| Per-owner conversation, claims, schedules, approvals, audit | One SQLite-backed Durable Object | `telegram-owner-do.ts`, `conversation/conversation-store.ts`, `memory/claims.ts`, `scheduler/multiplexer.ts`, `channels/approvals.ts` | A green Worker health endpoint does not prove an owner's DO and DB path. |
+| Long-term recall | Claim store and episodes FTS5 | `memory/claims.ts`, `channels/episodes.ts` | Memory profile is not the live source of truth for provider state. Claims still lack source-event IDs and dated validity. |
+| Google consent/token custody | Owner DO consent attempt and Supabase Vault/proxy when configured | `connectors/google-consent.ts`, `connectors/connections.ts`, `channels/google-oauth.ts` | The local no-proxy fallback stores raw refresh tokens in DO; check the target environment before making a blanket custody claim. OAuth state is signed, PKCE and nonce are one-use. |
+| Artifact body and metadata | R2 body plus owner-DO SQLite metadata | `channels/artifacts.ts` | Without the R2 binding, an in-memory fallback is not durable across eviction. Confirm binding and body readback. |
+| Derived health | App-owned `public.health_context_daily`, signed `waldo.health_context_read` | `channels/health-context.ts`, `supabase/migrations/20260928160000_waldo_health_context.sql` | The function may exist while its app-owned table does not. Latest live health hop at 23:37 IST failed 42P01; a narrow app migration is pending. Raw health streams must not enter the prompt. |
+
+## Lifecycle, effects, and failure truth
+
+- `channels/reminders.ts`, `channels/heartbeat.ts`, `channels/standing-orders.ts`, `scheduler/multiplexer.ts`, and the DO `alarm()` schedule work; `channels/background-runs.ts` is a bounded audit list. Read actual delivery and run state: pending is not sent, sent is not necessarily received.
+- `channels/approvals.ts` stores payload-bound proposals for calendar, email, browser submit, message and MCP effects. A proposal is not an effect. The executor re-reads bindings; unknown completion requires reconciliation. The owner DO serializes turns, callbacks and alarms through `this.serial()`; do not bypass it for an await-heavy state change.
+- `channels/telegram-owner-do.ts` constructs Google, browse, search, messaging, MCP, loop, artifact, and reminder handlers. Some have runtime prerequisites or approval rails; a registered handler is not proof of a working provider connection.
+- `observability/trace-privacy.ts`, `observability/otlp-turns.ts`, `channels/harness.ts`, and console Activity separate sanitized hop status from private text. A trace marker is not evidence that an external action landed. Do not put credentials, raw health, or provider message bodies into CI logs or reports.
+
+## New-developer checkout and proof
+
+- Clone `waldoco/waldo-backend`, record exact `beta-mvp` SHA, read root `AGENTS.md`, `docs/README.md`, this map, and only the owning domain doc. `docs/planning/waldo-agent-mvp/REPOSITORY_MAP.md` is a dated cross-repo map, not today's capability report. App (`waldo-app`) owns iPhone/HealthKit; Kennel owns local coding-harness execution; Brain owns canonical product decisions.
+- Use Node/pnpm versions in `package.json`, frozen install and an isolated branch/worktree. Run focused tests, `pnpm --filter @waldo/runtime typecheck`, `pnpm verify`, and **separately** `pnpm --filter @waldo/runtime test:scenarios` (the normal Worker Vitest config excludes that Node scenario file). Supabase pgTAP uses isolated local DB, not shared staging.
+- Before merging: exact-head Actions checks, source-level adversarial review, change-only files in commit, no secret-bearing artifacts. A Cloudflare PR preview check can be red independently of GitHub verify; disclose it, do not relabel red as green. Merge receipt does not deploy staging. For a staging release identify the version-to-commit mapping in Cloudflare, promote the selected version, then read `/healthz` twice and run a synthetic owner turn with console Activity receipt. Production deployment is a separate owner decision.
+- Test tomorrow's onboarding with two synthetic owners, not real Ashish/Suyash: email OTP flow with non-delivering test provider or approved sandbox, owner-cookie routing, separate DO/console and link-code redemption, send-time presence check, revocation/account switch, no cross-owner artifacts/claims. Never seed or alter an existing real owner row as a shortcut.
+
+## Open before first external invite
+
+The admin Invite UI is attribution-only and does not email anyone; product choice (open signup vs invite-required) remains unanswered. Live two-owner signed routing and new-owner redemption have not been proven against shared staging. Health-context read currently fails while `public.health_context_daily` is absent. The app and phone OTP / WhatsApp account ownership require separate provider tests. These are explicit blockers to a "production-ready" label, not reasons to fake success or silently swap tenants.
