@@ -171,6 +171,18 @@ const threadBody = (payload: GmailPayload | undefined): string => {
   return (payload ? plain(payload) : '').trim().slice(0, BODY_CAP);
 };
 
+// Single-shot access-token mint for callers that need a raw bearer (Google-auth MCP servers on
+// a locally held grant). Same refresh path and health reporting as googleClient, no cache: MCP
+// calls are rare enough that one refresh per call beats a second cache to keep consistent.
+export async function googleAccessToken(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void): Promise<string> {
+  const result = await token(app, { refresh_token: tokens.refresh_token, grant_type: 'refresh_token' }, fetcher).catch((error: unknown) => {
+    health?.(error instanceof Error ? error.message : String(error));
+    throw error;
+  });
+  health?.('');
+  return result.access_token;
+}
+
 // health hears '' after a good refresh and the error after a failed one, so the console can offer a reconnect.
 export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetch = fetch, health?: (error: string) => void): GoogleClient {
   let access: { token: string; until: number } | null = null;

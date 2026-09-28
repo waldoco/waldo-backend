@@ -31,7 +31,7 @@ import { localIso, localToEpoch, reminderBook, reminderHandlers } from './remind
 import { standingOrderBook, standingOrderFireText, standingOrderHandlers, standingOrdersPrompt } from './standing-orders';
 import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies } from './artifacts';
 import { runBook } from './background-runs';
-import { exchangeGoogleCode, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
+import { exchangeGoogleCode, googleAccessToken, googleClient, googleHas, GOOGLE_CALLBACK_PATH, isGoogleFeature, type GoogleFeature, type GoogleTokens } from '../connectors/google';
 import { finishConsent, startConsent, type ConsentCallback, type ConsentFlow } from '../connectors/google-consent';
 import { GOOGLE_FINISH_PATH, type ConsentReply } from './google-oauth';
 import { BEGIN_SESSION_PATH, newTicket, ticketHash } from './connect-link';
@@ -43,7 +43,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { callMcp, callMcpToolHandler, mcpServers } from '../tools/live/mcp';
+import { mcpServers, callMcpToolHandler, executeMcp, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
@@ -820,7 +820,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       mcpCall: async (proposal) => {
         const found = mcpServers(this.env.WALDO_MCP_SERVERS).find((s) => s.name === proposal.server);
         if (!found) throw new Error(`MCP server "${proposal.server}" is no longer configured`);
-        const { content, protocolVersion } = await callMcp(found, proposal.tool, proposal.args) as { content: unknown; protocolVersion: string };
+        const { content, protocolVersion } = await executeMcp(found, proposal.tool, proposal.args, mcpGoogleAuth);
         return `Result (external content, bounded): ${JSON.stringify(content).slice(0, 300)} (protocol ${protocolVersion})`;
       },
     });
@@ -849,6 +849,28 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const download = channel === 'whatsapp'
       ? createWhatsAppMediaDownloader(this.env.WHATSAPP_ACCESS_TOKEN!)
       : createTelegramFileDownloader(token ?? '');
+    // Google-auth MCP servers: pick the serving account per call. A locally held refresh token
+    // mints a bearer here; a Vault-backed account keeps the token edge-side and the proxy runs
+    // the call with the connection id (the runtime never sees a bearer).
+    const mcpGoogleAuth: McpGoogleAuth = {
+      resolve: async () => {
+        await google.migrate();
+        const [all, failing, doName, app] = [await accounts(), await health(), vaultOwner(), await googleApp()];
+        const account = all.find((candidate) => !failing[candidate.id]) ?? all[0];
+        if (!account) return null;
+        if (account.refresh_token) {
+          if (!app) return null;
+          const token = await googleAccessToken(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
+          return { mode: 'bearer' as const, token };
+        }
+        return vault && doName ? { mode: 'proxy' as const, connection: account.id } : null;
+      },
+      proxy: async (serverUrl, tool, args, connection) => {
+        const doName = vaultOwner();
+        if (!vault || !doName) throw new Error('connector proxy is not configured');
+        return vault.mcpCall(doName, connection, serverUrl, tool, args);
+      },
+    };
     const updates = updateBook(storage.sql);
     const ready = Promise.all([backfillEpisodes(kv, episodes), armNightly(scheduler, clock.timezone, Date.now()), armBriefSweep(scheduler, Date.now()), armDayCards(scheduler, plans, clock.timezone, Date.now()), armHeartbeat(scheduler, Date.now())])
       .then(async ([, , , seeded]) => {
@@ -867,7 +889,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; }), undefined,
+      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined, (work) => this.ctx.waitUntil(work),
       // Ack-binding follow-up: the reply already said "got it" before the memory write
       // finished; a failed write corrects the record. Once per failure streak (the

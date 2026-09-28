@@ -8,6 +8,9 @@ export type GoogleProxy = Readonly<{
   exchange(doName: string, code: string, redirectUri: string, codeVerifier?: string): Promise<GoogleLink | null>;
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
   client(doName: string, connection: string, health?: (error: string) => void): GoogleClient;
+  // Google-auth MCP servers (WALDO_MCP_SERVERS entries with auth:'google') on a Vault-backed
+  // grant: the edge attaches the token and runs the call; the runtime never sees a bearer.
+  mcpCall(doName: string, connection: string, serverUrl: string, tool: string, args: Record<string, unknown>): Promise<unknown>;
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
@@ -47,6 +50,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         throw error;
       }
     }])) as unknown as GoogleClient,
+    mcpCall: async (doName, connection, serverUrl, tool, args) => (await post({ do_name: doName, op: 'mcp_call', connection, server_url: serverUrl, tool, args: [args] })).data,
     revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
   };
 };

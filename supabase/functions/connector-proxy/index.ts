@@ -1,6 +1,8 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, GoogleError, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
+import { googleAccessToken } from '../../../packages/runtime/src/connectors/google.ts';
+import { callMcpTransport, McpAuthError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
 
 const env = (name: string) => Deno.env.get(name) ?? '';
 const [url, service, router, clientId, clientSecret] = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'WALDO_ROUTER_HMAC_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].map(env);
@@ -32,7 +34,7 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call'; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
@@ -61,6 +63,22 @@ const handle = async (body: Body): Promise<Response> => {
     }
     // One-time move of a token saved in the Durable Object before this proxy existed.
     if (body.op === 'adopt' && body.refresh_token) return store(body.do_name, body.email ?? 'google', body.scopes ?? [], body.refresh_token);
+    // Google-auth MCP servers: the runtime names server/tool/args; the token never leaves the edge.
+    if (body.op === 'mcp_call') {
+      if (!body.connection || !body.server_url || !body.tool || !/^https:\/\/([a-z0-9-]+\.)?googleapis\.com\//.test(body.server_url)) return fail(404, 'unknown operation');
+      const mcpToken = await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
+      if (!mcpToken) return fail(401, 'connection unavailable');
+      let mcpRefreshError = '';
+      try {
+        const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = error; });
+        const { content } = await callMcpTransport({ url: body.server_url }, body.tool, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access);
+        await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
+        return reply({ data: content ?? null });
+      } catch (error) {
+        if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError });
+        return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));
+      }
+    }
     if (body.op !== 'call' || !body.connection || !METHODS.includes(body.method as Method)) return fail(404, 'unknown operation');
     const token = await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
     if (!token) return fail(401, 'connection unavailable');
