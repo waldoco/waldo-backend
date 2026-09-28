@@ -1,5 +1,5 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { GoogleError, type GoogleClient, type GoogleTokens } from './google';
+import { GOOGLE_METHODS, GoogleError, type GoogleClient, type GoogleTokens } from './google';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
 // The runtime holds a connection id and gets data back; it never sees a bearer or refresh token.
@@ -11,7 +11,7 @@ export type GoogleProxy = Readonly<{
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
-const METHODS = ['events', 'draft', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail'] as const;
+const METHODS = GOOGLE_METHODS;
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
 
 export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): GoogleProxy | null => {

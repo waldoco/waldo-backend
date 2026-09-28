@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { googleProxy } from '../src/connectors/connections';
-import { consentState, GoogleError, googleClient, googleHas, readConsentState, type GoogleClient } from '../src/connectors/google';
+import { consentState, GOOGLE_METHODS, GoogleError, googleClient, googleHas, readConsentState, type GoogleClient, type GoogleMethod } from '../src/connectors/google';
 import { renderConsole } from '../src/channels/console';
 import { SAMPLE_CONSOLE_VIEW } from './fixtures/console-sample';
 import { googleHandlers } from '../src/tools/live/google';
@@ -8,6 +8,18 @@ import { hex, routerSignature } from '../src/identity/owner-directory';
 
 const env = { SUPABASE_PROJECT_URL: 'https://db.test', SUPABASE_PUBLISHABLE_KEY: 'pub', WALDO_ROUTER_HMAC_SECRET: 'router' };
 const at = 1_790_000_000;
+
+describe('proxy method parity', () => {
+  it('exposes every GoogleClient method through the vault client, including sendRaw/findSentByMessageId/searchMail/readThread/tasks', () => {
+    const client = googleProxy(env)!.client('do-a', 'c-1');
+    // Compile-time: a GoogleClient method missing from GOOGLE_METHODS fails typecheck here.
+    const missing: Exclude<keyof GoogleClient, GoogleMethod> = undefined as never;
+    expect(missing).toBe(undefined);
+    // Runtime: the vault client is built from exactly the allowlist, in both directions.
+    expect(Object.keys(client).sort()).toEqual([...GOOGLE_METHODS].sort());
+    for (const name of GOOGLE_METHODS) expect(typeof client[name]).toBe('function');
+  });
+});
 
 describe('google proxy', () => {
   const proxyOf = (fetcher: ReturnType<typeof vi.fn>) => googleProxy(env, fetcher as unknown as typeof fetch, () => at * 1000)!;

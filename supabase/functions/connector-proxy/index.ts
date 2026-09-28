@@ -1,11 +1,11 @@
 // Typed connector proxy. The only place a Google token is read, refreshed or used: the runtime
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
-import { exchangeGoogleCode, googleClient, GoogleError, type GoogleClient } from '../../../packages/runtime/src/connectors/google.ts';
+import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, GoogleError, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 
 const env = (name: string) => Deno.env.get(name) ?? '';
 const [url, service, router, clientId, clientSecret] = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'WALDO_ROUTER_HMAC_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].map(env);
-const METHODS = ['events', 'draft', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail'] as const;
-type Method = (typeof METHODS)[number];
+const METHODS = GOOGLE_METHODS;
+type Method = GoogleMethod;
 
 const hex = (bytes: ArrayBuffer) => [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 const sha256 = async (text: string) => hex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
