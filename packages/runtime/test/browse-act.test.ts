@@ -188,6 +188,26 @@ describe('executeBrowserSubmit', () => {
     expect(calls[calls.length - 1]).toBe('end');
   });
 
+  it('never substitutes a different observed action after approval', async () => {
+    const { calls, fetcher } = executorFake({ observeAction: { selector: '#cancel', description: 'Cancel the order', method: 'click' } });
+    const message = await executeBrowserSubmit('k', 'p', undefined, proposal, fetcher);
+    expect(message).toContain('no longer on the page');
+    expect(calls).not.toContain('act');
+  });
+
+  it('refuses a changed selector or method despite the same visible action label', async () => {
+    for (const action of [
+      { selector: '#different', description: 'Place the order', method: 'click' },
+      { selector: '#pay', description: 'Place the order', method: 'submit' },
+      { selector: '#pay', description: 'Place the order', method: 'click', arguments: ['different'] },
+    ]) {
+      const { calls, fetcher } = executorFake({ observeAction: action });
+      const message = await executeBrowserSubmit('k', 'p', undefined, proposal, fetcher);
+      expect(message).toContain('no longer on the page');
+      expect(calls).not.toContain('act');
+    }
+  });
+
   it('aborts when the price drifted - no act, honest drift report', async () => {
     const { calls, fetcher } = executorFake({ binding: { total: 'Rs 899' } });
     const message = await executeBrowserSubmit('k', 'p', undefined, proposal, fetcher);
