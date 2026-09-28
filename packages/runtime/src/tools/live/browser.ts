@@ -208,7 +208,11 @@ export const executeBrowserSubmit = async (
     const observed = await call(`/v1/sessions/${session}/observe`, { instruction: proposal.action.description, options: { model, timeout: 30000 } });
     if (!observed.ok) return `The action could not be found again (HTTP ${observed.status}), so nothing happened.`;
     const observeBody = (await observed.json()) as { success?: boolean; data?: { result?: BrowserAction[] } };
-    const found = observeBody.data?.result?.find((a) => a.description === proposal.action.description) ?? observeBody.data?.result?.[0];
+    // An approval is for a particular observed action, never whichever action is first
+    // on a changed page. Re-observe to locate it, but refuse a changed target/method.
+    const found = observeBody.data?.result?.find((a) =>
+      a.description === proposal.action.description && a.selector === proposal.action.selector &&
+      a.method === proposal.action.method && JSON.stringify(a.arguments ?? []) === JSON.stringify(proposal.action.arguments ?? []));
     if (!observeBody.success || !found) return 'That action is no longer on the page, so nothing happened. Ask me to look again.';
 
     const extracted = await call(`/v1/sessions/${session}/extract`, {
