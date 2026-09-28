@@ -18,6 +18,8 @@ const auth = (overrides: Partial<ConsoleAuth> = {}): ConsoleAuth => ({
   deleteOwner: vi.fn(async () => true),
   adminOverview: vi.fn(async () => null),
   invite: vi.fn(async () => false),
+  memberInvite: vi.fn(async () => false),
+  memberInvites: vi.fn(async () => []),
   revokeInvite: vi.fn(async () => false),
   ownerCookie: vi.fn(async (doName: string) => `${doName}.session.sig`),
   readOwnerCookie: vi.fn(async () => null),
@@ -166,7 +168,20 @@ describe('handleConsole', () => {
   });
 });
 
-describe('open signup', () => {
+describe('invite-gated signup', () => {
+  it('carries an invite through OTP send and verify and escapes it in the hidden field', async () => {
+    const sendCode = vi.fn(async () => true);
+    const verify = vi.fn(async () => 'owner-1');
+    const limiter = { limit: vi.fn(async () => ({ success: true })) } as unknown as RateLimit;
+    const env = { TELEGRAM_OWNER_DO: owners().ns, RESPONSIBILITY_RATE_LIMITER: limiter };
+    const signIn = await handleConsole(form('/console/signin', { email: 'invitee@example.com', phone: '+14155550100', invite: ' abc<123 ' }), env, auth({ sendCode, verify }));
+    expect(sendCode).toHaveBeenCalledWith('invitee@example.com', 'ABC<123');
+    expect(await signIn!.text()).toContain('name="invite" value="ABC&#60;123"');
+    const done = await handleConsole(form('/console/verify', { email: 'invitee@example.com', phone: '+14155550100', invite: ' ABC<123 ', code: '123456' }), env, auth({ sendCode, verify }));
+    expect(done?.status).toBe(303);
+    expect(verify).toHaveBeenCalledWith('invitee@example.com', '123456', '+14155550100', 'ABC<123');
+  });
+
   it('phone is required and normalized to E.164; it rides hidden into verify and reaches owner provisioning', async () => {
     const verify = vi.fn(async () => 'owner-abc');
     const a = auth({ verify });
@@ -178,7 +193,7 @@ describe('open signup', () => {
     expect(html).toContain('name="email" value="new@example.com"');
     const done = await handleConsole(form('/console/verify', { email: 'new@example.com', phone: '+91 98765 43210', code: '123456' }), env, a);
     expect(done?.status).toBe(303);
-    expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+919876543210');
+    expect(verify).toHaveBeenCalledWith('new@example.com', '123456', '+919876543210', '');
   });
 
   it('refuses code send without a phone, and refuses an un-normalizable phone', async () => {
@@ -211,7 +226,7 @@ describe('open signup', () => {
     expect(limit).toHaveBeenCalledWith({ key: 'console-signin-ip:1.2.3.4' });
     const allowed = await handleConsole(form('/console/signin', { email: 'fresh@x.com', phone: '+14155550100' }), env, auth({ sendCode }));
     expect(await allowed!.text()).toContain('name="code"');
-    expect(sendCode).toHaveBeenCalledWith('fresh@x.com');
+    expect(sendCode).toHaveBeenCalledWith('fresh@x.com', '');
   });
 
   it('throttles verify attempts per email and per IP: auth.verify never runs', async () => {

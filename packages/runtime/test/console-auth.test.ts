@@ -34,11 +34,28 @@ describe('consoleAuth', () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     const [url, init] = fetcher.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://db.test/rest/v1/rpc/signin_allowed');
-    expect(JSON.parse(String(init.body))).toMatchObject({ p_email: 'stranger@example.com', p_sig: await routerSignature('router', 1_790_000_000, 'signin.stranger@example.com') });
+    expect(JSON.parse(String(init.body))).toMatchObject({ p_email: 'stranger@example.com', p_sig: await routerSignature('router', 1_790_000_000, 'signin.stranger@example.com.') });
 
     const allowed = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({}));
     await consoleAuth(env, allowed as unknown as typeof fetch, now)!.sendCode('owner@example.com');
     expect((allowed.mock.calls[1] as [string])[0]).toBe('https://db.test/auth/v1/otp');
+  });
+
+  it('binds an invite code hash to the OTP gate and owner redemption without sending raw code to the directory', async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({}))
+      .mockResolvedValueOnce(json({ user: { id: 'u-1', email: 'invited@example.com' } }))
+      .mockResolvedValueOnce(json('owner-1'));
+    const auth = consoleAuth(env, fetcher as unknown as typeof fetch, now)!;
+    const code = 'ABCDEFGHJKLMNPQRSTUV';
+    expect(await auth.sendCode('Invited@Example.com', code)).toBe(true);
+    expect(await auth.verify('Invited@Example.com', '123456', '+14155550100', code)).toBe('owner-1');
+    const gate = JSON.parse(String((fetcher.mock.calls[0] as [string, RequestInit])[1].body));
+    const bound = JSON.parse(String((fetcher.mock.calls[3] as [string, RequestInit])[1].body));
+    expect(gate.p_code_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(bound.p_code_hash).toBe(gate.p_code_hash);
+    expect(gate.p_sig).toBe(await routerSignature('router', 1_790_000_000, `signin.invited@example.com.${gate.p_code_hash}`));
+    expect(bound.p_sig).toBe(await routerSignature('router', 1_790_000_000, `owner.u-1.invited@example.com.+14155550100.${gate.p_code_hash}`));
+    expect(JSON.stringify(fetcher.mock.calls)).not.toContain(code);
   });
 
   it('maps a verified code to the owner Durable Object', async () => {

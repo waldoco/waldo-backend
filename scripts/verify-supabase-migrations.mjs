@@ -31,6 +31,7 @@ const expectedMigrations = [
   '20260928130000_waldo_delete_owner_vault_portable.sql',
   '20260928140000_waldo_delete_owner_session_tables.sql',
   '20260928160000_waldo_health_context.sql',
+  '20260928190000_waldo_invite_chain.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

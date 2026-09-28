@@ -28,12 +28,12 @@ export const normalizePhone = (raw: string): string | null => {
   return /^\+[1-9]\d{6,14}$/.test(compact) ? compact : null;
 };
 
-const emailForm = (note = '') => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}"><p>Sign in to Waldo</p>${note ? `<p>${esc(note)}</p>` : ''}<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"><input name="phone" type="tel" autocomplete="tel" required placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
+const emailForm = (note = '') => page(`<form method="post" action="${CONSOLE_SIGNIN_PATH}"><p>Sign in to Waldo</p>${note ? `<p>${esc(note)}</p>` : ''}<input name="email" type="email" autocomplete="email" required placeholder="you@example.com"><input name="invite" autocomplete="off" placeholder="Invite code (new members)"><input name="phone" type="tel" autocomplete="tel" required placeholder="Phone, e.g. +91 98765 43210"><button>Email me a code</button></form>`);
 // The phone rides along as a hidden field so it lands on the owner row at first verify; it is
 // unverified contact data until the account-bound SMS OTP verifies the number.
-const codeForm = (email: string, phone: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}"><p>${note ? esc(note) : `If ${esc(email)} has access, a code is on its way.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form>`);
+const codeForm = (email: string, phone: string, invite: string, note = '') => page(`<form method="post" action="${CONSOLE_VERIFY_PATH}"><p>${note ? esc(note) : `If ${esc(email)} has access, a code is on its way.`}</p><input type="hidden" name="email" value="${esc(email)}"><input type="hidden" name="phone" value="${esc(phone)}"><input type="hidden" name="invite" value="${esc(invite)}"><input name="code" inputmode="numeric" autocomplete="one-time-code" required placeholder="Code"><button>Sign in</button></form>`);
 
-// With Supabase configured, the console signs in by email code (currently open signup) and a signed owner cookie picks the owner DO.
+// With Supabase configured, the console signs in by email code (invite-required for new members) and a signed owner cookie picks the owner DO.
 // Returns null when Supabase is not configured; the caller keeps the Telegram one-time link sign-in.
 export const handleConsole = async (request: Request, env: ConsoleEnv, auth: ConsoleAuth | null = consoleAuth(env), requestTrace: string = consoleTrace()): Promise<Response | null> => {
   const owners = env.TELEGRAM_OWNER_DO;
@@ -47,6 +47,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     const form = await request.formData();
     const email = String(form.get('email') ?? '').trim().toLowerCase();
     const phone = normalizePhone(String(form.get('phone') ?? ''));
+    const invite = String(form.get('invite') ?? '').trim().toUpperCase();
     if (!email.includes('@')) return finish(emailForm('Enter your email address.'));
     if (!phone) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.'));
     // OTP bombing guard: per-email and per-IP throttle, fail-closed: a public signup endpoint
@@ -74,21 +75,22 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
       event('console_signin', false, 'throttled');
       return finish(emailForm('Too many attempts. Try again in a few minutes.'));
     }
-    const sent = await auth.sendCode(email);
+    const sent = await auth.sendCode(email, invite);
     event('console_signin', sent, sent ? 'sent' : 'not_allowed');
-    return finish(codeForm(email, phone));
+    return finish(codeForm(email, phone, invite));
   }
   if (url.pathname === CONSOLE_VERIFY_PATH && request.method === 'POST') {
     const form = await request.formData();
     const email = String(form.get('email') ?? '');
     const phone = normalizePhone(String(form.get('phone') ?? ''));
+    const invite = String(form.get('invite') ?? '').trim().toUpperCase();
     if (!phone) return finish(emailForm('Enter your phone number with country code, e.g. +91 98765 43210.'));
     // A verification code is guessable, so verify attempts are throttled like code sends,
     // fail-closed: without the limiter this public endpoint refuses rather than allowing
     // unlimited guesses.
     if (!env.RESPONSIBILITY_RATE_LIMITER) {
       event('console_verify', false, 'limiter_absent');
-      return finish(codeForm(email, phone, 'Sign-in is temporarily unavailable. Try again shortly.'));
+      return finish(codeForm(email, phone, invite, 'Sign-in is temporarily unavailable. Try again shortly.'));
     }
     const ip = request.headers.get('cf-connecting-ip') ?? 'unknown';
     const address = email.trim().toLowerCase();
@@ -96,7 +98,7 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     const ipOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `console-verify-ip:${ip}` })).success;
     if (!emailOk || !ipOk) {
       event('console_verify', false, 'rate_limited');
-      return finish(codeForm(email, phone, 'Too many attempts. Wait a minute and try again.'));
+      return finish(codeForm(email, phone, invite, 'Too many attempts. Wait a minute and try again.'));
     }
     let admitted = false;
     try {
@@ -107,23 +109,23 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     }
     if (!admitted) {
       event('console_verify', false, 'throttled');
-      return finish(codeForm(email, phone, 'Too many attempts. Try again in a few minutes.'));
+      return finish(codeForm(email, phone, invite, 'Too many attempts. Try again in a few minutes.'));
     }
-    const doName = await auth.verify(email, String(form.get('code') ?? ''), phone);
+    const doName = await auth.verify(email, String(form.get('code') ?? ''), phone, invite);
     if (!doName) {
       event('console_verify', false, 'invalid');
-      return finish(codeForm(email, phone, 'That code did not work. Try again.'));
+      return finish(codeForm(email, phone, invite, 'That code did not work. Try again.'));
     }
     const grant = await owners.get(owners.idFromName(doName))
       .fetch('https://telegram-owner/grant-console', { method: 'POST', headers: { 'x-waldo-do-name': doName } });
     if (!grant.ok) {
       event('console_verify', false, 'grant_failed');
-      return finish(codeForm(email, phone, 'Sign-in is having trouble. Try again in a moment.'));
+      return finish(codeForm(email, phone, invite, 'Sign-in is having trouble. Try again in a moment.'));
     }
     const ownerCookieValue = await auth.ownerCookie(doName);
     if (ownerCookieValue === null) {
       event('console_verify', false, 'session_unavailable');
-      return finish(codeForm(email, phone, 'Sign-in is having trouble. Try again in a moment.'));
+      return finish(codeForm(email, phone, invite, 'Sign-in is having trouble. Try again in a moment.'));
     }
     const cookie = `Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
     const headers = new Headers({ location: CONSOLE_PATH });

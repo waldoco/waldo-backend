@@ -8,6 +8,8 @@ import { backupAndCopySpots, markCoreFilesMigrated, pendingCoreFiles } from '../
 import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
+import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
+import { newInviteCode } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -266,6 +268,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (url.pathname === CONSOLE_GOOGLE_PATH) return new Response(null, { status: 303, headers: { location: CONSOLE_PATH } });
     const admin = consoleAuth(this.env);
     const doName = this.ctx.storage.kv.get<string>('do_name');
+    if (url.pathname === CONSOLE_INVITES_PATH) {
+      if (!admin || !doName) return new Response('not found', { status: 404 });
+      return new Response(renderMemberInvites(await admin.memberInvites(doName), session.csrf), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
     if (url.pathname === CONSOLE_ADMIN_PATH) {
       const overview = admin && doName ? await admin.adminOverview(doName) : null;
       return overview ? new Response(renderAdmin(overview, session.csrf), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } }) : new Response('not found', { status: 404 });
@@ -281,8 +287,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           : back('google.connect.failed');
       }
       if (action?.action === 'invite.create' || action?.action === 'invite.revoke') {
-        const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value) : admin.revokeInvite(doName, action.id)) : false;
+        const code = action.action === 'invite.create' ? newInviteCode() : '';
+        const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value, code) : admin.revokeInvite(doName, action.id)) : false;
+        if (done && code) return new Response(`Invite for ${action.value}: ${code} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
         return new Response(null, { status: 303, headers: { location: done ? CONSOLE_ADMIN_PATH : `${CONSOLE_PATH}?m=invalid` } });
+      }
+      if (action?.action === 'invite.member') {
+        const code = newInviteCode();
+        const done = admin && doName ? await admin.memberInvite(doName, action.value, code) : false;
+        return done ? new Response(`Invite for ${action.value}: ${code} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : back('invalid');
       }
       if (action?.action === 'telegram.unlink') {
         const done = admin && doName ? await admin.unlinkTelegram(doName) : false;

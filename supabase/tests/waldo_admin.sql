@@ -7,8 +7,8 @@ create function pg_temp.at() returns bigint language sql as $$ select extract(ep
 create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(pg_temp.at()::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
 insert into waldo.owners (do_name, email, is_admin) values ('do-admin', 'admin@test.invalid', true), ('do-user', 'user@test.invalid', false);
 select is(waldo.admin_overview('do-user', pg_temp.at(), pg_temp.sig('admin.do-user')), null, 'a normal owner sees no admin data');
-select is(waldo.admin_invite('do-user', 'x@test.invalid', pg_temp.at(), pg_temp.sig('invite.do-user.x@test.invalid')), false, 'a normal owner cannot invite');
-select is(waldo.admin_invite('do-admin', 'New@test.invalid', pg_temp.at(), pg_temp.sig('invite.do-admin.new@test.invalid')), true, 'the admin can invite');
+select is(waldo.admin_invite('do-user', 'x@test.invalid', pg_temp.at(), pg_temp.sig('invite.do-user.x@test.invalid.'||repeat('b',64)), repeat('b',64)), false, 'a normal owner cannot invite');
+select is(waldo.admin_invite('do-admin', 'New@test.invalid', pg_temp.at(), pg_temp.sig('invite.do-admin.new@test.invalid.'||repeat('a',64)), repeat('a',64)), true, 'the admin can invite');
 select is(jsonb_array_length(waldo.admin_overview('do-admin', pg_temp.at(), pg_temp.sig('admin.do-admin'))->'owners'), 2, 'the admin sees every owner');
 select is((select revoked_at is null from waldo.invites where email = 'new@test.invalid'), true, 'the invite is open');
 select is(waldo.admin_revoke('do-admin', (select code_hash from waldo.invites where email = 'new@test.invalid'), pg_temp.at(), pg_temp.sig('revoke.do-admin.' || (select code_hash from waldo.invites where email = 'new@test.invalid'))), true, 'the admin can revoke');

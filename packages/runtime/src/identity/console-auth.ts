@@ -4,7 +4,7 @@ export const OWNER_COOKIE = 'waldo_owner';
 
 export type AdminOverview = Readonly<{
   owners: readonly Readonly<{ email: string | null; state: string; created_at: string; presences: readonly string[] }>[];
-  invites: readonly Readonly<{ id: string; email: string | null; created_at: string; used_at: string | null; revoked_at: string | null }>[];
+  invites: readonly Readonly<{ id: string; email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[];
 }>;
 
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
@@ -12,15 +12,17 @@ export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | n
 export type ConsoleSession = Readonly<{ session: string; created_at: string; last_seen_at: string }>;
 
 export type ConsoleAuth = Readonly<{
-  sendCode(email: string): Promise<boolean>;
+  sendCode(email: string, code?: string): Promise<boolean>;
   // Strict fixed-window auth throttle kept in the owner directory: global and durable, unlike
   // the per-location binding layer, which only expresses 10s/60s periods.
   throttle(key: string, limit: number, windowSeconds: number): Promise<boolean>;
-  verify(email: string, code: string, phone?: string): Promise<string | null>;
+  verify(email: string, code: string, phone?: string, inviteCode?: string): Promise<string | null>;
   issueLinkCode(doName: string): Promise<string | null>;
   saveSettings(doName: string, settings: OwnerSettings): Promise<boolean>;
   adminOverview(doName: string): Promise<AdminOverview | null>;
-  invite(doName: string, email: string): Promise<boolean>;
+  invite(doName: string, email: string, code: string): Promise<boolean>;
+  memberInvite(doName: string, email: string, code: string): Promise<boolean>;
+  memberInvites(doName: string): Promise<readonly Readonly<{ email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[]>;
   revokeInvite(doName: string, invite: string): Promise<boolean>;
   unlinkTelegram(doName: string): Promise<boolean>;
   // Send-time ownership re-check: true only while an active presence binds this channel subject to this owner.
@@ -67,14 +69,15 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return (await rpc('console_auth_throttle', `throttle.${key}.${limit}.${windowSeconds}`, { p_key: key, p_limit: limit, p_window_seconds: windowSeconds })) === true;
     },
     // Unknown addresses get no email and the same answer, so the page never reveals who is invited.
-    async sendCode(email) {
+    async sendCode(email, code = '') {
       const address = email.trim().toLowerCase();
-      if (!(await rpc('signin_allowed', `signin.${address}`, { p_email: address }))) return false;
+      const codeHash = code ? await linkCodeHash(code) : '';
+      if (!(await rpc('signin_allowed', `signin.${address}.${codeHash}`, { p_email: address, p_code_hash: codeHash }))) return false;
       const response = await auth('otp', { email: address, create_user: true });
       if (!response.ok) throw new Error(`otp send ${response.status}`);
       return true;
     },
-    async verify(email, code, phone) {
+    async verify(email, code, phone, inviteCode = '') {
       const address = email.trim().toLowerCase();
       const response = await auth('verify', { type: 'email', email: address, token: code.trim() });
       if (!response.ok) return null;
@@ -83,7 +86,8 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       // The phone is part of the signed canonical data: it lands on the owner row, so an
       // unsigned phone swap would be a tampered write the RPC must refuse.
       const phoneE164 = (phone ?? '').trim();
-      return (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164 })) as string | null;
+      const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
+      return (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
     },
     async issueLinkCode(doName) {
       const code = newLinkCode();
@@ -95,10 +99,17 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       return (await rpc('set_owner_settings', message, { p_do_name: doName, p_timezone: timezone, p_quiet_start: start ?? '', p_quiet_end: end ?? '', p_volume: volume })) === true;
     },
     adminOverview: async (doName) => (await rpc('admin_overview', `admin.${doName}`, { p_do_name: doName })) as AdminOverview | null,
-    invite: async (doName, email) => {
+    invite: async (doName, email, code) => {
       const address = email.trim().toLowerCase();
-      return (await rpc('admin_invite', `invite.${doName}.${address}`, { p_do_name: doName, p_email: address })) === true;
+      const hash = await linkCodeHash(code);
+      return (await rpc('admin_invite', `invite.${doName}.${address}.${hash}`, { p_do_name: doName, p_email: address, p_code_hash: hash })) === true;
     },
+    memberInvite: async (doName, email, code) => {
+      const address = email.trim().toLowerCase();
+      const hash = await linkCodeHash(code);
+      return (await rpc('issue_member_invite', `memberinvite.${doName}.${address}.${hash}`, { p_do_name: doName, p_email: address, p_code_hash: hash })) === true;
+    },
+    memberInvites: async (doName) => (await rpc('member_invites', `memberinvites.${doName}`, { p_do_name: doName })) as AdminOverview['invites'],
     revokeInvite: async (doName, invite) => (await rpc('admin_revoke', `revoke.${doName}.${invite}`, { p_do_name: doName, p_invite: invite })) === true,
     unlinkTelegram: async (doName) => (await rpc('unlink_presence', `unlink.${doName}.telegram`, { p_do_name: doName, p_provider: 'telegram' })) === true,
     assertChannelPresence: async (doName, provider, subject) => (await rpc('assert_channel_presence', `presence.${doName}.${provider}.${subject}`, { p_do_name: doName, p_provider: provider, p_subject: subject })) === true,
