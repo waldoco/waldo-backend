@@ -91,6 +91,30 @@ describe('handleConsole', () => {
     expect(await handleConsole(req, { TELEGRAM_OWNER_DO: owners().ns }, auth())).toBeNull();
   });
 
+  it('routes an email-code member using the signed owner cookie despite also carrying a DO cookie', async () => {
+    const { ns, fetch, idFromName } = owners();
+    const req = new Request('https://w.test/console', { headers: { cookie: 'waldo_console=member-session; waldo_owner=member-do.signed' } });
+    const result = await handleConsole(req, { TELEGRAM_OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'member-do') }));
+    expect(await result?.text()).toBe('console page');
+    expect(idFromName).toHaveBeenCalledWith('member-do');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not use a ticket URL to switch an email-code member to the deploy owner', async () => {
+    const { ns, idFromName } = owners();
+    const req = new Request('https://w.test/console?t=other-owners-ticket', { headers: { cookie: 'waldo_console=member-session; waldo_owner=member-do.signed' } });
+    const result = await handleConsole(req, { TELEGRAM_OWNER_DO: ns }, auth({ readOwnerCookie: vi.fn(async () => 'member-do') }));
+    expect(await result?.text()).toBe('console page');
+    expect(idFromName).toHaveBeenCalledWith('member-do');
+  });
+
+  it('does not fall back to deploy owner if a signed-owner cookie is invalid', async () => {
+    const req = new Request('https://w.test/console', { headers: { cookie: 'waldo_console=some-session; waldo_owner=invalid' } });
+    const result = await handleConsole(req, { TELEGRAM_OWNER_DO: owners().ns }, auth({ readOwnerCookie: vi.fn(async () => null) }));
+    expect(result?.status).toBe(303);
+    expect(result?.headers.get('location')).toBe('/console/signin');
+  });
+
   it('sends a signed-out visitor to the email form', async () => {
     const response = await handleConsole(new Request('https://w.test/console'), { TELEGRAM_OWNER_DO: owners().ns }, auth());
     expect(response?.status).toBe(303);
