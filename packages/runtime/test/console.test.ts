@@ -252,6 +252,8 @@ describe('owner console', () => {
     if (SAMPLE_CONSOLE_VIEW.nodes.length) {
       expect(html).toContain('Tentative association');
       expect(html).toContain('supporting spots');
+      expect(html).toContain('uncalibrated estimate');
+      expect(html).toContain('Tentative link');
     }
   });
 
