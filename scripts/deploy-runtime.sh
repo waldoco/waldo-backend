@@ -11,5 +11,7 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "refusing to deploy a dirty tree - traces must name committed code" >&2
   exit 1
 fi
+pnpm --filter @waldo/dashboard-app build
+pnpm --filter @waldo/dashboard-app verify:assets
 cd packages/runtime
 exec npx wrangler deploy --var "WALDO_RELEASE:${sha}" "$@"

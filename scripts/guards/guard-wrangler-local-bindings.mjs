@@ -39,7 +39,7 @@ if (!staging || staging.name !== 'waldo-runtime-staging') {
   bad.push('env.staging missing or name != waldo-runtime-staging');
 } else {
   const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  for (const key of ['durable_objects', 'ratelimits', 'migrations', 'kv_namespaces', 'r2_buckets', 'd1_databases', 'queues', 'services']) {
+  for (const key of ['assets', 'durable_objects', 'ratelimits', 'migrations', 'kv_namespaces', 'r2_buckets', 'd1_databases', 'queues', 'services']) {
     if (cfg[key] !== undefined && !eq(cfg[key], staging[key])) {
       bad.push(`env.staging does not mirror top-level "${key}"`);
     }
