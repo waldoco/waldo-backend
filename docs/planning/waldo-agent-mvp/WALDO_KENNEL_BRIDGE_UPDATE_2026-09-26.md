@@ -41,3 +41,5 @@ Every slice is built and reviewed against these nine, and against the standing b
 K0 (pairing + first round trip, per the 2026-09-24 bridge doc's K1/B1) remains first. Ambient capture is the second or third bridge capability - after pairing and the first command round trip are live, alongside or just after mission projection - not before. The waldo-backend memory layer (#234/#235 merged; #237, #238 in the merge wave) proceeds in parallel and does not wait on the bridge.
 
 *Update prepared by the build lane, 2026-09-26. Companion to WALDO_KENNEL_BRIDGE_2026-09-24.md; nothing in the 2026-09-24 doc is rescinded except where amended above.*
+
+September 29 comparison addendum: Dots joins Instinct, Meta Muse and Poke in the [competitor register](COMPETITOR_RESEARCH.md) and [matrix](CAPABILITY_MATRIX_2026-09-27.md). Its claimed device connection and cloud computer do not replace Kennel K0 proof; the cited OpenAI URL could not be independently fetched, so those Dots details remain owner-supplied transcription rather than verified operational behavior. This does not rewrite the September 26 pivot or authorize the bridge.

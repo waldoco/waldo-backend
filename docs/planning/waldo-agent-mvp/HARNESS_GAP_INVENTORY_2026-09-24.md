@@ -37,7 +37,7 @@ We also lack one that is central to our own product: an open-loop ledger the own
 
 ## 2. Tools
 
-- **Others:** Hermes and OpenClaw have tens of tools, including web, browser, shell, files and messaging. Muse, Poke and Instinct act across email, calendar, browser and messages.
+- **Others:** Hermes and OpenClaw have tens of tools, including web, browser, shell, files and messaging. Muse, Poke and Instinct were the dated comparison; a September 29 owner-supplied transcription attributed to the [Dots launch](https://openai.com/index/introducing-dots/) describes connected apps, cloud computer/browser and messaging, but does not independently verify Dots capabilities or broad email/calendar coverage.
 - **Waldo:** the live chat tools are:
   - `get_context`
   - `search_episodes` (c392457)

@@ -115,3 +115,5 @@ Sources: github.com/openclaw/openclaw, docs.openclaw.ai (automation, channels, c
 hermes-agent.nousresearch.com docs (features, tools/toolsets), 1password.dev (ai-agent SDK
 tutorial, service accounts, secret references), developers.openai.com/codex,
 blog.modelcontextprotocol.io (registry), plus today's repo reads.
+
+September 29 addendum: [Dots comparison in the newer matrix](CAPABILITY_MATRIX_2026-09-27.md) and [competitor register](COMPETITOR_RESEARCH.md). Dots claims come from owner-supplied transcription attributed to https://openai.com/index/introducing-dots/; that URL could not be independently fetched. This September 25 snapshot is not retroactively a Dots evaluation.
