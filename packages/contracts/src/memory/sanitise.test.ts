@@ -8,7 +8,6 @@
 // privacy or injection hole. Zone-descriptor vocabulary drift is health/crs territory.
 import { describe, expect, it } from 'vitest';
 import {
-  CANARY_REGEX,
   DERIVED_SCORE_PATTERNS,
   derivedScoreActionSchema,
   EXTERNAL_SOURCE_TAINT,
@@ -332,21 +331,6 @@ describe('sanitiseInput', () => {
 
     expect(sanitiseInputSchema.safeParse(input).success).toBe(true);
     expect(sanitiseInputSchema.safeParse({ ...input, trace_id: 'trace-1' }).success).toBe(false);
-  });
-});
-
-describe('check 1 — canary scan', () => {
-  it('finds an embedded 16-char hex token, case-insensitively', () => {
-    expect('remember this: f00dfacef00dface is fine'.match(CANARY_REGEX)).toEqual([
-      'f00dfacef00dface',
-    ]);
-    expect('F00DFACEF00DFACE'.match(CANARY_REGEX)).not.toBeNull();
-  });
-
-  it('does not match 15- or 17-char hex runs or non-hex tokens', () => {
-    expect('f00dfacef00dfac'.match(CANARY_REGEX)).toBeNull();
-    expect('f00dfacef00dfacef'.match(CANARY_REGEX)).toBeNull();
-    expect('g00dfaceg00dface'.match(CANARY_REGEX)).toBeNull();
   });
 });
 

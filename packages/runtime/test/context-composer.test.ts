@@ -746,7 +746,7 @@ describe('ContextComposer', () => {
               ...material.health,
               narrative: narrativeContextSchema.parse({
                 ...material.health.narrative,
-                day_summary: 'Slept poorly; stray token aaaaaaaaaaaaaaaa embedded.',
+                day_summary: 'Slept poorly; stray token 0123456789abcdef embedded.',
               }),
             },
           };
@@ -754,7 +754,7 @@ describe('ContextComposer', () => {
       },
     }).compose(trustedEnvelope(), RUNTIME_INPUTS);
     // Direction A (owner decision 2026-09-28): curated narrative free-text health metrics pass at
-    // system_prompt/null taint; the fails-closed line here is the canary scan.
+    // system_prompt/null taint; the exact session canary still fails closed.
     expect(unsafeHealth).toEqual({ ok: false, failure: { code: 'sanitisation_failed:canary_leak:narrative' } });
 
     const unsafeExternal = await createContextComposer({

@@ -95,33 +95,19 @@ export async function exchangeGoogleCode(app: GoogleApp, code: string, fetcher: 
 
 export type CalendarItem = Readonly<{ id: string; title: string; start: string; end: string; all_day: boolean; location?: string; description?: string; attendees?: number; etag?: string }>;
 
-// Model-facing prompt projections (live RCA 2026-09-28: pre-event brief denied
-// scribe_sanitise internal_context canary_leak at 13:40; brief card denied at 08:46 and
-// 14:01). Provider-internal fields never belong in trusted null-taint prompt context:
-// Google Calendar etags are 16-digit strings and Gmail message/thread ids are exactly 16
-// hex chars, and both collide with the scribe's embedded canary-shape scan
-// (CANARY_REGEX /\b[a-f0-9]{16}\b/i), failing every populated card/brief turn closed - and
-// canary_leak is a hard reason, so the softScribe degrade cannot save the turn. The etag
-// still flows through the connector API for If-Match concurrency (moveEvent/cancelEvent);
-// only the prompt projection drops it. The card prompt also never acts on provider ids.
+// Provider-internal etags are unnecessary in model-facing context. Keep them in the
+// connector API for concurrency (moveEvent/cancelEvent), not in a card prompt.
 export const calendarPromptProjection = (event: CalendarItem): Omit<CalendarItem, 'etag'> => {
   const { etag: _etag, ...projection } = event;
   return projection;
 };
 
-// Live RCA 2026-09-28 (Close card denied 21:30 + retry 21:31, same scribe_sanitise
-// internal_context canary_leak): mail free text still trips the scan. Snippet and subject
-// are provider free text - verification codes, tracking and unsubscribe tokens in them are
-// exactly the 16-hex canary shape - and a stored update change loses the external taint that
-// exempts live provider ingestion (sanitiser.ts embeddedScan), so the embedded scan fires on
-// it at card-compose time. Scrub canary-shaped runs from both fields at the projection
-// boundary: the scan's target is real canary leakage, and a 16-hex run in a mail preview or
-// subject is never meaningful prompt content.
-const PROVIDER_TOKEN_SHAPE = /\b[a-f0-9]{16}\b/gi;
-const scrubProviderTokenShapes = (text: string): string => text.replace(PROVIDER_TOKEN_SHAPE, '[id]');
+// Keep provider-internal IDs out of prompts, but preserve subject and snippet as user data.
+// The scribe checks exact session canaries rather than rejecting any 16-hex value;
+// a tracking string in mail text must not be silently replaced with [id].
 export const mailPromptProjection = (item: MailItem): Omit<MailItem, 'id' | 'thread_id'> => {
   const { id: _id, thread_id: _threadId, ...projection } = item;
-  return { ...projection, subject: scrubProviderTokenShapes(projection.subject), snippet: scrubProviderTokenShapes(projection.snippet) };
+  return projection;
 };
 
 export class GoogleError extends Error {

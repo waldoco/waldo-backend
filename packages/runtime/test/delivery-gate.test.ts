@@ -548,7 +548,7 @@ describe('DeliveryGate runtime policy state', () => {
   });
 
   it.each([
-    ['canary', 'leaked 1111111111111111', 'canary_leak'],
+    ['canary', 'leaked aaaaaaaaaaaaaaaa', 'canary_leak'],
     ['secret', 'sb_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', 'secret_leak'],
   ] as const)('rejects a candidate containing a %s before persistence', async (_case, eventId, reason) => {
     const runtime = freshRuntimeStub();

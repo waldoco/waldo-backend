@@ -58,34 +58,19 @@ describe('tool output ledger', () => {
     expect(f!.text).toContain('...');
   });
 
-  it('record() drops a summary the prompt-boundary scribe would deny (16-hex canary shape)', async () => {
+  it('record() preserves ordinary 16-hex thread ids for later turns', async () => {
     const storage = fakeStorage();
     const ledger = toolOutputLedger(storage);
-    // Gmail message ids are exactly 16 hex chars: the canary-shape scan denies this summary at
-    // system_prompt for any taint, so persisting it would poison every later turn.
     await ledger.record({ tool: 'archive_email', ok: true, at: 1000, taint: 'external', summary: 'archived thread 9f8e7d6c5b4a3210 for the owner' });
-    expect(storage.data.size).toBe(0);
-    expect(await storage.get('toolout-count')).toBeUndefined();
-    expect(await ledger.recent()).toHaveLength(0);
-    // Clean writes around the dropped one still record and order normally.
-    await ledger.record({ tool: 't', ok: true, at: 2000, taint: 'external', summary: 'clean' });
-    const fragments = await ledger.recent();
-    expect(fragments).toHaveLength(1);
-    expect(fragments[0]!.text).toBe('t succeeded: clean');
+    expect((await ledger.recent())[0]?.text).toContain('9f8e7d6c5b4a3210');
   });
 
-  it('recent() evicts a legacy poisoned entry from storage and stages only clean fragments', async () => {
+  it('recent() preserves a legacy summary with an ordinary mail id', async () => {
     const storage = fakeStorage();
-    // Legacy row written before the write guard existed (the self-sustaining outage state):
-    // bypass record() and plant it directly, plus one clean row.
     storage.data.set('toolout:0000000001', { tool: 'archive_email', ok: true, at: 1, taint: 'external', summary: 'archived thread 0123456789abcdef done' });
-    storage.data.set('toolout:0000000002', { tool: 'query_calendar', ok: true, at: 2, taint: 'external', summary: '{"events":[]}' });
     const ledger = toolOutputLedger(storage);
-    const fragments = await ledger.recent();
-    expect(fragments).toHaveLength(1);
-    expect(fragments[0]!.text).toBe('query_calendar succeeded: {"events":[]}');
-    // Self-heal: the poisoned row is deleted from storage, not just filtered once.
-    expect(storage.data.has('toolout:0000000001')).toBe(false);
-    expect(storage.data.has('toolout:0000000002')).toBe(true);
+    expect((await ledger.recent())[0]?.text).toContain('0123456789abcdef');
+    expect(storage.data.has('toolout:0000000001')).toBe(true);
   });
+
 });

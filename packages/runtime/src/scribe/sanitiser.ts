@@ -1,5 +1,4 @@
 import {
-  CANARY_REGEX,
   DERIVED_SCORE_PATTERNS,
   derivedHealthDestinationViewSchema,
   INJECTION_GUARD_THRESHOLDS,
@@ -356,20 +355,14 @@ function containsCanaryOrSecret(
   payload: JsonValue,
   input: PreparedInput,
 ): SanitiseFailureReason | undefined {
-  // The generic embedded canary-shape scan (/16 hex chars/) applies to all agent-side
-  // (non-external) content, and to EVERY destination even for external-tainted content, with
-  // one exception: provider ingestion into internal_context. Received provider data carries
-  // ordinary 16-hex identifiers (Gmail message ids are exactly 16 hex chars; Calendar etags
-  // are 16 digits) - the shape scan denied every populated Google read at the offload guard.
-  // Egress keeps the scan regardless of taint: a PostLLMCall in a turn that read provider data
-  // inherits external taint (the run loop merges tool-result taint into the turn context) and
-  // its destination is send_message, so a canary-shaped token can still never be emitted.
-  // Exact session-canary matching runs for every taint and destination.
-  const embeddedScan = !(input.source_taint === 'external' && input.destination === 'internal_context');
+  // Only this session's three canaries are tripwires. A regex for any 16-hex run
+  // rejected ordinary provider IDs and tracking codes in mail/card context.
+  // visitStrings also checks decoded views and object keys at every taint and destination.
+  const canaries = input.canary_tokens.map((token) => token.toLowerCase());
   let canaryFound = false;
   let secretFound = containsStructuredSecret(payload, input.destination);
   const result = visitStrings(payload, input.destination, (text) => {
-    if (input.canary_tokens.some((token) => text.includes(token)) || (embeddedScan && matches(CANARY_REGEX, text))) {
+    if (canaries.some((token) => text.toLowerCase().includes(token))) {
       canaryFound = true;
     }
     if (SECRET_PATTERNS.some((pattern) => matches(pattern, text))) secretFound = true;
