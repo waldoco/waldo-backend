@@ -63,7 +63,30 @@ The first pass deliberately mixes independent answer attempts with mock-world tr
 4. **External comparison:** adapter-run LiveClawBench and PAUSE only when their mock worlds can be driven with equal tool access and genuine task outcomes. Add AssistantBench as a full benchmark after guarded public-web egress lifts the six-host ceiling; use time-pinned tasks to avoid stale-key false results. GAIA requires official dataset access. If claiming “Waldo vs another personal agent,” use identical task inputs, permissions, budgets, fixtures and scoring on both complete products. Published model-in-harness leaderboards are context, not head-to-head product results.
 5. **Feed failures back into the product:** each miss gets a case ID, exact input, source/authorization trace, observed world state, failure class, expected correction and a rerun at the next promote. Fix retrieval misses with the cheapest evidence-backed method first; block false-positive sends and cross-owner leakage as safety gates. Do not optimize to the public dev keys or put held-out expected outputs into the prompt. An improvement is accepted when repeated answer-level results rise without new leakage, stale claims or wallet/representation violations.
 
-## 3. Waldo's five **memory tiers**, not the five hall categories
+## 3. Owner's capability baseline: contexts, combinations and memory throughout
+
+The owner supplied this product baseline in a WhatsApp message on September 29, 2026 (internal message ID `wamid.HBgMOTE3NTU4NjU5OTMxFQIAEhgUM0IyNTYwODc1N0M5QzlGRjdGNjAA`; no public content URL). This is **owner intent for evaluation**, not proof that Waldo already implements the capabilities. Future detailed owner documents may refine it. The scoring target is that Waldo selects and uses relevant context to make a better decision, while keeping the source, limits and correction visible, not simply reciting a profile.
+
+| Context Waldo could understand | Capability test: what changes |
+| --- | --- |
+| Goals and intent | Identify desired result, reason and definition of done instead of blindly finishing an adjacent task. |
+| Priorities and boundaries | Propose trade-offs while protecting what the owner marked non-negotiable. |
+| Confirmed commitments | Track to whom and by when a promise was made; distinguish preparation from delivered follow-through. |
+| Current capacity | Use self-reported energy and only optional, permitted health context; never infer a diagnosis. |
+| Schedule | Fit fixed events, availability, time zones and buffers; recheck changed appointments. |
+| Routines and interests | Preserve exercise, learning, family and stopping times when work presses. |
+| Relationships | Use identified people, relevant conversations and actual obligations; disambiguate near-name contacts. |
+| Work state | Know projects, decisions, dependencies, artifacts and agent progress before choosing next step. |
+| Communication | Read selected, authorized threads for change/replies/open loops; don't assume blanket inbox permission. |
+| Knowledge and history | Reuse sourced notes, research, preferences and decisions without treating old context as current authority. |
+| Resources | Respect available time, declared budget, tools and executor availability; no spending inferred from a budget. |
+| Permissions and corrections | Decide act/ask/wait/forget against authenticated grants and later corrections, not an email or a stale memory. |
+
+The owner's combination cases are: **health** (fit an existing health routine to only shared state); **personal life** (follow through on a renewal, repair, hobby or promise); **work** (prepare a meeting, research, reviewed draft or bounded project); **health + personal life** (adapt a routine on a lower-energy day); **health + work** (realistic workday protecting important commitments); **personal life + work** (protect family time while renegotiating or delegating work); and **health + personal life + work** (recover after a disrupted week, choose what bends, communicate changes and resume important work). In the owner's words, memory runs through every combination: preserve why the responsibility exists, what happened, what remains, and what the owner changed their mind about.
+
+An **additive synthetic overlay**, distinct from the earlier 16-case holdout, now proposes nine phased cases B01-B09: one for each combination, plus recipient/boundary judgment and a temporary correction. Every one of the 12 contexts appears in its case tags. It uses fake commitments, energy statements, relationships, calendars, mail, deadlines and resources; it explicitly has no connected health record or real recipient. The overlay has not run. Its two attached artifacts are `overlay.json` (SHA256 `f22fd13c3b21a45bccffe7b36c4da5d484c5c652a95152cb6a14cfab038f6ed0`) and `cases.jsonl` (SHA256 `543abc358b45051590157b203f4faec57d8f84901d764dbec84c5ee4d7d95eb6`). An internal message ID is provenance, not a user-clickable URL; the docs commit can cite the owner-supplied baseline as primary conversation evidence without inventing a link.
+
+## 4. Waldo's five **memory tiers**, not the five hall categories
 
 The current [architecture decision](https://github.com/waldoco/waldo-backend/blob/adae64c719adf9eeab3f19989b4e2eceb722fd0b/docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md) defines five tiers: working context, personal memory, episodes, reviewed procedures and eventual archive. The separate typed halls (facts, events, discoveries, preferences, advice) are categories, not these tiers. The following code assessment is pinned to beta-mvp `adae64c719adf9eeab3f19989b4e2eceb722fd0b`, not a claim about later deployments.
 
@@ -81,6 +104,6 @@ The [memory golden evaluation](https://github.com/waldoco/waldo-backend/blob/ada
 
 **Fortify or outsource memory on evidence.** Compare the current lexical retrieval baseline to query rewriting and better compact-profile selection on the same separately authored holdout, with repeated answer-level trials and contamination/forget checks. Try semantic retrieval only if the simpler fixes leave documented misses and the candidate improves answer-level accuracy without new leakage, stale fact use or unacceptable cost/latency. A graph store is not a justified response to phrase-mismatch failures. A production migration decision needs proof of capture, answer use, correction/forget and isolation, not just search recall.
 
-## 4. Release claim discipline
+## 5. Release claim discipline
 
 For each promoted slice, link the exact code and deployed version to a task/result ledger. Mark a case **passed, failed, not attempted, unsupported or blocked**; do not turn an adapter plan, synthetic unit test or preview build into a live pass. If a provider invocation never occurs, call the boundary un-attested rather than guessing a crash. External task prompts and website text remain untrusted data, even when written as commands. Source-grounded user approval must cover real messages, shares, bookings and money. A strong personal agent should do the requested work, verify what actually changed, and say plainly when it did not land.
