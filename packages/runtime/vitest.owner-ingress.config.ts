@@ -12,6 +12,8 @@ export default defineConfig({
       TELEGRAM_BOT_TOKEN: 'hermetic-test-bot-token',
       TELEGRAM_WEBHOOK_SECRET: 'hermetic-test-webhook-secret',
       OPENAI_API_KEY: 'hermetic-test-model-key',
+      GOOGLE_CLIENT_ID: 'hermetic-google-id',
+      GOOGLE_CLIENT_SECRET: 'hermetic-google-secret',
     } },
     wrangler: { configPath: './wrangler.jsonc' },
   })],
