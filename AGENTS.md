@@ -12,13 +12,13 @@
 
 Mirrored from canonical source in `waldo-brain` per [ADR-0063](https://github.com/Pin4sf/waldo-brain/blob/main/01-Waldo/Architecture%20Decision%20Records%20%28ADR%29/0063-canonical-rule-files-mirroring.md). Do not edit locally.
 
-The agent roster + dev-QA loop below is repo-specific. It sits on top of the universal rules. Start with the [`personal-agent product architecture and build plan`](docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md), [`NEXT-SESSION-PLAN.md`](docs/foundation/NEXT-SESSION-PLAN.md), the [`execution ledger`](docs/foundation/EXECUTION-LEDGER.md), and [`CONTRIBUTOR-ONBOARDING.md`](docs/foundation/CONTRIBUTOR-ONBOARDING.md). Before the plan merges it is a candidate roadmap. After review/merge it governs backend roadmap, dependency order, and documentation cleanup; conflicting product-scope or architecture seams remain non-authoritative until the Brain launch contract/ADR dispositions are published, the plan/entrypoints are repinned, and `accepted-adrs.json` is regenerated. For the contributor loop, skill status, plugin boundaries, and verification wall, read [`AGENT-OPERATING-WORKFLOW.md`](docs/foundation/AGENT-OPERATING-WORKFLOW.md). GitHub issues, milestones, labels, PRs, and linked evidence are the current delivery workflow; Linear/HEY identifiers are historical only. Every write-capable session registers its issue, branch/worktree, base SHA, scope, file ownership, agent/subagent roster, and handoff evidence through [#116](https://github.com/Pin4sf/waldo-backend/issues/116). Retired plans remain available at their pinned Git history and are not current product or sequencing authority.
+Start with the owner request, current issue/PR, source and tests for the touched seam, then the short [current agent entrypoint](docs/planning/waldo-agent-mvp/CURRENT_AGENT_ENTRYPOINT.md). Consult only relevant accepted ADRs and source-specific rules before acting. The dated [product architecture plan](docs/planning/WALDO_PERSONAL_AGENT_PRODUCT_ARCHITECTURE_AND_BUILD_PLAN_2026-09-18.md), [next-session plan](docs/foundation/NEXT-SESSION-PLAN.md), [execution ledger](docs/foundation/EXECUTION-LEDGER.md) and [contributor workflow](docs/foundation/AGENT-OPERATING-WORKFLOW.md) are references, not a mandatory full read path for every task. Claims from those records need current source and live receipts. When an accepted ADR conflicts with a touched implementation seam, publish a reviewed disposition before merging that implementation; nonconflicting private research, tests and preparation continue. GitHub issues and PRs track delivery; a tracker row is not owner permission. Record branch/worktree, base SHA, scope and handoff evidence on [#116](https://github.com/Pin4sf/waldo-backend/issues/116) where the write session uses that workflow.
 
 ---
 
 ## Judgment belongs to the model
 
-Judgment belongs to the model. Do not add regex or other fixed rules for anything that is a judgment call (tone, intent, topic, health vs clinical, what to remember). The harness gives the model context, reasoning room, tools and autonomy. Deterministic rejection is allowed only for hard security and safety boundaries where a reject must be guaranteed: auth, secrets, canaries, owner checks, egress, schema validation, and medication dosing. When you find a fixed rule making a judgment call, file it under `post-mvp-cleanup` or move it to model reasoning with scenario tests.
+Judgment belongs to the model. Do not add regex or other fixed rules for anything that is a judgment call (tone, intent, topic, health vs clinical, what to remember). The harness gives the model context, reasoning room, tools and autonomy. Deterministic rejection is for exact security and safety boundaries where a reject must be guaranteed: auth, known secrets and actual session canaries, owner checks, typed destinations and external effects, schema validation, and medication dosing. An ordinary ID or quoted source is not a secret or an instruction by shape alone. Validate the harmful and harmless cases together; keep owner isolation and effect approval firm. When you find a fixed rule making a judgment call, file it under `post-mvp-cleanup` or move it to model reasoning with scenario tests.
 
 ## Named Invariants (shape every review decision)
 
@@ -57,17 +57,14 @@ Judgment belongs to the model. Do not add regex or other fixed rules for anythin
 - **`qa-breaker`** — Adversarial QA. Defaults to NEEDS WORK. Tries to break every feature.
 - **`e2e-pipeline-tester`** — Full wearable → CRS → Claude → Channel Adapter pipeline.
 
-## Dev-QA Loop (use for EVERY feature)
+## Dev-QA Loop (scale with the change)
 
 ```
-1. /waldo-isa-run-contract or /current-ideal-gap → define done
-2. planner / workflow-mapper → task breakdown + failure paths
-3. [build with /tdd or /diagnose as appropriate]
-4. qa-breaker → tries to break it
-   PASS → advance
-   FAIL (< 3 attempts) → fix, re-run qa-breaker
-   FAIL (≥ 3 attempts) → escalate: decompose or defer
-5. /compound-learning-capture if the work produced a reusable lesson
+1. Name the current defect or outcome, the exact seam and what would falsify the fix. For a small bounded change, do this in the PR; do not summon a planning roster as ceremony.
+2. For a new data flow or Durable Object/Execution Function seam, map owners, sources, failure/retry paths and external effects before implementation. Use planner/workflow-mapper where they add information.
+3. Add a red-first benign and harmful regression, implement the smallest full-class fix, then run the relevant typecheck, tests and separate scenarios.
+4. For auth, health, memory, money, disclosure, sandbox or external effects, run adversarial QA and the applicable security review before merge. A failed check means fix, decompose or report a real blocker, not an arbitrary three-attempt ritual.
+5. Report exact-head, CI, staging and user-visible receipts separately. Capture a reusable lesson only when the work produced one.
 ```
 
 ## Security Review Triggers (mandatory)
