@@ -19,6 +19,7 @@ import { GOOGLE_CALLBACK_PATH } from './connectors/google';
 import { CONSOLE_PATH } from './channels/console';
 import { ownerDirectory } from './identity/owner-directory';
 import { handleConsole } from './channels/console-signin';
+import { serveDashboard } from './channels/dashboard-static';
 import { consoleLog, consoleTrace, withConsoleTrace } from './observability/console-correlation';
 import type { GatewaySecretBinding } from './llm/gateway';
 import { createSupabaseResponsibilityAuthority } from './responsibility/supabase-authority';
@@ -56,6 +57,7 @@ import type { TracerDO } from './tracer/tracer-do';
 declare global {
   namespace Cloudflare {
     interface Env {
+      ASSETS?: Fetcher;
       RUNTIME_DO: DurableObjectNamespace<RuntimeProbeDO>;
       RUN_LOOP_DO: DurableObjectNamespace<RunLoopDO>;
       AI_GATEWAY_ID?: string;
@@ -137,6 +139,10 @@ export default {
     if (new URL(request.url).pathname === PROBE_TURN_PATH) {
       return handleProbeTurn(request, env);
     }
+    // The authenticated dashboard API is still owned by handleConsole/owner DO.
+    // This adapter handles only the read-only shell and content-hashed static assets.
+    const dashboard = await serveDashboard(request, env.ASSETS, (authRequest) => handleConsole(authRequest, env).then((result) => result ?? new Response('unauthorized', { status: 401 })));
+    if (dashboard) return dashboard;
     const consoleRequest = new URL(request.url).pathname.startsWith(CONSOLE_PATH);
     const consoleRequestTrace = consoleRequest ? consoleTrace() : null;
     if (consoleRequestTrace) {

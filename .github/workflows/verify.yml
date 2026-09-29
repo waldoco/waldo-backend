@@ -86,6 +86,9 @@ jobs:
       - name: Install (frozen lockfile, release-age policy active)
         run: pnpm install --frozen-lockfile
 
+      - name: Build dashboard assets for Worker-backed tests
+        run: pnpm --filter @waldo/dashboard-app build && pnpm --filter @waldo/dashboard-app verify:assets
+
       - name: Runtime tests
         working-directory: packages/runtime
         run: npx vitest run --shard=${{ matrix.shard }}/4

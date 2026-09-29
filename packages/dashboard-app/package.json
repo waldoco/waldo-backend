@@ -1,0 +1,24 @@
+{
+  "name": "@waldo/dashboard-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "verify:assets": "node scripts/verify-assets.mjs",
+    "build": "node -e \"require('fs').rmSync('dist', {recursive:true, force:true})\" && tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "typescript": "5.9.3",
+    "vite": "8.0.16",
+    "vitest": "4.1.9"
+  }
+}

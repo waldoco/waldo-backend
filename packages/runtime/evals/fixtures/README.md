@@ -1,0 +1,5 @@
+# Waldo-native development suite source
+
+`Waldo_Benchmark_Cases_v2.jsonl` is the owner's original 36-record authored specification attachment from September 29, 2026. SHA256: `fc651ed0e02bf53d3875d2497637f9f9309db794b6ce02386227a04b7155211f`. It replaces the temporary atlas-derived extraction, which flattened or omitted fields. Preserve these bytes as the development source and review any future revisions separately. The W01-W24 and R25-R36 rows all carry `execution_status: not_run`.
+
+`waldo-native-suite.ts` validates bytes and the required structural contract; its tests are source-integrity checks, not model trials, actual provider effects or results. Do not feed `authority`, `expected_behavior`, `forbidden_behavior`, `pass_evidence` or `evaluation_note` to Waldo as an owner instruction. Fixture authority is fictional. A runner still needs isolated two-owner source and provider adapters, a controllable clock, intercepted effects, real authenticated Telegram ingress, independent model runs, authoritative state and answer checks, and resets. Label any unsupported case honestly. Keep a separate unseen holdout for release decisions.
