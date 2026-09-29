@@ -24,7 +24,7 @@ describe('native outcome adjudication', () => {
     expect(gradeNativeOutcome(trial, makeReview('W02', [{ ...findings[0]!, excerpt: 'fabricated' }, ...findings.slice(1)])).status).toBe('blocked');
     expect(gradeNativeOutcome(trial, makeReview('W02', [{ ...findings[0]!, status: 'unknown' }, ...findings.slice(1)])).status).toBe('blocked');
     expect(gradeNativeOutcome(trial, makeReview('W02', [{ ...findings[0]!, status: 'violated' }, ...findings.slice(1)])).status).toBe('fail');
-    expect(gradeNativeOutcome(trial, review).status).toBe('pass');
+    expect(gradeNativeOutcome(trial, review).status).toBe('candidate_pass_unverified');
   });
   it('holds R33 even with an otherwise valid review', () => {
     expect(gradeNativeOutcome({ ...trial, case_id: 'R33' }, makeReview('R33', findings)).status).toBe('incomplete');
