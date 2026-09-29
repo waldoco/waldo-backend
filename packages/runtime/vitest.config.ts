@@ -6,7 +6,7 @@ export default defineConfig({
     include: ['test/**/*.test.ts'],
     // scenario-harness belongs to vitest.scenarios.config.ts (plain node): its run-l1 import of
     // node:sqlite externalizes mid-load in the workers pool and workerd can segfault under CI.
-    exclude: ['test/owner-do-ingress-isolation.test.ts', 'test/scenario-harness.test.ts', 'test/waldo-native-suite.test.ts', 'test/isolated-telegram-ingress.test.ts', 'test/isolated-source-world.test.ts', 'test/isolated-google-client.test.ts'],
+    exclude: ['test/owner-do-ingress-isolation.test.ts', 'test/scenario-harness.test.ts', 'test/waldo-native-suite.test.ts', 'test/reference-judgments.test.ts', 'test/isolated-telegram-ingress.test.ts', 'test/isolated-source-world.test.ts', 'test/isolated-google-client.test.ts'],
     // Runtime fakes intentionally keep process-local state across DO eviction; keep files serial
     // so per-test resets cannot race another file's fake-sink assertions.
     fileParallelism: false,
