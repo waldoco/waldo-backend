@@ -134,7 +134,7 @@ function listFiles(dir) {
   for (const entry of entries) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue; // generated bundles are checked at their source
       out.push(...listFiles(full));
     } else if (entry.isFile()) {
       out.push(full);
