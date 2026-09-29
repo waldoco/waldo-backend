@@ -4,6 +4,6 @@ import { defineConfig } from 'vitest/config';
 // sqlite shim replaces DO storage (same pattern as evals/run.ts via tsx), so no workers pool.
 export default defineConfig({
   test: {
-    include: ['test/scenario-harness.test.ts'],
+    include: ['test/scenario-harness.test.ts', 'test/waldo-native-suite.test.ts'],
   },
 });
