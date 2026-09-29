@@ -116,7 +116,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       `Subject: ${p.subject}`, '', p.body].join('\n');
   const reviewMessage = (p: MessageSendProposal) => p.content;
   const unreviewable = (kind: string, summary: string) =>
-    `${kind} ${summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Tap Not now and ask me to show you the full text first.`;
+    `${kind} ${summary}\n\nThe full content doesn't fit in this card, so it can't be approved here - approving would send text you haven't reviewed. Use the Not now instruction on the card and ask me to show you the full text first.`;
   const describeAny = (entry: LedgerRow) => {
     if (entry.kind === 'browser_submit') return describeBrowser(JSON.parse(entry.payload_json) as BrowserSubmitProposal);
     if (entry.kind === 'email_send') return describeEmail(JSON.parse(entry.payload_json) as EmailSendProposal);
@@ -318,8 +318,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const url = await deps.reviewUrl?.().catch(() => null);
       const detail = url ? ` View details: ${url}. This page cannot approve email sends.` : '';
       const receipt = approvable
-        ? 'Email ready for review. The card above has the exact recipients, subject and body. Tap Send it on that card if it is right. Nothing has been sent.'
-        : 'The email is too long to approve from its chat card. No Send it button was offered and nothing has been sent. Ask me for a shorter version or a draft to review.';
+        ? 'Email ready for review. The card above has the exact recipients, subject and body. If it is right, use the Send it instruction on that card. Nothing has been sent.'
+        : 'The email is too long to approve from its chat card. No Send it approval was offered and nothing has been sent. Ask me for a shorter version or a draft to review.';
       try {
         await say(`${receipt}${detail}`);
       } catch {
@@ -402,8 +402,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (query.from.id !== deps.owner || !id || !['a', 's', 'e', 'u'].includes(action)) return void (await answer('Not available.'));
       if (query.message) await deps.call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
       const out = await decide(id, action as 'a' | 's' | 'e' | 'u', trace);
-      await answer(out.toast);
-      await say(out.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
+      // An uncertain card may have reached the owner before a channel timeout. It has
+      // no valid send approval until reconciled, so tell the owner what to do next.
+      const reported = out.toast === 'Already handled.' && row(id)?.status === 'card_unconfirmed'
+        ? { toast: 'Review not confirmed', message: 'That review card was not confirmed, so I cannot use its Send it instruction. No email was sent. Check this chat and ask for a fresh proposal if you still want the email.' }
+        : out;
+      await answer(reported.toast);
+      await say(reported.message, action === 'a' && out.toast === 'Done' && out.message.includes('Undo is available') ? [['Undo', `u:${id}`]] : undefined);
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();

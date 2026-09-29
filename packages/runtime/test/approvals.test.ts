@@ -415,7 +415,8 @@ describe('approval desk - email_send rail', () => {
       const payload = { ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
       const id = await desk.proposeSendEmail(payload);
       expect(sent).toHaveLength(2);
-      expect(sent[1]!.body.text).toContain('Tap Send it on that card');
+      expect(sent[1]!.body.text).toContain('use the Send it instruction on that card');
+      expect(sent[1]!.body.text).not.toContain('Tap Send it');
       expect(sent[1]!.body.text).toContain('https://waldo.example/console/waiting');
       expect(sent[1]!.body.text).toContain('Nothing has been sent');
       expect(sent[1]!.body.reply_markup).toBeUndefined();
@@ -450,8 +451,10 @@ describe('approval desk - email_send rail', () => {
   it('strands an uncertain card safely and exposes it as unconfirmed, not approvable', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-uncertain'));
     await runInDurableObject(stub, async (_i, state) => {
+      const delivered: string[] = [];
+      let first = true;
       const desk = approvalDesk(state.storage.sql, {
-        call: async () => { throw new Error('timeout'); }, owner: 42, google: async () => null,
+        call: async (method, body) => { if (first && method === 'sendMessage') { first = false; throw new Error('timeout'); } delivered.push(JSON.stringify(body)); return {}; }, owner: 42, google: async () => null,
         newId: () => '42', now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const payload = { ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
@@ -460,6 +463,9 @@ describe('approval desk - email_send rail', () => {
       expect(item?.state).toBe('unconfirmed');
       expect((await desk.decide('p42', 'a', 't')).toast).toBe('Already handled.');
       await expect(desk.proposeSendEmail(payload)).rejects.toThrow('card_unconfirmed');
+      await desk.callback({ id: 'c42', from: { id: 42 }, data: 'a:p42' }, 'test');
+      expect(delivered.join(' ')).toContain('Review not confirmed');
+      expect(delivered.join(' ')).toContain('No email was sent');
     });
   });
 
