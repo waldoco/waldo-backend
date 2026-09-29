@@ -2,7 +2,7 @@
 // listener, and model responder. All external model and Telegram effects are intercepted.
 import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
@@ -10,6 +10,7 @@ import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
+const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
 let interceptCalendarEffects = false;
 vi.mock('../src/connectors/google', async (load) => {
@@ -75,7 +76,27 @@ const callback = async (subject: number, from: number, data: string, updateId: n
 const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<TelegramOwnerDO>;
 
 describe('real owner-DO ingress in a sealed test world', () => {
-  afterEach(() => { sourceWorld = null; interceptCalendarEffects = false; });
+  beforeEach(() => {
+    unexpectedFetches.length = 0;
+    // Hard deny all ordinary global network calls in this integration harness. The
+    // only legal effects are the explicit mocked model/channel and fixture adapter.
+    vi.stubGlobal('fetch', (async (input: RequestInfo | URL) => {
+      unexpectedFetches.push(String(input));
+      throw new Error('isolated trial attempted an unmocked outbound fetch');
+    }) as typeof fetch);
+  });
+  afterEach(() => {
+    sourceWorld = null; interceptCalendarEffects = false;
+    vi.unstubAllGlobals();
+    expect(unexpectedFetches).toEqual([]);
+  });
+  it('records and denies an unexpected outbound fetch rather than reaching a network', async () => {
+    await expect(fetch('https://unlisted.fixture.invalid/private')).rejects.toThrow(/unmocked outbound fetch/);
+    expect(unexpectedFetches).toEqual(['https://unlisted.fixture.invalid/private']);
+    // This negative test intentionally made one denied call; the teardown checks zero
+    // unexpected calls on every actual owner-DO trial below.
+    unexpectedFetches.length = 0;
+  });
   it('routes two fictional owners through separate durable state and intercepts model and channel effects', async () => {
     outbox.length = 0;
     modelInputs.length = 0;
