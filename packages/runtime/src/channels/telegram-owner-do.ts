@@ -25,6 +25,7 @@ import { nightlyDiagnostic } from './nightly-diagnostic';
 import { armBriefSweep, eventBriefs } from './event-briefs';
 import { applyDayPlan, dayPlanTraceDetail, armDayCards, cardFor, isClock, composeDayCard, dayPlanBook, dayWindow, isSkip, parseDayPlan, readCalendar } from './day-cards';
 import { DAY_CARDS, dayPlanInput } from '../prompt/day-cards';
+import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS, dashboardOverview } from './dashboard-overview';
 import { SKIP_UPDATE, updateCardPrompt } from '../prompt/update-cards';
 import { changeLines, collectChanges, updateBook, type UpdateBook } from './update-cards';
 import { searchEpisodesHandler } from '../tools/live/search-episodes';
@@ -90,6 +91,7 @@ type OwnerRuntime = Readonly<{
   cards(entry: ScheduleEntry): Promise<void>;
   updateCheck(trace: string): Promise<void>;
   view(session: ConsoleSession, notice: string | null, page?: { traceBefore?: number; runsBefore?: number }): Promise<ConsoleView & { page: { trace_before: number | null; runs_before: number | null; trace_applied: number | null; runs_applied: number | null } }>;
+  overview(): Promise<ReturnType<typeof dashboardOverview>>;
   act(action: ConsoleAction): Promise<boolean | string>;
   googleConnectUrl(feature: GoogleFeature, channel?: 'telegram' | 'console'): Promise<string | null>;
   google: Readonly<{
@@ -253,6 +255,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async console(request: Request): Promise<Response> {
     const access = consoleAccess(this.ctx.storage);
     const url = new URL(request.url);
+    const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH;
+    if (overviewRoute && request.method !== 'GET') return new Response('method not allowed', { status: 405, headers: DASHBOARD_OVERVIEW_HEADERS });
     const link = url.pathname === CONSOLE_PATH ? url.searchParams.get('t') : null;
     if (link && request.method === 'GET') return signInPage(link);
     const posted = url.pathname === CONSOLE_PATH && request.method === 'POST' ? String((await request.formData()).get('t') ?? '') : '';
@@ -262,10 +266,19 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       return new Response(null, { status: 303, headers: { location: CONSOLE_PATH, 'set-cookie': `${CONSOLE_COOKIE}=${session}; Path=${CONSOLE_PATH}; HttpOnly; Secure; SameSite=Strict; Max-Age=43200` } });
     }
     const session = await access.session(sessionCookie(request));
-    if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401 });
+    if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
       return Response.json(await nightlyDiagnostic(this.ctx.storage), { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
+    if (overviewRoute) {
+      try {
+        const runtime = this.setup();
+        await runtime.ready;
+        return Response.json(await runtime.overview(), { headers: DASHBOARD_OVERVIEW_HEADERS });
+      } catch {
+        return Response.json({ error: 'overview_unavailable' }, { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS });
+      }
     }
     const { ready, view, act, googleConnectUrl, openFile, desk } = this.setup();
     await ready;
@@ -1197,6 +1210,12 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           runs: runPage.rows.map((row) => ({ id: row.id, kind: row.kind, status: row.status, summary: row.summary, parent_id: row.parent_id, started: localIso(row.started_at, clock.timezone).slice(5, 16).replace('T', ' '), ended: row.ended_at === null ? null : localIso(row.ended_at, clock.timezone).slice(5, 16).replace('T', ' ') })),
           page: { trace_before: tracePage.next, runs_before: runPage.next, trace_applied: page?.traceBefore ?? null, runs_applied: page?.runsBefore ?? null },
         };
+      },
+      overview: async () => {
+        const now = Date.now();
+        const day = localIso(now, clock.timezone).slice(0, 10);
+        return dashboardOverview({ now, timezone: clock.timezone, plans: plans.read(day), cards: DAY_CARDS,
+          approvals: desk.pending(now), run: runs.list(1)[0] ?? null, trace: traces.latest(), grants: await google.state() });
       },
       act: async ({ action, id, value }) => {
         const now = Date.now();

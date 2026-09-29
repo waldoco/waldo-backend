@@ -88,6 +88,10 @@ export const traceBook = (sql: Sql, keep = 500) => {
       const page = rows.slice(0, limit).reverse().map((row) => ({ time: localIso(row.at, timezone).slice(11, 16), trace: row.trace, hop: row.hop, ok: row.ok === 1, ms: row.ms, note: row.note ?? '' }));
       return { rows: page, next: rows.length > limit ? rows[limit - 1]!.at : null };
     },
+    latest(): { at: number; hop: string; ok: boolean } | null {
+      const row = sql.exec<{ at: number; hop: string; ok: number }>('SELECT at, hop, ok FROM trace_log ORDER BY at DESC, id DESC LIMIT 1').toArray()[0];
+      return row ? { at: row.at, hop: row.hop, ok: row.ok === 1 } : null;
+    },
     usageRows(): readonly Readonly<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>[] {
       return sql.exec<{ model: string; calls: number; input: number; cached: number; output: number; usd: number }>(
         `SELECT model, COUNT(*) AS calls, SUM(input_tokens) AS input, SUM(cached_tokens) AS cached, SUM(output_tokens) AS output, SUM(usd) AS usd

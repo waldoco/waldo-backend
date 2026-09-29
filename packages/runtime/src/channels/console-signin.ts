@@ -2,6 +2,7 @@ import { consoleLog, consoleTrace, withConsoleTrace } from '../observability/con
 import { consoleAuth, OWNER_COOKIE, type ConsoleAuth } from '../identity/console-auth';
 import type { OwnerDirectoryEnv } from '../identity/owner-directory';
 import { CONSOLE_COOKIE, CONSOLE_PATH } from './console';
+import { DASHBOARD_OVERVIEW_PATH, DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 
 export const CONSOLE_SIGNIN_PATH = `${CONSOLE_PATH}/signin`;
 export const CONSOLE_VERIFY_PATH = `${CONSOLE_PATH}/verify`;
@@ -162,14 +163,30 @@ export const handleConsole = async (request: Request, env: ConsoleEnv, auth: Con
     event('console_route', true, 'ticket_session_passthrough');
     return null;
   }
-  const doName = await auth.readOwnerCookie(request);
+  let doName: string | null;
+  try { doName = await auth.readOwnerCookie(request); }
+  catch {
+    if (url.pathname === DASHBOARD_OVERVIEW_PATH) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    throw new Error('owner session validation failed');
+  }
   if (!doName) {
     event('console_route', false, 'no_valid_owner_cookie');
+    if (url.pathname === DASHBOARD_OVERVIEW_PATH) return finish(new Response('unauthorized', { status: 401, headers: DASHBOARD_OVERVIEW_HEADERS }));
     return finish(new Response(null, { status: 303, headers: { location: CONSOLE_SIGNIN_PATH } }));
   }
   const forwarded = new Request(request);
   forwarded.headers.set('x-waldo-do-name', doName);
-  const response = await owners.get(owners.idFromName(doName)).fetch(forwarded);
+  let response: Response;
+  try { response = await owners.get(owners.idFromName(doName)).fetch(forwarded); }
+  catch (error) {
+    if (url.pathname === DASHBOARD_OVERVIEW_PATH) return finish(new Response('overview unavailable', { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS }));
+    throw error;
+  }
   event('console_route', response.ok, response.ok ? 'forwarded' : 'forward_failed');
+  if (url.pathname === DASHBOARD_OVERVIEW_PATH) {
+    const headers = new Headers(response.headers);
+    for (const [key, value] of Object.entries(DASHBOARD_OVERVIEW_HEADERS)) headers.set(key, value);
+    return finish(new Response(response.body, { status: response.status, headers }));
+  }
   return finish(response);
 };
