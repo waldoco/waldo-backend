@@ -6,16 +6,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory';
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
-import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
+import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios/isolated-google-client';
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
+let interceptCalendarEffects = false;
 vi.mock('../src/connectors/google', async (load) => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, tokens: { email?: string }) => {
     if (!sourceWorld || !tokens.email) throw new Error('fixture Google account is unavailable');
-    return isolatedGoogleClient(sourceWorld, tokens.email);
+    return interceptCalendarEffects ? isolatedCalendarEffectClient(sourceWorld, tokens.email) : isolatedGoogleClient(sourceWorld, tokens.email);
   } };
 });
 vi.mock('../src/channels/telegram-api', async (load) => {
@@ -74,7 +75,7 @@ const callback = async (subject: number, from: number, data: string, updateId: n
 const doStub = (subject: number) => env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(route(subject).doName)) as DurableObjectStub<TelegramOwnerDO>;
 
 describe('real owner-DO ingress in a sealed test world', () => {
-  afterEach(() => { sourceWorld = null; });
+  afterEach(() => { sourceWorld = null; interceptCalendarEffects = false; });
   it('routes two fictional owners through separate durable state and intercepts model and channel effects', async () => {
     outbox.length = 0;
     modelInputs.length = 0;
@@ -153,5 +154,24 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-query-${update + 3}` && item.body.text === 'Already handled.')).toBe(true);
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
     expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))).toHaveLength(1);
+  });
+  it('intercepts a calendar provider write only after the bound owner approves the card', async () => {
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T13:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: {} });
+    interceptCalendarEffects = true; outbox.length = 0; modelInputs.length = 0;
+    const update = 400000 + ++sequence * 10;
+    expect((await send(81101, 'Propose a fixture calendar event for my review.', update)).status).toBe(200);
+    const card = outbox.find((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))!.body;
+    const keyboard = card.reply_markup as { inline_keyboard: { callback_data: string }[][] };
+    const approve = keyboard.inline_keyboard.flat().find((button) => button.callback_data.startsWith('a:'))!.callback_data;
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
+    expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
+    expect((await callback(81101, 81101, approve, update + 1)).status).toBe(200);
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([expect.objectContaining({ kind: 'calendar.create', target: 'primary', payload: { title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30' } })]);
+    expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
+    await runInDurableObject(doStub(81101), async (_instance, state) => {
+      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change' ORDER BY created_at DESC LIMIT 1").toArray()).toEqual([{ status: 'done' }]);
+    });
+    expect((await callback(81101, 81101, approve, update + 2)).status).toBe(200);
+    expect(sourceWorld.outbox('a@example.invalid')).toHaveLength(1);
   });
 });
