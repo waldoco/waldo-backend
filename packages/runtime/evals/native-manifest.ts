@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto';
 import { loadNativeSuite } from './waldo-native-suite';
 import type { WorldFixture } from '../scenarios/isolated-source-world';
+import { FixtureAuthorityClock } from './fixture-authority';
 
 export type NativeManifest = Readonly<{
   case_id: string;
@@ -43,8 +44,12 @@ export const inspectNativeManifest = (manifest: NativeManifest): ManifestCheck =
   if (!manifest.grants.some((grant) => grant.owner_id === manifest.candidate_owner && grant.purpose && grant.scope &&
     Date.parse(grant.effective_at) <= Date.parse(manifest.world.clock) && Date.parse(grant.expires_at) > Date.parse(manifest.world.clock)))
     missing.push('current typed synthetic grant');
+  try { new FixtureAuthorityClock(manifest); }
+  catch { missing.push('invalid synthetic authority clock or owner scope'); }
   if (requiredBranches.has(spec.id) && !manifest.branches.some((branch) => branch.id && branch.owner_id === manifest.candidate_owner &&
-    !Number.isNaN(Date.parse(branch.trigger_at)))) missing.push('typed owner branch');
+    Number.isFinite(Date.parse(branch.trigger_at)) && Date.parse(branch.trigger_at) >= Date.parse(manifest.world.clock) &&
+    manifest.grants.some((grant) => grant.owner_id === manifest.candidate_owner && Date.parse(grant.effective_at) <= Date.parse(branch.trigger_at) &&
+      Date.parse(branch.trigger_at) < Date.parse(grant.expires_at)))) missing.push('typed owner branch under current grant');
   if (!manifest.supported_tools.length) missing.push('supported tool inventory');
   if (manifest.source_digest !== `sha256:${createHash('sha256').update(canonical(manifest.world.sources)).digest('hex')}`)
     missing.push('source manifest digest mismatch');
