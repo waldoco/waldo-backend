@@ -286,9 +286,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return id;
     },
     async proposeSendEmail(payload) {
-      // The wire Message-ID binds retries of this exact proposal. A prior card whose send
-      // outcome is unknown is never sent again blindly: duplicate review cards could each
-      // approve one effect, and the user must not guess which one is live.
+      // The turn/content key binds ingress retries; Message-ID is the fallback for exact desk
+      // retries. A prior card whose delivery is unknown is not issued again blindly:
+      // duplicate cards could each approve one effect.
       const prior = payload.dedupe_key
         ? sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.dedupe_key') = ? ORDER BY created_at DESC LIMIT 1", payload.dedupe_key).toArray()[0]
         : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
