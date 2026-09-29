@@ -10,6 +10,22 @@ import type { BrowserSubmitProposal } from '../../channels/approvals';
 const BASE = 'https://api.stagehand.browserbase.com';
 const MODEL = `${PROVIDER_OF[WALDO_CHAT_MODEL]}/${WALDO_CHAT_MODEL}`;
 
+// Stagehand start accepts BrowserbaseSessionCreateParams.proxies. This is only a
+// transport seam: lifting the host allowlist also requires a deployed proxy,
+// connection-path negative tests and a no-bypass proof. No default proxy fallback.
+export type BrowserEgressProxy = Readonly<{ server?: string; username?: string; password?: string }>;
+export const browserStartParams = (proxy?: BrowserEgressProxy): object | null => {
+  if (!proxy || (!proxy.server && !proxy.username && !proxy.password)) return { modelName: MODEL, verbose: 0 };
+  if (!proxy.server || !proxy.username || !proxy.password) return null;
+  let parsed: URL;
+  try { parsed = new URL(proxy.server); } catch { return null; }
+  if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/') return null;
+  return {
+    modelName: MODEL, verbose: 0,
+    browserbaseSessionCreateParams: { proxies: [{ type: 'external', server: parsed.origin, username: proxy.username, password: proxy.password }] },
+  };
+};
+
 
 // Failure bodies from the browser service carry the actionable reason (e.g. schema rejections).
 // Surface a short sanitized slice - never keys, project ids or session ids.
@@ -35,6 +51,12 @@ const failDetail = async (res: Response, secrets: readonly (string | undefined |
   }
 };
 
+const safeBrowserError = (error: unknown, secrets: readonly (string | undefined | null)[]): string => {
+  let message = error instanceof Error ? error.message : String(error);
+  for (const secret of secrets) if (secret && secret.length > 3) message = message.split(secret).join('[redacted]');
+  return message.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '[session]').slice(0, 200);
+};
+
 const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger) => TOOL_PERMISSIONS[trigger].includes(name));
 
 export const browsePageHandler = (
@@ -42,6 +64,7 @@ export const browsePageHandler = (
   projectId: string | undefined,
   modelApiKey: string | undefined,
   fetcher: typeof fetch = fetch,
+  proxy?: BrowserEgressProxy,
 ): ToolHandler<BrowsePageArgs, Readonly<{ url: string; data: unknown }>, ToolDispatcherContext> => ({
   name: 'browse_page',
   description: 'Open a public web page in a real browser and extract information from it. Use when web_search snippets are not enough - the page is dynamic or needs reading in full. Read-only: it never clicks, fills or submits.',
@@ -50,30 +73,32 @@ export const browsePageHandler = (
   autonomy_gated: false,
   async handle({ url, instruction }: BrowsePageArgs) {
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.' };
+    const startParams = browserStartParams(proxy);
+    if (!startParams) return { ok: false, code: 'auth_failed', error: 'The browser network route is not configured safely.' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
     const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     let session: string | null = null;
     const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
     try {
-      const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
+      const started = await call('/v1/sessions/start', startParams);
       if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.` };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})${await failDetail(started, [apiKey, projectId])}` };
+      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})${await failDetail(started, [apiKey, projectId, proxy?.server, proxy?.username, proxy?.password])}` };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
       if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.' };
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
-      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})${await failDetail(navigated, [apiKey, projectId, session])}` };
+      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})${await failDetail(navigated, [apiKey, projectId, session, proxy?.server, proxy?.username, proxy?.password])}` };
 
       const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction, options: { model, timeout: 30000 } });
       if (extracted.status === 401 || extracted.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${extracted.status}) - it needs replacing.` };
-      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})${await failDetail(extracted, [apiKey, projectId, session])}` };
+      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})${await failDetail(extracted, [apiKey, projectId, session, proxy?.server, proxy?.username, proxy?.password])}` };
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
       if (!extractBody.success) return { ok: false, code: 'transient', error: 'Extraction was rejected by the browser service.' };
       return { ok: true, data: { url, data: extractBody.data?.result ?? null }, source_taint: 'external' };
     } catch (error) {
-      return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, code: 'transient', error: safeBrowserError(error, [apiKey, projectId, modelApiKey, session, proxy?.server, proxy?.username, proxy?.password]) };
     } finally {
       await end();
     }
@@ -105,6 +130,7 @@ export const browseActHandler = (
   record: (kind: string, summary: string, payload: unknown) => void = () => undefined,
   proposeSubmit?: (payload: BrowserSubmitProposal) => Promise<string>,
   fetcher: typeof fetch = fetch,
+  proxy?: BrowserEgressProxy,
 ): ToolHandler<BrowseActArgs, BrowseActResult, ToolDispatcherContext> => ({
   name: 'browse_act',
   description: 'Open a public web page in a real browser and take a few small in-page actions (click, type, scroll) toward a task, then report what the page shows. Capped steps. It will never submit, pay, send, book, delete or log in - it stops and reports instead.',
@@ -114,6 +140,8 @@ export const browseActHandler = (
   mutates_state: true,
   async handle({ url, task, max_actions }: BrowseActArgs) {
     if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.' };
+    const startParams = browserStartParams(proxy);
+    if (!startParams) return { ok: false, code: 'auth_failed', error: 'The browser network route is not configured safely.' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
     const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
@@ -121,21 +149,21 @@ export const browseActHandler = (
     const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
     const taken: string[] = [];
     try {
-      const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
+      const started = await call('/v1/sessions/start', startParams);
       if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.` };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})${await failDetail(started, [apiKey, projectId])}` };
+      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})${await failDetail(started, [apiKey, projectId, proxy?.server, proxy?.username, proxy?.password])}` };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
       if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.' };
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
-      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})${await failDetail(navigated, [apiKey, projectId, session])}` };
+      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})${await failDetail(navigated, [apiKey, projectId, session, proxy?.server, proxy?.username, proxy?.password])}` };
 
       let stopped: BrowseActResult['stopped'] = 'cap_reached';
       let blocked: string | undefined;
       for (let step = 0; step < max_actions; step += 1) {
         const observed = await call(`/v1/sessions/${session}/observe`, { instruction: task, options: { model, timeout: 30000 } });
-        if (!observed.ok) return { ok: false, code: 'transient', error: `Observe failed (HTTP ${observed.status})${await failDetail(observed, [apiKey, projectId, session])}` };
+        if (!observed.ok) return { ok: false, code: 'transient', error: `Observe failed (HTTP ${observed.status})${await failDetail(observed, [apiKey, projectId, session, proxy?.server, proxy?.username, proxy?.password])}` };
         const observeBody = (await observed.json()) as { success?: boolean; data?: { result?: BrowserAction[] } };
         const action = observeBody.data?.result?.[0];
         if (!observeBody.success || !action) { stopped = step === 0 ? 'no_action_found' : 'task_done'; break; }
@@ -155,7 +183,7 @@ export const browseActHandler = (
           stopped = 'irreversible_blocked'; blocked = action.description; break;
         }
         const acted = await call(`/v1/sessions/${session}/act`, { input: action, options: { model, timeout: 30000 } });
-        if (!acted.ok) return { ok: false, code: 'transient', error: `Act failed (HTTP ${acted.status})${await failDetail(acted, [apiKey, projectId, session])}` };
+        if (!acted.ok) return { ok: false, code: 'transient', error: `Act failed (HTTP ${acted.status})${await failDetail(acted, [apiKey, projectId, session, proxy?.server, proxy?.username, proxy?.password])}` };
         const actBody = (await acted.json()) as { success?: boolean };
         if (!actBody.success) { stopped = 'no_action_found'; break; }
         taken.push(action.description);
@@ -163,7 +191,7 @@ export const browseActHandler = (
       }
 
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction: 'Summarise what this page now shows, relative to the task.', options: { model, timeout: 30000 } });
-      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})${await failDetail(extracted, [apiKey, projectId, session])}` };
+      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})${await failDetail(extracted, [apiKey, projectId, session, proxy?.server, proxy?.username, proxy?.password])}` };
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
       const data: BrowseActResult = {
         url, actions_taken: taken, stopped,
@@ -172,7 +200,7 @@ export const browseActHandler = (
       };
       return { ok: true, data, source_taint: 'external' };
     } catch (error) {
-      return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
+      return { ok: false, code: 'transient', error: safeBrowserError(error, [apiKey, projectId, modelApiKey, session, proxy?.server, proxy?.username, proxy?.password]) };
     } finally {
       await end();
     }
@@ -188,15 +216,18 @@ export const executeBrowserSubmit = async (
   modelApiKey: string | undefined,
   proposal: BrowserSubmitProposal,
   fetcher: typeof fetch = fetch,
+  proxy?: BrowserEgressProxy,
 ): Promise<string> => {
   if (!apiKey || !projectId) return 'Browsing is not set up on this Waldo yet, so nothing happened.';
+  const startParams = browserStartParams(proxy);
+  if (!startParams) return 'The browser network route is not configured safely, so nothing happened.';
   const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
   const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
   const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
   let session: string | null = null;
   const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
   try {
-    const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
+    const started = await call('/v1/sessions/start', startParams);
     if (!started.ok) return `The browser session could not start (HTTP ${started.status}), so nothing happened.`;
     const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
     session = startBody.data?.sessionId ?? null;
@@ -235,7 +266,7 @@ export const executeBrowserSubmit = async (
     if (!actBody.success) return 'The final action was rejected by the browser. It may or may not have happened - check the page before retrying.';
     return `Done: ${proposal.action.description} on ${proposal.url}.`;
   } catch (error) {
-    return `The browser run failed: ${error instanceof Error ? error.message : String(error)}. Nothing may have happened - check the page before retrying.`;
+    return `The browser run failed: ${safeBrowserError(error, [apiKey, projectId, modelApiKey, session, proxy?.server, proxy?.username, proxy?.password])}. Nothing may have happened - check the page before retrying.`;
   } finally {
     await end();
   }

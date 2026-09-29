@@ -20,6 +20,9 @@ export type TelegramWebhookEnv = Readonly<{
   ARTIFACTS?: R2Bucket;
   BROWSERBASE_API_KEY?: string;
   BROWSERBASE_PROJECT_ID?: string;
+  WALDO_BROWSER_PROXY_SERVER?: string;
+  WALDO_BROWSER_PROXY_USERNAME?: string;
+  WALDO_BROWSER_PROXY_PASSWORD?: string;
   ELEVENLABS_API_KEY?: string;
   WALDO_STT_PROVIDER?: string;
   WALDO_TOOL_OFFLOAD?: string;
