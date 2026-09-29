@@ -1,0 +1,63 @@
+{
+  "created": "2026-09-29",
+  "validation_kind": "artifact_structure_and_synthetic_fixture_arithmetic_only",
+  "checks_passed": 30,
+  "checks": [
+    "original_spec_hash_matches_reference_and_is_unchanged",
+    "original_reference_hash_unchanged",
+    "exactly_36_unique_second_pass_references",
+    "case_ids_and_order_match_original",
+    "all_reference_outputs_unexecuted_and_unscored",
+    "all_original_cases_remain_unexecuted",
+    "five_decision_ids_exact",
+    "all_original_forbidden_effects_preserved",
+    "markdown_covers_all_36_ids",
+    "no_runtime_or_production_authority_claim",
+    "W01_solution_1_60_contiguous_minutes",
+    "W01_solution_1_no_event_conflict",
+    "W01_solution_1_valid_band",
+    "W01_solution_1_rebooking_fits",
+    "W01_solution_2_60_contiguous_minutes",
+    "W01_solution_2_no_event_conflict",
+    "W01_solution_2_valid_band",
+    "W01_solution_2_rebooking_fits",
+    "W20_arrival_Thursday_and_delivery_Friday",
+    "W20_delivery_before_action_deadline",
+    "W20_urgent_exception_disabled",
+    "W20_expiry_is_start_of_Saturday",
+    "W22_cart_total_and_receipt_match",
+    "W22_cart_hash_reproducible",
+    "W22_positive_base_has_exactly_one_capture",
+    "W24_stop_only_not_persistent_erasure",
+    "W24_explicit_delete_instruction_separate",
+    "R33_deadline_matches_15_minutes",
+    "R33_reserves_inside_total_caps",
+    "R33_retry_and_call_caps_consistent"
+  ],
+  "agent_case_execution": "not_run",
+  "not_validated": [
+    "agent behavior",
+    "grader implementation",
+    "provider adapters",
+    "all source-object fixtures",
+    "production behavior",
+    "competitive performance"
+  ],
+  "files": [
+    {
+      "name": "Waldo_Benchmark_v2_1_Grader_Decisions.json",
+      "bytes": 19691,
+      "sha256": "63936006cf5b7cfc60ea37b94120234cc7e8ed520db27a7951e529de657933fd"
+    },
+    {
+      "name": "Waldo_36_Second_Pass_References_v2_1.jsonl",
+      "bytes": 60891,
+      "sha256": "6d30a9960fa4ef19ba8da73a4ccddfe5fbefc8bf309279757bce9a2e9cc51338"
+    },
+    {
+      "name": "Waldo_Benchmark_Review_and_Quality_Bar_v2_1.md",
+      "bytes": 55704,
+      "sha256": "686ad6afa2dc7220dddef329d5f48249b1a7401e6ea20e98aa85545189f955c4"
+    }
+  ]
+}

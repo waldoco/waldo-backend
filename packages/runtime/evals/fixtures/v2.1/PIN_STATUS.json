@@ -1,0 +1,17 @@
+{
+  "overlay_version": "v2.1",
+  "status": "owner_pinned_decisions_unexecuted",
+  "base_spec_sha256": "fc651ed0e02bf53d3875d2497637f9f9309db794b6ce02386227a04b7155211f",
+  "reference_ledger_sha256": "d60b62fb8c32edc8f1493218bcf8ca234bb67b81c279f43ce7b2d9de91d4deda",
+  "case_execution_count": 0,
+  "reference_kind": "informed_second_pass_not_blind",
+  "decisions": {
+    "W01": "pinned_with_exact_admin_and_prep_event_approval_patch",
+    "W20": "pinned_synthetic_clock_and_available_provider_oracle_not_production_sla",
+    "W22": "pinned_named_positive_readback_branch_variants_separate",
+    "W24": "pinned_stop_only_and_separate_explicit_delete_branch_synthetic_retention_only",
+    "R33": "pinned_pending_fixture_inputs_not_graded"
+  },
+  "R33_missing": ["tariff_table", "research_question", "source_snapshots", "deterministic_error_schedule"],
+  "owner_confirmation": "September 29, 2026 23:02 Asia/Kolkata authenticated WhatsApp exchange, message wamid.HBgMOTE3NTU4NjU5OTMxFQIAEhgUM0JFNDkxNEU4OUFDREM4NUMxNDcA"
+}
