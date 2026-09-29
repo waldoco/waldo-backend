@@ -256,19 +256,19 @@ const approvals = (view: ConsoleView) => {
     const canApprove = consoleMayApprove(item) && safeReview !== null;
     // Open send proposals are dismissible here: skipping changes nothing external, it only
     // closes the loop. Approving a send stays in chat with the exact words on the card.
-    const dismissible = item.state === 'open' && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
+    const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
     const actions = canApprove
       ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
-      : item.state === 'open'
+      : item.state === 'open' || item.state === 'review_only'
         ? dismissible ? form(view.csrf, 'approval.skip', 'Not now', { id: item.id }) : ''
         : item.undoable ? form(view.csrf, 'approval.undo', 'Undo', { id: item.id }, { tone: 'danger', confirm: 'Undo this calendar change?' }) : '';
     const review = safeReview ? reviewDetails(safeReview) : '';
-    const holdReason = item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
+    const holdReason = item.state === 'review_only' ? '<div class="sub">The full email did not fit in the chat card, so no Send it button was offered. Nothing has been sent. Ask for a shorter version or a draft to review.</div>' : item.state === 'unconfirmed' ? '<div class="sub">Review card delivery was not confirmed. This email cannot be approved here or in chat; nothing has been sent. Check chat before making a fresh request.</div>' : item.state !== 'open' || canApprove ? '' : item.kind === 'email_send' || item.kind === 'message_send'
       ? '<div class="sub">Review the exact sender, recipient and words in your chat - approving this send happens there. Not now dismisses it, here or in chat.</div>'
       : '<div class="sub">Full action details are not available here. This console cannot approve or dismiss it. Ask Waldo to show the proposal in full before deciding.</div>';
-    const changeHint = item.state === 'open' && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
+    const changeHint = (item.state === 'open' || item.state === 'review_only') && ['calendar_change', 'email_send', 'message_send'].includes(item.kind)
       ? '<div class="sub">Want to change it? Ask Waldo to prepare a new proposal before approving.</div>' : '';
-    return `<div class="row approval-row"><div class="main"><div class="sub">${chip(label)}</div><div class="line">${esc(item.summary)}</div>${review}${holdReason}${changeHint}</div>${chip(item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'open' ? 'neutral' : 'good')}<div class="act">${actions}</div></div>`;
+    return `<div class="row approval-row"><div class="main"><div class="sub">${chip(label)}</div><div class="line">${esc(item.summary)}</div>${review}${holdReason}${changeHint}</div>${chip(item.state === 'review_only' ? 'Too long to approve' : item.state === 'unconfirmed' ? 'Card unconfirmed' : item.state === 'open' ? 'Waiting on you' : 'Done', item.state === 'done' ? 'good' : 'neutral')}<div class="act">${actions}</div></div>`;
   }).join('');
 };
 
@@ -377,7 +377,7 @@ const activity = (view: ConsoleView) => {
 const overview = (view: ConsoleView) => {
   const hour = Number(view.now.split(' ')[1]?.split(':')[0]);
   const greeting = Number.isFinite(hour) && hour < 12 ? 'Morning.' : Number.isFinite(hour) && hour < 18 ? 'Afternoon.' : 'Evening.';
-  const waiting = view.approvals.filter((approval) => approval.state === 'open');
+  const waiting = view.approvals.filter((approval) => approval.state === 'open' || approval.state === 'review_only' || approval.state === 'unconfirmed');
   const latestRun = view.page?.runs_applied ? undefined : view.runs[0];
   const latestTrace = view.page?.trace_applied ? undefined : view.trace.at(-1);
   const lastMovement = latestRun
@@ -480,7 +480,7 @@ export const renderConsole = (view: ConsoleView, page: string = '', banner = '')
   const pages: Readonly<Record<string, string>> = {
     '': `<section id="overview" aria-label="Overview">${overview(view)}</section>
 <div class="stats"><div class="stat"><b>${view.google.accounts.length ? String(view.google.accounts.length) : 'Off'}</b><span>Google connection</span></div><div class="stat"><b>${view.spots.length}</b><span>Active spots</span></div><div class="stat"><b>${view.nodes.length}</b><span>Constellation patterns</span></div><div class="stat"><b>${sentToday}/${view.cards.length}</b><span>Cards sent today</span></div><div class="stat"><b>${seen}/${view.steps.length}</b><span>End-to-end steps seen</span></div></div>`,
-    waiting: section('approvals', 'Waiting on you', 'Changes Waldo proposed. Do it or not now, here or in Telegram - one decision, both places update.', approvals(view)),
+    waiting: section('approvals', 'Waiting on you', 'Changes Waldo proposed. You can approve calendar changes here; email sends can only be approved on the full review card in chat.', approvals(view)),
     setup: section('checklist', 'Setup checklist', 'The few steps that make Waldo useful. Connection status shows access, not a passed tool test.', checklist(view)),
     connections: section('connections', 'Connections', 'What Waldo has permission to reach. To verify a tool, try a real request in chat and check Activity below.', serviceStatus(view) + connectors(view)),
     spots: section('spots', 'Spots', 'Small things Waldo has noticed about you. You can confirm, dismiss, or forget a spot here; corrections go through chat.', spots(view) + forgetting(view) + retired(view) + held(view)),

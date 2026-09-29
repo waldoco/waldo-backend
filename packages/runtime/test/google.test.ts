@@ -89,6 +89,28 @@ describe('google client', () => {
 
 describe('google tools', () => {
   const proposals = { propose: async () => 'proposal:1', proposeSendEmail: async () => 'proposal:1', record: () => undefined };
+  it('returns typed receipt outcomes for email proposals without claiming a Gmail send', async () => {
+    const google: GoogleAccess = { client: async () => ({} as never) };
+    const args = { to: ['a@example.test'], subject: 'Hello', body_markdown: 'Body' };
+    const good = googleHandlers(google, { ...proposals, proposeSendEmail: async () => 'p1' }, clock).find((tool) => tool.name === 'send_email')!;
+    const receipt = await good.handle(args as never);
+    expect(receipt).toMatchObject({ ok: true, data: { proposal_id: 'p1', sent: false, status: expect.stringContaining('review card') } });
+    const uncertain = googleHandlers(google, { ...proposals, proposeSendEmail: async () => { throw new Error('telegram timeout'); } }, clock).find((tool) => tool.name === 'send_email')!;
+    const failed = await uncertain.handle(args as never);
+    expect(failed).toMatchObject({ ok: false, code: 'transient', source_taint: 'external', error: expect.stringContaining('No email was sent') });
+    expect(JSON.stringify(failed)).not.toContain('telegram timeout');
+    const seen: { message_id: string; dedupe_key?: string }[] = [];
+    const desk = { ...proposals, proposeSendEmail: async (payload: { message_id: string; dedupe_key?: string }) => { seen.push(payload); return 'p1'; } };
+    const handler = googleHandlers(google, desk, clock).find((tool) => tool.name === 'send_email')!;
+    const ctx = { authenticatedUserId: 'owner-42', turnId: 'tg-123' } as never;
+    await handler.handle(args as never, ctx);
+    await handler.handle(args as never, ctx);
+    expect(seen[0]!.dedupe_key).toBe(seen[1]!.dedupe_key);
+    expect(seen[0]!.message_id).not.toBe(seen[1]!.message_id);
+    await handler.handle(args as never, { authenticatedUserId: 'owner-42', turnId: 'tg-124' } as never);
+    expect(seen[2]!.dedupe_key).not.toBe(seen[1]!.dedupe_key);
+  });
+
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
     const [query] = googleHandlers(google, proposals, clock);

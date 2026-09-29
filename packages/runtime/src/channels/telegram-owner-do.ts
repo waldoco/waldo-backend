@@ -838,6 +838,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const desk = approvalDesk(storage.sql, {
       call: routedCall, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
       timezone: clock.timezone, log,
+      reviewUrl: async () => {
+        const origin = await storage.get<string>('origin');
+        return origin && /^https:\/\/[^/?#]+$/.test(origin) ? `${origin}${CONSOLE_PATH}/waiting` : null;
+      },
       browserSubmit: (proposal) => executeBrowserSubmit(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, proposal),
       // Approved sends go out this Waldo's own channel chat, verbatim, through the same routed
       // call the cards use. A proposal naming another channel fails honestly instead of
@@ -1205,6 +1209,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'timezone.set') {
           if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
           identity.put('timezone', value);
+          await armNightly(scheduler, value, now);
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.

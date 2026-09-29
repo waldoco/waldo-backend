@@ -76,7 +76,11 @@ export const NIGHTLY_ID = 'nightly-memory';
 export const NIGHTLY_TIME = '03:00';
 
 export const armNightly = async (scheduler: Scheduler, timezone: string, now: number): Promise<void> => {
-  if (scheduler.read(NIGHTLY_ID)) return;
+  const existing = scheduler.read(NIGHTLY_ID);
+  if (existing?.recurrence?.type === 'daily_local' && existing.recurrence.time === NIGHTLY_TIME && existing.recurrence.timezone === timezone) return;
+  // A due occurrence must be dispatched (or recorded as missed) before replacing its row.
+  // Keep the scheduler's one-second due lookahead intact; no manual fire or duplicate pass.
+  if (existing && (existing.status !== 'armed' || existing.due_at <= now + 1_000)) return;
   const at = nextAfter(localToEpoch(`${localIso(now, timezone).slice(0, 10)}T${NIGHTLY_TIME}`, timezone), now);
   await scheduler.schedule({
     id: NIGHTLY_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_ID }, occurrenceAt: at, dueAt: at,
