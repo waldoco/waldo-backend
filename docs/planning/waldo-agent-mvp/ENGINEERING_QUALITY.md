@@ -104,7 +104,7 @@ Freeze later relationship/commerce/general orchestration breadth until its named
 
 ## 7. Premium experience and competitive evidence
 
-Instinct and Meta Muse set an experience target; the [competitor evidence register](COMPETITOR_RESEARCH.md) separates public claims and observations. Full product parity is not promised by an adapter architecture. Recheck sources for a specific capability only when it affects the assigned slice.
+Instinct, Meta Muse and Dots set an experience target; the [competitor evidence register](COMPETITOR_RESEARCH.md) separates public claims and observations. Full product parity is not promised by an adapter architecture. Recheck sources for a specific capability only when it affects the assigned slice.
 
 | Experience to prove | Waldo acceptance / comparison |
 |---|---|
@@ -115,4 +115,6 @@ Instinct and Meta Muse set an experience target; the [competitor evidence regist
 | Health plus work delegation | Optional health meaningfully changes the day; K0 delegates one actual task and returns independently checked evidence without losing the personal thread |
 | Premium reliability | Clear pending/error/uncertain states, fast useful progress, accessible controls, stop/reconnect, quiet notifications and measured latency/cost on iPhone |
 
-For a parity claim, record product/date/version or observed account configuration, the same consented synthetic scenario, permissions, trials, outcomes, latency/cost and interventions. Use the same rubric and proof level; public marketing or a single demo cannot establish relative reliability. When competitor access is unavailable, mark comparison unverified and evaluate Waldo against the explicit product rubric. No invented personally tested Instinct or Muse story, unsupported exclusivity claim, or competitive feature checklist expands the MVP release cut.
+For a parity claim, record product/date/version or observed account configuration, the same consented synthetic scenario, permissions, trials, outcomes, latency/cost and interventions. Use the same rubric and proof level; public marketing or a single demo cannot establish relative reliability. When competitor access is unavailable, mark comparison unverified and evaluate Waldo against the explicit product rubric. No invented personally tested Instinct, Muse or Dots story, unsupported exclusivity claim, or competitive feature checklist expands the MVP release cut.
+
+September 29 Dots source note: https://openai.com/index/introducing-dots/ returned HTTP 403 to independent fetching; Dots claims in [the register](COMPETITOR_RESEARCH.md) are owner-supplied transcription attributed to the launch page. Keep these separate from observed product behavior before comparing against Waldo.
