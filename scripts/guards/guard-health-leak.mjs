@@ -148,6 +148,9 @@ function isSkipped(file) {
   const parts = rel.split(sep);
   // Guard sources legitimately carry the forbidden token patterns as detectors.
   if (parts.includes('guards')) return true;
+  // Build tooling paths can contain 'console', 'hr' and numeric asset hashes; source
+  // application code remains scanned, but tooling and generated output do not.
+  if (parts.includes('dashboard-app') && parts.includes('scripts')) return true;
   if (!SCANNABLE.test(file)) return true;
   if (TEST_FILE.test(file)) return true;
   return false;
