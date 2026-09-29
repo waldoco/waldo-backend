@@ -28,6 +28,13 @@ describe('dashboard read-only copy', () => {
     const failure: OverviewV1 = { ...empty, latest_activity: { kind: 'heartbeat', status: 'failed', at: empty.as_of, summary: 'attempt did not complete' } };
     expect(renderToStaticMarkup(<Dashboard data={failure} route="patrol" />)).toContain('attempt did not complete');
   });
+  it('does not contradict a recorded activity when its summary is absent', () => {
+    const record: OverviewV1 = { ...empty, latest_activity: { kind: 'update_card', status: 'completed', at: empty.as_of, summary: null } };
+    const patrol = renderToStaticMarkup(<Dashboard data={record} route="patrol" />);
+    expect(patrol).toContain('update_card');
+    expect(patrol).toContain('No summary is recorded for this activity.');
+    expect(patrol).not.toContain('No owner-facing work appears');
+  });
   it('orders a waiting decision before the Brief on a small screen without hiding its summary', () => {
     const waiting: OverviewV1 = { ...empty, waiting: { count: 1, first: { id: 'w1', summary: 'Review recipient and effect' } } };
     const html = renderToStaticMarkup(<Dashboard data={waiting} route="overview" />);
