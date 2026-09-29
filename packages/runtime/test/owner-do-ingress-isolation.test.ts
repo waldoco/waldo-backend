@@ -186,10 +186,13 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect((await callback(81101, 81101, approve, update + 1)).status).toBe(200);
     expect(sourceWorld.outbox('a@example.invalid')).toEqual([expect.objectContaining({ kind: 'calendar.create', target: 'primary', payload: { title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30' } })]);
     expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
+    expect(sourceWorld.providerCalendarReadback('a@example.invalid')).toEqual([expect.objectContaining({ title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30' })]);
+    expect(sourceWorld.providerCalendarReadback('b@example.invalid')).toEqual([]);
     await runInDurableObject(doStub(81101), async (_instance, state) => {
       expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change' ORDER BY created_at DESC LIMIT 1").toArray()).toEqual([{ status: 'done' }]);
     });
     expect((await callback(81101, 81101, approve, update + 2)).status).toBe(200);
     expect(sourceWorld.outbox('a@example.invalid')).toHaveLength(1);
+    expect(sourceWorld.providerCalendarReadback('a@example.invalid')).toHaveLength(1);
   });
 });

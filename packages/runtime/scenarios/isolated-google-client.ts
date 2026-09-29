@@ -29,13 +29,10 @@ export const isolatedGoogleClient = (world: IsolatedSourceWorld, owner: string):
 // Explicit test-only effect opt-in. The regular adapter above continues to reject every
 // mutation; an approval test must choose this wrapper and inspect the world outbox.
 export const isolatedCalendarEffectClient = (world: IsolatedSourceWorld, owner: string): GoogleClient => {
-  let callNumber = 0;
   return {
     ...isolatedGoogleClient(world, owner),
     createEvent: async (input) => {
-      const effect = world.intercept({ owner_id: owner, kind: 'calendar.create', target: 'primary', payload: input,
-        idempotency_key: `fixture-create-call-${++callNumber}` });
-      return { id: `fixture-event-${world.outbox(owner).length}`, ...input, all_day: false, etag: effect.idempotency_key };
+      return copy<CalendarItem>(world.commitCalendarCreate(owner, input, world.nextProviderKey(owner)));
     },
   };
 };

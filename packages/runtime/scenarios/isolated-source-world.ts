@@ -24,6 +24,9 @@ export class IsolatedSourceWorld {
   private readonly revisions: readonly Revision[];
   private readonly effects: InterceptedEffect[] = [];
   private readonly accesses: SourceAccess[] = [];
+  // Simulated provider state is separate from the source fixtures and the effect log.
+  private readonly providerCalendar: Map<string, Map<string, SourceRow>> = new Map();
+  private readonly providerSequence: Map<string, number> = new Map();
   private nowMs: number;
 
   constructor(fixture: WorldFixture) {
@@ -93,6 +96,28 @@ export class IsolatedSourceWorld {
     const record = { ...copy(effect), at: this.now() };
     this.effects.push(record);
     return copy(record);
+  }
+  // Test-only provider commit/readback. The outbox alone cannot prove final state.
+  // Never expose another owner's rows even when synthetic event IDs overlap.
+  nextProviderKey(owner: string): string {
+    this.checkOwner(owner);
+    const next = (this.providerSequence.get(owner) ?? 0) + 1;
+    this.providerSequence.set(owner, next);
+    return `fixture-create-call-${next}`;
+  }
+  commitCalendarCreate(owner: string, input: Readonly<{ title: string; start: string; end: string }>, key: string): SourceRow {
+    if (!input.title || !Number.isFinite(Date.parse(input.start)) || !Number.isFinite(Date.parse(input.end)) ||
+      Date.parse(input.start) >= Date.parse(input.end)) throw new Error('invalid fixture event');
+    const effect = this.intercept({ owner_id: owner, kind: 'calendar.create', target: 'primary', payload: input, idempotency_key: key });
+    let store = this.providerCalendar.get(owner);
+    if (!store) { store = new Map(); this.providerCalendar.set(owner, store); }
+    const id = `fixture-event-${effect.idempotency_key}`;
+    if (!store.has(id)) store.set(id, { owner_id: owner, id, ...copy(input), all_day: false, etag: effect.idempotency_key });
+    return copy(store.get(id)!);
+  }
+  providerCalendarReadback(owner: string): readonly SourceRow[] {
+    this.checkOwner(owner);
+    return [...(this.providerCalendar.get(owner)?.values() ?? [])].map(copy);
   }
   outbox(owner: string): readonly InterceptedEffect[] {
     this.checkOwner(owner);
