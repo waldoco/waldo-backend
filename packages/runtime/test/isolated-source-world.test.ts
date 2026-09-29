@@ -20,6 +20,14 @@ describe('isolated source and effect world', () => {
     expect(world.read('b', 'mail', 'same-id')?.body).toBe('beta private');
     expect(world.read('a', 'mail', 'missing')).toBeNull();
     expect(() => world.list('stranger', 'mail')).toThrow(/unknown owner/);
+    expect(world.accessLog('a')).toEqual([
+      expect.objectContaining({ source: 'mail', id: 'same-id', kind: 'read' }),
+      expect.objectContaining({ source: 'mail', id: 'same-id', kind: 'read' }),
+      expect.objectContaining({ source: 'mail', id: 'missing', kind: 'read' }),
+    ]);
+    expect(world.accessLog('b')).toEqual([expect.objectContaining({ owner_id: 'b', source: 'mail', id: 'same-id' })]);
+    world.list('a', 'mail');
+    expect(world.accessLog('a').at(-1)).toEqual(expect.objectContaining({ kind: 'list', id: null, source: 'mail' }));
   });
   it('applies source revisions at the clock boundary and resets on a fresh trial', () => {
     const world = new IsolatedSourceWorld(fixture());
@@ -28,6 +36,7 @@ describe('isolated source and effect world', () => {
     world.advance('2026-10-06T10:00:00+05:30');
     expect(world.read('a', 'mail', 'same-id')?.version).toBe(2);
     expect(world.read('b', 'mail', 'same-id')?.version).toBe(1);
+    expect(world.accessLog('a').at(-1)?.at).toBe('2026-10-06T04:30:00.000Z');
     expect(new IsolatedSourceWorld(fixture()).read('a', 'mail', 'same-id')?.version).toBe(1);
     expect(() => world.advance('2026-10-06T09:00:00+05:30')).toThrow(/backward/);
   });

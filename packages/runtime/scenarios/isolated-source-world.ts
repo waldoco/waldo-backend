@@ -2,6 +2,7 @@
 // The oracle/approval grader stays outside this world; fixture text is untrusted data.
 export type SourceRow = Readonly<{ owner_id: string; id: string; [key: string]: unknown }>;
 export type Revision = Readonly<{ at: string; owner_id: string; source: string; id: string; patch: Readonly<Record<string, unknown>> }>;
+export type SourceAccess = Readonly<{ owner_id: string; source: string; id: string | null; kind: 'read' | 'list'; at: string }>;
 export type InterceptedEffect = Readonly<{ owner_id: string; kind: string; target: string; payload: unknown; idempotency_key: string; at: string }>;
 export type WorldFixture = Readonly<{
   clock: string;
@@ -22,6 +23,7 @@ export class IsolatedSourceWorld {
   private readonly rows: Map<string, Map<string, Map<string, SourceRow>>> = new Map();
   private readonly revisions: readonly Revision[];
   private readonly effects: InterceptedEffect[] = [];
+  private readonly accesses: SourceAccess[] = [];
   private nowMs: number;
 
   constructor(fixture: WorldFixture) {
@@ -53,12 +55,18 @@ export class IsolatedSourceWorld {
   now(): string { return new Date(this.nowMs).toISOString(); }
   read(owner: string, source: string, id: string): SourceRow | null {
     this.checkOwner(owner);
+    this.accesses.push({ owner_id: owner, source, id, kind: 'read', at: this.now() });
     const row = this.rows.get(source)?.get(owner)?.get(id);
     return row ? copy(row) : null;
   }
   list(owner: string, source: string): readonly SourceRow[] {
     this.checkOwner(owner);
+    this.accesses.push({ owner_id: owner, source, id: null, kind: 'list', at: this.now() });
     return [...(this.rows.get(source)?.get(owner)?.values() ?? [])].map(copy);
+  }
+  accessLog(owner: string): readonly SourceAccess[] {
+    this.checkOwner(owner);
+    return this.accesses.filter((access) => access.owner_id === owner).map(copy);
   }
   advance(to: string): void {
     const next = atTime(to);
