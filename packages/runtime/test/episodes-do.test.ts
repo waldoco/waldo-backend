@@ -60,6 +60,8 @@ describe('episode history', () => {
       await armNightly(scheduler, 'UTC', before);
       expect(scheduler.read(NIGHTLY_ID)?.due_at).toBe(Date.parse('2026-09-29T03:00:00Z'));
       // Preserve an already-due row so normal dispatch can record it first.
+      await armNightly(scheduler, 'Asia/Kolkata', Date.parse('2026-09-29T02:59:59Z'));
+      expect(scheduler.read(NIGHTLY_ID)?.recurrence).toEqual({ type: 'daily_local', time: '03:00', timezone: 'UTC' });
       await armNightly(scheduler, 'Asia/Kolkata', Date.parse('2026-09-29T03:00:01Z'));
       expect(scheduler.read(NIGHTLY_ID)?.recurrence).toEqual({ type: 'daily_local', time: '03:00', timezone: 'UTC' });
       // On the next setup the future UTC row is replaced with the correct local anchor.
