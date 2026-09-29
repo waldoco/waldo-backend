@@ -16,6 +16,8 @@ describe('evaluator-side trial receipt verification', () => {
     expect(verifyCaptureReceipts({ ...trial, transcript: { ...trial.transcript, bytes: 'changed' } }, identity, receipts, keys)).not.toEqual([]);
     expect(verifyCaptureReceipts(trial, identity, [{ ...receipts[0]!, seed: 'other' }, ...receipts.slice(1)], keys)).not.toEqual([]);
     expect(verifyCaptureReceipts(trial, identity, receipts, { ...keys, provider_readback: 'wrong-key' })).not.toEqual([]);
+    expect(verifyCaptureReceipts(trial, identity, receipts, { ...keys, provider_readback: keys.runner })).toContain('adapter keys must be nonempty and distinct');
+    expect(verifyCaptureReceipts({ ...trial, final_state_readback: { ...trial.final_state_readback, source: 'runner:owner-a' } }, identity, receipts, keys)).not.toEqual([]);
   });
   it('rejects duplicate owner identities', () => {
     expect(verifyCaptureReceipts(trial, { owners: ['owner-a','owner-a'], candidate_owner:'owner-a' }, receipts, keys)).toContain('invalid two-owner isolation');

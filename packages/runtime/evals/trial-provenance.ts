@@ -26,6 +26,7 @@ export const sealCaptureReceipt = (trial: ObservedTrial, owner_id: string, field
 export const verifyCaptureReceipts = (trial: ObservedTrial, capture: Pick<IsolatedCapture, 'owners' | 'candidate_owner'>,
   receipts: readonly SealedReceipt[], keys: ReceiptKeys): readonly string[] => {
   const errors: string[] = [];
+  if (Object.values(keys).some((key) => !key) || new Set(Object.values(keys)).size !== 4) errors.push('adapter keys must be nonempty and distinct');
   if (capture.owners.length !== 2 || capture.owners[0] === capture.owners[1] || !capture.owners.includes(capture.candidate_owner)) errors.push('invalid two-owner isolation');
   if (receipts.length !== fields.length || new Set(receipts.map((item) => item.field)).size !== fields.length) errors.push('missing or duplicate capture receipt');
   for (const [index, field] of fields.entries()) {
@@ -33,7 +34,7 @@ export const verifyCaptureReceipts = (trial: ObservedTrial, capture: Pick<Isolat
     const role = expectedRoles[index]!;
     const artifact: CapturedArtifact = trial[field];
     if (!receipt || receipt.case_id !== trial.case_id || receipt.seed !== trial.seed || receipt.owner_id !== capture.candidate_owner ||
-      receipt.role !== role || !keys[role] || receipt.digest !== artifact.digest ||
+      receipt.role !== role || artifact.source !== `${role}:${capture.candidate_owner}` || !keys[role] || receipt.digest !== artifact.digest ||
       artifact.digest !== `sha256:${createHash('sha256').update(artifact.bytes).digest('hex')}` ||
       !validSignature(receipt, keys[role])) errors.push(`invalid ${field} receipt`);
   }
