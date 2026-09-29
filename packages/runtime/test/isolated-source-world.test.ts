@@ -49,4 +49,18 @@ describe('isolated source and effect world', () => {
     expect(() => world.intercept({ ...effect, payload: { body: 'changed' } })).toThrow(/collision/);
     expect(() => world.intercept({ ...effect, owner_id: 'unknown' })).toThrow(/unknown owner/);
   });
+  it('commits a simulated provider event only once per effect key and reads final state by owner', () => {
+    const world = new IsolatedSourceWorld(fixture());
+    const input = { title: 'Fixture meeting', start: '2026-10-06T11:00:00Z', end: '2026-10-06T11:30:00Z' };
+    const first = world.commitCalendarCreate('a', input, 'approval-1');
+    expect(world.commitCalendarCreate('a', input, 'approval-1')).toEqual(first);
+    expect(world.outbox('a')).toHaveLength(1);
+    expect(world.providerCalendarReadback('a')).toEqual([first]);
+    expect(world.providerCalendarReadback('b')).toEqual([]);
+    (first as unknown as { title: string }).title = 'tampered';
+    expect(world.providerCalendarReadback('a')[0]?.title).toBe('Fixture meeting');
+    expect(() => world.commitCalendarCreate('a', { ...input, title: 'changed' }, 'approval-1')).toThrow(/collision/);
+    expect(() => world.commitCalendarCreate('x', input, 'approval-1')).toThrow(/unknown owner/);
+    expect(new IsolatedSourceWorld(fixture()).providerCalendarReadback('a')).toEqual([]);
+  });
 });

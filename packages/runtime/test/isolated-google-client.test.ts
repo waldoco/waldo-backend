@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
-import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
+import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios/isolated-google-client';
 
 const fixture = () => new IsolatedSourceWorld({
   clock: '2026-10-06T09:00:00Z', owners: [{ id: 'a' }, { id: 'b' }],
@@ -35,5 +35,14 @@ describe('isolated Google source adapter', () => {
     await expect(a.sendRaw('payload')).rejects.toThrow(/intercepted approval/);
     await expect(a.draft({ to: ['x@example.invalid'], subject: 'x', body: 'x' })).rejects.toThrow(/intercepted approval/);
     await expect(a.searchMail('x', 5)).rejects.toThrow(/not implemented/);
+  });
+  it('assigns unique provider records across fresh adapter instances in one owner world', async () => {
+    const world = fixture();
+    const first = await isolatedCalendarEffectClient(world, 'a').createEvent({ title: 'First', start: '2026-10-06T11:00:00Z', end: '2026-10-06T11:30:00Z' });
+    const second = await isolatedCalendarEffectClient(world, 'a').createEvent({ title: 'Second', start: '2026-10-06T12:00:00Z', end: '2026-10-06T12:30:00Z' });
+    expect(first.id).not.toBe(second.id);
+    expect(world.providerCalendarReadback('a').map((row) => row.title)).toEqual(['First', 'Second']);
+    expect(world.providerCalendarReadback('b')).toEqual([]);
+    expect(world.outbox('a')).toHaveLength(2);
   });
 });
