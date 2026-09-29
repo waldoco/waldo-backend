@@ -140,12 +140,17 @@ describe('real owner-DO ingress in a sealed test world', () => {
     const ledgerState = async () => runInDurableObject(doStub(81101), async (_instance, state) =>
       state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM ledger WHERE kind = ? ORDER BY created_at DESC LIMIT 1', 'calendar_change').toArray());
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'open' }]);
-    expect((await callback(81101, 81102, approve, update + 1)).status).toBe(200);
+    // First try the forged sender on A's DO directly: this exercises the approval
+    // desk's owner check, not only the webhook directory's normal routing.
+    await doStub(81101).fetch('https://telegram-owner/turn', { method: 'POST', headers: { 'x-waldo-telegram-subject': '81101' },
+        body: JSON.stringify({ update_id: update + 1, callback_query: { id: `fixture-forgery-${update}`, from: { id: 81102 }, data: approve, message: { message_id: update, chat: { id: 81101 } } } }) });
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'open' }]);
+    expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-forgery-${update}` && item.body.text === 'Not available.')).toBe(true);
     expect((await callback(81101, 81101, skip, update + 2)).status).toBe(200);
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
     expect((await callback(81101, 81101, approve, update + 3)).status).toBe(200);
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
+    expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-query-${update + 3}` && item.body.text === 'Already handled.')).toBe(true);
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
     expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))).toHaveLength(1);
   });
