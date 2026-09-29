@@ -324,7 +324,7 @@ describe('approval desk - email_send rail', () => {
     digest: '',
   };
   let idSeq = 0;
-  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; connected?: boolean }) => {
+  const setup = async (state: DurableObjectState, opts: { sendError?: Error; found?: boolean; connected?: boolean; messageId?: string }) => {
     const sent: { method: string; body: Record<string, unknown> }[] = [];
     const sentRaw: string[] = [];
     let now = 1_000_000;
@@ -338,7 +338,7 @@ describe('approval desk - email_send rail', () => {
       owner: 42, google: async () => (opts.connected === false ? null : client), newId: () => String(++idSeq), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
     });
     const { sha256Hex } = await import('../src/connectors/google');
-    const id = await desk.proposeSendEmail({ ...proposal, digest: await sha256Hex(proposal.raw) });
+    const id = await desk.proposeSendEmail({ ...proposal, message_id: opts.messageId ?? proposal.message_id, digest: await sha256Hex(proposal.raw) });
     return { desk, id, sent, sentRaw, sql: state.storage.sql, tick: (ms: number) => { now += ms; } };
   };
 
@@ -373,6 +373,9 @@ describe('approval desk - email_send rail', () => {
       const keyboard = JSON.stringify(sent[0]!.body.reply_markup);
       expect(keyboard).not.toContain('a:p8');
       expect(keyboard).toContain('s:p8');
+      expect(desk.pending(1_000_000).find((item) => item.id === 'p8')?.state).toBe('review_only');
+      expect((await desk.decide('p8', 'a', 't')).toast).toBe('Already handled.');
+      expect((await desk.decide('p8', 's', 't')).toast).toBe('Not now');
     });
   });
 
@@ -392,11 +395,66 @@ describe('approval desk - email_send rail', () => {
       expect((await desk.decide(id, 'u', 't')).toast).toBe("Can't be undone");
       expect(desk.pending(Date.now()).find((p) => p.id === id)?.undoable ?? false).toBe(false);
 
-      const id2 = await desk.proposeSendEmail({ ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) });
+      const id2 = await desk.proposeSendEmail({ ...proposal, message_id: '<m2@waldo-send>', digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) });
       tick(13 * 60 * 60_000);
       const late = await desk.decide(id2, 'a', 't');
       expect(late.toast).toBe('This proposal expired');
       expect(sentRaw).toHaveLength(1);
+    });
+  });
+
+  it('adds a deterministic receipt and only a view-details link, never a second send button', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-receipt'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const sent: { method: string; body: Record<string, unknown> }[] = [];
+      const desk = approvalDesk(state.storage.sql, {
+        call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
+        owner: 42, google: async () => null, newId: () => '41', now: () => 1_000_000,
+        timezone: 'Asia/Kolkata', log: () => undefined, reviewUrl: async () => 'https://waldo.example/console/waiting',
+      });
+      const payload = { ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
+      const id = await desk.proposeSendEmail(payload);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]!.body.text).toContain('Tap Send it on that card');
+      expect(sent[1]!.body.text).toContain('https://waldo.example/console/waiting');
+      expect(sent[1]!.body.text).toContain('Nothing has been sent');
+      expect(sent[1]!.body.reply_markup).toBeUndefined();
+      expect(await desk.proposeSendEmail(payload)).toBe(id);
+      expect(sent).toHaveLength(2);
+      await expect(desk.proposeSendEmail({ ...payload, subject: 'Changed' })).rejects.toThrow('different content');
+    });
+  });
+
+  it('strands an uncertain card safely and exposes it as unconfirmed, not approvable', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-uncertain'));
+    await runInDurableObject(stub, async (_i, state) => {
+      const desk = approvalDesk(state.storage.sql, {
+        call: async () => { throw new Error('timeout'); }, owner: 42, google: async () => null,
+        newId: () => '42', now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const payload = { ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
+      await expect(desk.proposeSendEmail(payload)).rejects.toThrow('delivery was not confirmed');
+      const item = desk.pending(1_000_000).find((candidate) => candidate.id === 'p42');
+      expect(item?.state).toBe('unconfirmed');
+      expect((await desk.decide('p42', 'a', 't')).toast).toBe('Already handled.');
+      await expect(desk.proposeSendEmail(payload)).rejects.toThrow('delivery was not confirmed');
+    });
+  });
+
+  it('does not re-propose on secondary receipt failure after the review card arrives', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-receipt-failure'));
+    await runInDurableObject(stub, async (_i, state) => {
+      let calls = 0;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async () => { if (++calls === 2) throw new Error('receipt timeout'); return {}; },
+        owner: 42, google: async () => null, newId: () => '43', now: () => 1_000_000,
+        timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const payload = { ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
+      const id = await desk.proposeSendEmail(payload);
+      expect(desk.pending(1_000_000).find((candidate) => candidate.id === id)?.state).toBe('open');
+      expect(await desk.proposeSendEmail(payload)).toBe(id);
+      expect(calls).toBe(2);
     });
   });
 
@@ -424,7 +482,7 @@ describe('approval desk - email_send rail', () => {
       expect(out1.message).toContain('exactly once');
       expect(ok.sentRaw).toHaveLength(1);
 
-      const miss = await setup(state, { sendError: new Error('network timeout'), found: false });
+      const miss = await setup(state, { sendError: new Error('network timeout'), found: false, messageId: '<m4@waldo-send>' });
       const out2 = await miss.desk.decide(miss.id, 'a', 't');
       expect(out2.toast).toBe("That didn't send");
       expect(out2.message).toContain('Nothing was delivered');

@@ -198,13 +198,19 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
         to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
         subject: args.subject, body: args.body_markdown, messageId: message_id,
       })));
-      const proposal_id = await desk.proposeSendEmail({
-        to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
-        subject: args.subject, body: args.body_markdown,
-        ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-        message_id, raw, digest: await sha256Hex(raw),
-      });
-      return { ok: true, data: { proposal_id, status: 'sent to the owner with Send it / Modify / Not now buttons', sent: false }, source_taint: null };
+      try {
+        const proposal_id = await desk.proposeSendEmail({
+          to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
+          subject: args.subject, body: args.body_markdown,
+          ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
+          message_id, raw, digest: await sha256Hex(raw),
+        });
+        return { ok: true, data: { proposal_id, status: 'review card requested in chat; nothing was sent', sent: false }, source_taint: null };
+      } catch {
+        // Do not collapse the delivery uncertainty into an ordinary transient retry: a timeout
+        // may have delivered the card, but no email was sent and its proposal is blocked.
+        return { ok: false, code: 'rejected', error: 'The email review card could not be confirmed. No email was sent. Check the chat before asking for a fresh proposal.', source_taint: 'external' };
+      }
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
 ];

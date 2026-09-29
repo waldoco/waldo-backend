@@ -45,7 +45,7 @@ export type ApprovalReview =
   | Readonly<{ kind: 'email_send'; to: readonly string[]; cc: readonly string[]; bcc: readonly string[]; subject: string; body: string }>
   | Readonly<{ kind: 'message_send'; channel: string; content: string }>
   | Readonly<{ kind: 'calendar_change'; action: 'create' | 'move' | 'cancel'; title: string | null; event_id: string | null; start: string | null; end: string | null; reason: string }>;
-export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done'; undoable: boolean; review: ApprovalReview | null }>;
+export type ApprovalItem = Readonly<{ id: string; kind: string; summary: string; state: 'open' | 'done' | 'unconfirmed' | 'review_only'; undoable: boolean; review: ApprovalReview | null }>;
 export type ApprovalDesk = Readonly<{
   propose(args: ProposeCalendarChangeArgs): Promise<string>;
   proposeBrowserSubmit(payload: BrowserSubmitProposal): Promise<string>;
@@ -69,6 +69,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   newId(): string;
   now(): number;
   timezone: string;
+  reviewUrl?: () => Promise<string | null>;
   log(entry: TurnLogEntry): void;
   browserSubmit?: (proposal: BrowserSubmitProposal) => Promise<string>;
   sendMessage?: (proposal: MessageSendProposal) => Promise<void>;
@@ -150,6 +151,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     const started = deps.now();
     const entry = row(id);
     const expected = action === 'u' ? 'done' : 'open';
+    if (entry?.status === 'review_only' && action === 's') {
+      setStatus(id, 'skipped');
+      return { toast: 'Not now', message: 'Left it. Nothing changed.' };
+    }
     if (!entry || entry.status !== expected) return { toast: 'Already handled.', message: 'Already handled.' };
     const proposal = JSON.parse(entry.payload_json) as Stored;
     try {
@@ -277,12 +282,42 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       return id;
     },
     async proposeSendEmail(payload) {
+      // The wire Message-ID binds retries of this exact proposal. A prior card whose send
+      // outcome is unknown is never sent again blindly: duplicate review cards could each
+      // approve one effect, and the user must not guess which one is live.
+      const prior = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
+      if (prior) {
+        if (prior.payload_json !== JSON.stringify(payload)) throw new Error('email proposal identifier reused with different content');
+        if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
+        if (prior.status === 'card_unconfirmed') throw new Error('email review card delivery was not confirmed; no email was sent. Check this chat before trying again.');
+        throw new Error('this exact email proposal has already been handled; check this chat before trying again.');
+      }
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
-      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
+      sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'email_send', 'card_unconfirmed', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(payload), deps.now());
       const text = `Send this email? ${reviewEmail(payload)}`;
-      await say(text.length <= REVIEW_BUDGET ? text : unreviewable('Send this email?', summary),
-        text.length <= REVIEW_BUDGET ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
+      const approvable = text.length <= REVIEW_BUDGET;
+      try {
+        await say(approvable ? text : unreviewable('Send this email?', summary),
+          approvable ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
+      } catch {
+        // A timeout can mean the card arrived. Leave it unapprovable until reconciled;
+        // never say a card was delivered or attempt a second blind send.
+        throw new Error('email review card delivery was not confirmed; no email was sent. Check this chat before trying again.');
+      }
+      sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", approvable ? 'open' : 'review_only', id);
+      const url = await deps.reviewUrl?.().catch(() => null);
+      const detail = url ? ` View details: ${url}. This page cannot approve email sends.` : '';
+      const receipt = approvable
+        ? 'Email ready for review. The card above has the exact recipients, subject and body. Tap Send it on that card if it is right. Nothing has been sent.'
+        : 'The email is too long to approve from its chat card. No Send it button was offered and nothing has been sent. Ask me for a shorter version or a draft to review.';
+      try {
+        await say(`${receipt}${detail}`);
+      } catch {
+        // The card itself is already the full review. A failed secondary receipt must not
+        // make the model claim the proposal failed or recreate a duplicate card.
+        deps.log({ trace: id, hop: 'email_review_receipt', ms: 0, ok: false, code: 'send_failed' });
+      }
       return id;
     },
     async proposeSendMessage(payload) {
@@ -320,6 +355,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     // offering an approval action. Never expose raw MIME, tokens or arbitrary MCP args here.
     pending(now) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'open' ORDER BY created_at").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
       const undoable = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status = 'done' AND undo_json IS NOT NULL AND decided_at IS NOT NULL ORDER BY decided_at DESC LIMIT 5").toArray();
       const review = (r: LedgerRow): ApprovalReview | null => {
         try {
@@ -345,6 +382,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       };
       return [
         ...open.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'open' as const, undoable: false, review: review(r) })),
+        ...unconfirmed.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'unconfirmed' as const, undoable: false, review: review(r) })),
+        ...reviewOnly.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'review_only' as const, undoable: false, review: review(r) })),
         ...undoable.map((r) => ({ id: r.id, kind: r.kind, summary: r.summary, state: 'done' as const, undoable: r.decided_at !== null && now - r.decided_at <= UNDO_WINDOW_MS, review: review(r) })),
       ];
     },
@@ -359,10 +398,14 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     },
     ledger(reminders) {
       const open = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status IN ('open', 'changing') ORDER BY created_at").toArray();
-      const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
+      const unconfirmed = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'card_unconfirmed' ORDER BY created_at").toArray();
+      const reviewOnly = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND status = 'review_only' ORDER BY created_at").toArray();
+      const done = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE status NOT IN ('open', 'changing', 'card_unconfirmed', 'review_only') ORDER BY COALESCE(decided_at, created_at) DESC LIMIT 8").toArray();
       const lines = [
         'Open',
-        ...(open.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
+        ...(open.length || unconfirmed.length || reviewOnly.length ? open.map((r) => `- ${r.summary} (waiting on you)`) : ['- nothing waiting on you']),
+        ...unconfirmed.map((r) => `- ${r.summary} (review card delivery unconfirmed; cannot approve)`),
+        ...reviewOnly.map((r) => `- ${r.summary} (too long for approval card; cannot send)`),
         '', 'Reminders',
         ...(reminders.length ? reminders.map((r) => `- ${r.at.replace('T', ' ')} ${r.note}${r.repeat === 'daily' ? ' (daily)' : ''}`) : ['- none set']),
         '', 'Recent',
