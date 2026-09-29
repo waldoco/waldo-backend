@@ -15,9 +15,13 @@ describe('native fixture readiness, not a trial',()=>{
     expect(inspectNativeManifest({...m,grants:[]}).missing).toContain('current typed synthetic grant');
     expect(inspectNativeManifest({...m,source_digest:'sha256:wrong'}).missing).toContain('source manifest digest mismatch');
     expect(inspectNativeManifest({...m,world:{...m.world,owners:[{id:'a'},{id:'a'}]}}).missing).toContain('duplicate fixture owner');
+    expect(inspectNativeManifest({...m,branches:[{id:'wrong',trigger_at:spec.fixture.now,owner_id:'outsider',permitted_effects:['calendar.move']}]}).missing).toContain('invalid synthetic authority clock or owner scope');
   });
   it('keeps R33 fixture-blocked rather than inventing tariff or research input',()=>{
     const r=loadNativeSuite().find((row)=>row.id==='R33')!;
     expect(inspectNativeManifest({...m,case_id:'R33',visible_prompt:r.user_prompt,world:{...m.world,clock:r.fixture.now}}).status).toBe('blocked_fixture');
+    const w01=loadNativeSuite().find((row)=>row.id==='W01')!;
+    const base={...m,case_id:'W01',visible_prompt:w01.user_prompt,world:{...m.world,clock:w01.fixture.now}};
+    expect(inspectNativeManifest({...base,branches:[{id:'approval',owner_id:'a',trigger_at:'2026-10-06T10:00:00+05:30',permitted_effects:['calendar.move']}]}).missing).toContain('typed owner branch under current grant');
   });
 });
