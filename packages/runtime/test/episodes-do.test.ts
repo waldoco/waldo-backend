@@ -51,6 +51,32 @@ describe('episode history', () => {
     });
   });
 
+  it('re-anchors a future stale-zone nightly row without replaying an occurrence', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly-zone-reconcile'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      ensureSchema(state.storage);
+      const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+      const before = Date.parse('2026-09-29T02:00:00Z');
+      await armNightly(scheduler, 'UTC', before);
+      expect(scheduler.read(NIGHTLY_ID)?.due_at).toBe(Date.parse('2026-09-29T03:00:00Z'));
+      // Preserve an already-due row so normal dispatch can record it first.
+      await armNightly(scheduler, 'Asia/Kolkata', Date.parse('2026-09-29T03:00:01Z'));
+      expect(scheduler.read(NIGHTLY_ID)?.recurrence).toEqual({ type: 'daily_local', time: '03:00', timezone: 'UTC' });
+      // On the next setup the future UTC row is replaced with the correct local anchor.
+      const after = Date.parse('2026-09-29T04:00:00Z');
+      await scheduler.schedule({ id: NIGHTLY_ID, kind: 'dreaming', payloadRefs: { id: NIGHTLY_ID },
+        occurrenceAt: Date.parse('2026-09-30T03:00:00Z'), dueAt: Date.parse('2026-09-30T03:00:00Z'),
+        recurrence: { type: 'daily_local', time: '03:00', timezone: 'UTC' } });
+      await armNightly(scheduler, 'Asia/Kolkata', after);
+      const corrected = scheduler.read(NIGHTLY_ID)!;
+      expect(corrected.recurrence).toEqual({ type: 'daily_local', time: '03:00', timezone: 'Asia/Kolkata' });
+      expect(corrected.due_at).toBe(Date.parse('2026-09-29T21:30:00Z'));
+      await armNightly(scheduler, 'Asia/Kolkata', after);
+      expect(scheduler.read(NIGHTLY_ID)?.due_at).toBe(corrected.due_at);
+      await scheduler.cancel(NIGHTLY_ID);
+    });
+  });
+
   it('arms one nightly memory pass at 03:00 owner time', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('nightly'));
     await runInDurableObject(stub, async (_instance, state) => {

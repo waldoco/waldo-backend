@@ -1205,6 +1205,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         } else if (action === 'timezone.set') {
           if (!validZone(value) || !(await saveSettings({ timezone: value, ...loops.proactivity() }))) return false;
           identity.put('timezone', value);
+          await armNightly(scheduler, value, now);
         } else if (action === 'spot.dismiss' || action === 'spot.forget' || action === 'spot.confirm') {
           // A claim mid-scrub (status 'purging') is the retry path: the stated 'try again'
           // must be able to select it. Dismiss/confirm stay active-only.
