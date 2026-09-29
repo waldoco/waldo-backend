@@ -1,0 +1,9 @@
+# Waldo dashboard app - slice 1
+
+A read-only React shell built from the #298 dashboard/app bridge contract and #343 design-language brief. Not deployed. No production fixture data, effect buttons, chat, memory claims or inferred health scores. Loading, error, signed-out and honest no-data states render without a provider response.
+
+`pnpm --filter @waldo/dashboard-app test` and `pnpm --filter @waldo/dashboard-app build` run locally. `pnpm --filter @waldo/dashboard-app dev` runs a UI preview, but without an authenticated API its request to `/console/dashboard/api/v1/overview` fails honestly. The *preview-only* synthetic capture recipe lives in `scripts/preview.mjs`; it is excluded from production builds and served only under a local preview script. Never deploy the fixture as a substitute for owner data.
+
+Integration status: #352 (`c8df216`) provides the narrow owner-DO Overview API on staging; the shell + static adapter are pending review/merge/deploy. Existing `/console` cookie remains `Path=/console`. The shell and API use the same origin at `/console/dashboard` and `/console/dashboard/api/v1/overview`, and the static files are content-hashed under `/console/dashboard/assets/`. The Worker dispatch gates the HTML shell with the API's owner-session check; public immutable JS/CSS contain no owner data. `run_worker_first: true` keeps API routing and authentication ahead of static serving, and unknown paths never fall back to the SPA.
+
+Other pages currently use Overview's narrow fields. Memory displays a deliberate unavailable state until a provenance-safe endpoint exists; Waiting is read-only; no approval sends are wired. The source fixture preview is not live owner proof. Final gate is a real authenticated owner-session read and desktop/mobile pixel inspection after staging deploy, including empty and failure states. `/console` Accept JSON exposes the full ConsoleView including CSRF and memory; the app does not consume it.
