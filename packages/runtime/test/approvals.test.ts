@@ -421,7 +421,7 @@ describe('approval desk - email_send rail', () => {
       expect(sent[1]!.body.reply_markup).toBeUndefined();
       expect(await desk.proposeSendEmail(payload)).toBe(id);
       expect(sent).toHaveLength(2);
-      await expect(desk.proposeSendEmail({ ...payload, subject: 'Changed' })).rejects.toThrow('different content');
+      await expect(desk.proposeSendEmail({ ...payload, subject: 'Changed' })).rejects.toThrow('identifier_reused');
     });
   });
 
@@ -440,7 +440,7 @@ describe('approval desk - email_send rail', () => {
       expect(await desk.proposeSendEmail(retry)).toBe(id);
       expect(cards).toBe(2); // one card, one receipt
       expect(desk.pending(1_000_000).find((item) => item.id === id)?.state).toBe('open');
-      await expect(desk.proposeSendEmail({ ...retry, subject: 'Changed' })).rejects.toThrow('different content');
+      await expect(desk.proposeSendEmail({ ...retry, subject: 'Changed' })).rejects.toThrow('identifier_reused');
       const later = await desk.proposeSendEmail({ ...retry, dedupe_key: 'turn-2' });
       expect(later).not.toBe(id);
       expect(cards).toBe(4);
@@ -455,11 +455,11 @@ describe('approval desk - email_send rail', () => {
         newId: () => '42', now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
       });
       const payload = { ...proposal, digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
-      await expect(desk.proposeSendEmail(payload)).rejects.toThrow('delivery was not confirmed');
+      await expect(desk.proposeSendEmail(payload)).rejects.toThrow('card_unconfirmed');
       const item = desk.pending(1_000_000).find((candidate) => candidate.id === 'p42');
       expect(item?.state).toBe('unconfirmed');
       expect((await desk.decide('p42', 'a', 't')).toast).toBe('Already handled.');
-      await expect(desk.proposeSendEmail(payload)).rejects.toThrow('delivery was not confirmed');
+      await expect(desk.proposeSendEmail(payload)).rejects.toThrow('card_unconfirmed');
     });
   });
 

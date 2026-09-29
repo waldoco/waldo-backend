@@ -4,7 +4,7 @@ import {
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
 import { b64url, buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
-import type { EmailSendProposal } from '../../channels/approvals';
+import { EmailProposalError, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
@@ -210,10 +210,16 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
         });
         return { ok: true, data: { proposal_id, status: 'review card requested in chat; nothing was sent', sent: false }, source_taint: null };
-      } catch {
-        // Do not collapse the delivery uncertainty into an ordinary transient retry: a timeout
-        // may have delivered the card, but no email was sent and its proposal is blocked.
-        return { ok: false, code: 'rejected', error: 'The email review card could not be confirmed. No email was sent. Check the chat before asking for a fresh proposal.', source_taint: 'external' };
+      } catch (error) {
+        // A channel timeout may have delivered the card, but no email was sent and the
+        // proposal remains blocked. Database/other faults are not card-delivery evidence.
+        if (!(error instanceof EmailProposalError)) return { ok: false, code: 'transient', error: 'The email proposal could not be prepared. No email was sent; check chat before retrying.', source_taint: 'external' };
+        const reason = error.reason === 'card_unconfirmed'
+          ? 'The email review card delivery was not confirmed. No email was sent. Check chat before asking for a fresh proposal.'
+          : error.reason === 'identifier_reused'
+            ? 'The email proposal identifier was reused with changed content. No email was sent; ask for a fresh proposal.'
+            : 'This email proposal was already handled. No new email was sent; check chat before asking again.';
+        return { ok: false, code: 'rejected', error: reason, source_taint: 'external' };
       }
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,

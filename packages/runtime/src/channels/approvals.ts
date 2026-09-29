@@ -7,6 +7,10 @@ export type CallbackQuery = Readonly<{ id: string; from: { id: number }; data?: 
 
 type Undo = { op: 'cancel'; id: string } | { op: 'move'; id: string; start: string; end: string };
 type LedgerRow = { id: string; kind: string; status: string; summary: string; payload_json: string; undo_json: string | null; created_at: number; decided_at: number | null };
+export class EmailProposalError extends Error {
+  constructor(readonly reason: 'identifier_reused' | 'card_unconfirmed' | 'already_handled') { super(reason); }
+}
+
 
 export const UNDO_WINDOW_MS = 10 * 60_000;
 export const PROPOSAL_TTL_MS = 12 * 60 * 60_000;
@@ -291,10 +295,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       if (prior) {
         const was = JSON.parse(prior.payload_json) as EmailSendProposal;
         const semantic = ({ to, cc, bcc, subject, body, thread_id }: EmailSendProposal) => JSON.stringify({ to, cc, bcc, subject, body, thread_id });
-        if (semantic(was) !== semantic(payload)) throw new Error('email proposal identifier reused with different content');
+        if (semantic(was) !== semantic(payload)) throw new EmailProposalError('identifier_reused');
         if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
-        if (prior.status === 'card_unconfirmed') throw new Error('email review card delivery was not confirmed; no email was sent. Check this chat before trying again.');
-        throw new Error('this exact email proposal has already been handled; check this chat before trying again.');
+        if (prior.status === 'card_unconfirmed') throw new EmailProposalError('card_unconfirmed');
+        throw new EmailProposalError('already_handled');
       }
       const id = `p${deps.newId()}`;
       const summary = describeEmail(payload);
@@ -302,12 +306,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       const text = `Send this email? ${reviewEmail(payload)}`;
       const approvable = text.length <= REVIEW_BUDGET;
       try {
-        await say(approvable ? text : unreviewable('Send this email?', summary),
+        const delivered = await say(approvable ? text : unreviewable('Send this email?', summary),
           approvable ? [['Send it', `a:${id}`], ['Modify', `e:${id}`], ['Not now', `s:${id}`]] : [['Not now', `s:${id}`]]);
+        if (delivered == null) throw new EmailProposalError('card_unconfirmed');
       } catch {
         // A timeout can mean the card arrived. Leave it unapprovable until reconciled;
         // never say a card was delivered or attempt a second blind send.
-        throw new Error('email review card delivery was not confirmed; no email was sent. Check this chat before trying again.');
+        throw new EmailProposalError('card_unconfirmed');
       }
       sql.exec("UPDATE ledger SET status = ? WHERE id = ? AND status = 'card_unconfirmed'", approvable ? 'open' : 'review_only', id);
       const url = await deps.reviewUrl?.().catch(() => null);
