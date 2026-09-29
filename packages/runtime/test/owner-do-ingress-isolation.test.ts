@@ -38,9 +38,12 @@ vi.mock('openai', () => ({
         : 'Synthetic answer from the model adapter.';
       const input = JSON.stringify(body);
       const wantsMail = input.includes('Read the fixture inbox');
+      const wantsProposal = input.includes('Propose a fixture calendar event');
       const hasToolOutput = input.includes('function_call_output');
-      const output = wantsMail && !hasToolOutput && name !== 'claim_ops'
-        ? [{ type: 'function_call', call_id: 'fixture-mail-read', name: 'get_communication', arguments: '{}' }] : [];
+      const output = name === 'claim_ops' || hasToolOutput ? []
+        : wantsProposal ? [{ type: 'function_call', call_id: 'fixture-calendar-proposal', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'create', title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30', reason: 'test-only owner request' }) }]
+        : wantsMail ? [{ type: 'function_call', call_id: 'fixture-mail-read', name: 'get_communication', arguments: '{}' }]
+        : [];
       return { id: `fixture-${modelInputs.length}`, output_text: output.length ? '' : text, output, usage: { input_tokens: 1, output_tokens: 1, input_tokens_details: { cached_tokens: 0 } } };
     } };
   },
@@ -55,6 +58,15 @@ const send = async (subject: number, text: string, updateId: number) => {
   const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
     method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'hermetic-test-webhook-secret' },
     body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text } }),
+  }), env, (work) => pending.push(work), directory);
+  await Promise.all(pending);
+  return response;
+};
+const callback = async (subject: number, from: number, data: string, updateId: number) => {
+  const pending: Promise<unknown>[] = [];
+  const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
+    method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'hermetic-test-webhook-secret' },
+    body: JSON.stringify({ update_id: updateId, callback_query: { id: `fixture-query-${updateId}`, from: { id: from, is_bot: false }, data, message: { message_id: updateId, chat: { id: subject, type: 'private' } } } }),
   }), env, (work) => pending.push(work), directory);
   await Promise.all(pending);
   return response;
@@ -110,5 +122,31 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(toolInputs).toEqual(expect.arrayContaining([expect.stringContaining('cedar only'), expect.stringContaining('birch only')]));
     expect(toolInputs.filter((input) => input.includes('cedar only')).every((input) => !input.includes('birch only'))).toBe(true);
     expect(toolInputs.filter((input) => input.includes('birch only')).every((input) => !input.includes('cedar only'))).toBe(true);
+  });
+  it('routes an owner-scoped calendar proposal card through the real DO without applying a provider effect', async () => {
+    outbox.length = 0; modelInputs.length = 0;
+    const update = 300000 + ++sequence * 10;
+    expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
+    const cards = outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'));
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.body.chat_id).toBe(81101);
+    expect(JSON.stringify(cards[0]!.body.reply_markup)).toContain('Do it');
+    const proposalOutput = modelInputs.map((body) => JSON.stringify(body)).find((input) => input.includes('function_call_output') && input.includes('proposal_id'));
+    expect(proposalOutput).toContain('applied');
+    expect(proposalOutput).toContain('false');
+    const card = cards[0]!.body.reply_markup as { inline_keyboard: { callback_data: string }[][] };
+    const approve = card.inline_keyboard.flat().find((button) => button.callback_data.startsWith('a:'))!.callback_data;
+    const skip = card.inline_keyboard.flat().find((button) => button.callback_data.startsWith('s:'))!.callback_data;
+    const ledgerState = async () => runInDurableObject(doStub(81101), async (_instance, state) =>
+      state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM ledger WHERE kind = ? ORDER BY created_at DESC LIMIT 1', 'calendar_change').toArray());
+    expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'open' }]);
+    expect((await callback(81101, 81102, approve, update + 1)).status).toBe(200);
+    expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'open' }]);
+    expect((await callback(81101, 81101, skip, update + 2)).status).toBe(200);
+    expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
+    expect((await callback(81101, 81101, approve, update + 3)).status).toBe(200);
+    expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
+    expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
+    expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))).toHaveLength(1);
   });
 });
