@@ -425,6 +425,28 @@ describe('approval desk - email_send rail', () => {
     });
   });
 
+  it('dedupes a retried owner turn despite fresh MIME Message-ID bytes, but not a later turn', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-turn-retry'));
+    await runInDurableObject(stub, async (_i, state) => {
+      let cards = 0;
+      let next = 0;
+      const desk = approvalDesk(state.storage.sql, {
+        call: async () => { cards++; return {}; }, owner: 42, google: async () => null,
+        newId: () => String(++next), now: () => 1_000_000, timezone: 'Asia/Kolkata', log: () => undefined,
+      });
+      const first = { ...proposal, dedupe_key: 'turn-1', digest: await (await import('../src/connectors/google')).sha256Hex(proposal.raw) };
+      const id = await desk.proposeSendEmail(first);
+      const retry = { ...first, message_id: '<fresh@waldo-send>', raw: 'fresh raw', digest: 'fresh digest' };
+      expect(await desk.proposeSendEmail(retry)).toBe(id);
+      expect(cards).toBe(2); // one card, one receipt
+      expect(desk.pending(1_000_000).find((item) => item.id === id)?.state).toBe('open');
+      await expect(desk.proposeSendEmail({ ...retry, subject: 'Changed' })).rejects.toThrow('different content');
+      const later = await desk.proposeSendEmail({ ...retry, dedupe_key: 'turn-2' });
+      expect(later).not.toBe(id);
+      expect(cards).toBe(4);
+    });
+  });
+
   it('strands an uncertain card safely and exposes it as unconfirmed, not approvable', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-email-uncertain'));
     await runInDurableObject(stub, async (_i, state) => {

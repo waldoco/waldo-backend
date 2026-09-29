@@ -29,7 +29,7 @@ const BROWSER_SUBMIT_TTL_MS = 30 * 60_000;
 // closed instead of sending; message_id reconciles an ambiguous send via Sent-mail lookup.
 export type EmailSendProposal = Readonly<{
   to: readonly string[]; cc?: readonly string[]; bcc?: readonly string[];
-  subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string;
+  subject: string; body: string; thread_id?: string; message_id: string; raw: string; digest: string; dedupe_key?: string;
 }>;
 
 // send_message proposals (ADR-0054): the exact channel + content the owner approved, replayed
@@ -285,9 +285,13 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       // The wire Message-ID binds retries of this exact proposal. A prior card whose send
       // outcome is unknown is never sent again blindly: duplicate review cards could each
       // approve one effect, and the user must not guess which one is live.
-      const prior = sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
+      const prior = payload.dedupe_key
+        ? sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.dedupe_key') = ? ORDER BY created_at DESC LIMIT 1", payload.dedupe_key).toArray()[0]
+        : sql.exec<LedgerRow>("SELECT * FROM ledger WHERE kind = 'email_send' AND json_extract(payload_json, '$.message_id') = ? ORDER BY created_at DESC LIMIT 1", payload.message_id).toArray()[0];
       if (prior) {
-        if (prior.payload_json !== JSON.stringify(payload)) throw new Error('email proposal identifier reused with different content');
+        const was = JSON.parse(prior.payload_json) as EmailSendProposal;
+        const semantic = ({ to, cc, bcc, subject, body, thread_id }: EmailSendProposal) => JSON.stringify({ to, cc, bcc, subject, body, thread_id });
+        if (semantic(was) !== semantic(payload)) throw new Error('email proposal identifier reused with different content');
         if (prior.status === 'open' || prior.status === 'review_only') return prior.id;
         if (prior.status === 'card_unconfirmed') throw new Error('email review card delivery was not confirmed; no email was sent. Check this chat before trying again.');
         throw new Error('this exact email proposal has already been handled; check this chat before trying again.');

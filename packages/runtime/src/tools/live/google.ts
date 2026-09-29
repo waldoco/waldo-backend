@@ -185,11 +185,15 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // and hands both to the approval desk. The desk replays the stored bytes on approval
     // (users.messages.send, never drafts.send) and reconciles an ambiguous send through the
     // Message-ID we set, so the model's post-approval state cannot change what goes out.
-    handle: async (args: SendEmailArgs) => {
+    handle: async (args: SendEmailArgs, ctx?: ToolDispatcherContext) => {
       // Connectivity is gated at propose time (same tier-2 contract as the other google
       // handlers): no client -> typed connect intent, no half-proposed card.
       const gate = await withGoogle(google, 'mail', async () => null);
       if (!gate.ok) return { ...gate, source_taint: null };
+      // A replay of the same ingress turn with the same final email arguments must reuse its
+      // proposal, even though each invocation mints fresh wire Message-ID bytes. Later turns
+      // may request an identical email deliberately; their distinct turn IDs stay independent.
+      const dedupe_key = ctx?.turnId ? await sha256Hex(JSON.stringify([ctx.authenticatedUserId, ctx.turnId, args])) : undefined;
       const message_id = `<${crypto.randomUUID()}@waldo-send>`;
       // The digest-bound bytes are exactly what crosses the Gmail wire: base64url MIME.
       // (buildMime returns the MIME TEXT; messages/send rejects it unencoded - google 400
@@ -203,7 +207,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown,
           ...(args.reply_to_thread_id ? { thread_id: args.reply_to_thread_id } : {}),
-          message_id, raw, digest: await sha256Hex(raw),
+          message_id, raw, digest: await sha256Hex(raw), ...(dedupe_key ? { dedupe_key } : {}),
         });
         return { ok: true, data: { proposal_id, status: 'review card requested in chat; nothing was sent', sent: false }, source_taint: null };
       } catch {
