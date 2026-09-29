@@ -1215,7 +1215,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const now = Date.now();
         const day = localIso(now, clock.timezone).slice(0, 10);
         return dashboardOverview({ now, timezone: clock.timezone, plans: plans.read(day), cards: DAY_CARDS,
-          approvals: desk.pending(now), run: runs.list(1)[0] ?? null, trace: traces.latest(), grants: await google.state() });
+          approvals: desk.pending(now), run: runs.latestActivity(), trace: traces.latest(), grants: await google.state() });
       },
       act: async ({ action, id, value }) => {
         const now = Date.now();

@@ -24,6 +24,7 @@ export type RunBook = Readonly<{
   start(kind: RunKind, parentId: string | null): BackgroundRun;
   finish(id: string, status: Exclude<RunStatus, 'running'>, summary: string): boolean;
   list(limit: number): readonly BackgroundRun[];
+  latestActivity(): BackgroundRun | null;
   listPage(limit: number, before?: number): { rows: readonly BackgroundRun[]; next: number | null };
   byId(id: string): BackgroundRun | null;
 }>;
@@ -64,6 +65,9 @@ export const runBook = (sql: Sql, clock: OwnerClock, newId: () => string): RunBo
     },
     list: (limit) =>
       sql.exec<BackgroundRun>('SELECT * FROM background_runs ORDER BY started_at DESC LIMIT ?', limit).toArray(),
+    latestActivity: () => sql.exec<BackgroundRun>(
+      'SELECT * FROM background_runs ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC LIMIT 1',
+    ).toArray()[0] ?? null,
     // B9 dashboard bar: cursor page, same convention as the trace book - `before` is the
     // oldest started_at the caller holds; `next` is null when the page ran out.
     listPage: (limit, before) => {
