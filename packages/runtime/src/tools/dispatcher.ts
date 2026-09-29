@@ -55,6 +55,7 @@ export type ParseToolCallsResult =
 
 export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
+  turnId?: string;
   session: SessionState;
 };
 

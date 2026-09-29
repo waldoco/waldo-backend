@@ -215,6 +215,19 @@ describe('owner console', () => {
     expect(consoleMayApprove({ ...proposals[0]!, review: null })).toBe(false);
   });
 
+  it('labels stranded and overlong email proposals without a send affordance', () => {
+    const base = { id: 'mail', kind: 'email_send', summary: 'Send email to me@example.test: "Deck"', undoable: false, review: { kind: 'email_send' as const, to: ['me@example.test'], cc: [], bcc: [], subject: 'Deck', body: 'Text' } };
+    const html = renderConsole({ ...SAMPLE_CONSOLE_VIEW, approvals: [
+      { ...base, state: 'unconfirmed' as const }, { ...base, id: 'long', state: 'review_only' as const },
+    ] }, 'waiting');
+    expect(html).toContain('Card unconfirmed');
+    expect(html).toContain('Too long to approve');
+    expect(html).toContain('This email cannot be approved here or in chat');
+    expect(html).toContain('no Send it button was offered');
+    expect(html).not.toContain('value="approval.approve"');
+    expect((html.match(/value="approval.skip"/g) ?? []).length).toBe(1);
+  });
+
   it('shows gate holds as kind + reason + day only - refused words never reach the page', () => {
     const html = renderConsole(SAMPLE_CONSOLE_VIEW, 'spots');
     expect(html).toContain('Held at the gate (1)');
