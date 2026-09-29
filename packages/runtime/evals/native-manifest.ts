@@ -11,7 +11,7 @@ export type NativeManifest = Readonly<{
   control_owner: string;
   visible_prompt: string;
   world: WorldFixture;
-  grants: readonly Readonly<{ owner_id: string; purpose: string; scope: string; effective_at: string; expires_at: string }> [];
+  grants: readonly Readonly<{ owner_id: string; purpose: string; scope: string; allowed_effects: readonly string[]; effective_at: string; expires_at: string }> [];
   branches: readonly Readonly<{ id: string; trigger_at: string; owner_id: string; permitted_effects: readonly string[] }> [];
   supported_tools: readonly string[];
   source_digest: string;
@@ -41,7 +41,7 @@ export const inspectNativeManifest = (manifest: NativeManifest): ManifestCheck =
     const rows = manifest.world.sources[source];
     if (!rows?.some((row) => row.owner_id === manifest.candidate_owner && row.id)) missing.push(`missing candidate-owner ${source} rows`);
   }
-  if (!manifest.grants.some((grant) => grant.owner_id === manifest.candidate_owner && grant.purpose && grant.scope &&
+  if (!manifest.grants.some((grant) => grant.owner_id === manifest.candidate_owner && grant.purpose && grant.scope && Array.isArray(grant.allowed_effects) &&
     Date.parse(grant.effective_at) <= Date.parse(manifest.world.clock) && Date.parse(grant.expires_at) > Date.parse(manifest.world.clock)))
     missing.push('current typed synthetic grant');
   try { new FixtureAuthorityClock(manifest); }
@@ -49,7 +49,8 @@ export const inspectNativeManifest = (manifest: NativeManifest): ManifestCheck =
   if (requiredBranches.has(spec.id) && !manifest.branches.some((branch) => branch.id && branch.owner_id === manifest.candidate_owner &&
     Number.isFinite(Date.parse(branch.trigger_at)) && Date.parse(branch.trigger_at) >= Date.parse(manifest.world.clock) &&
     manifest.grants.some((grant) => grant.owner_id === manifest.candidate_owner && Date.parse(grant.effective_at) <= Date.parse(branch.trigger_at) &&
-      Date.parse(branch.trigger_at) < Date.parse(grant.expires_at)))) missing.push('typed owner branch under current grant');
+      Date.parse(branch.trigger_at) < Date.parse(grant.expires_at) &&
+      branch.permitted_effects.every((effect) => grant.allowed_effects.includes(effect))))) missing.push('typed owner branch under current grant');
   if (!manifest.supported_tools.length) missing.push('supported tool inventory');
   if (manifest.source_digest !== `sha256:${createHash('sha256').update(canonical(manifest.world.sources)).digest('hex')}`)
     missing.push('source manifest digest mismatch');
