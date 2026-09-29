@@ -16,6 +16,9 @@ export default defineConfig({
       miniflare: {
         bindings: {
           WALDO_ENV: 'test',
+          TELEGRAM_BOT_TOKEN: 'hermetic-test-bot-token',
+          TELEGRAM_WEBHOOK_SECRET: 'hermetic-test-webhook-secret',
+          OPENAI_API_KEY: 'hermetic-test-model-key',
           RUN_LOOP_PROVIDER_MODE: 'fake',
           RUN_LOOP_LOCAL_INGRESS_TOKEN: 'test-run-loop-local-token-000000000000',
           RESPONSIBILITY_INGRESS_HMAC_SECRET: 'test-responsibility-ingress-hmac-secret-000000000000',
