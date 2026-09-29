@@ -123,6 +123,24 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(toolInputs).toEqual(expect.arrayContaining([expect.stringContaining('cedar only'), expect.stringContaining('birch only')]));
     expect(toolInputs.filter((input) => input.includes('cedar only')).every((input) => !input.includes('birch only'))).toBe(true);
     expect(toolInputs.filter((input) => input.includes('birch only')).every((input) => !input.includes('cedar only'))).toBe(true);
+    // Capture collection-boundary evidence from the source adapter and real owner DO.
+    // This is a scripted-model smoke, not a scored W/R trial.
+    const aAccess = sourceWorld.accessLog('a@example.invalid');
+    const bAccess = sourceWorld.accessLog('b@example.invalid');
+    expect(aAccess).toEqual([expect.objectContaining({ owner_id: 'a@example.invalid', source: 'mail', kind: 'list' })]);
+    expect(bAccess).toEqual([expect.objectContaining({ owner_id: 'b@example.invalid', source: 'mail', kind: 'list' })]);
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
+    expect(sourceWorld.outbox('b@example.invalid')).toEqual([]);
+    for (const [subject, ownWord, otherWord] of [[81101, 'cedar only', 'birch only'], [81102, 'birch only', 'cedar only']] as const) {
+      await runInDurableObject(doStub(subject), async (_instance, state) => {
+        const rows = state.storage.sql.exec<{ trace: string; hop: string; owner: string | null }>(
+          'SELECT trace, hop, owner FROM trace_log WHERE trace = ? ORDER BY id', `tg-${update + (subject === 81101 ? 0 : 1)}`).toArray();
+        expect(rows.some((row) => row.hop === 'tool_get_communication')).toBe(true);
+        expect(rows.some((row) => row.hop === 'turn')).toBe(true);
+        expect(rows.every((row) => row.owner !== null)).toBe(true);
+      });
+      expect(toolInputs.some((input) => input.includes(ownWord) && !input.includes(otherWord))).toBe(true);
+    }
   });
   it('routes an owner-scoped calendar proposal card through the real DO without applying a provider effect', async () => {
     outbox.length = 0; modelInputs.length = 0;
