@@ -38,6 +38,7 @@ export const prepareNativeGrade = (trial: ObservedTrial, resolvedBranches: Reado
   const missing = fields.filter((field) => !verifiedCapture(trial[field])).map((field) => `missing or digest-invalid ${field}`);
   if (!trial.seed.trim()) missing.push('missing independent trial seed');
   if (branchGaps.has(spec.id) && !verifiedCapture(resolvedBranches[spec.id]!)) missing.push(`unresolved ${spec.id} fixture branch`);
+  if (spec.id === 'R33') missing.push('R33 tariff table, research question, source snapshots and deterministic error schedule are not pinned as fixture inputs');
   if (missing.length) return { status: 'incomplete', missing };
   // A valid digest proves only these bytes were handed over, never that they are true or
   // source-authorized. This packet is NOT a score or an assertion that a case ran.

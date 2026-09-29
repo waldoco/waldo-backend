@@ -17,8 +17,8 @@ describe('native grading handoff', () => {
   });
   it('holds ambiguous branches until independently resolved fixture decisions are supplied', () => {
     for (const id of ['W01', 'W20', 'W22', 'W24', 'R33']) {
-      expect(prepareNativeGrade(trial(id))).toEqual({ status: 'incomplete', missing: [`unresolved ${id} fixture branch`] });
-      expect(prepareNativeGrade(trial(id), { [id]: ref('owner-branch-adjudication') }).status).toBe('packet_prepared_ungraded');
+      expect(prepareNativeGrade(trial(id))).toEqual({ status: 'incomplete', missing: id === 'R33' ? [`unresolved ${id} fixture branch`, 'R33 tariff table, research question, source snapshots and deterministic error schedule are not pinned as fixture inputs'] : [`unresolved ${id} fixture branch`] });
+      expect(prepareNativeGrade(trial(id), { [id]: ref('owner-branch-adjudication') }).status).toBe(id === 'R33' ? 'incomplete' : 'packet_prepared_ungraded');
     }
   });
   it('prepares an outcome rubric, not a golden-plan or tool-trajectory matching key', () => {
