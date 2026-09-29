@@ -54,6 +54,10 @@ jobs:
       - name: Runtime scenarios
         working-directory: packages/runtime
         run: npx vitest run --config vitest.scenarios.config.ts
+      # Fictional bot/model bindings live only here; the ordinary DO tests rely on their absence.
+      - name: Hermetic owner ingress
+        working-directory: packages/runtime
+        run: npx vitest run --config vitest.owner-ingress.config.ts
 
   # Matches the in-lane gate exactly: 4 shards, each a small process that exits cleanly.
   # Falsifier for coverage: the shard totals must sum to the full runtime test count.
