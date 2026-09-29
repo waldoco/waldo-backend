@@ -226,10 +226,8 @@ export const sanitiseResultSchema = z.discriminatedUnion('ok', [
 ]);
 export type SanitiseResult = z.infer<typeof sanitiseResultSchema>;
 
-// Check 1 — the embedded-scan form of a canary token; the anchored single-token shape is
-// canaryTokenSchema in core/trigger. Any session canary inside candidate text means the
-// system prompt leaked: terminate the session, never write (ADR-0024).
-export const CANARY_REGEX = /\b[a-f0-9]{16}\b/gi;
+// Check 1: only the actual session canary values are tripwires. The former
+// 16-hex shape scan collided with ordinary provider IDs and mail text.
 
 // Check 2 — raw sensor readings never persist outside Supabase and never reach ANY sanitise
 // destination, internal ones included; they have no continuity exception (ADR-0024). Targeted

@@ -368,6 +368,20 @@ describe('Scribe sanitiser', () => {
     });
   });
 
+  it('rejects only the actual session canaries across taints, destinations, keys and decoded views', () => {
+    const benign = '19c8a1b2f3d4e5f6';
+    for (const destination of ['internal_context', 'send_message', 'system_prompt'] as const) {
+      for (const taint of [null, 'external'] as const) {
+        const check = (payload: SanitiseInput['payload']) => sanitise({ payload, destination, canary_tokens: [...CANARIES], source_taint: taint });
+        expect(check(`mail id ${benign}`), `${destination}/${taint}`).not.toMatchObject({ reason: 'canary_leak' });
+        expect(check(`mail id ${CANARIES[0]!.toUpperCase()}`)).toMatchObject({ ok: false, reason: 'canary_leak' });
+        expect(check({ [CANARIES[1]!]: 'value' })).toMatchObject({ ok: false, reason: 'canary_leak' });
+      }
+    }
+    expect(inspect(`mail body ${btoa(`value ${CANARIES[2]}`)}`)).toMatchObject({ ok: false, reason: 'canary_leak' });
+    expect(inspect('tracking f00dfacef00dface')).not.toMatchObject({ reason: 'canary_leak' });
+  });
+
   it('returns content-free failures and preserves taint only on allowed content', () => {
     const denied = inspect(`leaked ${CANARIES[0]}`);
     expect(denied).toEqual({ ok: false, check: 'canary_token', reason: 'canary_leak' });
@@ -422,7 +436,6 @@ describe('Scribe sanitiser', () => {
   });
 
   it.each([
-    'noise f00dfacef00dface noise',
     'Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature-value',
     'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijklmnop',
     '-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----',
@@ -431,7 +444,7 @@ describe('Scribe sanitiser', () => {
     'github_pat_abcdefghijklmnopqrstuvwxyz0123456789',
     'AKIAIOSFODNN7EXAMPLE',
     'api_key = super-secret-value-123',
-  ])('denies canary-shaped or high-confidence secret text: %s', (payload) => {
+  ])('denies high-confidence secret text: %s', (payload) => {
     expect(inspect(payload)).toMatchObject({ ok: false, check: 'canary_token' });
   });
 

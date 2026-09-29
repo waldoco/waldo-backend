@@ -31,19 +31,15 @@ const summaryAdmissionSchema: StrictSchema<string> = {
   },
 };
 
-// Tool-output summaries are staged into every later turn's prompt canvas as tool_result
-// fragments. A summary the scribe denies at that boundary (canary-shaped 16-hex token, fence
-// closer, injected instruction, structured secret) must never persist: once inside the ring it
-// fails every turn BEFORE any tool call can record, so the ring never rotates and the outage is
-// self-sustaining - the 2026-09-27 staging reply-outage root cause (trace chain
-// fbdd97e1 -> 8e717c7e -> :material:tool_result). Exact session canaries are per-runtime and
-// unknown at ledger time; the shape/fence/instruction guards are turn-independent and catch the class.
+// Tool-output summaries are staged into later turns. Reject fence closers, injected
+// instructions, and structured secrets before persistence so a poisoned ring cannot
+// fail every subsequent turn. Exact session canaries are checked when context is read;
+// they are not known at ledger-write time.
 const admitsForPrompt = (summary: string, taint: SourceTaint): boolean => {
   // The exact-canary check is turn-scoped and meaningless here (the real tokens do not exist
   // yet), but the contract schema requires exactly 3 distinct 16-hex tokens. Random throwaway
   // tokens satisfy the schema with no false-positive risk (48 hex chars of entropy per call)
-  // while the shape/fence/secret scans - the turn-independent guards this admission check
-  // exists for - run unchanged. The payload must survive unrewritten: a fragment the scribe
+  // while fence/instruction/secret guards run at this turn-independent boundary. The payload must survive unrewritten: a fragment the scribe
   // would transform on its way to the canvas is staged differently than what was recorded.
   const throwawayCanaries = Array.from({ length: 3 }, () => crypto.randomUUID().replaceAll('-', '').slice(0, 16));
   const prepared = prepareWithScribe(summary, summaryAdmissionSchema, 'system_prompt', taint, throwawayCanaries);

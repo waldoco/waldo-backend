@@ -5,13 +5,8 @@ import { readCalendar } from '../src/channels/day-cards';
 import { collectChanges, type UpdateBook } from '../src/channels/update-cards';
 import { sanitise } from '../src/scribe/sanitiser';
 
-// Live RCA 2026-09-28: the pre-event brief failed scribe_sanitise internal_context
-// canary_leak at 13:40 and the brief card failed at 08:46 and 14:01. Root cause: raw
-// provider objects were JSON.stringify'd into trusted null-taint card context, and Google
-// Calendar etags (16 digits) / Gmail message ids (exactly 16 hex) match the scribe's
-// embedded canary-shape scan (CANARY_REGEX /\b[a-f0-9]{16}\b/i) - a hard deny the softScribe
-// degrade cannot save. These tests pin the projection hygiene: provider-internal sync and
-// identifier fields never enter model-facing card/brief/update context.
+// Model-facing projections omit provider-internal identifiers; ordinary 16-hex mail
+// content survives the exact-session canary guard.
 
 const CANARIES = ['1111111111111111', '2222222222222222', '3333333333333333'] as const;
 
@@ -81,9 +76,8 @@ describe('trusted card and brief context survives real Google field shapes', () 
     expect(changes.find((item) => item.source === 'calendar')?.detail).toContain('Design review');
   });
 
-  it('update changes scrub canary-shaped tokens from mail free text and sanitise clean', async () => {
-    // Repro of the 21:30 Close card denial: a stored mail change whose snippet carries a
-    // 16-hex run (verification-code / tracking-token shape) used to fail the card closed.
+  it('preserves non-canary 16-hex mail free text and sanitises clean', async () => {
+    // Tracking/reference-shaped text is owner-readable content, not a session canary.
     const hexRun = 'a1b2c3d4e5f60718';
     const codedMail: MailItem = {
       ...mail,
@@ -98,7 +92,7 @@ describe('trusted card and brief context survives real Google field shapes', () 
     const changes = await collectChanges(book, google, Date.parse('2026-09-28T12:00:00Z'));
     expect(changes).toHaveLength(1);
     const change = changes[0]!;
-    expect(change.detail).not.toContain(hexRun);
+    expect(change.detail).toContain(hexRun);
     expect(change.detail).toContain('expires in 10 minutes');
     expect(sanitisesClean(change.detail)).toBe(true);
   });
@@ -113,10 +107,10 @@ describe('trusted card and brief context survives real Google field shapes', () 
     expect(projection.snippet).toBe('deadbeef is 8 hex and cafebabe12345 is 12 - both stay, are we still on');
   });
 
-  it('pins the collision: the same fields unprojected still trip the canary-shape scan', () => {
-    // Guard against a future scribe change silently weakening the embedded scan this
-    // projection works around: raw etagged/mail JSON must STILL be denied at null taint.
-    expect(sanitisesClean(JSON.stringify(etagged))).toBe(false);
-    expect(sanitisesClean(JSON.stringify(mail))).toBe(false);
+  it('allows ordinary unprojected provider identifiers under exact-session canary matching', () => {
+    // Provider identifiers alone are not session canaries; the projection still omits
+    // unnecessary IDs from the prompt, but the scribe must not reject normal mail.
+    expect(sanitisesClean(JSON.stringify(etagged))).toBe(true);
+    expect(sanitisesClean(JSON.stringify(mail))).toBe(true);
   });
 });
