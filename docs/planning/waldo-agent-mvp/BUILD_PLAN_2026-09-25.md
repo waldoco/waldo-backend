@@ -116,3 +116,44 @@ a first-class endpoint. No new auth surface, no client-side secrets, same CSP/no
   extension packaging format later (B8); session-tree idea maps onto our episode store for
   "branch from here" debugging of agent runs.
 - Hermes (per CAPABILITY_INVENTORY): three plugin types, 40+ toolsets, voice stack.
+
+## 2026-09-29 addendum: multi-owner observability, evaluation and cost
+
+This is a forward plan, not a claim that these controls are deployed. Track A's public-web
+connection-level boundary and negative-case live proof stay ahead of readiness claims. The
+owner-parametric Langfuse exporter and DO trace table exist; a consented second-owner turn
+has not yet proven isolation, export and queryability end to end.
+
+1. **Multi-owner acceptance and safety:** use a consented second account to prove onboarding,
+   route to its own DO, owner-keyed browser/connector state, a denied cross-owner read and
+   action, trace attribution and failure lookup. Do not mark cohort-ready based on a code
+   path or a founder-only probe. Keep regression cases for wrong-owner and private-network
+   requests in exact-head CI and staged live probes.
+2. **Correlated, privacy-gated telemetry:** propagate one request/turn/run correlation ID and
+   server-verified owner identity across ingress, DO, LLM, tool/connector, browser/proxy,
+   provider send and receipts. Capture typed outcome/error, duration, retry/idempotency,
+   release and prompt version, plus export failures. Define per-surface coverage and alert
+   on missing traces, elevated denials or failed exports. Cloudflare invocation logging and
+   tracing remain off until sensitive request URLs are reviewed; never blanket-enable text
+   capture to solve a debugging gap. Stage a sampled, privacy-tested trace rollout separately.
+3. **Evaluation flywheel:** pin each escaped live failure into a replay dataset; score checked
+   sources, outcome success, truthful capability, owner isolation and effect safety. Compare
+   exact-head releases against a baseline in CI, with human-reviewed sampled live scores and
+   owner feedback. Roll back when a release regresses rather than relying on a green unit suite.
+4. **Per-owner cost ledger and dashboard:** persist an immutable owner-scoped usage event per
+   model/provider call (trace/run ID, time, provider request ID, model, input/cached/output
+   tokens, optional reasoning, price-version and tier, estimated USD, pricing status). Aggregate
+   per day/feature/model with explicit unpriced counts and provider-bill reconciliation. Show
+   estimates, not invoices. The existing 500-row DO trace ring and flat one-model price table
+   are insufficient for durable per-owner economics; the current long-context tier is missing.
+   Use Langfuse's user-filtered metrics for trace diagnosis, not as a replacement owner ledger.
+5. **Voice versions:** manage editable persona text by Langfuse labels with trace-linked version,
+   stable per-owner beta variants, tested local fallback and rollback. Keep hard safety/effect
+   rules in code. Conformance tests should tie tool manifest, ACL, schema and handlers together.
+
+Primary design sources: [Langfuse evaluation](https://langfuse.com/docs/evaluation/overview),
+[Langfuse cost tracking](https://langfuse.com/docs/observability/features/token-and-cost-tracking),
+[Langfuse metrics API](https://langfuse.com/docs/metrics/features/metrics-api),
+[Cloudflare Workers observability](https://developers.cloudflare.com/workers/observability/),
+[Cloudflare traces](https://developers.cloudflare.com/workers/observability/traces/),
+[OWASP multi-tenant security](https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html).

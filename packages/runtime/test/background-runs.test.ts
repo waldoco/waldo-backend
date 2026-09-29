@@ -40,7 +40,10 @@ const fakeSql = () => {
         return { toArray: () => all, rowsWritten: 0 };
       }
       if (query.startsWith('SELECT * FROM background_runs ORDER BY')) {
-        return { toArray: () => [...rows.values()].sort((a, b) => b.started_at - a.started_at).slice(0, args[0] as number), rowsWritten: 0 };
+        const byActivity = query.includes('COALESCE(ended_at, started_at)');
+        return { toArray: () => [...rows.values()].sort((a, b) => byActivity
+          ? (b.ended_at ?? b.started_at) - (a.ended_at ?? a.started_at) || b.started_at - a.started_at
+          : b.started_at - a.started_at).slice(0, (args[0] as number | undefined) ?? 1), rowsWritten: 0 };
       }
       throw new Error(`unexpected query: ${query}`);
     },
@@ -80,6 +83,14 @@ describe('background run book (A5b)', () => {
     expect(listed[0]!.kind).toBe('standing_order');
     expect(listed[1]!.kind).toBe('loop');
     expect(listed[1]!.parent_id).toBe('turn:a');
+  });
+
+  it('latest activity uses finish time over a newer start', () => {
+    const sql = fakeSql();
+    const book = runBook(sql as never, seqClock, () => 'x');
+    sql.rows.set('older', { id: 'older', kind: 'loop', status: 'completed', summary: 'finished', parent_id: null, started_at: 10, ended_at: 40 });
+    sql.rows.set('newer', { id: 'newer', kind: 'reminder', status: 'running', summary: null, parent_id: null, started_at: 30, ended_at: null });
+    expect(book.latestActivity()?.id).toBe('older');
   });
 
   it('trims the oldest rows past the cap so the table never grows without bound', () => {
