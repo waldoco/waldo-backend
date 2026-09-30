@@ -51,3 +51,9 @@ it('draft identity binds host owner/turn/call, repeats stable invocation but dis
  expect(ids[0]).toMatch(/^draft:[0-9a-f]{64}$/);expect(ids[1]).toBe(ids[0]);expect(ids[2]).not.toBe(ids[0]);
  const denied=await handler.handle(args as never);expect(denied).toMatchObject({ok:false,code:'rejected'});expect(ids).toHaveLength(3);
 });
+it('lost edge response or malformed mutation response becomes pending, never false effect failure',async()=>{
+ const cfg={SUPABASE_PROJECT_URL:'https://fixture.invalid',SUPABASE_PUBLISHABLE_KEY:'fixture',WALDO_ROUTER_HMAC_SECRET:'fixture'};
+ for(const fetcher of [vi.fn(async()=>{throw new Error('response lost');}),vi.fn(async()=>new Response('not-json'))]){
+  const proxy=googleProxy(cfg,fetcher)!;await expect(proxy.client('owner','conn',undefined,{id:'approval:one'}).sendRaw('bytes')).rejects.toThrow('intent_pending');expect(fetcher).toHaveBeenCalledOnce();
+ }
+});
