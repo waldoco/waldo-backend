@@ -88,4 +88,8 @@ describe('retained byte store',()=>{
  it('read racing deletion cannot return already tombstoned content',async()=>{
  const f=fixture(),s=await workspaceStore(f.host),m=await s.write(args());let release!:()=>void;const original=f.host.bodies.get;f.host.bodies.get=vi.fn(async b=>{const bytes=await original(b);await new Promise<void>(r=>release=r);return bytes;});const read=s.read(m.file_id,1,0,10);await vi.waitFor(()=>expect(f.host.bodies.get).toHaveBeenCalledTimes(1));await s.tombstone(m.file_id,1);release();await expect(read).rejects.toThrow('workspace_not_found');
  });
+ it('resumed lifecycle can read unchanged mapping but cannot finalize an old pending epoch',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host),m=await s.write(args());const put=f.host.bodies.put;f.host.bodies.put=async(b,v)=>{await put(b,v);f.suspend();};await expect(s.write(args(11,'pending'))).rejects.toThrow('workspace_rejected');
+ f.host.binding={...binding,stateVersion:2};f.host.admit=async(b)=>({status:b.stateVersion===2?'ok':'rejected'});const resumed=await workspaceStore(f.host);expect((await resumed.read(m.file_id,1,0,10)).text).toBe('hello');expect(f.state().bodies[0]!.binding.stateVersion).toBe(1);await expect(resumed.reconcile(id(11))).rejects.toThrow('workspace_rejected');expect(f.state().operations[1]!.status).toBe('pending');await expect(s.read(m.file_id,1,0,10)).rejects.toThrow('workspace_rejected');
+ });
 });
