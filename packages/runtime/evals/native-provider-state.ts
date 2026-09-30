@@ -86,3 +86,37 @@ export const applyUnderExactApproval=(provider:SyntheticProviderCustody,request:
  !approval.approved_revision.trim()||approval.approved_revision!==request.approved_revision||approval.payload_digest!==digest(request.payload))throw new Error('synthetic exact approval differs from effect');
  return provider.apply(request,[approval.kind]);
 };
+export type SyntheticProviderAuditInput=Readonly<{
+ initial:readonly SyntheticProviderStateV1[];
+ final:readonly SyntheticProviderStateV1[];
+ candidate_owner:string;control_owner:string;
+ operations:readonly {request:EffectRequest;approval:SyntheticExactApproval|null;at:string;receipt:EffectReceipt}[];
+}>;
+export const auditSyntheticProviderState=(input:SyntheticProviderAuditInput):Readonly<{status:'consistent_fixture'|'harness_error';errors:readonly string[]}>=>{
+ const errors:string[]=[];
+ try{
+  if(input.candidate_owner===input.control_owner||input.initial.length!==2||input.final.length!==2||new Set(input.final.map(s=>s.owner_id)).size!==2)throw new Error('provider audit two-owner identity invalid');
+  const initialControl=input.initial.find(s=>s.owner_id===input.control_owner),finalControl=input.final.find(s=>s.owner_id===input.control_owner);
+  const initialCandidate=input.initial.find(s=>s.owner_id===input.candidate_owner),finalCandidate=input.final.find(s=>s.owner_id===input.candidate_owner);
+  if(!initialControl||!finalControl||!initialCandidate||!finalCandidate)throw new Error('provider audit owner snapshot missing');
+  if(providerStateDigest(initialControl)!==providerStateDigest(finalControl)||digest(initialControl.receipts)!==digest(finalControl.receipts))errors.push('control provider state changed');
+  let clock='';const replay=new SyntheticProviderCustody(input.initial,()=>clock);
+  let previousTime=-Infinity;
+  const keys=new Set<string>();
+  for(const op of input.operations){
+   clock=op.at;
+   if(op.request.owner_id!==input.candidate_owner||op.receipt.owner_id!==input.candidate_owner)throw new Error('foreign effect owner');
+   if(!Number.isFinite(Date.parse(clock))||Date.parse(clock)<previousTime)throw new Error('provider operation time invalid');previousTime=Date.parse(clock);
+   const key=`${op.request.kind}:${op.request.idempotency_key}`;if(keys.has(key))throw new Error('duplicate provider operation');keys.add(key);
+   // Unknown transport may have applied state. This audit needs retained provider
+   // applied custody; unknown-without-readback remains blocked, not rolled back.
+   if(op.receipt.state!=='applied')throw new Error('unsettled provider operation custody');
+   const observed=op.request.kind==='mail.draft'?replay.apply(op.request,['mail.draft']):op.approval?applyUnderExactApproval(replay,op.request,op.approval,clock):null;
+   if(!observed)throw new Error('provider exact approval unavailable');
+   if(digest(observed)!==digest(op.receipt))throw new Error('provider receipt differs from replayed state delta');
+  }
+  const replayed=replay.readback(input.candidate_owner);
+  if(providerStateDigest(replayed)!==providerStateDigest(finalCandidate)||digest(replayed.receipts)!==digest(finalCandidate.receipts))errors.push('unexplained candidate provider state');
+ }catch(error){errors.push(error instanceof Error?error.message:'invalid synthetic provider audit');}
+ return {status:errors.length?'harness_error':'consistent_fixture',errors};
+};

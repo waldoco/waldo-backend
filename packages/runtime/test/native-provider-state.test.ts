@@ -37,3 +37,17 @@ it('exact approval binds owner/kind/target/revision/full payload and current val
  expect(p.readback('a')).toEqual(states[0]);
  expect(applyUnderExactApproval(p,move,grant,'2026-10-01T09:00:00Z').state).toBe('applied');
 });
+import { auditSyntheticProviderState } from '../evals/native-provider-state';
+it('reconstructs actual deltas from initial two-owner states, refuses forged/unexplained/control changes and missing exact approval',()=>{
+ const at='2026-10-01T09:00:00Z';const p=new SyntheticProviderCustody(states,()=>at);
+ const approval:SyntheticExactApproval={owner_id:'a',kind:'calendar.move',target:'existing',approved_revision:'v2',payload_digest:syntheticPayloadDigest(move.payload),effective_at:'2026-10-01T08:00:00Z',expires_at:'2026-10-01T10:00:00Z'};
+ const receipt=applyUnderExactApproval(p,move,approval,at);
+ const input={initial:states,final:[p.readback('a'),p.readback('b')],candidate_owner:'a',control_owner:'b',operations:[{request:move,approval,at,receipt}]};
+ expect(auditSyntheticProviderState(input).status).toBe('consistent_fixture');
+ expect(auditSyntheticProviderState({...input,operations:[]}).errors).toContain('unexplained candidate provider state');
+ expect(auditSyntheticProviderState({...input,operations:[{...input.operations[0]!,approval:null}]}).status).toBe('harness_error');
+ expect(auditSyntheticProviderState({...input,operations:[{...input.operations[0]!,receipt:{...receipt,after_digest:'forged'}}]}).status).toBe('harness_error');
+ expect(auditSyntheticProviderState({...input,operations:[...input.operations,...input.operations]}).errors).toContain('duplicate provider operation');
+ const final=[...input.final];final[1]={...final[1]!,families:{calendar:[{id:'existing',owner_id:'b',title:'Modifiedcontrol'}]}};
+ expect(auditSyntheticProviderState({...input,final}).errors).toContain('control provider state changed');
+});
