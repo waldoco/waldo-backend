@@ -1,0 +1,43 @@
+name: Opt-in owner DO model smoke
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_scope:
+        description: 'Confirm model/spend scope and fictional-data disclosure were reviewed'
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  read-smoke:
+    if: ${{ inputs.reviewed_scope }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - name: Compile opt-in entrypoint without model calls
+        run: pnpm --filter @waldo/runtime exec tsc --project tsconfig.live-smoke.json --noEmit
+      - name: Actual-model fictional-source read smoke
+        env:
+          WALDO_RUN_LIVE_SMOKE: reviewed
+          WALDO_SMOKE_OPENAI_KEY: ${{ secrets.WALDO_SMOKE_OPENAI_KEY }}
+          WALDO_SMOKE_REPORT_PATH: ${{ runner.temp }}/waldo-smoke/status.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/waldo-smoke"
+          pnpm --filter @waldo/runtime exec vitest run --config vitest.live-smoke.config.ts 2>&1 | tee "$RUNNER_TEMP/waldo-smoke/stdout.log"
+      - name: Save status and stdout evidence, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: owner-do-read-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/waldo-smoke/
+          if-no-files-found: warn
+          retention-days: 7

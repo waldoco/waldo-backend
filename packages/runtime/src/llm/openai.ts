@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { validModelCredential } from './credential-shape';
 import {
   OPENAI_PROVIDER,
   PROVIDER_OF,
@@ -35,12 +36,12 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
   constructor(options: OpenAIAdapterOptions) {
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.onResponseMetadata = options.onResponseMetadata;
-    this.missingKey = options.client === undefined && (options.apiKey?.trim().length ?? 0) === 0;
-    this.client = options.client ?? (this.missingKey ? undefined : new OpenAI({
+    this.missingKey = options.apiKey !== undefined ? !validModelCredential(options.apiKey) : options.client === undefined;
+    this.client = this.missingKey ? undefined : options.client ?? new OpenAI({
       apiKey: options.apiKey,
       maxRetries: 0,
       timeout: this.timeoutMs,
-    }));
+    });
   }
 
   async complete(input: LLMGatewayRequest): Promise<AdapterResult<LLMResponse>> {

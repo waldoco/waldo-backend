@@ -1,0 +1,9 @@
+# Fictional read-smoke fact check
+
+30 September 2026. Fixes #412's `cedar` substring criterion. No actual model execution or native W/R result is recorded by this change.
+
+The smoke now asks the real responder to read the latest fictional inbox message and return exactly a JSON object with `subject`, `from` and `snippet`, copied verbatim. The expected facts are the same fixture row supplied to the isolated Google source. A deterministic oracle requires all three exact string values, rejects missing/additional keys and malformed/non-object output, and checks only the final Telegram reply. An earlier mention of Cedar cannot carry a failed final answer. The stdout evidence records the narrow fact-check result as well as raw replies.
+
+This choice avoids a second model judge, extra model cost and unsupported semantic scoring. It deliberately prefers a strict output-format failure over a false usefulness success. Markdown, paraphrase or extra commentary fails even if a human could recover the right facts. That is a disclosed limitation, not a general agent quality verdict. Passing this check proves only exact extraction from this one fictional source, together with the existing trace/access/no-effect/isolation checks. It does not certify broad usefulness, effect readiness, tenant isolation or any benchmark score.
+
+Negative tests cover the original contradictory Cedar answer, refusal, reversed status, control-owner marker, wrong sender/subject, extra fields, missing fields, non-string facts, array/null/object output and trailing contradiction. These are deterministic tests, not actual-model runs. The opt-in/key/network limits and manual dispatch are unchanged; ordinary CI cannot call the paid model. Key delivery and owner-approved model/spend scope remain prerequisites to invocation.
