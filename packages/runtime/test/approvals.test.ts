@@ -7,6 +7,50 @@ import { GoogleError, type GoogleClient } from '../src/connectors/google';
 const iso = (s: string) => s as never;
 
 describe('approval desk', () => {
+  it('browser outcomes never claim Done without checked durable receipt, and consume replay/concurrent callbacks', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser-outcomes'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      let n = 0; let calls = 0;
+      const messages: string[] = [];
+      const logs: import('../src/channels/telegram-listener').TurnLogEntry[] = [];
+      const payload = { url: 'https://fixture.invalid', action: { selector: '#submit', description: 'Submit' }, binding: { total: '1' }, steps: [] };
+      const base = { call: async (_method: string, body: object) => { messages.push(JSON.stringify(body)); return {}; }, owner: 42,
+        google: async () => null, newId: () => String(++n), now: () => 1000, timezone: 'UTC', log: (entry: import('../src/channels/telegram-listener').TurnLogEntry) => logs.push(entry) };
+      for (const [status, expected, toast] of [ ['rejected', 'rejected', 'Not done'], ['acknowledged_unverified', 'unverified', 'Result not verified'],
+        ['uncertain', 'uncertain', 'Outcome unknown'], ['verified_with_receipt', 'unverified', 'Receipt not checked'], ['bogus', 'uncertain', 'Outcome unknown'] ] as const) {
+        const desk = approvalDesk(state.storage.sql, { ...base, browserSubmit: async () => { calls++; return { status, message: 'fixture result', receipt: { id: 'fake', observed_at: 'old', action_digest: 'wrong', binding_digest: 'wrong' } } as never; } });
+        const id = await desk.proposeBrowserSubmit(payload);
+        expect((await desk.decide(id, 'a', 'test')).toast).toBe(toast);
+        expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe(expected);
+        const before = calls;
+        // New desk simulates reconstructed approval state after eviction.
+        const restarted = approvalDesk(state.storage.sql, { ...base, browserSubmit: async () => { calls++; throw new Error('must not replay'); } });
+        expect((await restarted.decide(id, 'a', 'test')).toast).toBe('Already handled.');
+        expect(calls).toBe(before);
+      }
+      const throwing = approvalDesk(state.storage.sql, { ...base, browserSubmit: async () => { throw new Error('response lost'); } });
+      const thrown = await throwing.proposeBrowserSubmit(payload);
+      expect((await throwing.decide(thrown, 'a', 'test')).toast).toBe('Outcome unknown');
+      const missing = approvalDesk(state.storage.sql, base);
+      const absent = await missing.proposeBrowserSubmit(payload);
+      expect((await missing.decide(absent, 'a', 'test')).toast).toBe('Browsing is not set up');
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', absent).one().status).toBe('rejected');
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const concurrent = approvalDesk(state.storage.sql, { ...base, browserSubmit: async () => { calls++; await gate; return { status: 'uncertain', message: 'unknown' }; } });
+      const id = await concurrent.proposeBrowserSubmit(payload);
+      const first = concurrent.decide(id, 'a', 'test');
+      expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('uncertain');
+      // A crash at this point leaves terminal uncertain, not an open action.
+      const before = calls;
+      expect((await concurrent.decide(id, 'a', 'test')).toast).toBe('Already handled.');
+      expect(calls).toBe(before); release(); await first;
+      expect(messages.some((message) => message.includes('"text":"Done"'))).toBe(false);
+      expect(logs.some((entry) => entry.hop === 'browser_outcome' && entry.code === 'uncertain')).toBe(true);
+      expect(concurrent.ledger([])).toContain('uncertain');
+    });
+  });
+
   it('browser_submit: proposes with Do it / Not now, executes ONLY on approve, never undoes, expires in 30 minutes', async () => {
     const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('approval-browser'));
     await runInDurableObject(stub, async (_instance, state) => {
@@ -23,7 +67,7 @@ describe('approval desk', () => {
       const desk = approvalDesk(state.storage.sql, {
         call: async (method, body) => { sent.push({ method, body: body as Record<string, unknown> }); return {}; },
         owner: 42, google: async () => null, newId: () => String(++n), now: () => now, timezone: 'Asia/Kolkata', log: () => undefined,
-        browserSubmit: async (p) => { executed.push(p.action.description); return 'Done: Place the order.'; },
+        browserSubmit: async (p) => { executed.push(p.action.description); return { status: 'acknowledged_unverified' as const, message: 'Action acknowledged, result not verified.' }; },
       });
       const id = await desk.proposeBrowserSubmit(payload);
       expect(sent[0]!.body.text).toBe('Approve this browser action? Place the order on https://shop.example/checkout (total: Rs 499, items: 1x bottle)');
@@ -36,11 +80,12 @@ describe('approval desk', () => {
       // double-decide safe
       await desk.callback({ id: 'q1', from: { id: 42 }, data: `a:${id}` }, 't');
       await desk.callback({ id: 'q2', from: { id: 42 }, data: `a:${id}` }, 't');
+      expect(sent.filter((item) => item.method === 'answerCallbackQuery').map((item) => item.body.text)).toEqual(['Result not verified', 'Already handled.']);
       expect(executed).toEqual(['Place the order']);
 
       // never undoable
       const undone = await desk.decide(id, 'u', 't');
-      expect(undone.toast).toBe("Can't be undone");
+      expect(undone.toast).toBe("Already handled.");
 
       // 30-minute TTL, not the 12-hour calendar one
       const id2 = await desk.proposeBrowserSubmit({ ...payload, action: { ...payload.action, description: 'Pay now' } });

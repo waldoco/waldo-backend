@@ -1,5 +1,6 @@
 import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, type GoogleClient } from '../connectors/google';
+import type { BrowserSubmitOutcome } from '../tools/live/browser';
 import type { TurnLogEntry } from './telegram-listener';
 
 export type TelegramCall = (method: string, body: object) => Promise<unknown>;
@@ -75,7 +76,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   timezone: string;
   reviewUrl?: () => Promise<string | null>;
   log(entry: TurnLogEntry): void;
-  browserSubmit?: (proposal: BrowserSubmitProposal) => Promise<string>;
+  browserSubmit?: (proposal: BrowserSubmitProposal) => Promise<BrowserSubmitOutcome>;
   sendMessage?: (proposal: MessageSendProposal) => Promise<void>;
   // Returns a bounded owner-facing outcome line (the result is external content).
   mcpCall?: (proposal: McpCallProposal) => Promise<string>;
@@ -176,11 +177,33 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         const bp = JSON.parse(entry.payload_json) as BrowserSubmitProposal;
         if (action === 'a') {
           if (!deps.browserSubmit) {
+            setStatus(id, 'rejected');
             out = { toast: 'Browsing is not set up', message: 'I could not do that because browsing is not set up on this Waldo yet.' };
           } else {
-            const outcome = await deps.browserSubmit(bp);
-            setStatus(id, 'done');
-            out = { toast: 'Done', message: outcome };
+            // Synchronous compare-and-claim before external await. Replay and crash
+            // leave a consumed uncertain decision, never another blind browser act.
+            sql.exec("UPDATE ledger SET status = 'uncertain', decided_at = ? WHERE id = ? AND status = 'open'", deps.now(), id);
+            const claimed = sql.exec<{ claimed: number }>('SELECT changes() AS claimed').one().claimed;
+            if (claimed !== 1) return { toast: 'Already handled.', message: 'Already handled.' };
+            let outcome: BrowserSubmitOutcome;
+            try { outcome = await deps.browserSubmit(bp); }
+            catch { outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' }; }
+            switch (outcome?.status) {
+              case 'rejected':
+                setStatus(id, 'rejected'); out = { toast: 'Not done', message: outcome.message }; break;
+              case 'acknowledged_unverified':
+                setStatus(id, 'unverified'); out = { toast: 'Result not verified', message: outcome.message }; break;
+              case 'verified_with_receipt':
+                // No authoritative receipt validator/storage exists here yet. A typed
+                // callback alone cannot prove completion, regardless of receipt bytes.
+                setStatus(id, 'unverified');
+                out = { toast: 'Receipt not checked', message: 'The result receipt could not be checked, so completion is not verified.' }; break;
+              default:
+                setStatus(id, 'uncertain');
+                out = { toast: 'Outcome unknown', message: 'The browser outcome is unknown. Check the result before retrying.' }; break;
+            }
+            deps.log({ trace, hop: 'browser_outcome', ms: deps.now() - started, ok: outcome?.status === 'acknowledged_unverified',
+              code: outcome?.status === 'rejected' ? 'rejected' : outcome?.status === 'acknowledged_unverified' ? 'unverified' : outcome?.status === 'verified_with_receipt' ? 'receipt_unchecked' : 'uncertain' });
           }
         } else {
           out = { toast: "Can't be undone", message: 'A browser submit cannot be undone from here. Nothing was reversed.' };
