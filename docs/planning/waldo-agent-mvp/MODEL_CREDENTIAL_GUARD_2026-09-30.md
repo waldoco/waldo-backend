@@ -1,0 +1,9 @@
+# Model credential guard after failed smoke
+
+30 September 2026. The first push-triggered fictional smoke failed before any successful Responses response. Runtime non-ASCII Authorization header warnings exposed the malformed credential in Actions stdout/artifact. The supplied value contained trailing Unicode line separators. The former opt-in and adapter checks tested trimmed nonemptiness but passed the original value to runtime/SDK header construction.
+
+Containment: failed-run artifact and Actions logs deleted; only credential-free fictional evidence retained. Rotation/replacement requested from owner. No credential value or encoded header is recorded here. No successful model response, usage or native benchmark score was captured. Do not call this a provider usefulness failure or claim a billed amount.
+
+Choice: reject any nonempty model key containing characters outside ASCII letters/digits/underscore/dot/hyphen, before runtime bindings and before SDK construction. Never normalize, trim or repair the credential. This covers observed OpenAI token shape and the existing synthetic test keys, not every future provider's key grammar. A new grammar needs an explicit review. Errors are fixed content without the value. Injected SDK clients with an explicitly malformed key also fail closed; clients without a key remain supported for tests.
+
+Synthetic negatives cover Unicode line separators, other non-ASCII, newline/carriage return/tab/NUL and whitespace. Adapter tests prove no client call. Opt-in startup with a synthetic malformed value fails before Workers setup; output contains neither the synthetic value nor a header warning. The upstream Workers warning is not changed by this patch, and this is not a general credential-redaction certification. Plain content-free diagnostics stay the goal; tee/upload cannot be trusted to redact a malformed secret. No paid rerun until owner rotation/replacement and exact-head safety review.

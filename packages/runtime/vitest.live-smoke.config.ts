@@ -1,10 +1,13 @@
 // Explicit opt-in only. Never included in CI or the normal test suite.
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
+import { validModelCredential } from './src/llm/credential-shape';
 
 const key = process.env.WALDO_SMOKE_OPENAI_KEY;
 if (process.env.WALDO_RUN_LIVE_SMOKE !== 'reviewed' || !key?.trim())
   throw new Error('live smoke needs reviewed opt-in and a supervisor-supplied model key');
+if (!validModelCredential(key))
+  throw new Error('live smoke model credential has an invalid format; replace it through the secret store');
 export default defineConfig({
   test: {
     include: ['test/owner-do-live-smoke.ts'], testTimeout: 180_000,
