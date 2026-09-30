@@ -34,6 +34,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       throw error;
     }
     const json = await response.json().catch(() => ({ error: { status: response.status, message: body.intent_id ? 'intent_pending' : 'connector proxy failed' } })) as { data?: unknown; id?: string; email?: string; scopes?: string[]; error?: { status: number; message: string } };
+    if (body.intent_id && (!json || typeof json!=='object' || (!json.error && (!response.ok || !Object.hasOwn(json,'data'))))) throw new ProxyIntentError('intent_pending');
     if (json.error?.message === 'intent_pending' || json.error?.message === 'intent_conflict' || json.error?.message === 'intent_required' || json.error?.message === 'intent_unavailable') throw new ProxyIntentError(json.error.message);
     if (json.error) throw new GoogleError(json.error.status, json.error.message);
     return json;
