@@ -1,3 +1,4 @@
+import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import type { ProxyIntent } from '../connectors/proxy-intent';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
@@ -774,8 +775,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         if (!app) return null;
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
-        const fit = all.filter((account) => googleHas(account.scopes, feature));
-        const account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
+        const fit = all.filter((account) => googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
+        const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) return null;
         if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
         return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error), intent) : null;
@@ -909,10 +910,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // mints a bearer here; a Vault-backed account keeps the token edge-side and the proxy runs
     // the call with the connection id (the runtime never sees a bearer).
     const mcpGoogleAuth: McpGoogleAuth = {
-      resolve: async () => {
+      resolve: async (intent) => {
         await google.migrate();
         const [all, failing, doName, app] = [await accounts(), await health(), vaultOwner(), await googleApp()];
-        const account = all.find((candidate) => !failing[candidate.id]) ?? all[0];
+        const routes=all.map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
+        const account = pinProxyIntentRoute(storage.sql,intent,'mcp:google',routes,routes.find((candidate) => !failing[candidate.id]) ?? routes[0]);
         if (!account) return null;
         if (account.refresh_token) {
           if (!app) return null;

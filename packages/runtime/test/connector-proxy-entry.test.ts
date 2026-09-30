@@ -13,11 +13,11 @@ const request=async(body:unknown)=>{
  return new Request('https://edge.invalid',{method:'POST',body:raw,headers:{'x-waldo-at':String(at),'x-waldo-sig':await routerSignature(cfg.WALDO_ROUTER_HMAC_SECRET!,at,`proxy.${digest}`)}});
 };
 const fixture=()=>{
- const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events'];let healthFail=false;
+ const rows=new Map<string,{digest:string;result?:unknown;done?:boolean}>();const hops:string[]=[];let effects=0;let lost=false;let scopes:unknown=['https://www.googleapis.com/auth/gmail.send','https://www.googleapis.com/auth/gmail.compose','https://www.googleapis.com/auth/calendar.events'];let healthFail=false;let revoked=false;
  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(input);const args=url.startsWith('https://db.invalid/')?JSON.parse(String(init?.body??'{}')):{};const fn=url.split('/').at(-1)!;hops.push(fn);
-  if(fn==='proxy_access')return Response.json(args.p_connection==='conn'?[{secret:'fictional-refresh',scopes}]:[]);
-  if(fn==='proxy_secret')return Response.json(args.p_connection==='conn'? 'fictional-refresh':null);
+  if(fn==='proxy_access')return Response.json(args.p_connection==='conn'&&!revoked?[{secret:'fictional-refresh',scopes}]:[]);
+  if(fn==='proxy_secret')return Response.json(args.p_connection==='conn'&&!revoked? 'fictional-refresh':null);
   if(fn==='proxy_idem_claim'){
    if(args.p_connection!=='conn'||args.p_do_name!=='owner')return Response.json(null);
    const key=args.p_key;const prior=rows.get(key);if(!prior){rows.set(key,{digest:args.p_digest});return Response.json({state:'new'});}return Response.json(prior.digest!==args.p_digest?{state:'conflict'}:prior.done?{state:'done',result:prior.result}:{state:'pending'});
@@ -33,7 +33,7 @@ const fixture=()=>{
   if(url.includes('www.googleapis.com/calendar/')){effects++;if(lost)throw new Error('synthetic response loss');return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
   if(url.includes('gmail.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({id:'provider-one'});}
   throw new Error('unexpected fictional transport');
- }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;}};
+ }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;},revoke:()=>{revoked=true;}};
 };
 const body={do_name:'owner',op:'call',connection:'conn',method:'sendRaw',args:['ZmljdGlvbmFs'],intent_id:'approval:one'};
 it('real signed entry claims before provider and replays stored receipt without second dispatch',async()=>{
@@ -53,7 +53,7 @@ it('missing intent and unsigned request never mutate provider',async()=>{
 });
 it('real mutation requires explicit stored scope; null/empty/read-only never dispatch',async()=>{
  for(const scopes of [null,[],['https://www.googleapis.com/auth/gmail.readonly']]){
-  const f=fixture();f.scope(scopes);expect(await(await serve(await request(body))).json()).toMatchObject({error:{status:403,message:'insufficient scopes'}});expect(f.effects()).toBe(0);expect(f.rows.size).toBe(0);
+  const f=fixture();f.scope(scopes);expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_unavailable'}});expect(f.effects()).toBe(0);expect(f.rows.size).toBe(0);
  }
 });
 it('receipt returned after provider success is not invalidated by later health telemetry failure',async()=>{
@@ -90,5 +90,13 @@ it('every mutation retains an unknown result and never dispatches again after sy
  for(const input of calls){const f=fixture();f.lose();
   expect(await(await serve(await request(input))).json()).toMatchObject({error:{message:'intent_pending'}});
   expect(await(await serve(await request(input))).json()).toMatchObject({error:{message:'intent_pending'}});expect(f.effects()).toBe(1);
+ }
+});
+
+it('lost-response intent retains uncertainty when its pinned grant is later revoked or loses scope',async()=>{
+ for(const change of ['revoke','scope'] as const){const f=fixture();f.lose();
+  expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_pending'}});
+  if(change==='revoke')f.revoke();else f.scope([]);
+  expect(await(await serve(await request(body))).json()).toMatchObject({error:{message:'intent_unavailable'}});expect(f.effects()).toBe(1);
  }
 });

@@ -29,7 +29,7 @@ export const mcpServers = (raw: string | undefined): readonly McpServerConfig[] 
 // to the runtime, so the connector-proxy edge executes the call with the connection id instead.
 export type McpGoogleResolution = Readonly<{ mode: 'bearer'; token: string } | { mode: 'proxy'; connection: string }>;
 export type McpGoogleAuth = Readonly<{
-  resolve(): Promise<McpGoogleResolution | null>;
+  resolve(intent?: ProxyIntent): Promise<McpGoogleResolution | null>;
   proxy(serverUrl: string, tool: string, args: Record<string, unknown>, connection: string, intent?: ProxyIntent): Promise<unknown>;
 }>;
 
@@ -53,7 +53,7 @@ export const callMcp = async (server: McpTransportServer, tool: string, args: Re
 export const executeMcp = async (server: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch, intent?: ProxyIntent): Promise<{ content: unknown; protocolVersion: string }> => {
   if (server.auth === 'google') {
     if (!googleAuth) throw new McpConnectError('not_connected', 'Google is not connected');
-    const resolved = await googleAuth.resolve();
+    const resolved = await googleAuth.resolve(intent);
     if (resolved === null) throw new McpConnectError('not_connected', 'Google is not connected');
     if (resolved.mode === 'proxy') {
       try {

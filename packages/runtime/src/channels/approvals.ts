@@ -282,7 +282,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           }
         }
       } else {
-        const client = await deps.google({id:`approval:${id}:${action==='u'?'undo':'apply'}`});
+        const client = await deps.google({id:`approval:${id}:${action==='u'?'undo':'apply'}`,requireRoute:action==='u'||proposal.action!=='create'});
         if (client === null) {
           out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
         } else if (action === 'a') {
@@ -384,7 +384,8 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
     async propose(p) {
       const id = `p${deps.newId()}`;
       const summary = `${describe(p)}. ${p.reason}`;
-      const client = p.event_id ? await deps.google() : null;
+      const client = await deps.google({id:`approval:${id}:apply`},'calendar');
+      if(p.event_id&&!client)throw new Error('The calendar account is unavailable; no proposal was prepared.');
       const seen = client && p.event_id ? (await client.event(p.event_id)).etag : undefined;
       const stored: Stored = seen ? { ...p, seen_etag: seen } : p;
       sql.exec("INSERT INTO ledger (id, kind, status, summary, payload_json, undo_json, created_at, decided_at) VALUES (?, 'calendar_change', 'open', ?, ?, NULL, ?, NULL)", id, summary, JSON.stringify(stored), deps.now());
