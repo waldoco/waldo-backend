@@ -174,3 +174,45 @@ login, public share, parity, production readiness or full workspace claim from t
 Rollback keeps existing artifact APIs and provider-upload list intact; disable new handlers
 and routes without dropping ready metadata/body ownership. Open decisions: contracts lane
 schedule, limits/retention, legacy artifact recovery, provider tier/budget and live test scope.
+
+
+## September 30 static-audit comparison: Manus and browser continuity
+
+A supplied static audit identifies retained files/compute and browser session continuity as
+remaining gaps, not verified features. Its artifact/binding findings match the independently
+reproduced #397/#395 bugs. This document does not adopt the audit as permission.
+
+Official Manus references read September 30:
+
+- [Cloud Computer](https://help.manus.im/en/articles/15392111-what-is-the-cloud-computer)
+  describes a dedicated persistent Ubuntu VM with retained files, installed tools and running
+  processes between sessions, distinct from a temporary task sandbox. Delta: the proposed
+  Waldo workspace retains bytes, not processes, services or installed tools. A complete parity
+  comparison must separately test file durability, installed-environment persistence, process
+  continuity, idle billing and stop/resume. No need to add always-on compute to the first file
+  slice; one bounded explicit consumer and isolation receipts precede any broader tier.
+- [Browser Operator](https://manus.im/docs/features/browser-operator) describes a local
+  desktop browser extension using existing logins, per-session owner authorization and stop
+  by closing the tab. It separately describes a cloud browser requiring login in that session.
+  Delta: existing-login local browser access is not the same feature as a persistent cloud VM.
+  Do not label a hosted provider context as local browser-session parity.
+- [Cloud Browser login management](https://help.manus.im/en/articles/11711226-how-can-i-manage-the-login-information-that-manus-stores)
+  describes owner takeover for login/challenges, confirmation before saving login state,
+  global disable and per-site management. Add to any later browser plan: explicit opt-in to
+  persistence, owner/site-keyed context custody, revocation/reset, takeover/OTP recovery,
+  expiration and a truthful resume/relogin receipt. No cookies or secrets in model/workspace.
+
+For Waldo browser depth, all current handlers start/end a session per call; approval replay
+uses a new session. `browser.ts` act acknowledgments do not include an authoritative final
+external receipt. #404 is a wording prerequisite only; approval ledger/toast still needs the
+core-owned typed outcome mapping reported separately. Plan owner-scoped sessions only with
+current provider documentation proving context and navigation state, bounded lifetimes,
+cleanup/revocation and isolated auth. Final effect proof needs the exact approved
+recipient/items/total/action plus provider or controlled-fixture receipt and response-loss
+reconciliation, never an extraction summary or a Telegram delivery outbox.
+
+The audit's six-host-ceiling claim needs exact live-policy wiring reconciliation: browser.ts
+itself does not contain six hosts. Public egress policy and its configured roster are outside
+this lane's ownership; core should verify the active bound policy before changing reach.
+These are vendor-described features and source observations, not measured competitor/Waldo
+outcomes, provider selection, spend approval or a new implementation commitment.
