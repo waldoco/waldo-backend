@@ -157,3 +157,14 @@ it('full-quota committed multipart replay returns original receipt; changed byte
   const newOperation=await send(crypto.randomUUID(),7,'new.bin');expect(newOperation.status).toBe(413);expect(puts).toBe(1);
  });
 });
+it('oversized directory body cancels at16KiB before metadata construction',async()=>{
+ const cancel=vi.fn();const stream=new ReadableStream<Uint8Array>({pull(c){c.enqueue(new Uint8Array(8193));},cancel});const storage=storageFixture();
+ await expect(workspaceOwnerHost(config,storage,'opaque-id','workspace-owner',vi.fn(async()=>new Response(stream)))).rejects.toThrow('workspace_unavailable');expect(cancel).toHaveBeenCalledOnce();expect(storage.sql.exec).not.toHaveBeenCalled();
+});
+it('hung directory response body is cancelled by the5second deadline',async()=>{
+ vi.useFakeTimers();try{
+  const cancel=vi.fn();const stream=new ReadableStream<Uint8Array>({pull(){},cancel});
+  const result=expect(workspaceOwnerHost(config,storageFixture(),'opaque-id','workspace-owner',vi.fn(async()=>new Response(stream)))).rejects.toThrow('workspace_unavailable');
+  await vi.advanceTimersByTimeAsync(5_001);await result;expect(cancel).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
+ }finally{vi.useRealTimers();}
+});
