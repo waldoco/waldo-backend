@@ -64,6 +64,8 @@ Current auth email/IP throttles and the responsibility public edge limiter are n
 
 ### Metrics and cost
 
+Observability is dual-layer in the proposed production model: keep raw DO trace/outbox readback as the permanent development evidence path; step 4 adds Langfuse and Cloudflare observability above it, not instead of it. Cloudflare structured logs/metrics are another attribution source; invocation URLs/traces stay constrained by the existing credential-redaction/privacy gate in wrangler.jsonc. Source presence is not proof of per-user attribution or deployed receipt coverage.
+
 Per-owner usage must include response IDs, model, tokens/cached tokens, estimate price version, provider request outcome, task/channel, release/environment, and independently reconciled aggregate charges where available. Current trace usd is a modelCost estimate; do not label it provider-billed. Operator views aggregate safely; users see only their own rows. Shared prompt cache labels and channel-based exporter IDs require the identity fix above. Define retention and content-free metrics before enabling broad text captures.
 
 ### Lifecycle
