@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { workspaceStore, type WorkspaceState, type WorkspaceHost, type OwnerBinding, LIMITS } from '../src/store';
+import { workspaceStore, type WorkspaceState, type WorkspaceHost, type OwnerBinding, type Admission, LIMITS } from '../src/store';
 const id = (n:number) => `00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const binding:OwnerBinding={ownerId:id(1),environment:'staging',namespace:'owner-do-staging',doName:'owner-name',doId:'opaque',stateVersion:1,mappingVersion:1};
 const args=(operation=10,path='file.txt',bytes=new TextEncoder().encode('hello'))=>({path,bytes,mime:'text/plain',expected_revision:0,provenance:'agent_generated' as const,operation_id:id(operation)});
 const fixture=()=>{
  let state:WorkspaceState={binding:null,files:[],bodies:[],operations:[]};
  const objects=new Map<string,Uint8Array>();let n=100;let active=true;
- const host: { -readonly [K in keyof WorkspaceHost]: WorkspaceHost[K] }={binding:{...binding},admit:vi.fn(async()=>({status:active?'ok':'rejected'})),metadata:{transaction(work){const next=structuredClone(state);const result=work(next);state=next;return result;}},bodies:{put:vi.fn(async(b,v)=>{objects.set(b.blob_id,v.slice());}),get:vi.fn(async b=>objects.get(b.blob_id)?.slice()??null),remove:vi.fn(async b=>{objects.delete(b.blob_id);})},now:()=>1000,newId:()=>id(n++)};
+ const host: { -readonly [K in keyof WorkspaceHost]: WorkspaceHost[K] }={binding:{...binding},admit:vi.fn<Admission>(async()=>({status:active?'ok':'rejected'})),metadata:{transaction(work){const next=structuredClone(state);const result=work(next);state=next;return result;}},bodies:{put:vi.fn(async(b,v)=>{objects.set(b.blob_id,v.slice());}),get:vi.fn(async b=>objects.get(b.blob_id)?.slice()??null),remove:vi.fn(async b=>{objects.delete(b.blob_id);})},now:()=>1000,newId:()=>id(n++)};
  return {host,objects,state:()=>state,suspend:()=>{active=false;}};
 };
 describe('retained byte store',()=>{
