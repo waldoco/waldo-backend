@@ -40,7 +40,38 @@ const options = { catalog, dataset_digest: WALDO_NATIVE_SUITE_SHA256, cases: [{ 
 ] };
 
 describe('pinned prompt/tool experiment foundation', () => {
-  it('compares two versions using the existing real grader, with distinct evidence layers', async () => {
+  it('keeps a caller-authored five-positive-finding packet diagnostic-only', async () => {
+    const report = await compareExperiments(options, async (input) => capture(input));
+    expect(report).toMatchObject({ evidence_kind: 'diagnostic_packet', native_result_eligible: false, native_score: null });
+    expect(report.trials[0]).toMatchObject({ diagnostic_review: { status: 'diagnostic_findings_supplied' } });
+    expect(report.pairs[0]).toMatchObject({ diagnostic_reviews: ['diagnostic_findings_supplied', 'diagnostic_findings_supplied'] });
+    expect(JSON.stringify(report)).not.toMatch(/native_grade|candidate_pass_unverified/);
+  });
+  it('cannot turn forged calendar or control effect bytes into a native result', async () => {
+    for (const forged of ['forged calendar event persisted', 'forged control effect executed']) {
+      const report = await compareExperiments(options, async (input) => {
+        const result = capture(input);
+        const findings = result.review.findings.map((finding) => finding.criterion === 'final_state' ? { ...finding, excerpt: forged } : finding);
+        const body = { case_id: input.binding.case_id, trial_seed: input.binding.seed, reviewer: 'caller-authored evaluator', findings };
+        return { ...result, capture: { ...result.capture, final_state_readback: { ...result.capture.final_state_readback, bytes: forged }, intercepted_effects: { ...result.capture.intercepted_effects, bytes: `synthetic no effects; ${forged}` } }, review: { ...body, review_record: artifact(JSON.stringify(body)) } };
+      });
+      expect(report).toMatchObject({ evidence_kind: 'diagnostic_packet', native_result_eligible: false, native_score: null });
+      expect(report.trials[0]).toMatchObject({ diagnostic_review: { status: 'diagnostic_findings_supplied' }, evidence_limits: { reviewer_proof: 'unverified', source_proof: 'unverified', custody_proof: 'unverified', execution_proof: 'unverified' } });
+      expect(JSON.stringify(report)).not.toMatch(/native_grade|candidate_pass_unverified/);
+    }
+  });
+  it('reports missing reviewer and source proof even with positive packet findings', async () => {
+    const report = await compareExperiments(options, async (input) => capture(input));
+    expect(report.trials[0]).toMatchObject({ evidence_limits: { reviewer_proof: 'unverified', source_proof: 'unverified', custody_proof: 'unverified', execution_proof: 'unverified' }, tool_review_checks: { reviewer_proof: 'unverified' } });
+    expect(report.trials[0]).toMatchObject({ code_checks: { scope: 'packet_structure_and_schema_only' } });
+  });
+  it('maps incomplete fixture inputs to an exclusively diagnostic status', async () => {
+    const report = await compareExperiments({ ...options, cases: [{ id: 'R33', seed: 'diagnostic-incomplete' }] }, async (input) => capture(input));
+    expect(report.trials.every((row) => row.diagnostic_review.status === 'diagnostic_incomplete')).toBe(true);
+    expect(report).toMatchObject({ evidence_kind: 'diagnostic_packet', native_result_eligible: false, native_score: null });
+    expect(report.evidence_limits).toMatchObject({ reviewer_proof: 'unverified', source_proof: 'unverified' });
+  });
+  it('compares two versions through diagnostic excerpt checks, with distinct evidence layers', async () => {
     const report = await compareExperiments(options, async (input) => {
       expect(Object.keys(input.model_input)).toEqual(['instruction', 'response_schema', 'user_prompt', 'tools']);
       expect(input.model_input).not.toHaveProperty('expected_behavior');
@@ -48,15 +79,15 @@ describe('pinned prompt/tool experiment foundation', () => {
       expect(input.model_input.instruction).toContain('Tools available in this chat: get_context.');
       return capture(input, input.binding.prompt_version === 2);
     });
-    expect(report.trials.map((row) => row.native_grade.status)).toEqual(['candidate_pass_unverified', 'fail']);
+    expect(report.trials.map((row) => row.diagnostic_review.status)).toEqual(['diagnostic_findings_supplied', 'diagnostic_violation']);
     expect(report.trials.map((row) => row.judgment.task_completion)).toEqual(['met', 'violated']);
-    expect(report.trials[0]!.code_checks).toEqual({ argument_valid: 1, argument_invalid: 0 });
+    expect(report.trials[0]!.code_checks).toEqual({ scope: 'packet_structure_and_schema_only', argument_valid: 1, argument_invalid: 0 });
     expect(report.trials[0]!.judgment).toMatchObject({ appropriate_tool_selection: 1, unnecessary_calls: 0, approval_behavior: 'met' });
     expect(report.trials[0]!.measurements).toEqual({ latency_ms: 12, token_estimate: { input: 100, output: 25 }, calls: 1 });
-    expect(report.trials[0]!.execution_evidence.final_state_readback.bytes).toBe('synthetic final state');
+    expect(report.trials[0]!.unverified_source_records.final_state_readback.bytes).toBe('synthetic final state');
     expect(report.baseline_gate).toBe('external_36_trial_run_required');
   });
-  it('rejects a different dataset or mislabeled capture before scoring', async () => {
+  it('rejects a different dataset or mislabeled capture before diagnostic review', async () => {
     await expect(compareExperiments({ ...options, dataset_digest: 'changed' }, async (input) => capture(input))).rejects.toThrow('dataset');
     await expect(compareExperiments(options, async (input) => capture({ ...input, binding: { ...input.binding, prompt_version: 99 } }))).rejects.toThrow('binding');
   });
@@ -66,7 +97,9 @@ describe('pinned prompt/tool experiment foundation', () => {
       const trace = { ...captured.capture.tool_trace, bytes: JSON.stringify({ format: 1, calls: [] }) };
       return { ...captured, capture: { ...captured.capture, tool_trace: trace }, review: null, tool_review: null };
     });
-    expect(report.trials.every((row) => row.native_grade.status === 'blocked')).toBe(true);
+    expect(report.trials.every((row) => row.diagnostic_review.status === 'diagnostic_blocked')).toBe(true);
+    expect(report.trials[0]!.evidence_limits).toMatchObject({ reviewer_proof: 'unverified', source_proof: 'unverified' });
+    expect(report.trials[0]!.tool_review_checks).toMatchObject({ packet_binding: 'not_supplied', reviewer_proof: 'unverified' });
     expect(report.trials[0]!.judgment.task_completion).toBe('unknown');
     expect(report.trials[0]!.measurements.latency_ms).toBeNull();
     expect(report.trials[0]!.measurements.token_estimate).toBeNull();
@@ -96,7 +129,7 @@ describe('pinned prompt/tool experiment foundation', () => {
       return { ...result, capture: { ...result.capture, tool_trace: { ...result.capture.tool_trace, bytes } }, review: null, tool_review: null };
     });
     expect(report.trials.map((row) => row.binding.tool_version)).toEqual([1, 2]);
-    expect(report.trials[0]!.code_checks).toEqual({ argument_valid: 0, argument_invalid: 2 });
+    expect(report.trials[0]!.code_checks).toEqual({ scope: 'packet_structure_and_schema_only', argument_valid: 0, argument_invalid: 2 });
     expect(report.trials[0]!.judgment.appropriate_tool_selection).toBeNull();
     await expect(compareExperiments({ ...options, variants: [{ ...options.variants[0]!, tools: buildToolCatalog([], 1, source) }, options.variants[1]!] }, async (input) => capture(input))).rejects.toThrow('handler schemas');
   });

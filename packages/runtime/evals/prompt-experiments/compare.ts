@@ -16,7 +16,14 @@ export type ExperimentInput = Readonly<{
 }>;
 const judgmentSchema = z.object({ call_id: z.string().min(1), appropriate: z.enum(['yes', 'no', 'unknown']), unnecessary: z.enum(['yes', 'no', 'unknown']), excerpt: z.string().min(1), explanation: z.string().min(1) }).strict();
 export type ToolReview = Readonly<{ binding: ExperimentBinding; tool_trace_digest: string; reviewer: string; judgments: readonly z.infer<typeof judgmentSchema>[]; record: CapturedArtifact }>;
-export type ExperimentCapture = Readonly<{ capture: IsolatedCapture; review: IndependentReview | null; tool_review?: ToolReview | null; resolved_branches?: Readonly<Record<string, CapturedArtifact>> }>;
+export type DiagnosticExperimentCapture = Readonly<{ capture: IsolatedCapture; review: IndependentReview | null; tool_review?: ToolReview | null; resolved_branches?: Readonly<Record<string, CapturedArtifact>> }>;
+export type DiagnosticReviewStatus = 'diagnostic_incomplete' | 'diagnostic_blocked' | 'diagnostic_violation' | 'diagnostic_findings_supplied';
+const diagnosticStatuses: Readonly<Record<ReturnType<typeof gradeNativeOutcome>['status'], DiagnosticReviewStatus>> = {
+  incomplete: 'diagnostic_incomplete', blocked: 'diagnostic_blocked', fail: 'diagnostic_violation', candidate_pass_unverified: 'diagnostic_findings_supplied',
+};
+const evidenceLimits = {
+  reviewer_proof: 'unverified', source_proof: 'unverified', custody_proof: 'unverified', execution_proof: 'unverified',
+} as const;
 export type ExperimentOptions = Readonly<{ catalog: PromptCatalog; dataset_digest: string; cases: readonly Readonly<{ id: string; seed: string }>[]; variants: readonly Variant[] }>;
 const traceSchema = z.object({
   format: z.literal(1), calls: z.array(z.object({ id: z.string().min(1), name: z.string().min(1), arguments: z.unknown() }).strict()),
@@ -25,7 +32,7 @@ const traceSchema = z.object({
 }).strict();
 const validArtifact = (artifact: CapturedArtifact) => Boolean(artifact.bytes && artifact.source.trim()) && artifact.digest === `sha256:${createHash('sha256').update(artifact.bytes).digest('hex')}`;
 
-const score = (binding: ExperimentBinding, variant: Variant, capture: ExperimentCapture) => {
+const reviewDiagnosticPacket = (binding: ExperimentBinding, variant: Variant, capture: DiagnosticExperimentCapture) => {
   const trial = assembleIsolatedCapture(capture.capture);
   const manifest = JSON.parse(trial.fixture_manifest.bytes);
   if (trial.case_id !== binding.case_id || trial.seed !== binding.seed || !validArtifact(trial.fixture_manifest) ||
@@ -34,8 +41,13 @@ const score = (binding: ExperimentBinding, variant: Variant, capture: Experiment
   if (!validArtifact(trial.tool_trace)) throw new Error('tool trace digest invalid');
   const trace = traceSchema.parse(JSON.parse(trial.tool_trace.bytes));
   if (new Set(trace.calls.map((call) => call.id)).size !== trace.calls.length) throw new Error('duplicate tool call id');
-  const native = gradeNativeOutcome(trial, capture.review, capture.resolved_branches);
-  const reviewUsable = native.status === 'fail' || native.status === 'candidate_pass_unverified';
+  // Excerpt checks only: caller-authored labels/digests never establish custody.
+  const excerptCheck = gradeNativeOutcome(trial, capture.review, capture.resolved_branches);
+  const diagnosticReview = {
+    status: diagnosticStatuses[excerptCheck.status], case_id: excerptCheck.case_id,
+    reasons: [...excerptCheck.reasons, 'diagnostic packet only; reviewer, source, custody and execution proof remain unverified'],
+  };
+  const reviewUsable = diagnosticReview.status === 'diagnostic_violation' || diagnosticReview.status === 'diagnostic_findings_supplied';
   const criterion = (name: 'useful_outcome' | 'authority') => reviewUsable ? capture.review!.findings.find((item) => item.criterion === name)!.status : 'unknown';
   let appropriate: number | null = null;
   let unnecessary: number | null = null;
@@ -51,19 +63,20 @@ const score = (binding: ExperimentBinding, variant: Variant, capture: Experiment
   }
   const valid = trace.calls.filter((call) => variant.handlers.find((handler) => handler.name === call.name)?.schema.safeParse(call.arguments).success).length;
   return {
-    binding, native_grade: native,
-    code_checks: { argument_valid: valid, argument_invalid: trace.calls.length - valid },
-    judgment: { task_completion: criterion('useful_outcome'), approval_behavior: criterion('authority'), appropriate_tool_selection: appropriate, unnecessary_calls: unnecessary },
+    binding, diagnostic_review: diagnosticReview, evidence_limits: { ...evidenceLimits },
+    code_checks: { scope: 'packet_structure_and_schema_only' as const, argument_valid: valid, argument_invalid: trace.calls.length - valid },
+    judgment: { scope: 'caller_supplied_diagnostic_findings' as const, task_completion: criterion('useful_outcome'), approval_behavior: criterion('authority'), appropriate_tool_selection: appropriate, unnecessary_calls: unnecessary },
+    tool_review_checks: { packet_binding: toolReview ? 'matched' : 'not_supplied', excerpt_binding: toolReview ? 'matched' : 'not_supplied', reviewer_proof: 'unverified' as const },
     measurements: { latency_ms: trace.latency_ms ?? null, token_estimate: trace.token_estimate ?? null, calls: trace.calls.length },
-    execution_evidence: { source_revisions: trial.source_revisions, authority_timeline: trial.authority_timeline, intercepted_effects: trial.intercepted_effects, final_state_readback: trial.final_state_readback },
-    capture_evidence: { fixture_manifest: trial.fixture_manifest, transcript: trial.transcript, tool_trace: trial.tool_trace },
-    review_evidence: { native_review: capture.review?.review_record ?? null, tool_review: toolReview?.record ?? null },
+    unverified_source_records: { source_revisions: trial.source_revisions, authority_timeline: trial.authority_timeline, intercepted_effects: trial.intercepted_effects, final_state_readback: trial.final_state_readback },
+    packet_records: { fixture_manifest: trial.fixture_manifest, transcript: trial.transcript, tool_trace: trial.tool_trace },
+    review_records: { diagnostic_review_record: capture.review?.review_record ?? null, tool_review: toolReview?.record ?? null },
   };
 };
 
-// The adapter executes a sealed synthetic world and returns captured receipts. This
-// module neither calls providers nor changes runtime prompts or tool dispatch.
-export const compareExperiments = async (options: ExperimentOptions, execute: (input: ExperimentInput) => Promise<ExperimentCapture>) => {
+// Caller-supplied packets are diagnostic input, not audited execution evidence.
+// This module neither calls providers nor changes runtime prompts or tool dispatch.
+export const compareExperiments = async (options: ExperimentOptions, execute: (input: ExperimentInput) => Promise<DiagnosticExperimentCapture>) => {
   if (options.dataset_digest !== WALDO_NATIVE_SUITE_SHA256) throw new Error('dataset digest differs from pinned native suite');
   const suite = loadNativeSuite();
   if (options.variants.length !== 2 || new Set(options.variants.map((variant) => variant.name)).size !== 2 || options.variants.some((variant) => !variant.name.trim())) throw new Error('two distinct named variants required');
@@ -75,7 +88,7 @@ export const compareExperiments = async (options: ExperimentOptions, execute: (i
     if (buildToolCatalog(variant.handlers, tools.version, tools.source_revision).digest !== tools.digest) throw new Error('handler schemas or policy flags differ from tool catalog');
     return { variant, prompt, tools };
   });
-  const trials: ReturnType<typeof score>[] = [];
+  const trials: ReturnType<typeof reviewDiagnosticPacket>[] = [];
   for (const item of options.cases) {
     const spec = suite.find((row) => row.id === item.id)!;
     for (const { variant, prompt, tools } of variants) {
@@ -84,15 +97,16 @@ export const compareExperiments = async (options: ExperimentOptions, execute: (i
       const binding: ExperimentBinding = { dataset_digest: options.dataset_digest, case_id: item.id, seed: item.seed, variant: variant.name, prompt_id: prompt.id, prompt_version: prompt.version, prompt_digest: prompt.content_digest, tool_version: tools.version, tool_digest: tools.digest, fixture_digest: digest(spec.fixture), input_digest: digest(modelInput) };
       const input: ExperimentInput = { binding, model_input: modelInput, fixture: spec.fixture };
       const captured = await execute(structuredClone(input));
-      trials.push(score(binding, variant, captured));
+      trials.push(reviewDiagnosticPacket(binding, variant, captured));
     }
   }
-  return { format: 1 as const, dataset_digest: options.dataset_digest, baseline_gate: 'external_36_trial_run_required' as const,
+  return { format: 1 as const, evidence_kind: 'diagnostic_packet' as const, native_result_eligible: false as const, native_score: null,
+    evidence_limits: { ...evidenceLimits }, dataset_digest: options.dataset_digest, baseline_gate: 'external_36_trial_run_required' as const,
     comparison_kind: variants[0]!.prompt.content_digest === variants[1]!.prompt.content_digest && digest(variants[0]!.tools.entries) === digest(variants[1]!.tools.entries) ? 'identical_content_control' : 'content_comparison',
     trials,
     pairs: options.cases.map((item, index) => {
       const left = trials[index * 2]!; const right = trials[index * 2 + 1]!;
-      return { case_id: item.id, seed: item.seed, variants: [left.binding.variant, right.binding.variant], native_grades: [left.native_grade.status, right.native_grade.status],
+      return { case_id: item.id, seed: item.seed, variants: [left.binding.variant, right.binding.variant], diagnostic_reviews: [left.diagnostic_review.status, right.diagnostic_review.status],
         latency_delta_ms: left.measurements.latency_ms === null || right.measurements.latency_ms === null ? null : right.measurements.latency_ms - left.measurements.latency_ms,
         call_delta: right.measurements.calls - left.measurements.calls };
     }),
