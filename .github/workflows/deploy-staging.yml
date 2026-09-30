@@ -40,7 +40,7 @@ jobs:
         with:
           version: 10.34.4
 
-      - name: Install (frozen lockfile, release-age policy active)
+      - name: Install (frozen lockfile)
         run: pnpm install --frozen-lockfile
 
       - name: Verify gates stay green on the exact head being deployed
