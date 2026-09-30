@@ -69,6 +69,9 @@ importers:
       '@waldo/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@waldo/workspace':
+        specifier: workspace:*
+        version: link:../workspace
       openai:
         specifier: 5.12.2
         version: 5.12.2(ws@8.21.0)(zod@3.25.76)
@@ -103,6 +106,15 @@ importers:
       wrangler:
         specifier: 4.105.0
         version: 4.105.0(@cloudflare/workers-types@4.20260616.1)
+
+  packages/workspace:
+    devDependencies:
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 4.1.9
+        version: 4.1.9(@types/node@22.20.1)(vite@8.0.16(@types/node@22.20.1)(esbuild@0.28.1)(tsx@4.20.6))
 
 packages:
 
