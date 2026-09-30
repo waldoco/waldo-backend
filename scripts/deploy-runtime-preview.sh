@@ -11,5 +11,6 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 sha=$(git rev-parse --short HEAD)
+full_sha=$(git rev-parse HEAD)
 cd packages/runtime
-exec pnpm exec wrangler preview --worker-name waldo-runtime-staging --ignore-base-config --var "WALDO_RELEASE:${sha}"
+exec pnpm exec wrangler preview --worker-name waldo-runtime-staging --ignore-base-config --var "WALDO_RELEASE:${sha}" --name "isolated-${full_sha}"

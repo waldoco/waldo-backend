@@ -18,7 +18,8 @@ for (const key of ['r2_buckets', 'vectorize', 'ai', 'services', 'queues', 'trigg
 }
 const command = readFileSync('scripts/deploy-runtime-preview.sh', 'utf8');
 assert(command.includes('exec pnpm exec wrangler preview --worker-name waldo-runtime-staging --ignore-base-config --var'));
-assert(command.includes('--ignore-base-config'), 'do not inherit dashboard base secrets');
+assert(command.includes('--ignore-base-config'), 'do not inherit dashboard base secrets on creation');
+assert(command.includes('--name "isolated-${full_sha}"'), 'do not reuse legacy branch-named preview state');
 assert(!/wrangler (?:deploy|versions)/.test(command));
 assert(!/--env\s+staging/.test(command));
 console.log('guard-runtime-preview-config: ok (fail-closed infrastructure scope)');

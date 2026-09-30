@@ -159,7 +159,10 @@ async function flush(stub: RuntimeInterfaceStub, runId: string): Promise<void> {
 describe('promoted run journal/outbox runtime interface', () => {
   it('delivers a generated numeric-heavy v4 run ID through scheduled resume after eviction', async () => {
     const runtime = freshRuntimeStub();
-    const occurrenceAt = Date.now() + 500;
+    // Keep the platform alarm parked while setup and eviction run. The due
+    // SQLite row is made eligible explicitly before invoking the alarm helper.
+    const occurrenceAt = Date.now();
+    const heldAlarmAt = occurrenceAt + 3_600_000;
     const sink = new FakeSink();
 
     await runInDurableObject(runtime, async (_instance, state) => {
@@ -174,7 +177,7 @@ describe('promoted run journal/outbox runtime interface', () => {
         id: `handoff:${runId}`,
         kind: 'handoff',
         occurrenceAt,
-        dueAt: occurrenceAt,
+        dueAt: heldAlarmAt,
         payloadRefs: { run_id: runId },
       });
       const persistedCandidate = state.storage.sql
@@ -186,6 +189,8 @@ describe('promoted run journal/outbox runtime interface', () => {
         CARD_LIKE_GENERATED_RUN_ID,
       );
       expect(scheduled.payload_refs.run_id).toBe(CARD_LIKE_GENERATED_RUN_ID);
+      expect(await state.storage.getAlarm()).toBe(heldAlarmAt);
+      state.storage.sql.exec('UPDATE schedule SET due_at = ? WHERE id = ?', occurrenceAt, `handoff:${runId}`);
     });
 
     await evictDurableObject(runtime);
