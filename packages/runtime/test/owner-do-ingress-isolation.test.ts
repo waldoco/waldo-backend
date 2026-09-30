@@ -7,6 +7,7 @@ import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
 import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios/isolated-google-client';
+import { captureFixtureAdapters } from '../evals/fixture-adapter-capture';
 import { auditIsolatedWorld } from '../evals/isolated-world-audit';
 import type { NativeManifest } from '../evals/native-manifest';
 
@@ -236,6 +237,12 @@ describe('real owner-DO ingress in a sealed test world', () => {
     };
     const evidence = { candidate_effects: sourceWorld.outbox('a@example.invalid'), control_effects: sourceWorld.outbox('b@example.invalid'),
       candidate_calendar: sourceWorld.providerCalendarReadback('a@example.invalid'), control_calendar: sourceWorld.providerCalendarReadback('b@example.invalid') };
+    const captured = captureFixtureAdapters(sourceWorld, { case_id: 'fictional-smoke', seed: String(update),
+      candidate_owner: 'a@example.invalid', control_owner: 'b@example.invalid' },
+      { source_adapter: 'fixture-source-key', effect_interceptor: 'fixture-effect-key', provider_readback: 'fixture-provider-key' });
+    expect(JSON.parse(captured.artifacts.intercepted_effects.bytes).data).toEqual(evidence.candidate_effects);
+    expect(JSON.parse(captured.artifacts.final_state_readback.bytes).data.calendar).toEqual(evidence.candidate_calendar);
+    expect(captured.receipts).toHaveLength(3);
     expect(auditIsolatedWorld(fixture, evidence).status).toBe('consistent_fixture');
     expect(auditIsolatedWorld({ ...fixture, grants: [] }, evidence).errors).toContain('effect outside synthetic grant and branch');
   });
