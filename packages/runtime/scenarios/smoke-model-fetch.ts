@@ -1,7 +1,9 @@
 // Test-only outbound boundary. Workers supports manual, not error, redirects.
 export type SmokeRequestReceipt = { url: string; status: number | null; response_id: string | null; model: string | null; usage: unknown; failure: 'transport' | 'redirect' | 'response_json' | null };
-export const smokeModelFetch = (network: typeof fetch, requests: SmokeRequestReceipt[], denied: string[]): typeof fetch =>
-  (async (input: RequestInfo | URL, init?: RequestInit) => {
+export type SmokeFetchBoundary = typeof fetch & { settle(): Promise<void>; pending(): number };
+export const smokeModelFetch = (network: typeof fetch, requests: SmokeRequestReceipt[], denied: string[]): SmokeFetchBoundary => {
+  const pending = new Set<Promise<Response>>();
+  const execute = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
     if (url.href !== 'https://api.openai.com/v1/responses' || method !== 'POST') {
@@ -26,3 +28,13 @@ export const smokeModelFetch = (network: typeof fetch, requests: SmokeRequestRec
     } catch { receipt.failure = 'response_json'; }
     return response;
   }) as typeof fetch;
+  const boundary = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const work = execute(input, init);
+    pending.add(work);
+    void work.then(() => pending.delete(work), () => pending.delete(work));
+    return work;
+  }) as SmokeFetchBoundary;
+  boundary.settle = async () => { while (pending.size) await Promise.allSettled([...pending]); };
+  boundary.pending = () => pending.size;
+  return boundary;
+};
