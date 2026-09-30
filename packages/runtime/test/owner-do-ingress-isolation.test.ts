@@ -147,6 +147,7 @@ describe('real owner-DO ingress in a sealed test world', () => {
     }
     const update = 200000 + ++sequence * 10;
     expect((await send(81101, 'Read the fixture inbox for owner A.', update)).status).toBe(200);
+    sourceWorld.advance('2026-09-29T11:01:00Z');
     expect((await send(81102, 'Read the fixture inbox for owner B.', update + 1)).status).toBe(200);
     const sent = outbox.filter((item) => item.method === 'sendMessage');
     expect(sent.map((item) => item.body.chat_id)).toEqual([81101, 81102]);
@@ -169,6 +170,10 @@ describe('real owner-DO ingress in a sealed test world', () => {
         expect(rows.some((row) => row.hop === 'tool_get_communication')).toBe(true);
         expect(rows.some((row) => row.hop === 'turn')).toBe(true);
         expect(rows.every((row) => row.owner !== null)).toBe(true);
+        const times = state.storage.sql.exec<{ at: number }>('SELECT at FROM trace_log WHERE trace = ?',
+          `tg-${update + (subject === 81101 ? 0 : 1)}`).toArray();
+        expect(times.length).toBeGreaterThan(0);
+        expect(times.every((row) => row.at === Date.parse(subject === 81101 ? '2026-09-29T11:00:00Z' : '2026-09-29T11:01:00Z'))).toBe(true);
       });
       expect(toolInputs.some((input) => input.includes(ownWord) && !input.includes(otherWord))).toBe(true);
     }

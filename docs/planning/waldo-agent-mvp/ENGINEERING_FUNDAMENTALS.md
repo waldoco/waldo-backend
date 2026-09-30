@@ -160,3 +160,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Evaluator fixture capture
 - Adapter snapshots are collected from the world, not runner-supplied byte labels; test identity/key checks, tampering, other-owner exclusion, fresh-world reset and immutable as-of bytes. Same-process fictional keys never establish external provider custody.
 - Validate exactly the role keys a collector consumes, even when a full supervisor key object is supplied; extra role keys do not invalidate an otherwise valid scoped collector.
+- Trace persistence uses the same injected clock as source/effect capture, including exporter-failure writes. Advance fixture time between sequential owner turns and verify each stored trace at its own turn time; duration measurements are separate.
