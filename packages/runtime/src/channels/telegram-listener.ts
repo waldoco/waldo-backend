@@ -1,3 +1,4 @@
+import { ownerTurnTrace } from './owner-turn-envelope';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
 
@@ -23,6 +24,7 @@ import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
 
 export type TelegramOwnerListenerOptions = Readonly<{
   ownerTelegramId: number;
+  surface?: 'telegram' | 'whatsapp';
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   turnTimeoutMs?: number;
@@ -64,7 +66,7 @@ export class TelegramOwnerListener {
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
     const { api } = this.options;
     const chat_id = turn.chatId;
-    this.options.log?.({ trace: `tg-${turn.updateId}`, hop: 'unsupported', ms: 0, ok: true, ...(turn.note === undefined ? {} : { detail: turn.note }) });
+    this.options.log?.({ trace: ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId), hop: 'unsupported', ms: 0, ok: true, ...(turn.note === undefined ? {} : { detail: turn.note }) });
     await api.sendMessage({ chat_id, text: this.options.unsupportedText ?? 'I can read text, photos, documents and voice notes here. Videos, stickers, forwards and some formatting do not come through yet.' }).catch(() => undefined);
     if (turn.messageId !== null) {
       await api.setMessageReaction({ chat_id, message_id: turn.messageId, reaction: [{ type: 'emoji', emoji: '🤷' }] }).catch(() => undefined);
@@ -77,7 +79,7 @@ export class TelegramOwnerListener {
     if (turn.senderId !== owner || turn.chatId !== owner) return 'ignored';
     const { api } = this.options;
     const now = this.options.now ?? Date.now;
-    const trace = `tg-${turn.updateId}`;
+    const trace = ownerTurnTrace(this.options.surface ?? 'telegram', turn.updateId);
     const log = (hop: string, ms: number, ok: boolean, error?: string, code?: string) =>
       this.options.log?.(error === undefined ? { trace, hop, ms, ok } : { trace, hop, ms, ok, error, ...(code === undefined ? {} : { code }) });
     const time: TurnTimer = async (hop, work) => {
