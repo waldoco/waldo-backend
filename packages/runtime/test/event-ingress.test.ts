@@ -132,3 +132,6 @@ it('never acknowledges before owner admission and bounds an ignoring-abort fetch
   await vi.waitFor(()=>expect(vi.getTimerCount()).toBeGreaterThan(0));await vi.advanceTimersByTimeAsync(5001);expect((await timeout).status).toBe(503);
  }finally{vi.useRealTimers();}
 });
+it('bounds raw provider body before signature work or owner admission',async()=>{
+ const {ns,fetch}=namespace();expect((await run(post('uptime','x'.repeat(65537),{'x-waldo-event-token':'up-secret'}),{TELEGRAM_OWNER_DO:ns,WALDO_EVENT_SOURCES:SOURCES})).status).toBe(413);expect(fetch).not.toHaveBeenCalled();
+});

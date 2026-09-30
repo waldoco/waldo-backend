@@ -111,7 +111,11 @@ export const handleEventIngress = async (
   if (request.method !== 'POST' || !config || !env.TELEGRAM_OWNER_DO || !source || source.includes('/')) {
     return new Response('not found', { status: 404 });
   }
-  const body = await request.text();
+  const reader=request.body?.getReader();if(!reader)return new Response('invalid body',{status:400});
+  const chunks:Uint8Array[]=[];let size=0;
+  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>65536){void reader.cancel();return new Response('body too large',{status:413});}chunks.push(value);}}catch{return new Response('body unavailable',{status:400});}
+  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+  const body = new TextDecoder().decode(bytes);
   if (!(await verify(config, request, body))) return new Response('forbidden', { status: 403 });
   let envelope: EventEnvelope | null = null;
   try {

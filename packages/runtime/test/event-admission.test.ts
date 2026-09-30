@@ -15,3 +15,19 @@ it('durable event admission survives reconstruction, binds raw digest and never 
   expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE source='github'").one().state).toBe('unknown');
  });
 });
+it('actual owner event entry acknowledges durable admission, prevents duplicate notification and preserves unknown after loss',async()=>{
+ const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('event-admission-entry'));
+ await runInDurableObject(stub,async(instance,state)=>{
+  const entry=instance as unknown as {recordEvent(r:Request,b:string):Promise<Response>;setup():unknown};
+  const setup=entry.setup;let sends=0;let lose=false;
+  entry.setup=()=>({runs:{start:()=>({id:'synthetic-event'}),finish:()=>true},api:{sendMessage:async()=>{sends++;if(lose)throw new Error('synthetic response loss');}},owner:42,log:()=>{}});
+  try{
+   const body=JSON.stringify({subject:'fixture',kind:'push',title:'fixture'});
+   const request=(id:string,digest='a'.repeat(64))=>new Request('https://owner/event',{method:'POST',headers:{'x-waldo-event-source':'github','x-waldo-event-notify':'1','x-waldo-event-delivery':`id:${id}`,'x-waldo-event-digest':digest}});
+   expect((await entry.recordEvent(request('one'),body)).status).toBe(200);expect((await entry.recordEvent(request('one'),body)).status).toBe(200);expect(sends).toBe(1);
+   expect((await entry.recordEvent(request('one','b'.repeat(64)),body)).status).toBe(409);expect(sends).toBe(1);
+   lose=true;expect((await entry.recordEvent(request('lost'),body)).status).toBe(200);expect((await entry.recordEvent(request('lost'),body)).status).toBe(200);expect(sends).toBe(2);
+   expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE delivery='id:lost'").one().state).toBe('unknown');
+  }finally{entry.setup=setup;}
+ });
+});
