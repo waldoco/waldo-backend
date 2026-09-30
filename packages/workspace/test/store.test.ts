@@ -79,4 +79,13 @@ describe('retained byte store',()=>{
  await expect(s.write({...args(10499,'zero',new Uint8Array()),expected_revision:499})).rejects.toThrow('workspace_rejected');expect(f.state().operations).toHaveLength(500);expect(f.state().bodies).toHaveLength(499);
  f.host.admit=async()=>({status:'ok'});const restart=await workspaceStore(f.host);expect((await restart.reconcile(id(10499))).revision).toBe(500);expect(f.state().bodies).toHaveLength(500);
  });
+ it('binding map-version mismatch at construction never reaches bodies',async()=>{
+ const f=fixture();await workspaceStore(f.host);f.host.binding={...binding,mappingVersion:2};await expect(workspaceStore(f.host)).rejects.toThrow('workspace_rejected');expect(f.host.bodies.get).not.toHaveBeenCalled();expect(f.host.bodies.put).not.toHaveBeenCalled();
+ });
+ it('revocation immediately before put preserves a pending reservation but sends no bytes',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);let writes=0;f.host.admit=async(_b,a)=>({status:a==='write'&&++writes>1?'rejected':'ok'});await expect(s.write(args())).rejects.toThrow('workspace_rejected');expect(f.state().operations[0]?.status).toBe('pending');expect(f.host.bodies.put).not.toHaveBeenCalled();
+ });
+ it('read racing deletion cannot return already tombstoned content',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host),m=await s.write(args());let release!:()=>void;const original=f.host.bodies.get;f.host.bodies.get=vi.fn(async b=>{const bytes=await original(b);await new Promise<void>(r=>release=r);return bytes;});const read=s.read(m.file_id,1,0,10);await vi.waitFor(()=>expect(f.host.bodies.get).toHaveBeenCalledTimes(1));await s.tombstone(m.file_id,1);release();await expect(read).rejects.toThrow('workspace_not_found');
+ });
 });
