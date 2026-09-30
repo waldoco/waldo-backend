@@ -13,7 +13,7 @@ const paths=process.argv.slice(2);
 if(process.env.WALDO_RUN_NATIVE_TRIAL!=='reviewed'||!paths.length||paths.length>6||new Set(paths).size!==paths.length)throw new Error('native supervisor requires explicit opt-in and1-6 distinct bundle paths');
 const parsed=paths.map(p=>parseNativeCaseBundle(readFileSync(p,'utf8')));
 if(new Set(parsed.map(p=>p.bundle.manifest.case_id)).size!==parsed.length)throw new Error('duplicate native case');
-const support={source_families:['calendar','mail','tasks'],effect_kinds:[],turn_kinds:['owner_text','provider_event'] as const,production_tools:['query_calendar','get_communication','search_communication','read_thread','query_tasks']};
+const support={source_families:['calendar','mail','tasks'],effect_kinds:[],turn_kinds:['owner_text','provider_event'] as const,production_tools:['query_calendar','get_communication','search_communication','read_thread','get_tasks','get_context']};
 for(const {bundle} of parsed){const missing=inspectNativeExecutionSupport(bundle,support);if(missing.length)throw new Error(`blocked_fixture ${bundle.manifest.case_id}: ${missing.join(';')}`);}
 // Read credential only after typed inputs/adapters passed. The key is never logged,
 // committed, placed in captures or saved to the output directory.

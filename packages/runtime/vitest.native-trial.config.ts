@@ -16,7 +16,7 @@ if(new Set(bundles.map(b=>b.bundle.manifest.case_id)).size!==bundles.length)thro
 // owner text and exact declared source revision turns. Other provider events and
 // effect/source families remain blocked.
 const support={source_families:['calendar','mail','tasks'],effect_kinds:[],turn_kinds:['owner_text','provider_event'] as const,
- production_tools:['query_calendar','get_communication','search_communication','read_thread','query_tasks']};
+ production_tools:['query_calendar','get_communication','search_communication','read_thread','get_tasks','get_context']};
 for(const {bundle} of bundles){const missing=inspectNativeExecutionSupport(bundle,support);if(missing.length)throw new Error(`blocked_fixture ${bundle.manifest.case_id}: ${missing.join(';')}`);}
 const receiptKeys=JSON.parse(process.env.WALDO_NATIVE_RECEIPT_KEYS??'null') as Record<string,string>|null;
 if(!receiptKeys||Object.keys(receiptKeys).sort().join(',')!=='effect_interceptor,provider_readback,runner,source_adapter'||Object.values(receiptKeys).some(v=>typeof v!=='string'||v.length<32)||new Set(Object.values(receiptKeys)).size!==4)throw new Error('native supervisor receipt key custody missing');

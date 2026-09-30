@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import { createHash } from 'node:crypto';
 import { expect,it } from 'vitest';
 import { parseNativeCaseBundle,fixtureInputFromBundle,type NativeCaseBundleV1 } from '../evals/native-case-bundle';
@@ -36,4 +37,9 @@ it('source revision support cannot admit an unbound provider event or silently t
  const event={id:'rev',kind:'provider_event' as const,at,payload:{owner_id:'a',source:'calendar',id:'cal',patch:{title:'Revised'}}};
  expect(inspectNativeExecutionSupport({...revised,turns:[...b.turns,event]},support)).toEqual([]);
  expect(inspectNativeExecutionSupport({...revised,turns:[...b.turns,{...event,payload:{...event.payload,patch:{title:'Different'}}}]},support)).toContain('unbound source provider event: rev');
+});
+it('concrete supervisor admission uses the actual product handler names, not invented task aliases',()=>{
+ const config=readFileSync(new URL('../vitest.native-trial.config.ts',import.meta.url),'utf8');
+ const cli=readFileSync(new URL('../evals/native-run-cli.ts',import.meta.url),'utf8');
+ for(const text of [config,cli]){expect(text).toContain("'get_tasks'");expect(text).toContain("'get_context'");expect(text).not.toContain("'query_tasks'");}
 });
