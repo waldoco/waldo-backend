@@ -6,7 +6,7 @@ import { defineConfig } from 'vitest/config';
 import { parseNativeCaseBundle } from './evals/native-case-bundle';
 import { inspectNativeExecutionSupport } from './evals/native-execution-readiness';
 import { validModelCredential } from './src/llm/credential-shape';
-import { WALDO_CHAT_MODEL } from '@waldo/contracts';
+import {OPENAI_GPT_6_LUNA_MODEL as WALDO_CHAT_MODEL} from '../contracts/src/model/roster';
 if(process.env.WALDO_RUN_NATIVE_TRIAL!=='reviewed')throw new Error('native trial needs explicit supervisor opt-in');
 const paths=(process.env.WALDO_NATIVE_BUNDLE_PATHS??'').split(',').filter(Boolean);
 if(!paths.length||paths.length>6||new Set(paths).size!==paths.length)throw new Error('native trial needs1-6 distinct bundle paths');
