@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {readFileSync,mkdtempSync,copyFileSync,rmSync,lstatSync,existsSync,readdirSync,mkdirSync,writeFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,copyFileSync,rmSync,lstatSync,existsSync,realpathSync,readdirSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join,dirname,resolve} from 'node:path';
+import {join,dirname,resolve,relative,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {compareHistory,localManifest,readHistory} from './staging-migration-preflight.mjs';
 const PROJECT='togdshayyxycitzckpqv';
@@ -25,11 +25,21 @@ export function effectiveConfigDigest(workdir){
  }
  if(existsSync(home)){
   // Only package caches and isolated XDG/TMP directories may be populated.
-  const allowed=new Set(['tmp','cache','data','config','.cache','.local','.npm']);
+  const allowed=new Set(['tmp','cache','data','config','.cache','.local','.npm','.supabase']);
   if(readdirSync(home).some(name=>!allowed.has(name)))throw Error('local_forbidden_input');
+  const supabaseHome=join(home,'.supabase');
+  if(existsSync(supabaseHome)&&readdirSync(supabaseHome).some(name=>!['telemetry.json','traces'].includes(name)))throw Error('local_forbidden_input');
   const scanHome=dir=>{for(const name of readdirSync(dir)){
    const path=join(dir,name),stat=lstatSync(path);
-   if(name.startsWith('.env')||stat.isSymbolicLink()||(!stat.isFile()&&!stat.isDirectory()))throw Error('local_forbidden_input');
+   if(name.startsWith('.env'))throw Error('local_forbidden_input');
+   if(stat.isSymbolicLink()){
+    const cache=join(home,'cache','pnpm','dlx');
+    const inside=(base,target)=>{const rel=relative(base,target);return rel!== '..'&&!rel.startsWith('../')&&!isAbsolute(rel);};
+    const projectIndex=join(home,'data','pnpm','store','v10','projects');
+    if((!inside(cache,path)&&!inside(projectIndex,path))||!inside(realpathSync(cache),realpathSync(path)))throw Error('local_forbidden_input');
+    continue;
+   }
+   if(!stat.isFile()&&!stat.isDirectory())throw Error('local_forbidden_input');
    if(stat.isDirectory())scanHome(path);
   }};scanHome(home);
  }

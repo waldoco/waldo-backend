@@ -68,3 +68,9 @@ Unexpected home profile/npm config and home dotenv/symlinks are rejected before
 link and before write. PATH and CI remain inherited trusted-host inputs; the route
 does not claim protection from a compromised runner/binary or concurrent filesystem
 writer. No repository file supplies that trust.
+
+Real unauthenticated pnpm10.34.4 + supabase2.109.1 help populated the isolated home.
+The scan admits .supabase telemetry.json/traces only, and package-cache symlinks
+only under cache/pnpm/dlx or data/pnpm/store/v10/projects with resolved targets
+inside cache/pnpm/dlx. Other symlinks/config/profile files still reject. This is
+package-cache usability, not a claim that a compromised dependency is safe.

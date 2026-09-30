@@ -128,3 +128,18 @@ test('real-fs dry-run injected home profile/npm config stops final write',async(
  rmSync(join(dir,'.isolated-home'),{recursive:true,force:true});
  }}finally{rmSync(parent,{recursive:true,force:true});}
 });
+test('real-shaped pnpm dlx cache may contain internal package links only',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-cache-test-'));
+ try{mkdirSync(join(dir,'supabase'));writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');
+ const cache=join(dir,'.isolated-home','cache','pnpm','dlx');mkdirSync(join(cache,'node_modules','.pnpm','package','node_modules','package'),{recursive:true});
+ symlinkSync('.pnpm/package/node_modules/package',join(cache,'node_modules','package'));
+ assert.doesNotThrow(()=>effectiveConfigDigest(dir));
+ rmSync(join(cache,'node_modules','package'));symlinkSync('/etc',join(cache,'node_modules','escape'));assert.throws(()=>effectiveConfigDigest(dir),/local_forbidden_input/);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+test('legitimate Supabase telemetry/traces permitted, profile remains forbidden',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-telemetry-test-'));
+ try{mkdirSync(join(dir,'supabase'));writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');mkdirSync(join(dir,'.isolated-home','.supabase','traces'),{recursive:true});writeFileSync(join(dir,'.isolated-home','.supabase','telemetry.json'),'{}');
+ assert.doesNotThrow(()=>effectiveConfigDigest(dir));writeFileSync(join(dir,'.isolated-home','.supabase','profile'),'custom.yaml');assert.throws(()=>effectiveConfigDigest(dir),/local_forbidden_input/);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
