@@ -981,6 +981,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
+      undefined, channel,
     );
     const migrateCoreFiles = async (trace: string) => {
       const input = pendingCoreFiles(storage.sql, memory);
