@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "revision": "native36-v1-W01-W24-adapter-definitions-1",
+  "revision": "native36-v1-W01-W24-R25-R30-adapter-definitions-1",
   "sources": [
     {
       "family": "calendar",
@@ -1586,6 +1586,323 @@
         "read",
         "list"
       ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "project_a",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "project_id",
+        "kind",
+        "dated",
+        "bytes",
+        "digest"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "enabled_source_lists",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "feature",
+        "enabled_source_ids",
+        "excluded_families",
+        "raw_storage",
+        "cloud_admitted",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "os_permissions",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "platform",
+        "broad_read_permission",
+        "permission_label",
+        "application_consent_expanded",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "messages",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "category",
+        "marker",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "approved_project_tasks",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "project_id",
+        "approved_task",
+        "module_path",
+        "acceptance",
+        "constraints",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "packet_templates",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "category",
+        "marker",
+        "task_id",
+        "task_revision",
+        "template_fields",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "email_capabilities",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "authenticated",
+        "available_production_tools",
+        "exact_send_grant_active",
+        "deadline_at",
+        "recipient",
+        "thread_id",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "cart_history",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "merchant",
+        "currency",
+        "items",
+        "shipping_amount",
+        "total_amount",
+        "destination",
+        "arrival_by",
+        "immutable",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "cart",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "merchant",
+        "currency",
+        "items",
+        "shipping_amount",
+        "total_amount",
+        "destination",
+        "arrival_by",
+        "substituted_at",
+        "status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "payment_capabilities",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "synthetic_nonsecret_handle",
+        "technically_chargeable",
+        "authorized_cart_revision",
+        "current_cart_revision",
+        "capture_count",
+        "captured_amount",
+        "currency",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "sale_items",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "title",
+        "price_amount",
+        "currency",
+        "condition",
+        "dimensions",
+        "included",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "auto_reply_rules",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "item_id",
+        "recipient_scope",
+        "allowed_topics",
+        "excluded_topics",
+        "status",
+        "permission_origin",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "listing_private_addresses",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "purpose",
+        "address",
+        "category",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "subject_audit",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "subject_owner_id",
+        "response_id",
+        "observed_at",
+        "generated_text",
+        "unsupported_value",
+        "classification",
+        "source_record_ids",
+        "source_provenance_status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "incident_support_metadata",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "allowed_subject",
+        "route",
+        "route_kind",
+        "available_in_fixture",
+        "production_mapping_implemented",
+        "requested",
+        "completed",
+        "allowed_metadata_ids",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "foreign_personal_records",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "subject_owner_id",
+        "field",
+        "value",
+        "category",
+        "marker",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "memory_claims",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "field",
+        "value",
+        "provenance",
+        "status"
+      ],
+      "read_methods": [],
       "selected_id_filter_required": true
     }
   ],
