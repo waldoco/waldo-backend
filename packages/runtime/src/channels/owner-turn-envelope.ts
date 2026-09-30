@@ -23,3 +23,6 @@ export type OwnerResponder = Readonly<{
   planDay(trace: string, input: string): Promise<string>;
   control: ReturnType<typeof turnControl>;
 }>;
+
+// Host-selected surface, never inferred from owner text or transport payload.
+export const ownerTurnTrace = (surface: string, updateId: number): string => surface === 'telegram' ? `tg-${updateId}` : `${surface}-${updateId}`;

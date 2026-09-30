@@ -32,3 +32,10 @@ describe('channel-neutral owner conversation seam', () => {
     expect(ownerToolApproval({ tool: 'get_context' })).toBe(true);
   });
 });
+
+it('same numeric transport sequence does not collide across host surfaces', async () => {
+  const { ownerTurnTrace } = await import('../src/channels/owner-turn-envelope');
+  expect(ownerTurnTrace('telegram', 12)).toBe('tg-12');
+  expect(ownerTurnTrace('whatsapp', 12)).toBe('whatsapp-12');
+  expect(telegramTurnEnvelope({ updateId: 12, chatId: 7, text: 'same id' } as never, 'whatsapp').traceId).toBe(ownerTurnTrace('whatsapp', 12));
+});

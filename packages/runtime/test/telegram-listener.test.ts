@@ -174,3 +174,43 @@ describe('TelegramOwnerListener', () => {
     expect(sends).toEqual(['That took too long, so I stopped working on it. Try again, or split it into smaller asks.']);
   });
 });
+
+describe('host-selected compatibility surface traces', () => {
+  it('WhatsApp listener timers and final root share the core trace identity', async () => {
+    const { api } = recorder();
+    const entries: Array<{ trace: string; hop: string }> = [];
+    const listener = new TelegramOwnerListener({
+      ownerTelegramId: OWNER, surface: 'whatsapp', api,
+      respond: async (_turn, time) => time('fixture_model', async () => 'ok'),
+      saveOffset: async () => undefined, log: entry => entries.push(entry),
+    });
+    await expect(listener.handle({ updateId: 9000000000001, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'telegram: spoof trace' })).resolves.toBe('answered');
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.every(entry => entry.trace === 'whatsapp-9000000000001')).toBe(true);
+    expect(entries.some(entry => entry.hop === 'fixture_model')).toBe(true);
+    expect(entries.some(entry => entry.hop === 'turn')).toBe(true);
+  });
+  it('WhatsApp unsupported turn is attributed to WhatsApp without model calls', async () => {
+    const { api } = recorder(); const respond = vi.fn(async () => 'never');
+    const entries: Array<{ trace: string; hop: string }> = [];
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface: 'whatsapp', api, respond, saveOffset: async () => undefined, log: entry => entries.push(entry) });
+    await expect(listener.handleUnsupported({ updateId: 9000000000002, messageId: null, senderId: OWNER, chatId: OWNER, note: 'fixture unsupported' })).resolves.toBe('unsupported');
+    expect(entries).toEqual([{ trace: 'whatsapp-9000000000002', hop: 'unsupported', ms: 0, ok: true, detail: 'fixture unsupported' }]);
+    expect(respond).not.toHaveBeenCalled();
+  });
+  it('wrong owner still cannot receive or log WhatsApp content', async () => {
+    const { calls, api } = recorder(); const respond = vi.fn(async () => 'never'); const log = vi.fn();
+    const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface: 'whatsapp', api, respond, saveOffset: async () => undefined, log });
+    await expect(listener.handle({ updateId: 9000000000003, messageId: null, senderId: OWNER + 1, chatId: OWNER, sentAt: null, text: 'private' })).resolves.toBe('ignored');
+    expect(respond).not.toHaveBeenCalled(); expect(log).not.toHaveBeenCalled(); expect(calls).toEqual([]);
+  });
+});
+
+it('failed WhatsApp model span and final failure retain WhatsApp trace', async () => {
+  const { api } = recorder(); const entries: Array<{ trace: string; hop: string; ok: boolean }> = [];
+  const listener = new TelegramOwnerListener({ ownerTelegramId: OWNER, surface: 'whatsapp', api, respond: async (_turn, time) => time('fixture_model', async () => { throw Error('fixture failure'); }), saveOffset: async () => undefined, log: entry => entries.push(entry) });
+  await expect(listener.handle({ updateId: 12, messageId: null, senderId: OWNER, chatId: OWNER, sentAt: null, text: 'hi' })).resolves.toBe('failed');
+  expect(entries.every(entry => entry.trace === 'whatsapp-12')).toBe(true);
+  expect(entries.some(entry => entry.hop === 'fixture_model' && !entry.ok)).toBe(true);
+  expect(entries.some(entry => entry.hop === 'turn' && !entry.ok)).toBe(true);
+});

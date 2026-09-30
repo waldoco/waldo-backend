@@ -1,5 +1,5 @@
 import { createOwnerResponder, ownerToolApproval } from './owner-turn';
-import type { OwnerTurnEnvelope } from './owner-turn-envelope';
+import { ownerTurnTrace, type OwnerTurnEnvelope } from './owner-turn-envelope';
 import type { TelegramInboundTurn } from './telegram-polling';
 import { loadTelegramMedia, type MediaReaders } from './telegram-media';
 import type { TelegramOwnerListenerOptions, TurnTimer } from './telegram-listener';
@@ -9,7 +9,7 @@ import { TELEGRAM_REACTIONS } from './reactions';
 // Only this adapter knows Telegram's numeric update/chat IDs and media formats.
 export const telegramOwnerApproval = ownerToolApproval;
 export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'telegram'): OwnerTurnEnvelope => ({
-  traceId: surface === 'telegram' ? `tg-${turn.updateId}` : `${surface}-${turn.updateId}`,
+  traceId: ownerTurnTrace(surface, turn.updateId),
   conversationRef: `${surface}-${turn.chatId}`,
   surface,
   text: turn.text,

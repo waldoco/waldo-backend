@@ -1,3 +1,4 @@
+import { ownerTurnTrace } from './owner-turn-envelope';
 import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
@@ -531,7 +532,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const fromOwner = raw.message?.from?.id === owner && raw.message.chat?.id === owner;
     if (fromOwner && raw.update_id !== undefined && raw.update_id >= offset && control.absorbed(raw.update_id)) {
       await this.ctx.storage.put(offsetKey, raw.update_id + 1);
-      return log({ trace: `tg-${raw.update_id}`, hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
+      return log({ trace: ownerTurnTrace(channel, raw.update_id), hop: 'steer', ms: 0, ok: true, detail: 'answered inside the running turn' });
     }
     if (fromOwner && raw.message?.text?.trim() === '/stop') {
       if (raw.update_id === undefined || raw.update_id < offset) return;
@@ -546,7 +547,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Langfuse trace at all (2026-09-27 sweep #12). A command turn now closes with a
       // machine_turn root like every other machine execution.
       const updateId = raw.update_id;
-      const commandTrace = `tg-${updateId}`;
+      const commandTrace = ownerTurnTrace(channel, updateId);
       const commandStarted = Date.now();
       const commandWhat = harness ? `/${harness.kind}` : raw.callback_query !== undefined ? 'callback' : '/ledger';
       const run = async () => {
@@ -567,7 +568,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const rated = query.from.id === owner && updates.rate(Number(feedback[1]), feedback[2] === 'u' ? 'useful' : 'not useful');
         await call('answerCallbackQuery', { callback_query_id: query.id, text: rated ? 'Thanks, noted.' : 'Already handled.' });
         if (rated && query.message) await call('editMessageReplyMarkup', { chat_id: query.message.chat.id, message_id: query.message.message_id, reply_markup: { inline_keyboard: [] } }).catch(() => undefined);
-      } else if (raw.callback_query) await desk.callback(raw.callback_query, `tg-${updateId}`);
+      } else if (raw.callback_query) await desk.callback(raw.callback_query, commandTrace);
         else await call('sendMessage', { chat_id: owner, text: await ledger() });
         await this.ctx.storage.put(offsetKey, updateId + 1);
       };
@@ -996,7 +997,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
     };
     const listener = owner > 0 ? new TelegramOwnerListener({
-      ownerTelegramId: owner, api, ...responder, log,
+      ownerTelegramId: owner, surface: channel, api, ...responder, log,
       respond: (turn, time) => {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
