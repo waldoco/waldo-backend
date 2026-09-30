@@ -54,6 +54,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Both canonical migration lists stay in sync statically: `guard-migration-fixture-sync.mjs` compares them in gates.sh, because the SQL fixture itself only runs Mac-side and its drift is invisible in sandbox gates.
 
 ### Failure paths
+- Browser effects return typed rejected, acknowledged-unverified or uncertain outcomes. Only authoritative validated receipts can prove completion; response loss after act starts is uncertain and cannot be blind-retried.
 - Every external call (model, Telegram, Google) has a timeout, and its failure path sends the owner something true or nothing, never a broken half-state. Best-effort UX calls (reactions, typing indicators) are bounded too and fail soft; they never gate the work they precede.
 - A turn that fails still records what happened in the trace.
 - Model output is parsed defensively. Invalid output is rejected and logged, and it never partly applies.
