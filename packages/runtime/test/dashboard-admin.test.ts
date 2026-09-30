@@ -35,7 +35,7 @@ describe('dashboard admin existing handlers', () => {
   it('reuses signed revoke and never returns a code or delivery claim',async()=>{
     const fetcher=vi.fn(async(_input: RequestInfo | URL, _init?: RequestInit)=>json(true));
     const response=await adminAction(request('invite.revoke'),'csrf',consoleAuth(env,fetcher as typeof fetch)!,'owner');
-    expect(await response.json()).toEqual({message:'Invite revoked. Copy it now and send it yourself. Waldo did not email anyone.'});
+    expect(await response.json()).toEqual({message:'Invite revoked. Waldo did not email anyone.'});
     expect(String(fetcher.mock.calls[0]?.[0])).toContain('admin_revoke');
   });
 });

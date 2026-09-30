@@ -178,6 +178,7 @@ footer { padding:35px 0 45px; color:var(--muted); font-size:12px; line-height:1.
   footer { padding-bottom:55px; }
 }
 @media(max-width:360px) {
+  .admin-heading h1 { font-size:38px; }
   .frame { padding:0 16px; }
   .review-guide { display:block; }
   .review-guide h2 { margin-top:15px; }

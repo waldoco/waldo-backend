@@ -23,7 +23,7 @@ const server = createServer((req, res) => {
         admin.current_issuer.issued_count++;admin.owners[0].issued_count++;
         admin.invites.unshift({id:`synthetic-${admin.current_issuer.issued_count}`,email:form.get('value'),issued_by:'issuer',issuer_email:'admin@example.test',created_at:admin.as_of,expires_at:'2026-10-14T08:00:00Z',used_at:null,revoked_at:null});
       } else if(action==='invite.revoke') {const invite=admin.invites.find(i=>i.id===form.get('id'));if(invite)invite.revoked_at=admin.as_of;}
-      res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify({message:'Synthetic receipt only. Copy it now and send it yourself. Waldo did not email anyone.',...(action==='invite.create'?{code:'SYNTHETICCODE'}:{})}));
+      res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify({message:action==='invite.create'?'Synthetic receipt only. Copy it now and send it yourself. Waldo did not email anyone.':'Synthetic receipt only. Invite revoked. Waldo did not email anyone.',...(action==='invite.create'?{code:'SYNTHETICCODE'}:{})}));
       if(selected==='admin-refresh-failure')adminReadFailed=true;
     });return;
   }
