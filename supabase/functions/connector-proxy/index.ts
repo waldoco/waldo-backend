@@ -81,8 +81,10 @@ const handle = async (body: Body): Promise<Response> => {
       if (!mcpToken) return fail(401, 'connection unavailable');
       let mcpRefreshError = '';
       try {
-        const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = error; });
-        const content = await intentDispatch(body, async()=> (await callMcpTransport({ url: body.server_url! }, body.tool!, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access)).content ?? null);
+        const content = await intentDispatch(body, async()=> {
+          const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = error; });
+          return (await callMcpTransport({ url: body.server_url! }, body.tool!, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access)).content ?? null;
+        });
         await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
         return reply({ data: content ?? null });
       } catch (error) {
