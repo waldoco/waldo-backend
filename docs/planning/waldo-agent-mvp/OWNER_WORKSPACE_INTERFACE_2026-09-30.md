@@ -36,8 +36,13 @@ existing artifact APIs stable; use a byte workspace store with explicit text-too
 Proposed new isolated `packages/workspace` package, with a concrete runtime consumer in
 its implementation PR. Avoid creating it before contracts and registration are scheduled.
 The package owns validation and operations, not authentication, grants or shell execution.
-Host supplies immutable DO ID, an owner-local transactional metadata adapter, private R2
-body adapter, clock and full random file/revision IDs. Never accept owner scope in tool args.
+Host supplies the canonical internal user identity bound to the immutable owner DO, an
+owner-local transactional metadata adapter, private R2
+body adapter, clock and full random file/revision IDs. Never accept owner scope in tool args. Telegram IDs are channel bindings, never tenant IDs.
+Every stored byte is owner-keyed. The core-owned tenancy model document will define the
+canonical internal user ID and its DO mapping; reconcile this proposed key scheme against
+that document before implementation. The current immutable DO-ID adapter in PR #400 is
+the first scoped storage instance, not an independent identity resolver.
 
 Each manifest row contains:
 
