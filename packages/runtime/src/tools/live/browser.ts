@@ -80,6 +80,19 @@ export const browsePageHandler = (
   },
 });
 
+// Binding extraction is evidence, not a default. Empty or malformed evidence must
+// never turn into an approval that commits an unbound external action.
+const pageBinding = (body: unknown): Record<string, string> | null => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const envelope = body as { success?: unknown; data?: { result?: unknown } };
+  if (envelope.success !== true) return null;
+  const value = envelope.data?.result;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length === 0 || entries.some(([key, item]) => !key.trim() || typeof item !== 'string' || !item.trim())) return null;
+  return Object.fromEntries(entries) as Record<string, string>;
+};
+
 type BrowserAction = Readonly<{ selector: string; description: string; method?: string; arguments?: string[] }>;
 
 // The deterministic irreversible line (owner law: hard safety lines only, judgment stays with
@@ -146,8 +159,8 @@ export const browseActHandler = (
               instruction: 'Extract the facts this action would commit, as flat key/value JSON: total price, items, recipient, destination, dates - whatever this page shows that the action commits. Empty object if none.',
               options: { model, timeout: 30000 },
             });
-            const bindBody = bind.ok ? (await bind.json()) as { success?: boolean; data?: { result?: unknown } } : {};
-            const binding = (bindBody.data?.result && typeof bindBody.data.result === 'object' && !Array.isArray(bindBody.data.result) ? bindBody.data.result : {}) as Record<string, string>;
+            const binding = bind.ok ? pageBinding(await bind.json()) : null;
+            if (binding === null) return { ok: false, code: 'rejected', error: 'The page facts could not be verified, so no approval was proposed. Ask me to look again.', source_taint: 'external' };
             const proposal = await proposeSubmit({ url, action, binding, steps: taken });
             record('browser_submit_proposed', `Approval needed: ${action.description}`, { url, proposal });
             return { ok: true, data: { url, actions_taken: taken, stopped: 'approval_pending', blocked_action: action.description, proposal_id: proposal, data: null }, source_taint: 'external' };
@@ -179,6 +192,15 @@ export const browseActHandler = (
   },
 });
 
+export type BrowserSubmitOutcome =
+  | Readonly<{ status: 'rejected'; message: string }>
+  | Readonly<{ status: 'acknowledged_unverified'; message: string }>
+  | Readonly<{ status: 'uncertain'; message: string }>
+  | Readonly<{ status: 'verified_with_receipt'; message: string; receipt: Readonly<{
+      id: string; observed_at: string; source: 'provider' | 'controlled_fixture';
+      action_digest: string; binding_digest: string;
+    }> }>;
+
 // B-tool-3 executor: runs ONLY after the owner's explicit approval, in a fresh session.
 // Re-resolves the action on the live page, re-reads the binding, and acts only when the
 // page still shows exactly what was approved. Any drift aborts.
@@ -188,8 +210,11 @@ export const executeBrowserSubmit = async (
   modelApiKey: string | undefined,
   proposal: BrowserSubmitProposal,
   fetcher: typeof fetch = fetch,
-): Promise<string> => {
-  if (!apiKey || !projectId) return 'Browsing is not set up on this Waldo yet, so nothing happened.';
+): Promise<BrowserSubmitOutcome> => {
+  const rejected = (message: string): BrowserSubmitOutcome => ({ status: 'rejected', message });
+  const uncertain = (message: string): BrowserSubmitOutcome => ({ status: 'uncertain', message });
+  let actAttempted = false;
+  if (!apiKey || !projectId) return rejected('Browsing is not set up on this Waldo yet, so nothing happened.');
   const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
   const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
   const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
@@ -197,45 +222,51 @@ export const executeBrowserSubmit = async (
   const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
   try {
     const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
-    if (!started.ok) return `The browser session could not start (HTTP ${started.status}), so nothing happened.`;
+    if (!started.ok) return rejected(`The browser session could not start (HTTP ${started.status}), so nothing happened.`);
     const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
     session = startBody.data?.sessionId ?? null;
-    if (!startBody.success || !session) return 'The browser session could not start, so nothing happened.';
+    if (!startBody.success || !session) return rejected('The browser session could not start, so nothing happened.');
 
     const navigated = await call(`/v1/sessions/${session}/navigate`, { url: proposal.url });
-    if (!navigated.ok) return `The page did not load (HTTP ${navigated.status}), so nothing happened.`;
+    if (!navigated.ok) return rejected(`The page did not load (HTTP ${navigated.status}), so nothing happened.`);
 
     const observed = await call(`/v1/sessions/${session}/observe`, { instruction: proposal.action.description, options: { model, timeout: 30000 } });
-    if (!observed.ok) return `The action could not be found again (HTTP ${observed.status}), so nothing happened.`;
+    if (!observed.ok) return rejected(`The action could not be found again (HTTP ${observed.status}), so nothing happened.`);
     const observeBody = (await observed.json()) as { success?: boolean; data?: { result?: BrowserAction[] } };
     // An approval is for a particular observed action, never whichever action is first
     // on a changed page. Re-observe to locate it, but refuse a changed target/method.
     const found = observeBody.data?.result?.find((a) =>
       a.description === proposal.action.description && a.selector === proposal.action.selector &&
       a.method === proposal.action.method && JSON.stringify(a.arguments ?? []) === JSON.stringify(proposal.action.arguments ?? []));
-    if (!observeBody.success || !found) return 'That action is no longer on the page, so nothing happened. Ask me to look again.';
+    if (!observeBody.success || !found) return rejected('That action is no longer on the page, so nothing happened. Ask me to look again.');
 
     const extracted = await call(`/v1/sessions/${session}/extract`, {
       instruction: 'Extract the facts this action would commit, as flat key/value JSON: total price, items, recipient, destination, dates - whatever this page shows that the action commits. Empty object if none.',
       options: { model, timeout: 30000 },
     });
-    if (!extracted.ok) return `The page state could not be re-read (HTTP ${extracted.status}), so nothing happened.`;
-    const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
-    const current = (extractBody.data?.result && typeof extractBody.data.result === 'object' && !Array.isArray(extractBody.data.result) ? extractBody.data.result : {}) as Record<string, string>;
-    const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
-    const drift = Object.entries(proposal.binding).filter(([k, v]) => norm(current[k]) !== norm(v));
+    if (!extracted.ok) return rejected(`The page state could not be re-read (HTTP ${extracted.status}), so nothing happened.`);
+    const current = pageBinding(await extracted.json());
+    const approved = pageBinding({ success: true, data: { result: proposal.binding } });
+    if (current === null || approved === null) return rejected('The page facts could not be verified, so nothing happened. Ask me to look again.');
+    // Values can be recipients, item codes or case-sensitive paths. Compare the
+    // complete set exactly; key order alone carries no meaning.
+    const keys = new Set([...Object.keys(approved), ...Object.keys(current)]);
+    const drift = [...keys].filter((key) => approved[key] !== current[key]);
     if (drift.length > 0) {
-      const changed = drift.map(([k, v]) => `${k}: approved "${v}" but page now shows "${current[k] ?? 'nothing'}"`).join('; ');
-      return `I did NOT do it - the page changed since you approved: ${changed}. Ask me to set it up again if you still want it.`;
+      const changed = drift.map((key) => `${key}: approved "${approved[key] ?? 'nothing'}" but page now shows "${current[key] ?? 'nothing'}"`).join('; ');
+      return rejected(`I did NOT do it - the page changed since you approved: ${changed}. Ask me to set it up again if you still want it.`);
     }
 
+    actAttempted = true;
     const acted = await call(`/v1/sessions/${session}/act`, { input: found, options: { model, timeout: 30000 } });
-    if (!acted.ok) return `The final action failed (HTTP ${acted.status}). It may or may not have happened - check the page before retrying.`;
+    if (!acted.ok) return uncertain(`The final action failed (HTTP ${acted.status}). It may or may not have happened - check the page before retrying.`);
     const actBody = (await acted.json()) as { success?: boolean };
-    if (!actBody.success) return 'The final action was rejected by the browser. It may or may not have happened - check the page before retrying.';
-    return `Done: ${proposal.action.description} on ${proposal.url}.`;
-  } catch (error) {
-    return `The browser run failed: ${error instanceof Error ? error.message : String(error)}. Nothing may have happened - check the page before retrying.`;
+    if (actBody.success !== true) return uncertain('The final action was not acknowledged by the browser. It may or may not have happened - check the page before retrying.');
+    return { status: 'acknowledged_unverified', message: 'The browser accepted the action, but the final outcome is not verified. Do not retry the action until the result has been checked on the page.' };
+  } catch {
+    return actAttempted
+      ? uncertain('The browser response was lost. The outcome is unknown - check the page before retrying.')
+      : rejected('The browser could not verify the page, so nothing happened. Ask me to look again.');
   } finally {
     await end();
   }
