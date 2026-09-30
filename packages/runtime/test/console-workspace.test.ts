@@ -6,5 +6,5 @@ it('uses private opaque attachment with encoded filename, no executable MIME or 
  const r=workspaceDownload(new Uint8Array([0,1,2]),meta);expect(r.headers.get('content-type')).toBe('application/octet-stream');expect(r.headers.get('cache-control')).toBe('private, no-store');expect(r.headers.get('content-disposition')).not.toContain('<script>');expect(new Uint8Array(await r.arrayBuffer())).toEqual(new Uint8Array([0,1,2]));
 });
 it('escapes hostile paths and shows honest absent controls/empty state',async()=>{
- const r=workspacePage([meta]);const html=await r.text();expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');expect(html).toContain('controls are unavailable');expect(await workspacePage([]).text()).toContain('No retained files.');
+ const r=workspacePage([meta], 'token<canary>', 'cursor');const html=await r.text();expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');expect(html).toContain('action="/console/workspace/upload"');expect(html).toContain('token&lt;canary&gt;');expect(html).toContain('/console/workspace?cursor=cursor');expect(r.headers.get('content-security-policy')).toContain("form-action 'self'");expect(html).not.toContain('<script');expect(await workspacePage([], 'csrf', null).text()).toContain('No retained files.');
 });
