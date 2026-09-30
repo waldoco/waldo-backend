@@ -17,7 +17,7 @@ on:
         description: Read-only migration inspection or Worker deployment
         required: true
         type: choice
-        default: preflight
+        default: deploy
         options:
           - preflight
           - deploy
@@ -108,4 +108,12 @@ jobs:
 #   1. Secrets above are set on the repo (staging-scoped token, not account-wide).
 #   2. The staging wrangler environment exists in packages/runtime/wrangler.toml.
 #   3. He has said the word on the first run. Then - and only then - trigger
-#      Actions -> deploy-staging -> Run workflow with run_migrations=false.
+#      Actions -> deploy-staging -> Run workflow on beta-mvp with
+#      operation=deploy and run_migrations=false.
+
+# Read-only recipe (explicit ref and operation are required):
+#   gh workflow run deploy-staging.yml --repo waldoco/waldo-backend --ref beta-mvp \
+#     -f operation=preflight -f expected_source_sha=<reviewed40charSHA> \
+#     -f run_migrations=false
+# Do not omit --ref: default main still contains the old deploy-capable workflow.
+# Preflight never runs the deploy job, regardless of run_migrations input.
