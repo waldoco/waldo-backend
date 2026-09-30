@@ -18,11 +18,16 @@ const validSignature = (receipt: SealedReceipt, key: string): boolean => {
   if (!/^[0-9a-f]{64}$/.test(receipt.signature)) return false;
   return timingSafeEqual(expected, Buffer.from(receipt.signature, 'hex'));
 };
-export const sealCaptureReceipt = (trial: ObservedTrial, owner_id: string, field: SealedReceipt['field'], role: string, key: string): SealedReceipt => {
-  if (!key || !owner_id || !fields.includes(field)) throw new Error('invalid receipt input');
-  const base = { case_id: trial.case_id, seed: trial.seed, owner_id, field, digest: trial[field].digest, role };
+export const sealArtifactReceipt = (identity: Pick<ObservedTrial, 'case_id' | 'seed'>, owner_id: string,
+  field: SealedReceipt['field'], artifact: CapturedArtifact, role: string, key: string): SealedReceipt => {
+  if (!key || !owner_id || !identity.case_id || !identity.seed || !fields.includes(field) ||
+    role !== expectedRoles[fields.indexOf(field)] || artifact.source !== `${role}:${owner_id}` ||
+    artifact.digest !== `sha256:${createHash('sha256').update(artifact.bytes).digest('hex')}`) throw new Error('invalid receipt input');
+  const base = { case_id: identity.case_id, seed: identity.seed, owner_id, field, digest: artifact.digest, role };
   return { ...base, signature: createHmac('sha256', key).update(payload(base)).digest('hex') };
 };
+export const sealCaptureReceipt = (trial: ObservedTrial, owner_id: string, field: SealedReceipt['field'], role: string, key: string): SealedReceipt =>
+  sealArtifactReceipt(trial, owner_id, field, trial[field], role, key);
 export const verifyCaptureReceipts = (trial: ObservedTrial, capture: Pick<IsolatedCapture, 'owners' | 'candidate_owner'>,
   receipts: readonly SealedReceipt[], keys: ReceiptKeys): readonly string[] => {
   const errors: string[] = [];
