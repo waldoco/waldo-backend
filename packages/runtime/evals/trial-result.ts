@@ -22,9 +22,9 @@ export type CapturedTrial = Readonly<{
   // Runner assertion until independently reconciled to provider usage. Never an official score.
   actual_model_calls: number;
   scripted_model: boolean;
-  observed_cost_usd: number | null; // assertion supplied by runner, not billing proof
+  observed_cost_usd: number | null; // legacy diagnostic only; native token receipts set null
   runner_usage: readonly UsageLine[];
-  provider_usage: readonly UsageLine[]; // independently collected rows, source proof still external
+  provider_usage: readonly UsageLine[]; // raw Responses capture; not independent billing proof
 }>;
 const result = (case_id: string, seed: string | null, status: TrialStatus, reasons: readonly string[], total_usd: number | null): TrialResult =>
   ({ case_id, seed, status, reasons, total_usd });
@@ -34,7 +34,7 @@ export const evaluateDiagnosticPacket = (case_id: string, capture: CapturedTrial
   if (!capture) return result(case_id, null, 'not_run', ['no trial capture'], null);
   const { observed } = capture;
   if (observed.case_id !== case_id || capture.scripted_model || !Number.isSafeInteger(capture.actual_model_calls) || capture.actual_model_calls < 1 ||
-    capture.observed_cost_usd === null || !Number.isFinite(capture.observed_cost_usd) || capture.observed_cost_usd < 0)
+    (capture.observed_cost_usd !== null && (!Number.isFinite(capture.observed_cost_usd) || capture.observed_cost_usd < 0)))
     return result(case_id, observed.seed, 'harness_error', ['no valid actual-model trial or model-usage receipt'], null);
   const usage = reconcileTrialUsage(capture.runner_usage, capture.provider_usage, capture.observed_cost_usd);
   if (usage.status === 'harness_error' || capture.actual_model_calls !== capture.runner_usage.length)
