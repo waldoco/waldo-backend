@@ -1,4 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
+import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
+import { workspaceDownload, workspacePage } from './console-workspace';
 import { setProactivityArgsSchema, type ConnectIntent, type ScheduleEntry } from '@waldo/contracts';
 import { ensureSchema } from '../tracer/schema';
 import { FORGOTTEN, claimStore, profile } from '../memory/claims';
@@ -267,6 +269,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     const session = await access.session(sessionCookie(request));
     if (!session) return new Response('Send /console to Waldo on Telegram for a sign-in link.', { status: 401, headers: overviewRoute ? DASHBOARD_OVERVIEW_HEADERS : undefined });
+    if (url.pathname === '/console/workspace' || url.pathname.startsWith('/console/workspace/')) {
+      return workspaceRequest(request, session.csrf,
+        () => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), this.ctx.storage.kv.get<string>('do_name')),
+        workspacePage, () => workspaceUploadLease(this.ctx.storage, () => workspaceOwnerHost(this.env, this.ctx.storage, this.ctx.id.toString(), this.ctx.storage.kv.get<string>('do_name'))), workspaceDownload);
+    }
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
       return Response.json(await nightlyDiagnostic(this.ctx.storage), { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });

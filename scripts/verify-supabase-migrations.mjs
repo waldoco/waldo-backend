@@ -34,6 +34,7 @@ const expectedMigrations = [
   '20260928190000_waldo_invite_chain.sql',
   '20260929030000_waldo_console_session_ttl.sql',
   '20260930060000_waldo_proxy_intent_integrity.sql',
+  '20260930070000_waldo_workspace_owner_mapping.sql',
 ];
 
 const migrationDir = new URL('../supabase/migrations/', import.meta.url);

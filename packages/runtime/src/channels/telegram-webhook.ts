@@ -12,6 +12,7 @@ export type TelegramWebhookEnv = Readonly<{
   LANGFUSE_BASE_URL?: string;
   LANGFUSE_CAPTURE_TEXT?: string;
   WALDO_ENVIRONMENT?: string;
+  WALDO_OWNER_DO_NAMESPACE?: string;
   WALDO_RELEASE?: string;
   OPENAI_API_KEY?: string;
   SMALLEST_AI_API_KEY?: string;
