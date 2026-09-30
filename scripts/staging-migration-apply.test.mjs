@@ -43,3 +43,10 @@ test('write error never retries or prints provider content',async()=>{const f=fi
 
 test('write runs from isolated workdir, not repository linked cache',async()=>{const f=fixture();await main(f.options);assert.ok(f.calls.filter(c=>c.cmd==='pnpm').every(c=>c.opts.cwd==='/fictional-isolated-workdir'));});
 test('copied SQL digest drift cancels before any CLI',async()=>{const f=fixture();let reads=0;f.options.manifest=()=>++reads===1?local:[local[0],{...local[1],sha256:'f'.repeat(64)}];await assert.rejects(main(f.options),/isolated_bytes_mismatch/);assert.ok(!f.calls.some(c=>c.cmd==='pnpm'));});
+test('CLI rejects ambient database-target/config overrides',async()=>{
+ const f=fixture();Object.assign(f.options.env,{PGHOST:'other',DATABASE_URL:'postgres://other',SUPABASE_DB_URL:'postgres://other',SUPABASE_CONFIG:'bad',SUPABASE_PROJECT_ID:'togdshayyxycitzckpqv'});
+ await main(f.options);for(const c of f.calls.filter(c=>c.cmd==='pnpm')){
+ assert.equal(c.opts.env.PGHOST,undefined);assert.equal(c.opts.env.DATABASE_URL,undefined);assert.equal(c.opts.env.SUPABASE_DB_URL,undefined);assert.equal(c.opts.env.SUPABASE_CONFIG,undefined);assert.equal(c.opts.env.SUPABASE_PROJECT_ID,undefined);
+ assert.equal(c.opts.env.SUPABASE_DB_PASSWORD,'fictional-fixture-password');}
+});
+test('copied byte read failure cleans up and never calls CLI',async()=>{const f=fixture();let reads=0,cleaned=0;f.options.manifest=()=>{if(++reads>1)throw Error('bad copy');return local;};f.options.cleanup=()=>cleaned++;await assert.rejects(main(f.options));assert.equal(cleaned,1);assert.ok(!f.calls.some(c=>c.cmd==='pnpm'));});

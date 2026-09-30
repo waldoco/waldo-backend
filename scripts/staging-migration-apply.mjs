@@ -40,10 +40,11 @@ export async function main({env=process.env,run=execFileSync,fetcher=fetch,manif
  const result=validateApply({source,expectedSource,dirty,project,expectedPending,local,remote});
  if(!env.SUPABASE_DB_PASSWORD)throw Error('db_auth_missing');
  const workdir=prepare(root);
- const isolated=manifest(new URL('supabase/migrations/',new URL(`file://${workdir}/`)));
- if(pendingDigest(isolated)!==pendingDigest(local)){cleanup(workdir,{recursive:true,force:true});throw Error('isolated_bytes_mismatch');}
  try {
- const cli=args=>run('pnpm',['dlx','supabase@2.109.1',...args],{cwd:workdir,env,stdio:'pipe',timeout:180000});
+ const isolated=manifest(new URL('supabase/migrations/',new URL(`file://${workdir}/`)));
+ if(pendingDigest(isolated)!==pendingDigest(local))throw Error('isolated_bytes_mismatch');
+ const cliEnv=Object.fromEntries(['PATH','HOME','TMPDIR','PNPM_HOME','CI','SUPABASE_ACCESS_TOKEN','SUPABASE_DB_PASSWORD'].filter(k=>env[k]!==undefined).map(k=>[k,env[k]]));
+ const cli=args=>run('pnpm',['dlx','supabase@2.109.1',...args],{cwd:workdir,env:cliEnv,stdio:'pipe',timeout:180000});
  // Password stays in the process environment, never argv, output or receipt.
  cli(['link','--project-ref',PROJECT]);
  const linked=read(join(workdir,'supabase','.temp','project-ref'),'utf8').trim();
