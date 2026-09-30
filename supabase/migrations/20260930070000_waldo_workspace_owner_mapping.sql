@@ -48,6 +48,10 @@ begin
     or p_environment = '' or p_namespace = '' or p_do_name = '' or p_do_id = '' then return null; end if;
   select * into v_owner from waldo.owners where do_name = p_do_name and state = 'active' for share;
   if not found then return null; end if;
+  -- Namespace replacement is a custody relocation, not first provisioning.
+  -- Serialize by owner so concurrent namespace claims cannot both become first.
+  perform pg_advisory_xact_lock(hashtextextended(v_owner.id::text || ':' || p_environment,0));
+  if exists(select 1 from waldo.workspace_owner_mappings where owner_id=v_owner.id and environment=p_environment and namespace<>p_namespace) then return null; end if;
   insert into waldo.workspace_owner_mappings(environment,namespace,do_name,do_id,owner_id)
     values(p_environment,p_namespace,p_do_name,p_do_id,v_owner.id) on conflict do nothing;
   select * into v_map from waldo.workspace_owner_mappings

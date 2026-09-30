@@ -13,7 +13,7 @@ select is(pg_temp.bind('staging','ns','workspace-owner','did')->>'mapping_versio
 select is(pg_temp.bind('staging','ns','workspace-owner','other-id'),null,'changed DO id cannot reinterpret name');
 select is(pg_temp.bind('staging','ns','other-owner','did'),null,'unknown owner cannot inherit locator');
 select is(pg_temp.bind('production','ns','workspace-owner','did')->>'environment','production','separate environment map');
-select is(pg_temp.bind('staging','ns2','workspace-owner','did')->>'namespace','ns2','separate namespace map');
+select is(pg_temp.bind('staging','ns2','workspace-owner','did'),null,'namespace replacement requires explicit reviewed relocation');
 select throws_ok($q$select waldo.workspace_owner_binding('staging','ns','workspace-owner','did','["staging","ns","workspace-owner","did"]',extract(epoch from now())::bigint,'forged')$q$,'42501','unsigned router call','unsigned map rejected');
 select throws_ok($q$select waldo.workspace_owner_binding('staging','ns','workspace-owner','did','["production","ns","workspace-owner","did"]',extract(epoch from now())::bigint,'forged')$q$,'42501','workspace locator mismatch','locator substitution rejected');
 update waldo.owners set state='suspended' where do_name='workspace-owner';
@@ -21,7 +21,7 @@ select is(pg_temp.bind('staging','ns','workspace-owner','did'),null,'suspended b
 update waldo.owners set state='active' where do_name='workspace-owner';
 select is(pg_temp.bind('staging','ns','workspace-owner','did')->>'state_version','2','resume advances lifecycle epoch without moving map');
 delete from waldo.owners where do_name='workspace-owner';
-select is((select count(*) from waldo.workspace_owner_mappings),3::bigint,'all locator maps survive owner deletion');
+select is((select count(*) from waldo.workspace_owner_mappings),2::bigint,'all locator maps survive owner deletion');
 insert into waldo.owners(id,do_name) values('10000000-0000-0000-0000-000000000002','workspace-owner');
 select is(pg_temp.bind('staging','ns','workspace-owner','did'),null,'new owner cannot inherit deleted owner locator');
 select * from finish();

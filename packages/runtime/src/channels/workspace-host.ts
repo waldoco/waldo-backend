@@ -38,8 +38,11 @@ export const workspaceOwnerHost = async (
     try {
       return await Promise.race([
         fetcher(input,{...init,signal:controller.signal}).then(async response => {
-          const bytes=await response.arrayBuffer();
-          if(bytes.byteLength>16_384)throw new WorkspaceError('unavailable');
+          if(!response.body)return new Response(null,{status:response.status,headers:response.headers});
+          const reader=response.body.getReader();const chunks:Uint8Array[]=[];let total=0;
+          try { while(true){const part=await reader.read();if(part.done)break;total+=part.value.byteLength;if(total>16_384){await reader.cancel();throw new WorkspaceError('unavailable');}chunks.push(part.value);} }
+          finally {reader.releaseLock();}
+          const bytes=new Uint8Array(total);let offset=0;for(const part of chunks){bytes.set(part,offset);offset+=part.byteLength;}
           return new Response(bytes,{status:response.status,headers:response.headers});
         }),
         new Promise<Response>((_resolve,reject)=> { timer=setTimeout(()=> { controller.abort();reject(new WorkspaceError('unavailable')); },5_000); }),
