@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {readFileSync,mkdtempSync,copyFileSync,rmSync,lstatSync,readdirSync,mkdirSync,writeFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,copyFileSync,rmSync,lstatSync,existsSync,readdirSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -19,6 +19,17 @@ export function validateApply({source,expectedSource,dirty,project,expectedPendi
 }
 export function effectiveConfigDigest(workdir){
  const rows=[];
+ const home=join(workdir,'.isolated-home');
+ for(const name of ['.supabase/profile','.npmrc','.pnpmrc','config/pnpm/rc','config/npm/npmrc']){
+  if(existsSync(join(home,name)))throw Error('local_forbidden_input');
+ }
+ if(existsSync(home)){
+  const scanHome=dir=>{for(const name of readdirSync(dir)){
+   const path=join(dir,name),stat=lstatSync(path);
+   if(name.startsWith('.env')||stat.isSymbolicLink()||(!stat.isFile()&&!stat.isDirectory()))throw Error('local_forbidden_input');
+   if(stat.isDirectory())scanHome(path);
+  }};scanHome(home);
+ }
  // Go dotenv discovery includes the project parent and can reach enclosing paths.
  let parent=resolve(workdir);
  while(true){
@@ -80,7 +91,7 @@ export async function main({env=process.env,run=execFileSync,fetcher=fetch,manif
  const cliEnv=Object.fromEntries(['PATH','CI','SUPABASE_ACCESS_TOKEN','SUPABASE_DB_PASSWORD'].filter(k=>env[k]!==undefined).map(k=>[k,env[k]]));
  const home=join(workdir,'.isolated-home');
  makeDir(home,{recursive:true});
- Object.assign(cliEnv,{HOME:home,XDG_CONFIG_HOME:join(home,'config'),XDG_CACHE_HOME:join(home,'cache'),XDG_DATA_HOME:join(home,'data'),TMPDIR:join(home,'tmp')});
+ Object.assign(cliEnv,{SUPABASE_PROFILE:'supabase',HOME:home,XDG_CONFIG_HOME:join(home,'config'),XDG_CACHE_HOME:join(home,'cache'),XDG_DATA_HOME:join(home,'data'),TMPDIR:join(home,'tmp')});
  makeDir(cliEnv.TMPDIR,{recursive:true});
  configDigest(workdir); // Reject parent/root dotenv before credentials reach link.
  const cli=args=>run('pnpm',['dlx','supabase@2.109.1',...args,'--profile','supabase'],{cwd:workdir,env:cliEnv,stdio:'pipe',timeout:180000});

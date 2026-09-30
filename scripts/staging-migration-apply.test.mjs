@@ -112,3 +112,10 @@ test('real-fs fake CLI: workdir or enclosing dotenv prevents credential-bearing 
  rmSync(envFile);
  }}finally{rmSync(parent,{recursive:true,force:true});}
 });
+test('real-fs home profile/npm config cannot evade effective configuration scan',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-home-test-'));
+ try{mkdirSync(join(dir,'supabase'));writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');mkdirSync(join(dir,'.isolated-home','.supabase'),{recursive:true});
+ for(const name of ['.supabase/profile','.npmrc']){const path=join(dir,'.isolated-home',name);writeFileSync(path,'poison');assert.throws(()=>effectiveConfigDigest(dir),/local_forbidden_input/);rmSync(path);}
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+test('explicit standard SUPABASE_PROFILE overrides profile-file precedence',async()=>{const f=fixture();await main(f.options);for(const c of f.calls.filter(c=>c.cmd==='pnpm'))assert.equal(c.opts.env.SUPABASE_PROFILE,'supabase');});

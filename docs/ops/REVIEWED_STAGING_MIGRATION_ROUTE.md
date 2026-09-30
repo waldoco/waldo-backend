@@ -61,3 +61,10 @@ rejected before link and before write. Effective config digest covers linked tem
 metadata and all copied SQL, without printing their content. The pinned CLI profile
 source confirms the standard profile uses api.supabase.com and standard hosts.
 https://github.com/supabase/cli/blob/v2.109.1/apps/cli-go/internal/utils/profile.go
+
+The TS front-end treats the default --profile flag differently from the Go loader.
+Set SUPABASE_PROFILE=supabase explicitly, which overrides persisted profile files.
+Unexpected home profile/npm config and home dotenv/symlinks are rejected before
+link and before write. PATH and CI remain inherited trusted-host inputs; the route
+does not claim protection from a compromised runner/binary or concurrent filesystem
+writer. No repository file supplies that trust.
