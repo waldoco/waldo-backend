@@ -75,7 +75,7 @@ it('reads only fictional owner mail with an actual model, captured tool path and
   const evidence = { kind: 'actual-model-fictional-source-smoke', native_score: null, fixture_clock: world.now(), requests, denied,
     sends, traces, source_accesses: world.accessLog(owner), control_accesses: world.accessLog(control),
     effects: world.outbox(owner), control_effects: world.outbox(control), provider_calendar: world.providerCalendarReadback(owner) };
-  // Captured in the JSON reporter console stream. Credentials/request headers are never logged.
+  // Supervisor saves stdout separately from the JSON status report. Never log credentials/headers.
   console.log('WALDO_SMOKE_EVIDENCE ' + JSON.stringify(evidence));
   expect(denied).toEqual([]);
   expect(requests.length).toBeGreaterThan(0);
