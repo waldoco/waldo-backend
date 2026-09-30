@@ -80,6 +80,19 @@ export const browsePageHandler = (
   },
 });
 
+// Binding extraction is evidence, not a default. Empty or malformed evidence must
+// never turn into an approval that commits an unbound external action.
+const pageBinding = (body: unknown): Record<string, string> | null => {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const envelope = body as { success?: unknown; data?: { result?: unknown } };
+  if (envelope.success !== true) return null;
+  const value = envelope.data?.result;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const entries = Object.entries(value);
+  if (entries.length === 0 || entries.some(([key, item]) => !key.trim() || typeof item !== 'string' || !item.trim())) return null;
+  return Object.fromEntries(entries) as Record<string, string>;
+};
+
 type BrowserAction = Readonly<{ selector: string; description: string; method?: string; arguments?: string[] }>;
 
 // The deterministic irreversible line (owner law: hard safety lines only, judgment stays with
@@ -146,8 +159,8 @@ export const browseActHandler = (
               instruction: 'Extract the facts this action would commit, as flat key/value JSON: total price, items, recipient, destination, dates - whatever this page shows that the action commits. Empty object if none.',
               options: { model, timeout: 30000 },
             });
-            const bindBody = bind.ok ? (await bind.json()) as { success?: boolean; data?: { result?: unknown } } : {};
-            const binding = (bindBody.data?.result && typeof bindBody.data.result === 'object' && !Array.isArray(bindBody.data.result) ? bindBody.data.result : {}) as Record<string, string>;
+            const binding = bind.ok ? pageBinding(await bind.json()) : null;
+            if (binding === null) return { ok: false, code: 'rejected', error: 'The page facts could not be verified, so no approval was proposed. Ask me to look again.', source_taint: 'external' };
             const proposal = await proposeSubmit({ url, action, binding, steps: taken });
             record('browser_submit_proposed', `Approval needed: ${action.description}`, { url, proposal });
             return { ok: true, data: { url, actions_taken: taken, stopped: 'approval_pending', blocked_action: action.description, proposal_id: proposal, data: null }, source_taint: 'external' };
@@ -220,12 +233,15 @@ export const executeBrowserSubmit = async (
       options: { model, timeout: 30000 },
     });
     if (!extracted.ok) return `The page state could not be re-read (HTTP ${extracted.status}), so nothing happened.`;
-    const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
-    const current = (extractBody.data?.result && typeof extractBody.data.result === 'object' && !Array.isArray(extractBody.data.result) ? extractBody.data.result : {}) as Record<string, string>;
-    const norm = (v: unknown) => String(v ?? '').trim().toLowerCase();
-    const drift = Object.entries(proposal.binding).filter(([k, v]) => norm(current[k]) !== norm(v));
+    const current = pageBinding(await extracted.json());
+    const approved = pageBinding({ success: true, data: { result: proposal.binding } });
+    if (current === null || approved === null) return 'The page facts could not be verified, so nothing happened. Ask me to look again.';
+    // Values can be recipients, item codes or case-sensitive paths. Compare the
+    // complete set exactly; key order alone carries no meaning.
+    const keys = new Set([...Object.keys(approved), ...Object.keys(current)]);
+    const drift = [...keys].filter((key) => approved[key] !== current[key]);
     if (drift.length > 0) {
-      const changed = drift.map(([k, v]) => `${k}: approved "${v}" but page now shows "${current[k] ?? 'nothing'}"`).join('; ');
+      const changed = drift.map((key) => `${key}: approved "${approved[key] ?? 'nothing'}" but page now shows "${current[key] ?? 'nothing'}"`).join('; ');
       return `I did NOT do it - the page changed since you approved: ${changed}. Ask me to set it up again if you still want it.`;
     }
 
