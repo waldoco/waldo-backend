@@ -2,7 +2,7 @@
   "version": 1,
   "suite_digest": "fc651ed0e02bf53d3875d2497637f9f9309db794b6ce02386227a04b7155211f",
   "baseline_head": "8eae4bd1d1c8a3a3338a8c689f20ea2b1bd5077e",
-  "revision": "native36-v1-W14-authored-world-1",
+  "revision": "native36-v1-W14-authored-world-2",
   "manifest": {
     "case_id": "W14",
     "candidate_owner": "native36-w14-owner-candidate-v1",
@@ -858,7 +858,7 @@
       "id": "execution-support",
       "missing_spec_field": "Actual core support distinct from authored fixture completeness",
       "synthetic_value": {
-        "core_head": "d94701a122bf91920091fc6eeb15f3dfd7936d00",
+        "core_head": "c163785dfff38db4ce1122a3baa395bdffb9e60a",
         "support": {
           "source_families": [
             "calendar",

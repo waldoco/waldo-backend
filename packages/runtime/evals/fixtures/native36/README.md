@@ -285,7 +285,7 @@ entries are unchanged. New families/effects append to `adapters.json`; no runtim
 implementation, candidate tool name, competing schema or prompt is introduced.
 
 Core compatibility is checked read-only at draft #433 pin
-`d94701a122bf91920091fc6eeb15f3dfd7936d00`. The suite and product baseline pins stay
+`c163785dfff38db4ce1122a3baa395bdffb9e60a`. The suite and product baseline pins stay
 unchanged; this fixture implementation has its own commit/revision. Source digests
 retain the committed-object rule; provider-state/payload digests use actual core
 canonicalization. Both owners have stable distinct IDs and nonempty same-ID source
@@ -416,14 +416,19 @@ and explicitly unresolved exact cloud-summary approval.
 ### Chunk 3 verification and adversarial checklist
 
 ```sh
-pnpm --filter @waldo/runtime exec tsx evals/fixtures/native36/v1/validate-W13-W18.mjs /absolute/path/to/core-checkout
-pnpm --filter @waldo/runtime exec tsx evals/fixtures/native36/v1/validate.mjs /absolute/path/to/core-checkout
-pnpm --filter @waldo/runtime exec tsx evals/fixtures/native36/v1/validate-W07-W12.mjs /absolute/path/to/core-checkout
+pnpm --filter @waldo/runtime exec tsx evals/fixtures/native36/v1/validate-W13-W18.mjs /absolute/path/to/current-core-checkout
+pnpm --filter @waldo/runtime exec tsx evals/fixtures/native36/v1/validate.mjs /absolute/path/to/pinned-core-d94701a-checkout
+pnpm --filter @waldo/runtime exec tsx evals/fixtures/native36/v1/validate-W07-W12.mjs /absolute/path/to/pinned-core-d94701a-checkout
 pnpm --filter @waldo/runtime exec vitest run --config vitest.scenarios.config.ts
 pnpm --filter @waldo/runtime exec vitest run test/mcp-eval-fixture.test.ts test/memory-golden-eval.test.ts
 git diff --check
 ```
 
+The new chunk validator uses core `c163785dfff38db4ce1122a3baa395bdffb9e60a`;
+existing chunk-1/chunk-2 regressions use a separate unchanged checkout at their
+original `d94701a122bf91920091fc6eeb15f3dfd7936d00` pin. Current core has an isolated
+artifact reader primitive: a test reads W17 bytes through it with explicit task-v4
+revision mapping. Generic CLI support remains unchanged and still rejects files.
 Core checkout must match the exact clean pin above; unavailable imports fail instead
 of substituting a parser. New content locks also protect W01–W12/old locks/validators
 and prior adapter entries. Applicable engineering fundamentals cover exact identity,

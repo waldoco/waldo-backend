@@ -1,5 +1,5 @@
 {
-  "core_head": "d94701a122bf91920091fc6eeb15f3dfd7936d00",
+  "core_head": "c163785dfff38db4ce1122a3baa395bdffb9e60a",
   "base_bundles": {
     "W01": "sha256:5f76ad4e95c28ce65bb05f1da08d0bfd24542325a857315b977ea3b8d70b3b14",
     "W02": "sha256:d2784c5bd81c07768630d87af8ef0f48e958592866d7ede89f0b752ebd780a22",
@@ -701,7 +701,7 @@
   },
   "cases": {
     "W13": {
-      "bundle_digest": "sha256:66e43a59d122dc9c47fc26329a9d4f3e02a6054f76479787f1f3b53a7e601674",
+      "bundle_digest": "sha256:ed241d3a27d1230d2cc26a865282b6c0705fa484627856575c8964ffe7b7a7db",
       "source_digest": "sha256:75f4058100d140c5389e26f6dabf752365ad1ef84972814246f2646dce4d9fff",
       "rows": [
         {
@@ -882,7 +882,7 @@
       ]
     },
     "W14": {
-      "bundle_digest": "sha256:e236244c6cb782aeca8c1d6df8934933aa3814dbfab3fa654e7aa5ba0b1c49be",
+      "bundle_digest": "sha256:2891b36d2e49ddb551c5ef4534b3d4104623cc9c83f930094bedf7af188d7863",
       "source_digest": "sha256:2de639b191304940594c24a7e2b02530d2025dd19f8a7e23f011153d75cee23a",
       "rows": [
         {
@@ -1028,7 +1028,7 @@
       ]
     },
     "W15": {
-      "bundle_digest": "sha256:17f4e9ec6db89102ee79cbe0a8a7b7ca1ae08f6e91cbf474ca336c71a7727e37",
+      "bundle_digest": "sha256:b546b03c07b42c67dcee2369e57af8e599e7c74e739a374f9e6096cb5fb81be5",
       "source_digest": "sha256:00c7896771af7fea6e6513a9933da5740d29fee8f539f3ac5fbb6c3d7e2c13fa",
       "rows": [
         {
@@ -1220,7 +1220,7 @@
       ]
     },
     "W16": {
-      "bundle_digest": "sha256:dab29435229cc7e22c4ba0e9a668bfac334c7d6d39e2f027d5b589bbb33343b1",
+      "bundle_digest": "sha256:e724dd45315e93d47eeab0354135cb389ac855ea2e049ce71e4d2e79226e5371",
       "source_digest": "sha256:73acfa74434e0570ad2cd1d547b04e79ac092a50656d3e476b39ce914148951a",
       "rows": [
         {
@@ -1430,7 +1430,7 @@
       ]
     },
     "W17": {
-      "bundle_digest": "sha256:59f15932110f90375b090d6fd6a254b2e68660b18265422b5b7d3540292a38bb",
+      "bundle_digest": "sha256:76b52dedb1f4f784f8fc9507b11e5bc7e016c262d31fc67421f86758c80f6b5d",
       "source_digest": "sha256:18602cbe1176d130ef135b2db2abb27971552e997580779150a4fce449f95d2c",
       "rows": [
         {
@@ -1610,7 +1610,7 @@
       ]
     },
     "W18": {
-      "bundle_digest": "sha256:bc045af06e8b0cf5e6370295df52b99897a9e353f7e19899582e5c29f4715b19",
+      "bundle_digest": "sha256:da68002501f5a7d5fd5ad28143072ca34b3d83d266069bea450f1ba7ad6e5cfa",
       "source_digest": "sha256:114961808e28428bc605da198e5758d59a9ed88534493b549ae1bff7b58e839a",
       "rows": [
         {

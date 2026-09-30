@@ -278,3 +278,12 @@ test('subscription switch has distinct confirmation/effective/pending-plan state
  const state=initial(b)[0],changed=structuredClone(state),row=changed.families.subscriptions.find(r=>r.id==='annual-tool');row.switch_confirmation_id='unobserved-schema-probe';
  assert.notEqual(providerStateDigest(changed),providerStateDigest(state));assert.equal(row.cancellation_confirmation_id,null);assert.equal(row.cancellation_effective_at,null);
 });
+test('current core isolated artifact reader consumes exact selected file bytes/revision without granting generic CLI readiness',async()=>{
+ const {nativeArtifactBook}=await fromCore('scenarios/native-artifact-book.ts');
+ const b=bundles.W17,m=b.manifest,world=new IsolatedSourceWorld(m.world),source=nativeSelectedSource(world,m.candidate_owner,b.selected_source_ids),binding=decision(b,'artifact-reader-binding');
+ const book=nativeArtifactBook(source,m.candidate_owner,[binding]),row=candidate(b,'files')[0];
+ const read=await book.read(row.id,0,8000);assert.equal(read.text,row.bytes);assert.equal(read.meta.revision,4);assert.equal(read.meta.provenance,'synthetic-source:task-v4');
+ assert.throws(()=>book.byId('project_b_notes-denied'),/selection denied/);await assert.rejects(()=>book.revise(row.id,'changed'),/writes unsupported/);
+ assert.ok(decision(b,'execution-support').missing.includes('unimplemented source adapter: files'));
+ assert.deepEqual(world.accessLog(m.control_owner),[]);
+});
