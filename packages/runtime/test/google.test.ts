@@ -45,6 +45,7 @@ describe('google oauth state', () => {
     expect(scopes).toEqual([
       'openid', 'email',
       'https://www.googleapis.com/auth/calendar.events',
+      'https://www.googleapis.com/auth/calendar.events.freebusy',
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/gmail.compose',
@@ -113,7 +114,7 @@ describe('google tools', () => {
 
   it('reports a typed connect intent when Google is not connected, and never hands the model a URL', async () => {
     const google: GoogleAccess = { client: async () => null };
-    const [query] = googleHandlers(google, proposals, clock);
+    const query = googleHandlers(google, proposals, clock).find(h=>h.name==='query_calendar');
     const result = await query!.handle({ include_declined: false, limit: 20 } as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',

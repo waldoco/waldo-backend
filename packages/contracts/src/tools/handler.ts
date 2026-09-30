@@ -97,6 +97,8 @@ export const GENERAL_AGENT_TOOLS: readonly ToolName[] = [
 // the complete set here makes a null taint stamp unrepresentable at the dispatcher boundary.
 export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'query_calendar',
+  'query_availability',
+  'read_owner_context',
   'get_communication',
   'search_communication',
   'read_thread',

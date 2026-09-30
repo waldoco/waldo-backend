@@ -40,6 +40,8 @@ export type ProbeGuard = { suppressMemory: boolean; stripLiveTools: boolean };
 // episode reads of the staging DO, reminders/loops.
 export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'query_calendar',
+  'query_availability',
+  'read_owner_context',
   'get_communication',
   'search_communication',
   'read_thread',

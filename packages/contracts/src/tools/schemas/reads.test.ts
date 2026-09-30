@@ -5,6 +5,7 @@ import {
   callMcpToolResultSchema,
   executeActionArgsSchema,
   getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema,
+  queryAvailabilityArgsSchema, readOwnerContextArgsSchema,
   getContextArgsSchema,
   getCrsArgsSchema,
   getHealthArgsSchema,
@@ -325,4 +326,17 @@ describe('searchCommunicationArgs / readThreadArgs (A1)', () => {
     expect(readThreadArgsSchema.safeParse({}).success).toBe(false);
     expect(readThreadArgsSchema.safeParse({ thread_id: '' }).success).toBe(false);
   });
+});
+
+// New source-read contracts never accept a caller-selected owner or hidden authority.
+describe('dedicated source reads',()=>{
+ it('availability requires explicit range/duration and rejects duplicate calendars, naive times and unknown fields',()=>{
+  const good={date_range:{from:'2026-10-05T09:00:00+05:30',to:'2026-10-05T17:00:00+05:30'},duration_minutes:30};
+  expect(queryAvailabilityArgsSchema.parse(good).calendar_ids).toEqual(['primary']);
+  for(const bad of [{...good,owner_id:'other'},{...good,calendar_ids:['primary','primary']},{...good,date_range:{from:'2026-10-05T09:00:00',to:good.date_range.to}},{...good,duration_minutes:0}])expect(queryAvailabilityArgsSchema.safeParse(bad).success).toBe(false);
+ });
+ it('owner context requires a bounded topic; no owner ID, approval or mutation argument',()=>{
+  expect(readOwnerContextArgsSchema.parse({topic:'gym'})).toEqual({topic:'gym',limit:8});
+  for(const bad of [{topic:'',limit:8},{topic:'gym',owner_id:'other'},{topic:'gym',approve:true},{topic:'gym',limit:13}])expect(readOwnerContextArgsSchema.safeParse(bad).success).toBe(false);
+ });
 });
