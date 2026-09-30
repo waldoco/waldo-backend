@@ -24,6 +24,9 @@ export function effectiveConfigDigest(workdir){
   if(existsSync(join(home,name)))throw Error('local_forbidden_input');
  }
  if(existsSync(home)){
+  // Only package caches and isolated XDG/TMP directories may be populated.
+  const allowed=new Set(['tmp','cache','data','config','.cache','.local','.npm']);
+  if(readdirSync(home).some(name=>!allowed.has(name)))throw Error('local_forbidden_input');
   const scanHome=dir=>{for(const name of readdirSync(dir)){
    const path=join(dir,name),stat=lstatSync(path);
    if(name.startsWith('.env')||stat.isSymbolicLink()||(!stat.isFile()&&!stat.isDirectory()))throw Error('local_forbidden_input');

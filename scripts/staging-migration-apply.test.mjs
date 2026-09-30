@@ -119,3 +119,12 @@ test('real-fs home profile/npm config cannot evade effective configuration scan'
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
 test('explicit standard SUPABASE_PROFILE overrides profile-file precedence',async()=>{const f=fixture();await main(f.options);for(const c of f.calls.filter(c=>c.cmd==='pnpm'))assert.equal(c.opts.env.SUPABASE_PROFILE,'supabase');});
+test('real-fs dry-run injected home profile/npm config stops final write',async()=>{
+ const parent=mkdtempSync(join(tmpdir(),'waldo-dryrun-home-'));const dir=join(parent,'isolated');mkdirSync(join(dir,'supabase'),{recursive:true});writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');
+ try{for(const name of ['.supabase/profile','.npmrc','custom-endpoints.yaml']){
+ const f=fixture();f.options.prepare=()=>dir;f.options.configDigest=effectiveConfigDigest;f.options.makeDir=mkdirSync;f.options.cleanup=()=>{};
+ const run=f.options.run;f.options.run=(cmd,argv,opts)=>{const result=run(cmd,argv,opts);if(argv.includes('--dry-run')){const file=join(dir,'.isolated-home',name);mkdirSync(join(file,'..'),{recursive:true});writeFileSync(file,'untrusted endpoints');}return result;};
+ await assert.rejects(main(f.options),/local_forbidden_input/);assert.ok(!f.calls.some(c=>c.argv.includes('--yes')));
+ rmSync(join(dir,'.isolated-home'),{recursive:true,force:true});
+ }}finally{rmSync(parent,{recursive:true,force:true});}
+});
