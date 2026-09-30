@@ -176,3 +176,5 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - A health writer's table grant is not consent authority. Verify the companion app's authenticated versus service-role paths and disclose consent/schema conflicts without adding client writes or rewriting legal audit records to accommodate them.
 - Exercise additive hardening with existing synthetic rows and compare row/schema preservation. Supabase CLI runs pgTAP in a container: assemble the actual migration between transaction fixtures rather than assuming a host-only SQL include is accessible there.
 - The plain PostgreSQL shim must preserve Supabase role semantics, including trusted service BYPASSRLS. Keep explicit role-attribute assertions and owner/anon isolation tests so test fidelity cannot become an RLS exemption.
+
+| 2026-10-01 | Runtime shard failures were hidden by job-level continue-on-error, so an aggregate green badge did not prove tests passed | Gates | Remove the soft-failure override; guard-ci-failure and fixture tests reject truthy or dynamic overrides at job and step level | CI: a failing verification must fail its workflow |
