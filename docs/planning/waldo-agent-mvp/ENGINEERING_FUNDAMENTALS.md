@@ -170,3 +170,6 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Dashboard admin receipts
 - A successful HTTP status is not a readable action receipt. A truncated JSON receipt or lost response must say the outcome is unavailable, require a read before retry, and explain that a one-time invite code cannot be recovered. `Admin.test.tsx` tests both transport loss and malformed successful receipts.
 - Malformed action bodies fail with a structured invalid-action response before any signed RPC. `dashboard-admin.test.ts` tests malformed multipart alongside session, CSRF and cross-owner rejection.
+
+- Admin titles must wrap at word boundaries at 320px; inspect actual font pixels rather than relying only on document overflow. The admin-only small-viewport size preserves desktop typography.
+- An invite revoke receipt has no code: keep creation-only copy/send instructions out of it. `dashboard-admin.test.ts` pins the revoke no-email message/no-code shape while retaining the creation copy assertion.
