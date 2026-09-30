@@ -53,7 +53,7 @@ export async function main(){
   const remote=await readHistory(process.env.SUPABASE_ACCESS_TOKEN,process.env.SUPABASE_PROJECT_ID);
   const result=compareHistory(local,remote);
   const packet={kind:'read_only_staging_migration_preflight',projectRef:PROJECT,sourceSha:head,
-    observedAt:new Date().toISOString(),localManifestSha256:sha(JSON.stringify(local)),...result,
+    observedAt:new Date().toISOString(),localManifestSha256:sha(JSON.stringify(local)),pendingManifestSha256:sha(JSON.stringify(result.pending)),...result,
     scopeProof:'GET history proves access to this endpoint only; token scope/exclusivity not established',
     digestProof:'Local committed SQL bytes only; applied hosted SQL digest not verified',
     apply:'not implemented; no db push, migration repair, query write or Worker deployment'};
