@@ -1,15 +1,18 @@
+import { AdminPanel, type AdminState } from './Admin';
+import { fetchAdmin } from './admin-model';
 import { useEffect, useRef, useState } from 'react';
 import type { OverviewV1 } from './model';
 import { fetchOverview, SignInRequired } from './model';
 import './style.css';
 
-export type Route = 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day';
+export type Route = 'today' | 'overview' | 'waiting' | 'patrol' | 'memory' | 'memory/spots' | 'memory/constellation' | 'memory/profile' | 'connections' | 'day' | 'admin';
 const routes = [
   { key: 'today', label: 'Today' }, { key: 'waiting', label: 'Waiting' },
   { key: 'patrol', label: 'Patrol' }, { key: 'memory', label: 'Memory' },
   { key: 'connections', label: 'Connections' }, { key: 'day', label: 'Your day' },
 ] as const;
 export const resolveRoute = (value: string): Route => {
+  if (value === 'admin') return 'admin';
   if (value === 'memory/spots' || value === 'memory/constellation' || value === 'memory/profile') return value;
   return routes.find((r) => r.key === value)?.key ?? 'today';
 };
@@ -38,7 +41,7 @@ const navigationIcons = {
   day: <><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></>,
 };
 
-export function DashboardNavigation({ route, waitingCount, onNavigate }: { route: Route; waitingCount?: number; onNavigate?: () => void }) {
+export function DashboardNavigation({ route, waitingCount, onNavigate, isAdmin = false }: { isAdmin?: boolean; route: Route; waitingCount?: number; onNavigate?: () => void }) {
   const selected = route.startsWith('memory/') ? 'memory' : route === 'overview' ? 'today' : route;
   return <div className="navigation">
     <nav aria-label="Dashboard pages">{routes.map((item) => (
@@ -53,6 +56,7 @@ export function DashboardNavigation({ route, waitingCount, onNavigate }: { route
       <a href="/console/setup" onClick={onNavigate}>Setup checklist</a>
       <a href="/console/invites" onClick={onNavigate}>Invite someone</a>
     </nav>
+    {isAdmin && <nav className="secondary-nav" aria-label="Restricted administration"><a href="#/admin" aria-current={route === 'admin' ? 'page' : undefined} onClick={onNavigate}><span className="nav-label"><svg className="nav-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5M8 17h3"/></svg>Invite management</span><small>Restricted administration</small></a></nav>}
     <nav className="account-nav" aria-label="Account and sessions">
       <a href="/console/account" onClick={onNavigate}>Account</a>
       <a href="/console/connections" onClick={onNavigate}>Sessions &amp; sign out</a>
@@ -197,9 +201,20 @@ export function App() {
   const [route, setRoute] = useState<Route>(currentRoute);
   const [state, setState] = useState<FeedbackState | { kind: 'ready'; data: OverviewV1 }>({ kind: 'loading' });
   const [retry, setRetry] = useState(0);
+  const [adminState, setAdminState] = useState<AdminState>({kind:'loading'});
+  const adminAbort = useRef<AbortController | null>(null);
+  const refreshAdmin = async () => {
+    adminAbort.current?.abort();
+    const controller = new AbortController(); adminAbort.current = controller;
+    try { const data = await fetchAdmin(controller.signal); if (!controller.signal.aborted) setAdminState(data ? {kind:'ready',data} : {kind:'absent'}); }
+    catch { if (!controller.signal.aborted) setAdminState({kind:'error'}); }
+  };
+  useEffect(() => { void refreshAdmin(); return () => adminAbort.current?.abort(); }, []);
+  const menuButton = useRef<HTMLButtonElement>(null);
   const drawer = useRef<HTMLDialogElement>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const closeDrawer = () => drawer.current?.close();
+  const openDrawer = () => { if (!drawer.current?.open) { drawer.current?.showModal(); setDrawerOpen(true); drawer.current?.querySelector<HTMLElement>('button')?.focus(); } };
   useEffect(() => {
     const desktop = window.matchMedia('(min-width: 861px)');
     const onChange = () => { if (desktop.matches) drawer.current?.close(); };
@@ -228,13 +243,13 @@ export function App() {
     <aside className="desktop-sidebar" aria-label="Console sidebar">
       <a className="brand" href="#/today" aria-label="Waldo dashboard home"><span className="brand-mark" aria-hidden="true"/></a>
       <span className="sidebar-caption">Your console</span>
-      <DashboardNavigation route={route} waitingCount={state.kind === 'ready' ? state.data.waiting.count : undefined}/>
+      <DashboardNavigation route={route} isAdmin={adminState.kind === 'ready'} waitingCount={state.kind === 'ready' ? state.data.waiting.count : undefined}/>
     </aside>
     <div className="console-content"><div className="frame">
     <header className="mobile-header"><a className="brand" href="#/today" aria-label="Waldo dashboard home"><span className="brand-mark" aria-hidden="true"/></a>
-      <button aria-expanded={drawerOpen} aria-controls="navigation-drawer" aria-haspopup="dialog" onClick={() => { drawer.current?.showModal(); setDrawerOpen(true); }}>Menu</button>
+      <button ref={menuButton} type="button" aria-expanded={drawerOpen} aria-controls="navigation-drawer" aria-haspopup="dialog" onClick={openDrawer} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDrawer(); } }}>Menu</button>
     </header>
-    <dialog ref={drawer} id="navigation-drawer" className="navigation-drawer" aria-labelledby="drawer-title" onClose={() => setDrawerOpen(false)} onKeyDown={(event) => {
+    <dialog ref={drawer} id="navigation-drawer" className="navigation-drawer" aria-labelledby="drawer-title" onClose={() => { setDrawerOpen(false); if (window.matchMedia('(max-width: 860px)').matches) menuButton.current?.focus(); }} onKeyDown={(event) => {
       if (event.key !== 'Tab') return;
       const controls = event.currentTarget.querySelectorAll<HTMLElement>('a[href],button:not([disabled])');
       const first = controls[0];
@@ -243,9 +258,9 @@ export function App() {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }}>
       <div className="drawer-heading"><h2 id="drawer-title">Your console</h2><button onClick={closeDrawer}>Close menu</button></div>
-      <DashboardNavigation route={route} waitingCount={state.kind === 'ready' ? state.data.waiting.count : undefined} onNavigate={closeDrawer}/>
+      <DashboardNavigation route={route} isAdmin={adminState.kind === 'ready'} waitingCount={state.kind === 'ready' ? state.data.waiting.count : undefined} onNavigate={closeDrawer}/>
     </dialog>
-    <main id="main" tabIndex={-1}>{state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
+    <main id="main" tabIndex={-1}>{route === 'admin' ? <AdminPanel state={adminState} onRefresh={refreshAdmin}/> : state.kind !== 'ready' ? <DashboardFeedback state={state} onRetry={() => setRetry((n) => n + 1)}/>
       : <><div className="record-status"><span>Records as of {date(state.data.as_of, state.data.timezone)} · {state.data.timezone}</span><button onClick={() => setRetry((n) => n + 1)}>Refresh records</button></div><Dashboard data={state.data} route={route}/></>}</main>
     <footer>Recorded activity can include attempts and failures. Check the result before treating work as done.</footer>
   </div></div></div>;

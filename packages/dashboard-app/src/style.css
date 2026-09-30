@@ -189,3 +189,16 @@ footer { padding:35px 0 45px; color:var(--muted); font-size:12px; line-height:1.
 @media(prefers-reduced-motion:reduce) {
   * { scroll-behavior:auto!important; transition:none!important; }
 }
+
+.admin-issue form,.admin-filters {display:flex;align-items:end;gap:16px;flex-wrap:wrap;margin:24px 0}
+.admin-issue label,.admin-filters label,.panel label {display:grid;gap:8px;font-size:14px}
+.panel input,.panel select,.admin-filters input {font:inherit;color:inherit;padding:10px 12px;border:1px solid #d8d4ce;border-radius:8px;background:#fff;max-width:100%;min-width:0}
+.table-scroll {overflow-x:auto;margin-top:20px}
+.table-scroll table {width:100%;border-collapse:collapse;font-size:14px;text-align:left}
+.table-scroll th {font-weight:500;color:#706b65;white-space:nowrap}
+.table-scroll td,.table-scroll th {padding:14px 12px;border-bottom:1px solid #e9e5df;vertical-align:top}
+.table-scroll td:first-child {overflow-wrap:anywhere;min-width:160px}
+.issuer-quota {display:block;color:#706b65;margin-top:8px;min-width:150px}
+.table-pager {display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:20px;flex-wrap:wrap;font-size:13px}
+button:disabled {opacity:.55;cursor:default}
+@media(max-width:860px){.admin-issue form{align-items:stretch}.admin-issue label{width:100%}.panel .connection-heading{flex-wrap:wrap}}

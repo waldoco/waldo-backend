@@ -23,3 +23,7 @@ Open `http://127.0.0.1:4178/console/dashboard`. There is no `dev` script. The pr
 No deployed revision was inspected for this slice. Local component/transport tests and synthetic pixels cannot establish live two-owner isolation, chat continuity, CSRF, action receipts or provider delivery. Full work queues, Brief/Close detail, rich Patrol history, modern Memory read/actions, sharing, commitments and web chat need explicit contracts. Private workspace Files are a separate integration (#424, now source-merged), with namespace configuration and rollout still owned by that lane.
 
 See `docs/planning/waldo-agent-mvp/CODEX_L7_CONTROLS.md` for the route/action map, evidence and acceptance handoff.
+
+Slice3 adds a restricted `#/admin` panel only after `/console/admin` returns the signed admin read successfully. It reuses `/console/action` with the existing session/CSRF and invite RPCs. The additive admin projection migration is required for issuer/quota fields; an older projection produces an unavailable view with the existing HTML path. Owner invites remain separate. Pagination is over all returned records, not a new server paging contract. No raw code is saved or recoverable.
+
+Synthetic admin layout/recovery checks: `node scripts/preview.mjs --case=admin --port=4180` or `--case=admin-refresh-failure --port=4181`. These are local fixtures only; legacy paths and permission enforcement are not simulated. Real keyboard proof uses Menu Enter/Space, Close menu Shift-Tab, last navigation link Tab, then Escape and opener focus return.
