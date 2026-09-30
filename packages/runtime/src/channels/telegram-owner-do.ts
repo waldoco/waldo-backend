@@ -883,7 +883,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const orders = standingOrderBook(storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     // A5: working-artifact store. Bodies ride R2 when the binding exists; a deploy missing it
     // degrades to per-DO-memory bodies (artifacts become session-scoped, turns never crash).
-    const artifacts = artifactBook(storage.sql, this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS) : inMemoryArtifactBodies(), clock, () => deps.newRunId().slice(0, 8));
+    const artifacts = artifactBook(storage.sql, this.env.ARTIFACTS ? r2ArtifactBodies(this.env.ARTIFACTS, this.ctx.id.toString()) : inMemoryArtifactBodies(), clock, () => deps.newRunId().slice(0, 8));
     const runs = runBook(storage.sql, clock, () => deps.newRunId().slice(0, 8));
     // A9: recent meal/workout logs join the proactive context; the read degrades to empty
     // when the store is unlinked so beats and the /ledger command never break on it.
