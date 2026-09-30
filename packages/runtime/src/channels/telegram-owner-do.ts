@@ -1,5 +1,6 @@
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
+import { eventAdmission } from './event-admission';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceDownload, workspacePage } from './console-workspace';
@@ -225,6 +226,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     if (!envelope || typeof envelope.subject !== 'string' || typeof envelope.kind !== 'string' || typeof envelope.title !== 'string') {
       return new Response('ok');
     }
+    const delivery=request.headers.get('x-waldo-event-delivery')??'';
+    const digest=request.headers.get('x-waldo-event-digest')??'';
+    if(!delivery||delivery.length>205||!/^[a-f0-9]{64}$/.test(digest))return new Response('invalid admission',{status:400});
+    const inbox=eventAdmission(this.ctx.storage);
+    const admitted=inbox.admit(source,delivery,digest,body);
+    if(admitted==='conflict')return new Response('delivery identity conflict',{status:409});
+    if(admitted==='capacity')return new Response('admission capacity',{status:503});
+    // Resume only an admitted, not-yet-claimed record after a crash. Claimed/settled
+    // redeliveries are acknowledged without repeating a possible notification.
+    if(!inbox.claim(source,delivery))return new Response('ok');
     const { runs, api, owner, log } = this.setup();
     const run = runs.start('event', null);
     const summary = `${source}: ${envelope.title}`.slice(0, 180);
@@ -233,12 +244,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
         await api.sendMessage({ chat_id: owner, text: `Event - ${summary}${url ? `\n${url}` : ''}` });
       }
+      inbox.finish(source,delivery);
       runs.finish(run.id, 'completed', summary);
       log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, detail: `${source}:${envelope.kind.slice(0, 60)}` });
     } catch (error) {
       runs.finish(run.id, 'failed', `${source}: delivery failed`.slice(0, 180));
       log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, error: String(error) });
-      throw error;
+      // Durable admission remains true even when notification is unknown.
     }
     return new Response('ok');
   }
