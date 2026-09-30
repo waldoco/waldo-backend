@@ -1,27 +1,9 @@
 import { sameSecret } from './telegram-webhook';
 
-// A8: generic webhook/event ingress. One verified HTTP channel for external services that
-// push events (GitHub, uptime monitors, anything that can sign or token a POST), mirroring
-// the telegram-webhook shape: verify -> 200 fast -> waitUntil routes to the owning DO.
-//
-// Sources are configured in WALDO_EVENT_SOURCES (JSON): each names its secret, its
-// verification shape, and the owner DO it is pinned to. Owner binding is explicit config,
-// not a directory presence: there is no linking UI for event sources in alpha, and a fake
-// directory abstraction would be a placeholder. When a real linking flow lands, config
-// migrates to presences.
-//
-// Verification shapes:
-//   "hmac-sha256": GitHub/Meta style - hex HMAC of the raw body, sent as `sha256=<hex>`
-//                  in x-hub-signature-256.
-//   "token":       shared secret in the x-waldo-event-token header (generic sources).
-//
-// Queue buffer evaluation (owed by the A8 slice, decided here): DEFERRED. The webhook
-// returns 200 at once and waitUntil carries the routing, matching both chat channels; the
-// providers worth integrating first retry on non-2xx, and alpha event volume is low. A
-// Queue buys durable delivery against waitUntil failure and burst absorption - adopt when
-// the first high-volume source lands or a provider without retries does. Wrapper cost when
-// that day comes: a queues binding + consumer handler + a line in the deploy packet.
-//
+// Verified source events await bounded owner admission. A provider ack means the owner
+// durably recorded the event, never that its optional notification was delivered.
+// Sources remain explicitly pinned config, not an invented directory linking flow.
+
 // Taint posture: envelope text is external content. It is stored (capped) in background_runs
 // and shown in the console escaped, and sent to the owner as a plain Telegram note - it is
 // NEVER recorded as an episode and NEVER fed to a turn, so a crafted commit message cannot
@@ -100,7 +82,7 @@ const githubEnvelope = (event: string, payload: Record<string, unknown>): EventE
     const first = head.split('\n')[0] ?? '';
     const pusher = (payload.pusher as { name?: string } | undefined)?.name ?? 'someone';
     return {
-      subject: repo, kind: 'push',
+      subject: cap(String(repo),120), kind: 'push',
       title: cap(`${pusher} pushed ${commits.length || 1} commit${commits.length === 1 ? '' : 's'}: ${first}`, 200),
       ...(typeof payload.compare === 'string' ? { url: cap(payload.compare, 300) } : {}),
     };
@@ -110,7 +92,7 @@ const githubEnvelope = (event: string, payload: Record<string, unknown>): EventE
     if (!pr) return null;
     const action = typeof payload.action === 'string' ? payload.action : 'updated';
     return {
-      subject: repo, kind: `pull_request.${cap(action, 30)}`,
+      subject: cap(String(repo),120), kind: `pull_request.${cap(action, 30)}`,
       title: cap(`PR #${pr.number ?? '?'} ${action}: ${pr.title ?? ''}`, 200),
       ...(typeof pr.html_url === 'string' ? { url: cap(pr.html_url, 300) } : {}),
     };
@@ -121,15 +103,19 @@ const githubEnvelope = (event: string, payload: Record<string, unknown>): EventE
 export const handleEventIngress = async (
   request: Request,
   env: EventIngressEnv,
-  waitUntil: (work: Promise<unknown>) => void,
+  _waitUntil: (work: Promise<unknown>) => void,
 ): Promise<Response> => {
   const url = new URL(request.url);
   const source = url.pathname.slice(EVENT_INGRESS_PREFIX.length).replace(/\/+$/, '');
   const config = parseEventSources(env.WALDO_EVENT_SOURCES)[source];
-  if (request.method !== 'POST' || !config || !env.TELEGRAM_OWNER_DO || !source || source.includes('/')) {
+  if (request.method !== 'POST' || !config || !env.TELEGRAM_OWNER_DO || !source || source.length>60 || source.includes('/')) {
     return new Response('not found', { status: 404 });
   }
-  const body = await request.text();
+  const reader=request.body?.getReader();if(!reader)return new Response('invalid body',{status:400});
+  const chunks:Uint8Array[]=[];let size=0;
+  try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>65536){void reader.cancel();return new Response('body too large',{status:413});}chunks.push(value);}}catch{return new Response('body unavailable',{status:400});}
+  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+  const body = new TextDecoder().decode(bytes);
   if (!(await verify(config, request, body))) return new Response('forbidden', { status: 403 });
   let envelope: EventEnvelope | null = null;
   try {
@@ -146,14 +132,31 @@ export const handleEventIngress = async (
   const owners = env.TELEGRAM_OWNER_DO;
   const origin = url.origin;
   const notify = config.notify !== false;
-  waitUntil((async () => {
+  const digest = await hmacSha256Hex(config.secret, body);
+  // Provider identity is scoped to a configured source and checked against raw bytes.
+  // Without an explicit identity, byte-identical deliveries collapse intentionally.
+  let explicit: unknown;
+  try { explicit = (JSON.parse(body) as Record<string,unknown>).event_id; } catch { explicit = undefined; }
+  const provider = source==='github' ? request.headers.get('x-github-delivery') : explicit;
+  if(provider!=null && (typeof provider!=='string'||!provider||provider.length>200||/[\r\n]/.test(provider)))return new Response('invalid delivery identity',{status:400});
+  const delivery = typeof provider==='string' ? `id:${provider}` : `body:${digest}`;
+  const controller = new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
+  try {
     const headers: Record<string, string> = {
       'x-waldo-origin': origin,
       'x-waldo-event-source': source,
       'x-waldo-event-notify': notify ? '1' : '0',
+      'x-waldo-event-delivery': delivery,
+      'x-waldo-event-digest': digest,
     };
     if (config.timezone) headers['x-waldo-timezone'] = config.timezone;
-    return owners.get(owners.idFromName(config.owner_do)).fetch('https://telegram-owner/event', { method: 'POST', body: JSON.stringify(envelope), headers });
-  })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'event_route', ok: false, error: String(error) }))));
-  return new Response('ok');
+    const timeout = new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error('admission_timeout'));},5000);});
+    const response = await Promise.race([owners.get(owners.idFromName(config.owner_do)).fetch('https://telegram-owner/event', { method: 'POST', body: JSON.stringify(envelope), headers, signal:controller.signal }),timeout]);
+    void response.body?.cancel();
+    if(!response.ok)return new Response('owner admission unavailable',{status:503});
+    return new Response('ok');
+  } catch {
+    console.log(JSON.stringify({hop:'event_route',ok:false,code:'admission_unavailable'}));
+    return new Response('owner admission unavailable',{status:503});
+  } finally {if(timer!==undefined)clearTimeout(timer);}
 };

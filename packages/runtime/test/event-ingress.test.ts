@@ -115,3 +115,28 @@ describe('handleEventIngress', () => {
     expect(envelope.title.length).toBeLessThanOrEqual(200);
   });
 });
+
+it('awaits admission and returns retryable failure for thrown or non-2xx owner fetch',async()=>{
+ for(const fail of [async()=>{throw new Error('route lost');},async()=>new Response('rejected',{status:409}),async()=>new Response('unavailable',{status:503})]){
+  const {ns}=namespace();const failing={...ns,get:()=>({fetch:fail})} as unknown as DurableObjectNamespace;
+  const body=JSON.stringify({subject:'api',kind:'down',title:'fixture'});
+  expect((await run(post('uptime',body,{'x-waldo-event-token':'up-secret'}),{TELEGRAM_OWNER_DO:failing,WALDO_EVENT_SOURCES:SOURCES})).status).toBe(503);
+ }
+});
+it('never acknowledges before owner admission and bounds an ignoring-abort fetch',async()=>{
+ const {ns}=namespace();const body=JSON.stringify({subject:'api',kind:'down',title:'fixture'});let release:(r:Response)=>void=()=>{};
+ const held=new Promise<Response>(r=>{release=r;});const pending=handleEventIngress(post('uptime',body,{'x-waldo-event-token':'up-secret'}),{TELEGRAM_OWNER_DO:{...ns,get:()=>({fetch:()=>held})} as unknown as DurableObjectNamespace,WALDO_EVENT_SOURCES:SOURCES},()=>{});
+ let ack=false;void pending.then(()=>{ack=true;});await Promise.resolve();expect(ack).toBe(false);release(new Response('ok'));expect((await pending).status).toBe(200);
+ vi.useFakeTimers();try{
+  const timeout=handleEventIngress(post('uptime',body,{'x-waldo-event-token':'up-secret'}),{TELEGRAM_OWNER_DO:{...ns,get:()=>({fetch:()=>new Promise(()=>{})})} as unknown as DurableObjectNamespace,WALDO_EVENT_SOURCES:SOURCES},()=>{});
+  await vi.waitFor(()=>expect(vi.getTimerCount()).toBeGreaterThan(0));await vi.advanceTimersByTimeAsync(5001);expect((await timeout).status).toBe(503);
+ }finally{vi.useRealTimers();}
+});
+it('bounds raw provider body before signature work or owner admission',async()=>{
+ const {ns,fetch}=namespace();expect((await run(post('uptime','x'.repeat(65537),{'x-waldo-event-token':'up-secret'}),{TELEGRAM_OWNER_DO:ns,WALDO_EVENT_SOURCES:SOURCES})).status).toBe(413);expect(fetch).not.toHaveBeenCalled();
+});
+it('caps signed GitHub repository subject to the same120character envelope bound',async()=>{
+ const {ns,fetch}=namespace();const body=JSON.stringify({repository:{full_name:'x'.repeat(5000)},commits:[]});
+ await run(post('github',body,{'x-github-event':'push','x-hub-signature-256':await sign('gh-secret',body)}),{TELEGRAM_OWNER_DO:ns,WALDO_EVENT_SOURCES:SOURCES});
+ expect(JSON.parse(String((fetch.mock.calls[0] as unknown as [string,RequestInit])[1].body)).subject).toHaveLength(120);
+});
