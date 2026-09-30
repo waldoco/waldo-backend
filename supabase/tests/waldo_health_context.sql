@@ -6,24 +6,6 @@ select vault.create_secret('test-router-secret', 'waldo_router_hmac');
 create function pg_temp.at() returns bigint language sql as $$ select extract(epoch from now())::bigint $$;
 create function pg_temp.sig(msg text) returns text language sql as $$ select encode(extensions.hmac(pg_temp.at()::text || '.' || msg, 'test-router-secret', 'sha256'), 'hex') $$;
 
--- The app-owned health_context_daily lives in the companion app repo's migrations; the CI
--- database only runs this repo's set. This fixture mirrors exactly the app-contract columns
--- the RPC reads, and rolls back with the test. (public.health_daily is NOT created here: the
--- name belongs to this repo's older HEY-9 columnar schema, and the RPC deliberately does not
--- read it.)
-create table public.health_context_daily (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  day date not null,
-  form jsonb,
-  recovery jsonb,
-  weight jsonb,
-  drivers jsonb not null default '[]'::jsonb,
-  confidence numeric,
-  freshness text,
-  tags text[] not null default '{}',
-  updated_at timestamptz not null default now()
-);
 insert into auth.users (id, email) values ('00000000-0000-0000-0000-0000000000d1', 'healthctx@test.invalid');
 insert into waldo.owners (do_name, email) values ('do-healthctx-unlinked', 'healthctx-unlinked@test.invalid');
 insert into waldo.owners (do_name, email, auth_user_id) values ('do-healthctx', 'healthctx-owner@test.invalid', '00000000-0000-0000-0000-0000000000d1');
