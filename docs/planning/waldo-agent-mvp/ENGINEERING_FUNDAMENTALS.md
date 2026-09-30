@@ -170,3 +170,9 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### Dashboard admin receipts
 - A successful HTTP status is not a readable action receipt. A truncated JSON receipt or lost response must say the outcome is unavailable, require a read before retry, and explain that a one-time invite code cannot be recovered. `Admin.test.tsx` tests both transport loss and malformed successful receipts.
 - Malformed action bodies fail with a structured invalid-action response before any signed RPC. `dashboard-admin.test.ts` tests malformed multipart alongside session, CSRF and cross-owner rejection.
+
+### Derived health migration ACLs
+- Restoring historical health DDL preserves its bytes; normalize Supabase default table/function ACLs in a new additive migration. The exact schema matrix must still deny anon access and client writes, and the real migrated-table tests must prove owner isolation, rejected-write zero delta, and trigger operation without direct helper EXECUTE.
+- A health writer's table grant is not consent authority. Verify the companion app's authenticated versus service-role paths and disclose consent/schema conflicts without adding client writes or rewriting legal audit records to accommodate them.
+- Exercise additive hardening with existing synthetic rows and compare row/schema preservation. Supabase CLI runs pgTAP in a container: assemble the actual migration between transaction fixtures rather than assuming a host-only SQL include is accessible there.
+- The plain PostgreSQL shim must preserve Supabase role semantics, including trusted service BYPASSRLS. Keep explicit role-attribute assertions and owner/anon isolation tests so test fidelity cannot become an RLS exemption.

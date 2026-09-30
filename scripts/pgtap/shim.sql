@@ -3,7 +3,8 @@
 -- auth schema stubs, vault secrets store, supabase_migrations bookkeeping.
 create role anon nologin;
 create role authenticated nologin;
-create role service_role nologin;
+-- Match Supabase trusted writer semantics; FORCE RLS must still bind clients.
+create role service_role nologin bypassrls;
 create schema extensions;
 create extension if not exists pgcrypto with schema extensions;
 create extension if not exists "uuid-ossp" with schema extensions;
