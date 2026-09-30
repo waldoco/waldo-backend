@@ -41,7 +41,7 @@ vi.mock('../src/channels/telegram-api',async(load)=>{const original=await load<t
 const {handleTelegramWebhook}=await import('../src/channels/telegram-webhook');
 afterEach(()=>{world=null;bundle=null;vi.unstubAllGlobals();});
 it('captures each admitted actual-model owner turn, adapter custody and usage without official score',async()=>{
- const runtime=env as typeof env & {WALDO_NATIVE_BUNDLES:string;WALDO_NATIVE_MODEL:string;WALDO_NATIVE_SCRIPTED?:string};
+ const runtime=env as typeof env & {WALDO_NATIVE_BUNDLES:string;WALDO_NATIVE_MODEL:string;WALDO_NATIVE_SCRIPTED?:string;WALDO_NATIVE_RECEIPT_KEYS?:string};
  const inputs=JSON.parse(runtime.WALDO_NATIVE_BUNDLES) as {bundle:NativeCaseBundleV1;digest:string}[];
  if(runtime.WALDO_NATIVE_MODEL!==WALDO_CHAT_MODEL)throw new Error('native model pin differs');
  for(const input of inputs){
@@ -59,6 +59,9 @@ it('captures each admitted actual-model owner turn, adapter custody and usage wi
   const subject=81201;const doName=`native-${seed}`;
   const directory:OwnerDirectory={byPresence:async(provider,id)=>provider==='telegram'&&id===String(subject)?{doName,subject:String(subject),timezone: 'Asia/Kolkata'}:null,redeem:async()=>null};
   const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName)) as DurableObjectStub<TelegramOwnerDO>;
+  const controlStub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`native-control-${seed}`)) as DurableObjectStub<TelegramOwnerDO>;
+  await runInDurableObject(controlStub,async(_instance,state)=>{await state.storage.put('native-control-canary',{owner:manifest.control_owner,value:'CONTROL_ONLY_SYNTHETIC'});});
+  const controlBefore=await runInDurableObject(controlStub,async(_instance,state)=>Array.from((await state.storage.list()).entries()));
   await runInDurableObject(stub,async(_instance,state)=>{await state.storage.put('google:accounts',[{id:`local:${manifest.candidate_owner}`,email:manifest.candidate_owner,scopes:null,refresh_token:'fictional-not-a-token'}]);});
   const transcript:{id:string;at:string;owner_text:string;channel_sends:unknown}[]=[];
   for(const [index,turn] of bundle.turns.entries()){
@@ -69,8 +72,10 @@ it('captures each admitted actual-model owner turn, adapter custody and usage wi
    if(response.status!==200)throw new Error('native ingress rejected');
    transcript.push({id:turn.id,at:turn.at,owner_text:turn.text,channel_sends:sends.slice(previous)});
   }
+  const controlAfter=await runInDurableObject(controlStub,async(_instance,state)=>Array.from((await state.storage.list()).entries()));
+  if(JSON.stringify(controlBefore)!==JSON.stringify(controlAfter)||world.accessLog(manifest.control_owner).length)throw new Error('native controlDO/source changed');
   const traces=await runInDurableObject(stub,async(_instance,state)=>state.storage.sql.exec('SELECT at, trace, hop, ok, model, input_tokens, output_tokens, cached_tokens, usd FROM trace_log ORDER BY id').toArray());
-  const keys:ReceiptKeys={runner:crypto.randomUUID(),source_adapter:crypto.randomUUID(),effect_interceptor:crypto.randomUUID(),provider_readback:crypto.randomUUID()};
+  const keys:ReceiptKeys=runtime.WALDO_NATIVE_RECEIPT_KEYS?JSON.parse(runtime.WALDO_NATIVE_RECEIPT_KEYS) as ReceiptKeys:{runner:crypto.randomUUID(),source_adapter:crypto.randomUUID(),effect_interceptor:crypto.randomUUID(),provider_readback:crypto.randomUUID()};
   const identity={case_id:manifest.case_id,seed,candidate_owner:manifest.candidate_owner,control_owner:manifest.control_owner};
   const adapters=captureFixtureAdapters(world,identity,keys);
   const source=(bytes:string)=>({owner_id:manifest.candidate_owner,role:'runner' as const,bytes});
@@ -84,7 +89,7 @@ it('captures each admitted actual-model owner turn, adapter custody and usage wi
   const capture={observed,isolation:{owners:[manifest.candidate_owner,manifest.control_owner] as readonly [string,string],candidate_owner:manifest.candidate_owner},receipts,world_evidence:JSON.parse(adapters.artifacts.final_state_readback.bytes).data.world_evidence,actual_model_calls:attempts.length,scripted_model:scripted,observed_cost_usd:null,runner_usage:[...sdkUsage],provider_usage:usage};
   // Native suite filesystem/grading belongs in Node supervisor, not workerd.
   const result={status:scripted?'scripted_diagnostic':'captured_ungraded',native_score:null};
-  console.log('WALDO_NATIVE_CAPTURE '+JSON.stringify({kind:scripted?'scripted-supervisor-diagnostic':'actual-model-synthetic-native-capture',native_score:null,bundle_digest:input.digest,case_id:identity.case_id,seed,result,capture,receipt_key_digests:Object.fromEntries(Object.entries(keys).map(([role,key])=>[role,createHash('sha256').update(key).digest('hex')]))}));
+  console.log('WALDO_NATIVE_CAPTURE '+JSON.stringify({kind:scripted?'scripted-supervisor-diagnostic':'actual-model-synthetic-native-capture',native_score:null,bundle_digest:input.digest,control_storage:{before:controlBefore,after:controlAfter},case_id:identity.case_id,seed,result,capture,receipt_key_digests:Object.fromEntries(Object.entries(keys).map(([role,key])=>[role,createHash('sha256').update(key).digest('hex')]))}));
   vi.unstubAllGlobals();
   if(attempts.length===0||usage.length!==sdkUsage.length||attempts.some(a=>a.outcome!=='captured'))throw new Error('native capture transport incomplete, stop chunk before further spend');
  }
