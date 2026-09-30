@@ -5,6 +5,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach,it,vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
+import {nativeSelectedSource} from '../scenarios/native-selected-source';
 import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
 import { settleSmokeOwner } from '../scenarios/smoke-settle';
 import { nativeModelBoundary } from '../evals/native-model-boundary';
@@ -34,7 +35,7 @@ vi.mock('../src/seams/deps',async(load)=>{const original=await load<typeof impor
 vi.mock('../src/connectors/google',async(load)=>{const original=await load<typeof import('../src/connectors/google')>();return {...original,googleClient:(_app:unknown,tokens:{email?:string})=>{
  if(!world||!bundle||tokens.email!==bundle.manifest.candidate_owner)throw new Error('native owner source denied');
  const w=world,b=bundle;
- const restricted={read:(owner:string,family:string,id:string)=>{if(!b.selected_source_ids[family]?.includes(id))throw new Error('native source selection denied');return w.read(owner,family,id);},list:(owner:string,family:string)=>{if(!b.selected_source_ids[family])throw new Error('native source family denied');return w.list(owner,family).filter(r=>b.selected_source_ids[family]!.includes(r.id));}} as Pick<IsolatedSourceWorld,'read'|'list'>;
+ const restricted=nativeSelectedSource(w,tokens.email,b.selected_source_ids);
  return isolatedGoogleClient(restricted,tokens.email);
  }};});
 vi.mock('../src/channels/telegram-api',async(load)=>{const original=await load<typeof import('../src/channels/telegram-api')>();return {...original,createTelegramCaller:()=>async(method:string,body:object)=>{sends.push({method,body:body as Record<string,unknown>});return method==='getMe'?{username:'fixture_bot'}:method==='sendMessage'?{message_id:sends.length}:true;}};});

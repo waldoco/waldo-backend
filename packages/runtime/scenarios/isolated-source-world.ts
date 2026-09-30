@@ -2,7 +2,7 @@
 // The oracle/approval grader stays outside this world; fixture text is untrusted data.
 export type SourceRow = Readonly<{ owner_id: string; id: string; [key: string]: unknown }>;
 export type Revision = Readonly<{ at: string; owner_id: string; source: string; id: string; patch: Readonly<Record<string, unknown>> }>;
-export type SourceAccess = Readonly<{ owner_id: string; source: string; id: string | null; kind: 'read' | 'list'; at: string }>;
+export type SourceAccess = Readonly<{ owner_id: string; source: string; id: string | null; kind: 'read' | 'list' | 'denied_read' | 'denied_list'; at: string }>;
 export type AppliedRevision = Readonly<{ at: string; owner_id: string; source: string; id: string; before: SourceRow; after: SourceRow }>;
 export type InterceptedEffect = Readonly<{ owner_id: string; kind: string; target: string; payload: unknown; idempotency_key: string; at: string }>;
 export type WorldFixture = Readonly<{
@@ -68,6 +68,10 @@ export class IsolatedSourceWorld {
     this.checkOwner(owner);
     this.accesses.push({ owner_id: owner, source, id: null, kind: 'list', at: this.now() });
     return [...(this.rows.get(source)?.get(owner)?.values() ?? [])].map(copy);
+  }
+  deniedAccess(owner:string,source:string,id:string|null):void {
+    this.checkOwner(owner);
+    this.accesses.push({owner_id:owner,source,id,kind:id===null?'denied_list':'denied_read',at:this.now()});
   }
   accessLog(owner: string): readonly SourceAccess[] {
     this.checkOwner(owner);
