@@ -248,8 +248,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       runs.finish(run.id, 'completed', summary);
       log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, detail: `${source}:${envelope.kind.slice(0, 60)}` });
     } catch (error) {
-      runs.finish(run.id, 'failed', `${source}: delivery failed`.slice(0, 180));
-      log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, error: String(error) });
+      runs.finish(run.id, 'stopped', `${source}: notification outcome unknown; not retried`.slice(0, 180));
+      log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: false, code:'notification_unknown' });
       // Durable admission remains true even when notification is unknown.
     }
     return new Response('ok');
