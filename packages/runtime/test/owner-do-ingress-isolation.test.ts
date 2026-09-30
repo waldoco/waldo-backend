@@ -179,10 +179,17 @@ describe('real owner-DO ingress in a sealed test world', () => {
     }
   });
   it('routes an owner-scoped calendar proposal card through the real DO without applying a provider effect', async () => {
+    // Proposal-time route custody now resolves a real fixture account before issuing a card.
+    // Do not rely on the previous test's account while leaving its source adapter unset.
+    sourceWorld = new IsolatedSourceWorld({ clock: '2026-09-29T11:00:00Z', owners: [{ id: 'a@example.invalid' }], sources: {} });
+    await runInDurableObject(doStub(81101), async (_instance, state) => {
+      await state.storage.put('google:accounts', [{ id: 'local:a@example.invalid', email: 'a@example.invalid', scopes: null, refresh_token: 'fictional-not-a-token' }]);
+    });
     outbox.length = 0; modelInputs.length = 0;
     const update = 300000 + ++sequence * 10;
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
     const cards = outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'));
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     expect(cards).toHaveLength(1);
     expect(cards[0]!.body.chat_id).toBe(81101);
     expect(JSON.stringify(cards[0]!.body.reply_markup)).toContain('Do it');
