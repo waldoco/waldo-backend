@@ -119,3 +119,20 @@ it('full custody quota admits bounded committed retry prelease without granting 
   lease.assert();expect(state.storage.sql.exec<{reserved_bytes:number}>('SELECT reserved_bytes FROM workspace_upload_lease').one().reserved_bytes).toBe(0);lease.release();
  });
 });
+it('hung signed directory construction aborts and settles sanitized unavailable within5seconds',async()=>{
+ vi.useFakeTimers();try{
+  let signal:AbortSignal|undefined;const fetcher=vi.fn((_i:RequestInfo|URL,init?:RequestInit)=>{signal=init?.signal??undefined;return new Promise<Response>(()=>{});});
+  const operation=workspaceOwnerHost(config,storageFixture(),'opaque-id','workspace-owner',fetcher);const result=expect(operation).rejects.toThrow('workspace_unavailable');
+  await vi.advanceTimersByTimeAsync(5_001);await result;expect(signal?.aborted).toBe(true);expect(vi.getTimerCount()).toBe(0);
+ }finally{vi.useRealTimers();}
+});
+it('hung fresh admission after body put settles unavailable retaining pending operation and no ready file',async()=>{
+ vi.useFakeTimers();try{
+  let hung=false;const fetcher=vi.fn(()=>hung?new Promise<Response>(()=>{}):Promise.resolve(Response.json(binding)));
+  const storage=storageFixture();const bucket={put:async()=>{hung=true;},get:async()=>null,delete:async()=>{}} as unknown as R2Bucket;
+  const store=await workspaceOwnerHost({...config,ARTIFACTS:bucket},storage,'opaque-id','workspace-owner',fetcher);
+  const operation=store.write({path:'one.txt',bytes:new Uint8Array([1]),mime:'text/plain',expected_revision:0,provenance:'owner_upload',operation_id:crypto.randomUUID()});const result=expect(operation).rejects.toThrow('workspace_unavailable');
+  await vi.advanceTimersByTimeAsync(5_001);await result;
+  const state=workspaceMetadata(storage).transaction(s=>s);expect(state.operations[0]?.status).toBe('pending');expect(state.files).toHaveLength(0);expect(vi.getTimerCount()).toBe(0);
+ }finally{vi.useRealTimers();}
+});

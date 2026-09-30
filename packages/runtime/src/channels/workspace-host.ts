@@ -32,7 +32,20 @@ export const workspaceOwnerHost = async (
   doName: string | undefined,
   fetcher: typeof fetch = fetch,
 ) => {
-  const call = signedRpc(env, fetcher);
+  const call = signedRpc(env, async (input,init) => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        fetcher(input,{...init,signal:controller.signal}).then(async response => {
+          const bytes=await response.arrayBuffer();
+          if(bytes.byteLength>16_384)throw new WorkspaceError('unavailable');
+          return new Response(bytes,{status:response.status,headers:response.headers});
+        }),
+        new Promise<Response>((_resolve,reject)=> { timer=setTimeout(()=> { controller.abort();reject(new WorkspaceError('unavailable')); },5_000); }),
+      ]);
+    } finally { if(timer!==undefined)clearTimeout(timer); }
+  });
   const { WALDO_ENVIRONMENT: environment, WALDO_OWNER_DO_NAMESPACE: namespace, TELEGRAM_OWNER_DO: owners } = env;
   if (!call || !environment || !namespace || !/^[a-zA-Z0-9_-]{1,120}$/.test(environment) || !/^[a-zA-Z0-9_-]{1,240}$/.test(namespace) || !owners || !doName || owners.idFromName(doName).toString() !== actualDoId || !env.ARTIFACTS) throw new WorkspaceError('unavailable');
   const args = { p_environment: environment, p_namespace: namespace, p_do_name: doName, p_do_id: actualDoId, p_locator: JSON.stringify([environment, namespace, doName, actualDoId]) };
