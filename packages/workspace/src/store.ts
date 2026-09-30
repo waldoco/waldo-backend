@@ -19,7 +19,7 @@ export const validId = (value: unknown): value is string => typeof value === 'st
 export const validateBinding = (binding: OwnerBinding): void => {
   if (!binding || !validId(binding.ownerId) || ![binding.environment, binding.namespace, binding.doName, binding.doId].every(v => typeof v === 'string' && v.length > 0 && v.trim() === v && !/[\x00-\x1f\x7f]/.test(v)) || !Number.isSafeInteger(binding.stateVersion) || binding.stateVersion < 0 || !Number.isSafeInteger(binding.mappingVersion) || binding.mappingVersion < 1) fail('unavailable');
 };
-export const sameBinding = (a: OwnerBinding, b: OwnerBinding): boolean => a.ownerId === b.ownerId && a.environment === b.environment && a.namespace === b.namespace && a.doName === b.doName && a.doId === b.doId && a.stateVersion === b.stateVersion && a.mappingVersion === b.mappingVersion;
+export const sameMapping = (a: OwnerBinding, b: OwnerBinding): boolean => a.ownerId === b.ownerId && a.environment === b.environment && a.namespace === b.namespace && a.doName === b.doName && a.doId === b.doId && a.mappingVersion === b.mappingVersion;
 export const validatePath = (path: string): void => {
   if (typeof path !== 'string' || !path || new TextEncoder().encode(path).length > 240 || path !== path.normalize('NFC') || /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(path) || /[\\\x00-\x1f\x7f]/.test(path) || path.split('/').some(v => !v || v === '.' || v === '..') || /^[a-z]:/i.test(path)) fail('invalid');
 };
@@ -43,7 +43,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
   const transact = <T>(work: (state: WorkspaceState) => T): T => {
     return host.metadata.transaction(state => {
       if (state.binding === null) state.binding = { ...binding };
-      if (!sameBinding(state.binding, binding) || state.bodies.some(b => !sameBinding(b.binding, binding)) || state.operations.some(o => !sameBinding(o.body.binding, binding))) fail('rejected');
+      if (!sameMapping(state.binding, binding) || state.bodies.some(b => !sameMapping(b.binding, binding)) || state.operations.some(o => !sameMapping(o.body.binding, binding))) fail('rejected');
       return work(state);
     });
   };
@@ -57,7 +57,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
   };
   const verifyBody = async (body: BodyRevision): Promise<Uint8Array> => {
     await admit('read');
-    if (!sameBinding(body.binding, binding)) fail('rejected');
+    if (!sameMapping(body.binding, binding)) fail('rejected');
     let bytes: Uint8Array | null;
     try { bytes = await bounded(() => host.bodies.get(body)); } catch { return fail('unavailable'); }
     if (!bytes || bytes.byteLength !== body.byte_size || await digest(bytes) !== body.sha256) fail('unavailable');
@@ -70,6 +70,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
     const index = state.operations.findIndex(o => o.operation_id === operation.operation_id);
     if (index < 0 || state.operations[index]!.fingerprint !== operation.fingerprint) fail('rejected');
     const saved = state.operations[index]!;
+    if (saved.body.binding.stateVersion !== binding.stateVersion) fail('rejected');
     if (saved.status === 'committed') return copyMeta(saved.meta);
     const file = state.files.find(f => f.path === saved.meta.path);
     if ((file?.revision ?? 0) !== saved.meta.revision - 1 || file?.state === 'tombstoned') fail('conflict');
@@ -125,7 +126,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         if (current?.state !== 'ready') fail('not_found');
         return copyMeta(reserved.operation.meta);
       }
-      if (!reserved.fresh) { await verifyBody(reserved.operation.body); return commit(reserved.operation); }
+      if (!reserved.fresh) { if (reserved.operation.body.binding.stateVersion !== binding.stateVersion) fail('rejected'); await verifyBody(reserved.operation.body); return commit(reserved.operation); }
       await admit('write');
       await bounded(() => host.bodies.put(reserved.operation.body, bytes));
       return commit(reserved.operation);
@@ -136,6 +137,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       const operation = transact(state => state.operations.find(o => o.operation_id === operationId));
       if (!operation) fail('not_found');
       if (operation!.status === 'committed') return copyMeta(operation!.meta);
+      if (operation!.body.binding.stateVersion !== binding.stateVersion) fail('rejected');
       await verifyBody(operation!.body);
       return commit(operation!);
     },
