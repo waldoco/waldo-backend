@@ -610,6 +610,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       channel, userId: owner > 0 ? `${channel}:${owner}` : `${channel}:unlinked`, sessionId: owner > 0 ? `${channel}-dm:${owner}` : `${channel}-dm:unlinked`,
       captureText: resolveCaptureText(this.env),
     }) : undefined;
+    const deps = productionDeps();
     const traces = traceBook(this.ctx.storage.sql);
     const captureText = resolveCaptureText(this.env);
     const log = (entry: TurnLogEntry) => {
@@ -617,16 +618,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The gate runs once here so free-form detail/error text reaches none of the sinks while
       // the capture switch is off; whitelisted hops keep their count/enum detail either way.
       const enriched: TurnLogEntry = gateTraceEntry({ ...entry, owner: entry.owner ?? identity.get<string>('do_name') ?? 'unresolved' }, captureText);
-      traces.record(enriched, Date.now());
+      traces.record(enriched, deps.now());
       console.log(JSON.stringify({ ...enriched, text: undefined }));
       if (exportTurn) this.ctx.waitUntil(exportTurn(enriched).catch((error: unknown) => {
         const note = String(error);
         const failed: TurnLogEntry = gateTraceEntry({ trace: enriched.trace, hop: 'otlp_export', ms: 0, ok: false, error: note, code: 'export_failed', owner: enriched.owner }, captureText);
         console.log(JSON.stringify({ ...failed, text: undefined }));
-        traces.record(failed, Date.now());
+        traces.record(failed, deps.now());
       }));
     };
-    const deps = productionDeps();
     ensureSchema(this.ctx.storage);
     const scheduler = new Scheduler(this.ctx.storage.sql, this.ctx.storage, deps);
     const fallbackZone = this.env.WALDO_OWNER_TIMEZONE ?? 'UTC';
