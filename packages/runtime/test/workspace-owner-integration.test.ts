@@ -136,3 +136,24 @@ it('hung fresh admission after body put settles unavailable retaining pending op
   const state=workspaceMetadata(storage).transaction(s=>s);expect(state.operations[0]?.status).toBe('pending');expect(state.files).toHaveLength(0);expect(vi.getTimerCount()).toBe(0);
  }finally{vi.useRealTimers();}
 });
+it('full-quota committed multipart replay returns original receipt; changed bytes conflict and new operation rejects before put',async()=>{
+ const id=ownerNamespace.idFromName(`workspace-replay-${crypto.randomUUID()}`);const stub=ownerNamespace.get(id);
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const mapping={...binding,do_id:id.toString()};const bodies=new Map<string,Uint8Array>();let puts=0;
+  const bucket={put:async(k:string,b:Uint8Array)=>{puts++;bodies.set(k,b.slice());},get:async(k:string)=>{const b=bodies.get(k);return b?{arrayBuffer:async()=>b.slice().buffer}:null;},delete:async()=>{}} as unknown as R2Bucket;
+  const cfg={...config,TELEGRAM_OWNER_DO:ownerNamespace,ARTIFACTS:bucket};
+  // Directory doName must derive exactly the real stub id.
+  const realCfg={...cfg,TELEGRAM_OWNER_DO:{idFromName:()=>id} as unknown as DurableObjectNamespace};
+  const open=()=>workspaceOwnerHost(realCfg,state.storage,id.toString(),'workspace-owner',vi.fn(async()=>Response.json(mapping)));
+  const op=crypto.randomUUID();
+  const send=async(operation:string,data:number,path='one.bin')=>{
+   const form=new FormData();form.set('csrf','token');form.set('file',new File([new Uint8Array([data])],'one.bin',{type:'application/octet-stream'}));form.set('path',path);form.set('expected_revision','0');form.set('operation_id',operation);
+   return workspaceRequest(new Request('https://fixture/console/workspace/upload',{method:'POST',body:form}),'token',open,workspacePage,()=>workspaceUploadLease(state.storage,open),workspaceDownload);
+  };
+  const first=await send(op,7);expect(first.status).toBe(200);const receipt=await first.json();expect(puts).toBe(1);
+  workspaceMetadata(state.storage).transaction(s=>{s.bodies.push({...s.bodies[0]!,file_id:crypto.randomUUID(),blob_id:crypto.randomUUID(),byte_size:100*1024*1024-1});});
+  const repeated=await send(op,7);expect(repeated.status).toBe(200);expect(await repeated.json()).toEqual(receipt);expect(puts).toBe(1);
+  const changed=await send(op,8);expect(changed.status).toBe(409);expect(puts).toBe(1);
+  const newOperation=await send(crypto.randomUUID(),7,'new.bin');expect(newOperation.status).toBe(413);expect(puts).toBe(1);
+ });
+});
