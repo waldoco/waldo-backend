@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "revision": "native36-v1-W01-W24-R25-R30-adapter-definitions-1",
+  "revision": "native36-v1-W01-W24-R25-R36-adapter-definitions-1",
   "sources": [
     {
       "family": "calendar",
@@ -1903,6 +1903,404 @@
         "status"
       ],
       "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "reading_metadata",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "reading_id",
+        "source_at",
+        "derived_score",
+        "scale_max",
+        "sample_count",
+        "stale",
+        "clinical_assessment",
+        "validated_fitness_for_duty_model",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "planning_choices",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "meeting_id",
+        "alternatives",
+        "medical_basis",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "product_pages",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "url",
+        "source_taint",
+        "attack_text",
+        "products",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "comparison_constraints",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "currency",
+        "budget_amount",
+        "all_in",
+        "requirements",
+        "purchase_grant",
+        "profile_disclosure_grant",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "private_profile",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "category",
+        "marker",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "research_questions",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "question",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "research_sources",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "url",
+        "captured_at",
+        "title",
+        "bytes",
+        "digest"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "research_limits",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "authority_origin",
+        "starts_at",
+        "deadline",
+        "aggregate_input_tokens",
+        "aggregate_output_tokens",
+        "aggregate_tool_attempts",
+        "aggregate_model_attempts",
+        "aggregate_tool_cost_usd",
+        "aggregate_estimated_total_cost_usd",
+        "max_attempts_per_tool_intent",
+        "backoff_ms",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "tariff",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "currency",
+        "pricing_status",
+        "model_route",
+        "input_per_million_usd",
+        "cached_input_per_million_usd",
+        "output_per_million_usd",
+        "tool_attempt_usd",
+        "failed_attempt_billed",
+        "cache_subset_of_input",
+        "estimate_not_bill",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "retry_error_schedule",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "match",
+        "outcomes",
+        "schedule_mode",
+        "unmatched_request",
+        "after_declared_attempts",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "executor_proposals",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "executor",
+        "proposal",
+        "monthly_amount",
+        "currency",
+        "account_creation_approval",
+        "service_existing",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "appointment_tasks",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "provider",
+        "appointment_reference",
+        "service_date",
+        "question",
+        "permitted_fields",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "automatic_call_observations",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "task_id",
+        "route_id",
+        "attempt_id",
+        "submitted_at",
+        "status",
+        "error_code",
+        "human_disclosure_count",
+        "completion",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "call_route_scopes",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "route_id",
+        "audience",
+        "task_id",
+        "allowed_fields",
+        "human_route_authorized",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "human_operator_offers",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "audience",
+        "provider",
+        "route_id",
+        "requested_fields",
+        "purpose",
+        "retention",
+        "owner_approval",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "private_appointment_notes",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "category",
+        "marker",
+        "bytes"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "refund_intents",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "intent_id",
+        "idempotency_key",
+        "order_id",
+        "refund_id",
+        "currency",
+        "amount",
+        "submitted_at",
+        "purpose",
+        "resubmission_authorized",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "refund_transport_observations",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "raw_receipt_id",
+        "kind",
+        "provider_receipt_id",
+        "intent_id",
+        "idempotency_key",
+        "refund_id",
+        "submitted",
+        "submitted_at",
+        "response_at",
+        "transport_outcome",
+        "transport_error",
+        "provider_outcome_at_timeout",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "refund",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "order_id",
+        "intent_id",
+        "idempotency_key",
+        "currency",
+        "requested_amount",
+        "accepted_amount",
+        "credited_amount",
+        "status",
+        "lookup_at",
+        "authority",
+        "credited_at",
+        "failure_code",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "purchase_request_scope",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "cart_id",
+        "cart_revision",
+        "currency",
+        "cap_amount",
+        "lawful",
+        "ordinary",
+        "health_restriction",
+        "payment_restriction",
+        "checkout_approval",
+        "preference_update_authorized",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
       "selected_id_filter_required": true
     }
   ],
