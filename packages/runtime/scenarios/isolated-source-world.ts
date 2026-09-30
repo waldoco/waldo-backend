@@ -3,6 +3,7 @@
 export type SourceRow = Readonly<{ owner_id: string; id: string; [key: string]: unknown }>;
 export type Revision = Readonly<{ at: string; owner_id: string; source: string; id: string; patch: Readonly<Record<string, unknown>> }>;
 export type SourceAccess = Readonly<{ owner_id: string; source: string; id: string | null; kind: 'read' | 'list'; at: string }>;
+export type AppliedRevision = Readonly<{ at: string; owner_id: string; source: string; id: string; before: SourceRow; after: SourceRow }>;
 export type InterceptedEffect = Readonly<{ owner_id: string; kind: string; target: string; payload: unknown; idempotency_key: string; at: string }>;
 export type WorldFixture = Readonly<{
   clock: string;
@@ -24,6 +25,7 @@ export class IsolatedSourceWorld {
   private readonly revisions: readonly Revision[];
   private readonly effects: InterceptedEffect[] = [];
   private readonly accesses: SourceAccess[] = [];
+  private readonly appliedRevisions: AppliedRevision[] = [];
   // Simulated provider state is separate from the source fixtures and the effect log.
   private readonly providerCalendar: Map<string, Map<string, SourceRow>> = new Map();
   private readonly providerSequence: Map<string, number> = new Map();
@@ -50,7 +52,7 @@ export class IsolatedSourceWorld {
       this.checkOwner(revision.owner_id);
       if (!this.rows.get(revision.source)?.get(revision.owner_id)?.has(revision.id)) throw new Error('revision target missing');
       if ('owner_id' in revision.patch || 'id' in revision.patch) throw new Error('revision cannot change source identity');
-      atTime(revision.at);
+      if (atTime(revision.at) <= this.nowMs) throw new Error('revision must follow fixture start');
     }
   }
 
@@ -80,9 +82,16 @@ export class IsolatedSourceWorld {
       const store = this.rows.get(revision.source)?.get(revision.owner_id);
       const prior = store?.get(revision.id);
       if (!prior) throw new Error('revision target missing');
-      store!.set(revision.id, { ...prior, ...copy(revision.patch) });
+      const after = { ...prior, ...copy(revision.patch) };
+      store!.set(revision.id, after);
+      this.appliedRevisions.push({ at: new Date(at).toISOString(), owner_id: revision.owner_id, source: revision.source,
+        id: revision.id, before: copy(prior), after: copy(after) });
     }
     this.nowMs = next;
+  }
+  revisionLog(owner: string): readonly AppliedRevision[] {
+    this.checkOwner(owner);
+    return this.appliedRevisions.filter((revision) => revision.owner_id === owner).map(copy);
   }
   intercept(effect: Omit<InterceptedEffect, 'at'>): InterceptedEffect {
     this.checkOwner(effect.owner_id);

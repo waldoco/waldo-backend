@@ -36,8 +36,13 @@ describe('isolated source and effect world', () => {
     world.advance('2026-10-06T10:00:00+05:30');
     expect(world.read('a', 'mail', 'same-id')?.version).toBe(2);
     expect(world.read('b', 'mail', 'same-id')?.version).toBe(1);
+    expect(world.revisionLog('a')).toEqual([expect.objectContaining({ at: '2026-10-06T04:30:00.000Z',
+      owner_id: 'a', source: 'mail', id: 'same-id', before: expect.objectContaining({ version: 1 }), after: expect.objectContaining({ version: 2 }) })]);
+    expect(world.revisionLog('b')).toEqual([]);
     expect(world.accessLog('a').at(-1)?.at).toBe('2026-10-06T04:30:00.000Z');
     expect(new IsolatedSourceWorld(fixture()).read('a', 'mail', 'same-id')?.version).toBe(1);
+    expect(new IsolatedSourceWorld(fixture()).revisionLog('a')).toEqual([]);
+    expect(() => new IsolatedSourceWorld({ ...fixture(), revisions: [{ ...fixture().revisions![0]!, at: fixture().clock }] })).toThrow(/follow fixture start/);
     expect(() => world.advance('2026-10-06T09:00:00+05:30')).toThrow(/backward/);
   });
   it('intercepts effects, keys retries, rejects changed retries and separates outboxes', () => {
