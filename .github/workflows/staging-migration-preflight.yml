@@ -13,6 +13,7 @@ permissions:
 jobs:
   requires-reviewed-beta-ref:
     runs-on: ubuntu-latest
+    timeout-minutes: 1
     steps:
       - name: Refuse execution from the registration stub
         run: |
