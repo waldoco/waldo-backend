@@ -1,9 +1,25 @@
-# Waldo dashboard app - slice 1
+# Waldo React dashboard
 
-A read-only React shell built from the #298 dashboard/app bridge contract and #343 design-language brief. Not deployed. No production fixture data, effect buttons, chat, memory claims or inferred health scores. Loading, error, signed-out and honest no-data states render without a provider response.
+The authenticated React dashboard reads only `/console/dashboard/api/v1/overview` on the same origin, with same-origin credentials and no-store requests. It does not read the full `/console` JSON (which includes memory and CSRF). The Worker gates the HTML shell through the same owner-session read; only content-hashed JS/CSS are served as public immutable assets. Unknown static paths do not fall back to the app.
 
-`pnpm --filter @waldo/dashboard-app test` and `pnpm --filter @waldo/dashboard-app build` run locally. `pnpm --filter @waldo/dashboard-app dev` runs a UI preview, but without an authenticated API its request to `/console/dashboard/api/v1/overview` fails honestly. The *preview-only* synthetic capture recipe lives in `scripts/preview.mjs`; it is excluded from production builds and served only under a local preview script. Never deploy the fixture as a substitute for owner data.
+Today replaces the visible Overview destination; old `#/overview` links still resolve to Today. Waiting and Patrol remain narrow summaries. Memory details are unavailable here. Connections show saved Google grants, not verified live tool use. Contextual links and More controls open the existing protected owner-console pages for real details/actions. Calendar review controls remain there; email/message sends still require the exact review card in chat. This slice adds no effect action and does not certify the approval-to-execution wiring.
 
-Integration status: #352 (`c8df216`) provides the narrow owner-DO Overview API on staging; the shell + static adapter are pending review/merge/deploy. Existing `/console` cookie remains `Path=/console`. The shell and API use the same origin at `/console/dashboard` and `/console/dashboard/api/v1/overview`, and the static files are content-hashed under `/console/dashboard/assets/`. The Worker dispatch gates the HTML shell with the API's owner-session check; public immutable JS/CSS contain no owner data. `run_worker_first: true` keeps API routing and authentication ahead of static serving, and unknown paths never fall back to the SPA.
+The brand font and logo come from `waldo-landing/public/fonts/Mottle[wght].ttf` and `waldo-landing/public/logo.svg`. Copies live in `src/assets`; CSS imports force inline assets so the unchanged Worker JS/CSS allowlist remains valid. No third-party font requests are made. Body type uses locally available SF Pro Rounded or the platform fallback; the landing's large SF Pro files are not bundled. This is a brand-informed composition, not pixel parity with Figma.
 
-Other pages currently use Overview's narrow fields. Memory displays a deliberate unavailable state until a provenance-safe endpoint exists; Waiting is read-only; no approval sends are wired. The source fixture preview is not live owner proof. Final gate is a real authenticated owner-session read and desktop/mobile pixel inspection after staging deploy, including empty and failure states. `/console` Accept JSON exposes the full ConsoleView including CSRF and memory; the app does not consume it.
+Run with Node 22 and pnpm 10.34.4:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm --filter @waldo/dashboard-app test
+pnpm --filter @waldo/dashboard-app typecheck
+pnpm --filter @waldo/dashboard-app build
+pnpm --filter @waldo/dashboard-app verify:assets
+pnpm -r typecheck
+node packages/dashboard-app/scripts/preview.mjs
+```
+
+Open `http://127.0.0.1:4178/console/dashboard`. There is no `dev` script. The preview is local-only, explicitly synthetic and excluded from production bundles; it does not simulate protected legacy pages or live authentication. After rebuilds reload the browser. Optional `--case=empty|missing-summary|signed-out|unavailable|malformed|loading|recorded` and `--port=4180` select a synthetic recovery scenario. The fixture intentionally shows an old `as_of` record; the UI displays its timestamp without inventing a freshness policy.
+
+No deployed revision was inspected for this slice. Local component/transport tests and synthetic pixels cannot establish live two-owner isolation, chat continuity, CSRF, action receipts or provider delivery. Full work queues, Brief/Close detail, rich Patrol history, modern Memory read/actions, sharing, commitments and web chat need explicit contracts. Private workspace Files are a separate integration (#424, now source-merged), with namespace configuration and rollout still owned by that lane.
+
+See `docs/planning/waldo-agent-mvp/CODEX_L7_TODAY.md` for the route/action map, evidence and acceptance handoff.

@@ -37,9 +37,15 @@ export const readOverview = (value: unknown): OverviewV1 => {
 };
 
 export const OVERVIEW_URL = '/console/dashboard/api/v1/overview';
+export class SignInRequired extends Error {
+  constructor() { super('Sign in to see your dashboard.'); }
+}
 export async function fetchOverview(signal?: AbortSignal): Promise<OverviewV1> {
   const response = await fetch(OVERVIEW_URL, { credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store', signal });
-  if (response.status === 401) throw new Error('Sign in to see your dashboard.');
+  if (response.status === 401) throw new SignInRequired();
   if (!response.ok) throw new Error('The dashboard could not load right now.');
-  return readOverview(await response.json() as unknown);
+  let value: unknown;
+  try { value = await response.json(); }
+  catch { throw new Error('The dashboard received an unsupported data shape.'); }
+  return readOverview(value);
 }

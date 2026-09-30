@@ -1,9 +1,52 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Dashboard } from './App';
+import { Dashboard, DashboardNavigation, DashboardFeedback, resolveRoute } from './App';
 import type { OverviewV1 } from './model';
 const empty: OverviewV1 = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kolkata', brief: { status: 'not_sent', at: null }, waiting: { count: 0, first: null }, next_card: null, latest_activity: null, services: [] };
 describe('dashboard read-only copy', () => {
+  it('escapes hostile proposal, activity, account and card text on every read surface', () => {
+    const hostile = '<script>alert("owner")</script>';
+    const record: OverviewV1 = { ...empty, waiting: { count: 1, first: { id: 'p1', summary: hostile } }, next_card: { id: 'c1', label: hostile, scheduled_at: empty.as_of }, latest_activity: { kind: hostile, status: hostile, summary: hostile, at: empty.as_of }, services: [{ account_id: 'g1', email: hostile, grants: [], health: 'needs_reconnect' }] };
+    for (const route of ['today', 'waiting', 'patrol', 'connections'] as const) {
+      const html = renderToStaticMarkup(<Dashboard data={record} route={route} />);
+      expect(html).not.toContain('<script>');
+      expect(html).toContain('&lt;script&gt;');
+    }
+  });
+  it('offers sign-in for an expired session and retry for an unavailable read', () => {
+    const signedOut = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'Sign in to see your dashboard.', signedOut: true }} onRetry={() => {}} />);
+    expect(signedOut).toContain('href="/console/signin"');
+    expect(signedOut).not.toContain('Try again');
+    const unavailable = renderToStaticMarkup(<DashboardFeedback state={{ kind: 'error', message: 'The dashboard could not load right now.', signedOut: false }} onRetry={() => {}} />);
+    expect(unavailable).toContain('Try again');
+    expect(unavailable).not.toContain('Not available yet');
+    expect(renderToStaticMarkup(<DashboardFeedback state={{ kind: 'loading' }} onRetry={() => {}} />)).toContain('role="status"');
+  });
+  it('opens Today by default, preserves Overview links, and keeps existing controls reachable', () => {
+    expect(resolveRoute('')).toBe('today');
+    expect(resolveRoute('overview')).toBe('today');
+    const html = renderToStaticMarkup(<DashboardNavigation route="today" />);
+    expect(html).toContain('aria-current="page"');
+    expect(html).toContain('href="#/today"');
+    for (const path of ['setup', 'day', 'files', 'usage', 'invites', 'account']) {
+      expect(html).toContain(`href="/console/${path}"`);
+    }
+    for (const [route, paths] of [
+      ['waiting', ['waiting']], ['patrol', ['activity']],
+      ['memory', ['spots', 'constellation', 'memory']], ['connections', ['connections']],
+    ] as const) {
+      const page = renderToStaticMarkup(<Dashboard data={empty} route={route} />);
+      for (const path of paths) expect(page).toContain(`href="/console/${path}"`);
+    }
+  });
+  it('keeps pending decisions visible when their summary is unavailable', () => {
+    const record: OverviewV1 = { ...empty, waiting: { count: 2, first: null } };
+    for (const route of ['overview', 'waiting'] as const) {
+      const html = renderToStaticMarkup(<Dashboard data={record} route={route} />);
+      expect(html).toContain('The decision summary is unavailable. Open the full proposals to review.');
+      expect(html).not.toMatch(/Nothing is waiting|No decision is waiting/);
+    }
+  });
   it('does not invent a Brief, health score, future card or activity', () => {
     const html = renderToStaticMarkup(<Dashboard data={empty} route="overview" />);
     expect(html).toContain('The Brief has not been sent.');
