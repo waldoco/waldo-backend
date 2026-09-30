@@ -30,6 +30,7 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       headers: { apikey: key, 'content-type': 'application/json', 'x-waldo-at': String(at), 'x-waldo-sig': await routerSignature(secret, at, `proxy.${await sha256(raw)}`) },
     });
     const json = await response.json().catch(() => ({ error: { status: response.status, message: 'connector proxy failed' } })) as { data?: unknown; id?: string; email?: string; scopes?: string[]; error?: { status: number; message: string } };
+    if (json.error?.message === 'intent_pending' || json.error?.message === 'intent_conflict' || json.error?.message === 'intent_required' || json.error?.message === 'intent_unavailable') throw new ProxyIntentError(json.error.message);
     if (json.error) throw new GoogleError(json.error.status, json.error.message);
     return json;
   };

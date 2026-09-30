@@ -5,6 +5,7 @@ class ToolExecutionError extends Error {}
 // also used by the connector-proxy Edge Function). Server auth modes: a static deploy-config
 // token, or 'google' - the owner's connected Google account supplies the OAuth bearer. Vault-backed
 // accounts keep the token edge-side: the runtime sends server/tool/args and the edge attaches it.
+import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
 import type { McpCallProposal } from '../../channels/approvals';
 import { callMcpTransport, McpAuthError, McpToolError, type McpTransportServer } from '../../connectors/mcp-transport';
@@ -29,7 +30,7 @@ export const mcpServers = (raw: string | undefined): readonly McpServerConfig[] 
 export type McpGoogleResolution = Readonly<{ mode: 'bearer'; token: string } | { mode: 'proxy'; connection: string }>;
 export type McpGoogleAuth = Readonly<{
   resolve(): Promise<McpGoogleResolution | null>;
-  proxy(serverUrl: string, tool: string, args: Record<string, unknown>, connection: string): Promise<unknown>;
+  proxy(serverUrl: string, tool: string, args: Record<string, unknown>, connection: string, intent?: ProxyIntent): Promise<unknown>;
 }>;
 
 // Typed auth states shared by the turn handler (mapped to a connect card) and the approval
@@ -49,14 +50,14 @@ export const callMcp = async (server: McpTransportServer, tool: string, args: Re
 
 // One execution path for both entry points (turn tool + approved card): resolves the server's
 // auth mode and runs the call, throwing McpConnectError for owner-actionable auth states.
-export const executeMcp = async (server: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch): Promise<{ content: unknown; protocolVersion: string }> => {
+export const executeMcp = async (server: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch, intent?: ProxyIntent): Promise<{ content: unknown; protocolVersion: string }> => {
   if (server.auth === 'google') {
     if (!googleAuth) throw new McpConnectError('not_connected', 'Google is not connected');
     const resolved = await googleAuth.resolve();
     if (resolved === null) throw new McpConnectError('not_connected', 'Google is not connected');
     if (resolved.mode === 'proxy') {
       try {
-        const content = await googleAuth.proxy(server.url, tool, args, resolved.connection);
+        const content = await googleAuth.proxy(server.url, tool, args, resolved.connection, intent);
         return { content, protocolVersion: 'proxied' };
       } catch (error) {
         const status = (error as { status?: number }).status;

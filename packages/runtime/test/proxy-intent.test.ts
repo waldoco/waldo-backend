@@ -39,3 +39,15 @@ it('vault effect client rejects missing host intent before signed request but re
  await proxy.client('owner','conn').events('a','b',1,false);expect(fetcher).toHaveBeenCalledOnce();
  await proxy.client('owner','conn',undefined,{id:'approval:1'}).sendRaw('bytes');expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body)).intent_id).toBe('approval:1');
 });
+import {googleHandlers,type GoogleAccess} from '../src/tools/live/google';
+import type {GoogleClient} from '../src/connectors/google';
+it('draft identity binds host owner/turn/call, repeats stable invocation but distinguishes legitimate identical calls',async()=>{
+ const ids:string[]=[];const client={draft:async()=>({draft_id:'fixture'})} as unknown as GoogleClient;
+ const access:GoogleAccess={client:async(_feature,intent)=>{ids.push(intent?.id??'missing');return client;}};
+ const handler=googleHandlers(access,{propose:async()=>'',proposeSendEmail:async()=>'',record:()=>{}},{timezone:'UTC',now:()=>new Date(0)}).find(h=>h.name==='draft_email')!;
+ const args={to:['fictional@test.invalid'],subject:'fixture',body_markdown:'fixture'};
+ const ctx={authenticatedUserId:'owner',turnId:'turn',toolCallId:'call'};
+ await handler.handle(args as never,ctx as never);await handler.handle(args as never,ctx as never);await handler.handle(args as never,{...ctx,toolCallId:'other'} as never);
+ expect(ids[0]).toMatch(/^draft:[0-9a-f]{64}$/);expect(ids[1]).toBe(ids[0]);expect(ids[2]).not.toBe(ids[0]);
+ const denied=await handler.handle(args as never);expect(denied).toMatchObject({ok:false,code:'rejected'});expect(ids).toHaveLength(3);
+});

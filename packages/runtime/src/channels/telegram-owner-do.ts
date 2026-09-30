@@ -1,3 +1,4 @@
+import type { ProxyIntent } from '../connectors/proxy-intent';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceDownload, workspacePage } from './console-workspace';
@@ -768,7 +769,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace: `google:${Date.now()}`, hop: 'google_token_migrated', ms: 0, ok: true, detail: vault ? 'moved to vault' : 'moved to account list' });
       },
       // The first healthy account whose grant covers the feature serves it.
-      async client(feature: GoogleFeature = 'calendar') {
+      async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent) {
         const app = await googleApp();
         if (!app) return null;
         await google.migrate();
@@ -777,7 +778,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = fit.find((candidate) => !failing[candidate.id]) ?? fit[0];
         if (!account) return null;
         if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
-        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error)) : null;
+        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error), intent) : null;
       },
       async state() {
         await google.migrate();
@@ -856,7 +857,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const desk = approvalDesk(storage.sql, {
-      call: routedCall, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
+      call: routedCall, owner, google: (intent,feature) => google.client(feature??'calendar',intent), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');
@@ -872,10 +873,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
       // Approved MCP calls run post-approval, outside any turn. The result is external content:
       // the owner gets a bounded line, and it never re-enters model context.
-      mcpCall: async (proposal) => {
+      mcpCall: async (proposal,intent) => {
         const found = mcpServers(this.env.WALDO_MCP_SERVERS).find((s) => s.name === proposal.server);
         if (!found) throw new Error(`MCP server "${proposal.server}" is no longer configured`);
-        const { content, protocolVersion } = await executeMcp(found, proposal.tool, proposal.args, mcpGoogleAuth);
+        const { content, protocolVersion } = await executeMcp(found, proposal.tool, proposal.args, mcpGoogleAuth, fetch, intent);
         return `Result (external content, bounded): ${JSON.stringify(content).slice(0, 300)} (protocol ${protocolVersion})`;
       },
     });
@@ -920,10 +921,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         }
         return vault && doName ? { mode: 'proxy' as const, connection: account.id } : null;
       },
-      proxy: async (serverUrl, tool, args, connection) => {
+      proxy: async (serverUrl, tool, args, connection, intent) => {
         const doName = vaultOwner();
         if (!vault || !doName) throw new Error('connector proxy is not configured');
-        return vault.mcpCall(doName, connection, serverUrl, tool, args);
+        return vault.mcpCall(doName, connection, serverUrl, tool, args, intent);
       },
     };
     const updates = updateBook(storage.sql);

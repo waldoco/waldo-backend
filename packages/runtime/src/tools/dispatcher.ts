@@ -56,6 +56,7 @@ export type ParseToolCallsResult =
 export type ToolDispatcherContext = HookRuntimeContext & {
   authenticatedUserId: string;
   turnId?: string;
+  toolCallId?: string;
   session: SessionState;
 };
 
@@ -279,7 +280,7 @@ export async function dispatchTool<Ctx extends ToolDispatcherContext>(
       if (executeOrReconcile === undefined) throw new Error('trusted tool reconciler disappeared');
       handlerResult = await executeOrReconcile(args, ctx, trustedEffect);
     } else {
-      handlerResult = await handler.handle(args, ctx);
+      handlerResult = await handler.handle(args, { ...ctx, toolCallId: call.id });
     }
   } catch (error) {
     // A trusted adapter can have crossed its side-effect boundary before an unexpected throw.

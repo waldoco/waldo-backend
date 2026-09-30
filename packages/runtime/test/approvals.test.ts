@@ -581,3 +581,16 @@ describe('approval desk - email_send rail', () => {
     });
   });
 });
+
+it('approved email propagates ledger intent and pending proxy outcome remains uncertain, never false not-delivered',async()=>{
+ const {ProxyIntentError}=await import('../src/connectors/proxy-intent');const {sha256Hex}=await import('../src/connectors/google');
+ const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(`approval-proxy-${crypto.randomUUID()}`));
+ await runInDurableObject(stub,async(_instance,state)=>{
+  const contexts:unknown[]=[];let sends=0;const raw='fixture-mime';
+  const client={sendRaw:async()=>{sends++;throw new ProxyIntentError('intent_pending');},findSentByMessageId:async()=>false} as unknown as GoogleClient;
+  const desk=approvalDesk(state.storage.sql,{call:async()=>({message_id:1}),owner:42,google:async(intent,feature)=>{contexts.push({intent,feature});return client;},newId:()=>crypto.randomUUID(),now:()=>1000,timezone:'UTC',log:()=>{}});
+  const id=await desk.proposeSendEmail({to:['fictional@test.invalid'],subject:'fixture',body:'fixture',raw,digest:await sha256Hex(raw),message_id:'fixture-id'});
+  const result=await desk.decide(id,'a','fixture');expect(result.toast).toBe('Outcome unknown');expect(result.message).not.toContain('Nothing was delivered');expect(contexts).toEqual([{intent:{id:`approval:${id}:apply`},feature:'mail'}]);
+  expect(state.storage.sql.exec<{status:string}>('SELECT status FROM ledger WHERE id=?',id).one().status).toBe('uncertain');await desk.decide(id,'a','fixture');expect(sends).toBe(1);
+ });
+});

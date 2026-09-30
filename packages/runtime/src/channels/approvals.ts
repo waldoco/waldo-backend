@@ -1,3 +1,5 @@
+import type { ProxyIntent } from '../connectors/proxy-intent';
+import { ProxyIntentError } from '../connectors/proxy-intent';
 import type { ProposeCalendarChangeArgs } from '@waldo/contracts';
 import { GoogleError, sha256Hex, type GoogleClient } from '../connectors/google';
 import type { BrowserSubmitOutcome } from '../tools/live/browser';
@@ -70,7 +72,7 @@ export type ApprovalDesk = Readonly<{
 export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   call: TelegramCall;
   owner: number;
-  google(): Promise<GoogleClient | null>;
+  google(intent?: ProxyIntent, feature?: 'mail' | 'calendar'): Promise<GoogleClient | null>;
   newId(): string;
   now(): number;
   timezone: string;
@@ -79,7 +81,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
   browserSubmit?: (proposal: BrowserSubmitProposal) => Promise<BrowserSubmitOutcome>;
   sendMessage?: (proposal: MessageSendProposal) => Promise<void>;
   // Returns a bounded owner-facing outcome line (the result is external content).
-  mcpCall?: (proposal: McpCallProposal) => Promise<string>;
+  mcpCall?: (proposal: McpCallProposal, intent: ProxyIntent) => Promise<string>;
 }>): ApprovalDesk => {
   sql.exec(`CREATE TABLE IF NOT EXISTS ledger (
     id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NOT NULL, payload_json TEXT NOT NULL,
@@ -216,7 +218,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
         if (action === 'u') {
           out = { toast: "Can't be undone", message: 'A sent email cannot be undone. Nothing was reversed.' };
         } else {
-          const client = await deps.google();
+          const client = await deps.google({id:`approval:${id}:apply`},'mail');
           if (client === null) {
             out = { toast: 'Google is not connected', message: 'I could not send that because Google is not connected.' };
           } else if (await sha256Hex(ep.raw) !== ep.digest) {
@@ -228,6 +230,10 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
               setStatus(id, 'done');
               out = { toast: 'Sent', message: `Sent: ${describeEmail(ep)}. This one can't be undone.` };
             } catch (error) {
+              if(error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) {
+                setStatus(id,'uncertain');
+                return {toast:'Outcome unknown',message:'The send outcome is unknown. Check Gmail before retrying; nothing was sent again.'};
+              }
               const landed = await client.findSentByMessageId(ep.message_id).catch(() => false);
               if (landed) {
                 setStatus(id, 'done');
@@ -266,16 +272,17 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
           out = { toast: 'MCP is not set up', message: 'I could not run that because MCP execution is not set up on this Waldo yet.' };
         } else {
           try {
-            const outcome = await deps.mcpCall(cp);
+            const outcome = await deps.mcpCall(cp,{id:`approval:${id}:apply`});
             setStatus(id, 'done');
             out = { toast: 'Done', message: `Done: ${describeMcp(cp)}. ${outcome}` };
           } catch (error) {
+            if(error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) {setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The MCP outcome is unknown. Check it before retrying; nothing was run again.'};}
             setStatus(id, 'failed');
             out = { toast: 'That failed', message: `The call failed (${error instanceof Error ? error.message : String(error)}). Nothing else ran - ask me to try again.` };
           }
         }
       } else {
-        const client = await deps.google();
+        const client = await deps.google({id:`approval:${id}:${action==='u'?'undo':'apply'}`});
         if (client === null) {
           out = { toast: 'Google is not connected', message: 'I could not do that because Google is not connected.' };
         } else if (action === 'a') {
@@ -298,6 +305,7 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: true, detail: id });
       return out;
     } catch (error) {
+      if(error instanceof ProxyIntentError || (error instanceof GoogleError && error.message==='intent_pending')) { setStatus(id,'uncertain');return {toast:'Outcome unknown',message:'The operation outcome is unknown. Check the result before retrying; nothing was run again.'}; }
       deps.log({ trace, hop: `approval_${action}`, ms: deps.now() - started, ok: false, error: String(error) });
       return { toast: 'That failed', message: `That didn't work: ${error instanceof Error ? error.message : String(error)}` };
     }

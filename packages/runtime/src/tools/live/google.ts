@@ -1,3 +1,4 @@
+import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
@@ -9,7 +10,7 @@ import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
 
 export type GoogleAccess = Readonly<{
-  client(feature?: GoogleFeature): Promise<GoogleClient | null>;
+  client(feature?: GoogleFeature, intent?: ProxyIntent): Promise<GoogleClient | null>;
 }>;
 
 export type EffectDesk = Readonly<{
@@ -162,8 +163,11 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
     // The draft receipt is a mutation ack, not provider-controlled content, so the result is
     // restamped taint-null: EXTERNAL_ORIGIN_TOOLS covers reads, and the dispatcher rejects a
     // mismatched stamp ('external' here made every draft result unparseable, 2026-09-25).
-    handle: async (args: DraftEmailArgs) => {
-      const result = await withGoogle(google, 'mail', async (client) => {
+    handle: async (args: DraftEmailArgs, ctx?: ToolDispatcherContext) => {
+      if (!ctx?.turnId || !ctx.toolCallId) return { ok: false as const, code: 'rejected' as const, error: 'Draft invocation identity is unavailable.' };
+      const intent = { id: `draft:${await sha256Hex(JSON.stringify([ctx.authenticatedUserId,ctx.turnId,ctx.toolCallId]))}` };
+      const access: GoogleAccess = { client: (feature) => google.client(feature,intent) };
+      const result = await withGoogle(access, 'mail', async (client) => {
         const draft = await client.draft({
           to: args.to, ...(args.cc ? { cc: args.cc } : {}), ...(args.bcc ? { bcc: args.bcc } : {}),
           subject: args.subject, body: args.body_markdown, ...(args.reply_to_thread_id ? { threadId: args.reply_to_thread_id } : {}),
