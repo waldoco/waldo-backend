@@ -86,7 +86,7 @@ test('real filesystem: ignored nested env cannot bypass CLI environment allowlis
 });
 import {readFileSync,readdirSync} from 'node:fs';
 
-test('effective linked config drift stops write',async()=>{const f=fixture();let reads=0;f.options.configDigest=()=>++reads===1?'before':'after';await assert.rejects(main(f.options),/effective_config_drift/);assert.ok(!f.calls.some(c=>c.argv.includes('--yes')));});
+test('effective linked config drift stops write',async()=>{const f=fixture();let reads=0;f.options.configDigest=()=>++reads<=2?'before':'after';await assert.rejects(main(f.options),/effective_config_drift/);assert.ok(!f.calls.some(c=>c.argv.includes('--yes')));});
 import {effectiveConfigDigest} from './staging-migration-apply.mjs';
 test('real filesystem: root dotenv must not be invisible to effective config validation',()=>{
  const dir=mkdtempSync(join(tmpdir(),'waldo-root-env-test-'));
@@ -99,3 +99,5 @@ test('CLI HOME and profile are isolated from ambient custom endpoints',async()=>
  const f=fixture();f.options.env.HOME='/untrusted/home';await main(f.options);
  for(const c of f.calls.filter(c=>c.cmd==='pnpm')){assert.notEqual(c.opts.env.HOME,'/untrusted/home');assert.equal(c.opts.env.HOME,'/fictional-isolated-workdir/.isolated-home');assert.ok(c.argv.includes('--profile'));}
 });
+
+test('root dotenv rejection occurs before credential-bearing link',async()=>{const f=fixture();f.options.configDigest=()=>{throw Error('local_forbidden_input');};await assert.rejects(main(f.options),/local_forbidden_input/);assert.ok(!f.calls.some(c=>c.cmd==='pnpm'));});

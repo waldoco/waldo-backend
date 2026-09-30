@@ -82,6 +82,7 @@ export async function main({env=process.env,run=execFileSync,fetcher=fetch,manif
  makeDir(home,{recursive:true});
  Object.assign(cliEnv,{HOME:home,XDG_CONFIG_HOME:join(home,'config'),XDG_CACHE_HOME:join(home,'cache'),XDG_DATA_HOME:join(home,'data'),TMPDIR:join(home,'tmp')});
  makeDir(cliEnv.TMPDIR,{recursive:true});
+ configDigest(workdir); // Reject parent/root dotenv before credentials reach link.
  const cli=args=>run('pnpm',['dlx','supabase@2.109.1',...args,'--profile','supabase'],{cwd:workdir,env:cliEnv,stdio:'pipe',timeout:180000});
  // Password stays in the process environment, never argv, output or receipt.
  cli(['link','--project-ref',PROJECT]);
