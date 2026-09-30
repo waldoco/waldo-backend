@@ -92,3 +92,30 @@ it('real console route denies missing sessions and fails closed without namespac
   });
   const admitted=await stub.fetch('https://fixture/console/workspace',{headers:{cookie:`${CONSOLE_COOKIE}=${cookie}`}});expect(admitted.status).toBe(503);expect(await admitted.json()).toEqual({error:'workspace_unavailable'});
 });
+
+import { workspaceUploadLease } from '../src/channels/workspace-host';
+it('real SQLite upload prelease serializes raw streams and stale release cannot clear replacement lease',async()=>{
+ const stub=ownerNamespace.get(ownerNamespace.idFromName(`workspace-lease-${crypto.randomUUID()}`));
+ await runInDurableObject(stub,async(_instance,state)=>{
+  workspaceMetadata(state.storage).transaction(s=>{s.binding={ownerId:owner,environment:'test',namespace:'ns',doName:'lease',doId:'id',stateVersion:0,mappingVersion:1};});
+  const open=async()=>({} as Awaited<ReturnType<typeof workspaceOwnerHost>>);
+  const first=await workspaceUploadLease(state.storage,open);first.assert();
+  await expect(workspaceUploadLease(state.storage,open)).rejects.toThrow('workspace_pending');
+  state.storage.sql.exec('UPDATE workspace_upload_lease SET expires_at=0 WHERE singleton=1');
+  const next=await workspaceUploadLease(state.storage,open);
+  expect(()=>first.assert()).toThrow('workspace_pending');first.release();next.assert();next.release();
+ });
+});
+it('cross-origin browser mutation rejects before reservation/open/body parse',async()=>{
+ const open=vi.fn();const reserve=vi.fn();
+ const response=await workspaceRequest(new Request('https://fixture/console/workspace/remove',{method:'POST',headers:{origin:'https://other.invalid'},body:'x'}),'token',open,workspacePage,reserve,workspaceDownload);
+ expect(response.status).toBe(403);expect(open).not.toHaveBeenCalled();expect(reserve).not.toHaveBeenCalled();
+});
+it('full custody quota admits bounded committed retry prelease without granting new byte capacity',async()=>{
+ const stub=ownerNamespace.get(ownerNamespace.idFromName(`workspace-full-${crypto.randomUUID()}`));
+ await runInDurableObject(stub,async(_instance,state)=>{
+  workspaceMetadata(state.storage).transaction(s=>{s.bodies=[{file_id:crypto.randomUUID(),blob_id:crypto.randomUUID(),revision:1,byte_size:100*1024*1024,sha256:'fixture',mime:'application/octet-stream',provenance:'owner_upload',created_at:0,binding:{ownerId:owner,environment:'test',namespace:'ns',doName:'full',doId:'id',stateVersion:0,mappingVersion:1}}];});
+  const lease=await workspaceUploadLease(state.storage,async()=>({} as Awaited<ReturnType<typeof workspaceOwnerHost>>));
+  lease.assert();expect(state.storage.sql.exec<{reserved_bytes:number}>('SELECT reserved_bytes FROM workspace_upload_lease').one().reserved_bytes).toBe(0);lease.release();
+ });
+});

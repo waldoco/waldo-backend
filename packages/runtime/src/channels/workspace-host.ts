@@ -126,25 +126,25 @@ export const workspaceRequest = async (
 
 
 // One durable owner-local upload reservation BEFORE reading request bytes. Reserve
-// the maximum supported file bytes, then the store reserves exact bytes at finalize.
+// available capacity up to maximum file bytes, then the store reserves exact bytes.
+// Raw request memory has its own fixed ceiling; even zero remaining storage must
+// admit a bounded exact committed retry. Store fingerprint/quota gates NEW bytes.
 // No R2 write occurs while this lease alone exists; expired leases are safe to clear
 // because incomplete raw uploads have no retained bodies or operations.
 export const workspaceUploadLease = async (storage: Pick<DurableObjectStorage, 'sql' | 'transactionSync'>, open: () => ReturnType<typeof workspaceOwnerHost>): Promise<Readonly<{ release(): void; assert(): void }>> => {
   await open(); // mapping and lifecycle admission before reservation
   const token = crypto.randomUUID();
   storage.transactionSync(() => {
-    storage.sql.exec('CREATE TABLE IF NOT EXISTS workspace_upload_lease (singleton INTEGER PRIMARY KEY CHECK(singleton=1), token TEXT NOT NULL, expires_at INTEGER NOT NULL)');
+    storage.sql.exec('CREATE TABLE IF NOT EXISTS workspace_upload_lease (singleton INTEGER PRIMARY KEY CHECK(singleton=1), token TEXT NOT NULL, expires_at INTEGER NOT NULL, reserved_bytes INTEGER NOT NULL)');
     const lease = storage.sql.exec<{ token: string; expires_at: number }>('SELECT token,expires_at FROM workspace_upload_lease WHERE singleton=1').toArray()[0];
     if (lease && lease.expires_at > Date.now()) throw new WorkspaceError('pending');
     const row = storage.sql.exec<{ state_json: string }>('SELECT state_json FROM workspace_manifest WHERE singleton=1').toArray()[0];
     if (!row) throw new WorkspaceError('unavailable');
     const state = JSON.parse(row.state_json) as WorkspaceState;
     const used = state.bodies.reduce((n,b) => n+b.byte_size,0) + state.operations.filter(o=>o.status==='pending').reduce((n,o)=>n+o.body.byte_size,0);
-    // Existing pending work already reserved its body bytes. Permit its exact
-    // recovery stream; store.write rejects a new operation while pending exists.
-    const pending = state.operations.some(o=>o.status==='pending');
-    if (used + (pending ? 0 : 10*1024*1024) > 100*1024*1024) throw new WorkspaceError('quota');
-    storage.sql.exec('INSERT INTO workspace_upload_lease(singleton,token,expires_at) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET token=excluded.token,expires_at=excluded.expires_at',token,Date.now()+60_000);
+    const available = Math.max(0,100*1024*1024-used);
+    const reserved = Math.min(10*1024*1024,available);
+    storage.sql.exec('INSERT INTO workspace_upload_lease(singleton,token,expires_at,reserved_bytes) VALUES(1,?,?,?) ON CONFLICT(singleton) DO UPDATE SET token=excluded.token,expires_at=excluded.expires_at,reserved_bytes=excluded.reserved_bytes',token,Date.now()+60_000,reserved);
   });
   return {
     release: () => { storage.sql.exec('DELETE FROM workspace_upload_lease WHERE singleton=1 AND token=?',token); },
