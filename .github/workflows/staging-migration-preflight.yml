@@ -1,0 +1,20 @@
+name: staging-migration-preflight
+# Registration only. The reviewed executable workflow lives on beta-mvp.
+# Dispatch with --ref beta-mvp and its exact source SHA. Default main fails closed.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source_sha:
+        description: Exact reviewed source SHA on beta-mvp
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  requires-reviewed-beta-ref:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse execution from the registration stub
+        run: |
+          echo 'Dispatch the reviewed workflow from beta-mvp; main is registration only.'
+          exit 1
