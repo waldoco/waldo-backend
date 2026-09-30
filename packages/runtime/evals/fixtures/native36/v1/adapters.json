@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "revision": "native36-v1-W01-W18-adapter-definitions-3",
+  "revision": "native36-v1-W01-W24-adapter-definitions-1",
   "sources": [
     {
       "family": "calendar",
@@ -1122,6 +1122,471 @@
         "list"
       ],
       "selected_id_filter_required": true
+    },
+    {
+      "family": "company_records",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "company",
+        "scope_id",
+        "contact_id",
+        "first_name",
+        "recipient",
+        "confidentiality",
+        "record_refs",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "watch_policies",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "thread_id",
+        "relevance",
+        "quiet_start",
+        "quiet_end",
+        "timezone",
+        "urgent_exception",
+        "expires_at",
+        "deadline_at",
+        "risk_condition",
+        "allowed_updates",
+        "post_closure_delivery_allowed",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "connector_status",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "thread_id",
+        "observed_at",
+        "last_provider_event_at",
+        "last_delivered_at",
+        "pending_event_id",
+        "pending_since",
+        "expected_delivery_at",
+        "status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "watch_deadlines",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "thread_id",
+        "watch_id",
+        "expires_at",
+        "closed_at",
+        "closure_reason",
+        "status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "preference_records",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "field",
+        "value",
+        "effective_at",
+        "source_id",
+        "superseded_by",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "derived_contexts",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "preference_id",
+        "preference_revision",
+        "value",
+        "status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "planning_inputs",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "scheduled_at",
+        "preference_id",
+        "preference_revision",
+        "value",
+        "status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "retained_transcripts",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "recorded_at",
+        "retention_until",
+        "purpose",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "commerce_carts",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "merchant",
+        "currency",
+        "items",
+        "shipping_amount",
+        "total_amount",
+        "destination",
+        "arrival_by",
+        "approved_revision",
+        "intent_id",
+        "status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "order_transport",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "intent_id",
+        "idempotency_key",
+        "cart_revision",
+        "requested_at",
+        "timed_out_at",
+        "transport_status",
+        "payment_status",
+        "provider_order_id",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "channel_observations",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "channel",
+        "event_id",
+        "intent_id",
+        "original_event_id",
+        "cart_revision",
+        "at",
+        "status",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "original_order_lookups",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "intent_id",
+        "idempotency_key",
+        "cart_revision",
+        "merchant",
+        "request_payload_digest",
+        "observed_at",
+        "provider_order_id",
+        "order_status",
+        "payment_status",
+        "captured_amount",
+        "capture_id",
+        "currency",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "consent_preferences",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "scope",
+        "enabled",
+        "standing_prompt_declined",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "connector_declines",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "at",
+        "connector_category",
+        "response",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "goal_records",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "title",
+        "status",
+        "routine_ids",
+        "watch_ids",
+        "capture_consent_ids",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "responsibilities",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "goal_id",
+        "kind",
+        "status",
+        "next_due_at",
+        "stopped_at",
+        "stop_reason",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "capture_consents",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "goal_id",
+        "enabled",
+        "allowed_source_ids",
+        "raw_storage",
+        "cloud_admitted",
+        "effective_at",
+        "expires_at",
+        "revoked_at",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "prior_plans",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "goal_id",
+        "at",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "queued_goal_events",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "goal_id",
+        "watch_id",
+        "created_at",
+        "received_at",
+        "status",
+        "body",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "goal_capture_sources",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "goal_id",
+        "kind",
+        "recorded_at",
+        "storage",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "copy_inventory",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "goal_id",
+        "location",
+        "kind",
+        "status",
+        "deleted_at",
+        "deletion_scope",
+        "content_deleted",
+        "deletion_eligible",
+        "recipient",
+        "retention_until",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "deletion_inventories",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "goal_id",
+        "copy_ids",
+        "expected_revisions",
+        "retain_ids",
+        "storage_scope",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "order_payments",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "intent_id",
+        "provider_order_id",
+        "cart_revision",
+        "currency",
+        "amount",
+        "status"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
     }
   ],
   "effects": [
@@ -1294,6 +1759,68 @@
         "summary_revision",
         "source_refs",
         "destination",
+        "purpose",
+        "expires_at"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "preference.correct",
+      "state_family": "preference_records",
+      "required_payload_fields": [
+        "preference_id",
+        "expected_revision",
+        "field",
+        "value",
+        "effective_at",
+        "source_id",
+        "derived_context_ids",
+        "queued_input_ids",
+        "retained_transcript_ids",
+        "external_calendar_mutation",
+        "purpose",
+        "expires_at"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "responsibility.stop",
+      "state_family": "responsibilities",
+      "required_payload_fields": [
+        "responsibility_id",
+        "goal_id",
+        "expected_revision",
+        "reason",
+        "suppress_queued",
+        "purpose",
+        "expires_at"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "consent.revoke",
+      "state_family": "capture_consents",
+      "required_payload_fields": [
+        "consent_id",
+        "goal_id",
+        "expected_revision",
+        "source_ids",
+        "scope",
+        "effective_at",
+        "purpose",
+        "expires_at"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "data.delete",
+      "state_family": "copy_inventory",
+      "required_payload_fields": [
+        "goal_id",
+        "copy_ids",
+        "expected_revisions",
+        "storage_scope",
+        "retain_ids",
         "purpose",
         "expires_at"
       ],
