@@ -219,14 +219,27 @@ These are vendor-described features and source observations, not measured compet
 outcomes, provider selection, spend approval or a new implementation commitment.
 
 
-## September 30 decision: DO control plane plus optional external execution
+## September 30 decision: Kennel primary, external sandbox fallback
 
-Recommendation for review, not provider selection: retain DO + R2 as the owner-scoped
-control plane and durable file authority, and add an external compute adapter when a task
-needs Python, shell, package installation, document rendering or repository tests. DO-only
-is a valid tier for metadata, API orchestration and bounded text transforms; it is not a
-substitute for a Linux workspace. External services are allowed as candidates, not approved
-connections, charges or data destinations. No trial has run and no latency was measured.
+Architecture direction from the owner's September 30 10:21:52 conversation: heavy tasks
+route through Kennel orchestration to specialist harnesses such as Codex/Claude Code on the
+user's machine or Codex Cloud. DO + R2 remains the owner-scoped control plane and durable
+file authority. E2B/Modal/Daytona are fallback execution candidates, not the default route.
+
+The Kennel bridge is specified separately in `WALDO_KENNEL_BRIDGE_2026-09-24.md`,
+`KENNEL_BRIDGE_BACKEND_2026-09-24.md` and `WALDO_KENNEL_BRIDGE_UPDATE_2026-09-26.md`;
+v0.2.3 joint signature remains an owner gate. This document does not implement or claim a
+working primary bridge. Core must verify current bridge readiness before any dispatched
+job; unavailable does not mean permission to silently select a fallback service.
+
+DO-only remains a tier for metadata, API orchestration and bounded text transforms, not a
+Linux workspace. Route heavy tasks through the primary bridge when the requested harness,
+owner machine/cloud availability, project scope and effect permissions are verified. Offer
+a named external fallback when the primary route is unavailable or unsuitable, or when the
+owner explicitly chooses it. A task sent to a user's machine still needs narrow input/output,
+secret, file-mutation and recipient authority; local execution is not unlimited consent.
+External services are candidates only: no approved connections, charges or data destinations.
+No sandbox trial has run and no latency was measured.
 
 ### Price and startup comparison
 
@@ -258,12 +271,17 @@ configuration; actual controlled trials decide runtime performance.
 2. **Proposed DO-native workspace:** private byte custody, explicit manifest/revision/quotas,
    binary upload/download and bounded text tools. Enables retained task inputs and outputs;
    cannot by itself run Pandoc, Python/pandas, LibreOffice, npm tests or persistent services.
-3. **Proposed external ephemeral sandbox:** map a task to a fresh or resumed isolated cell,
+3. **Primary heavy execution via Kennel:** dispatch a task-scoped job to the selected
+   specialist harness on the owner machine or Codex Cloud, return outputs plus verification
+   evidence, and admit files through the workspace manifest. Bridge handshake, project roots,
+   artifact transport, cancellation and replay/response-loss proof belong to the bridge
+   implementation and review. Neither the bridge nor harness execution is proved here.
+4. **Fallback external ephemeral sandbox:** map a task to a fresh or resumed isolated cell,
    mount only approved immutable inputs, run bounded code, harvest digest-verified outputs
    back through workspace admission, then stop/delete with receipt. This addresses execution
    gaps without an always-on machine. Retained bytes, installed packages and running process
    continuity are separate acceptance dimensions.
-4. **Optional persistent/desktop tier:** needed only for tasks whose process or environment
+5. **Optional persistent/desktop tier:** needed only for tasks whose process or environment
    must resume, GUI applications or browser continuity. Compare idle storage/compute billing,
    state deletion and recovery independently. Browser login custody is not a workspace grant.
 
@@ -290,6 +308,7 @@ cleanup/billing remains. After isolation, rank by successful task output, cost p
 task and time-to-useful-output, not boot time alone. E2B is a reasonable first **approval
 candidate** for general code execution; Modal is the custom-image/data alternative; Daytona
 is the persistence alternative once official Linux costs and exact runtime class are known.
+This ranking applies only when choosing a fallback, never instead of Kennel by default.
 No chosen service or default spend is established by this ranking.
 
 ### Sources and confidence
