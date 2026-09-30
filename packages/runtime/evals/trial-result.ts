@@ -1,6 +1,6 @@
 // Evaluator-only status ledger; source specifications remain immutable `not_run`.
 // A scripted harness smoke cannot become a scored native case by filling a field.
-import type { ObservedTrial } from './grading-contract';
+import type { CapturedArtifact, ObservedTrial } from './grading-contract';
 import { prepareNativeGrade } from './grading-contract';
 import { gradeNativeOutcome, type IndependentReview } from './outcome-grader';
 import { verifyCaptureReceipts, type ReceiptKeys, type SealedReceipt } from './trial-provenance';
@@ -11,6 +11,8 @@ export type TrialStatus = 'not_run' | 'blocked_fixture' | 'harness_error' | 'rev
 export type TrialResult = Readonly<{case_id: string; seed: string | null; status: TrialStatus; reasons: readonly string[]; total_usd: number | null}>;
 export type CapturedTrial = Readonly<{
   observed: ObservedTrial;
+  // Evaluator-authored, trial-bound evidence. Not owner authority or model output.
+  branch_adjudications?: readonly Readonly<{ case_id: string; trial_seed: string; artifact: CapturedArtifact }>[];
   isolation: Pick<IsolatedCapture, 'owners' | 'candidate_owner'>;
   receipts: readonly SealedReceipt[];
   // Runner assertion until independently reconciled to provider usage. Never an official score.
@@ -34,9 +36,13 @@ export const evaluateCapturedTrial = (case_id: string, capture: CapturedTrial | 
     return result(case_id, observed.seed, 'harness_error', [...usage.errors, ...(capture.actual_model_calls !== capture.runner_usage.length ? ['model call count mismatch'] : [])], null);
   const invalid = verifyCaptureReceipts(observed, capture.isolation, capture.receipts, keys);
   if (invalid.length) return result(case_id, observed.seed, 'harness_error', invalid, usage.total_usd);
-  const prepared = prepareNativeGrade(observed);
+  const branches = capture.branch_adjudications ?? [];
+  if (branches.length > 1 || branches.some((branch) => branch.case_id !== case_id || branch.trial_seed !== observed.seed))
+    return result(case_id, observed.seed, 'harness_error', ['branch adjudication case/seed mismatch or duplicate'], usage.total_usd);
+  const resolvedBranches: Readonly<Record<string, CapturedArtifact>> = Object.fromEntries(branches.map((branch) => [branch.case_id, branch.artifact]));
+  const prepared = prepareNativeGrade(observed, resolvedBranches);
   if (prepared.status === 'incomplete') return result(case_id, observed.seed, 'blocked_fixture', prepared.missing, usage.total_usd);
-  const grade = gradeNativeOutcome(observed, review);
+  const grade = gradeNativeOutcome(observed, review, resolvedBranches);
   const status: TrialStatus = grade.status === 'incomplete' ? 'blocked_fixture' : grade.status === 'blocked' ? 'review_pending'
     : grade.status === 'fail' ? 'failed' : 'candidate_pass_unverified';
   return result(case_id, observed.seed, status, grade.reasons, usage.total_usd);
