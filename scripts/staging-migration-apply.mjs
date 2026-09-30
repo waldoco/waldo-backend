@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {readFileSync,mkdtempSync,copyFileSync,rmSync,lstatSync,readdirSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {compareHistory,localManifest,readHistory} from './staging-migration-preflight.mjs';
 const PROJECT='togdshayyxycitzckpqv';
@@ -19,6 +19,12 @@ export function validateApply({source,expectedSource,dirty,project,expectedPendi
 }
 export function effectiveConfigDigest(workdir){
  const rows=[];
+ // Go dotenv discovery includes the project parent and can reach enclosing paths.
+ let parent=resolve(workdir);
+ while(true){
+  if(readdirSync(parent).some(name=>name.startsWith('.env')))throw Error('local_forbidden_input');
+  const next=dirname(parent);if(next===parent)break;parent=next;
+ }
  const scan=(dir,relative='')=>{
   if(!lstatSync(dir).isDirectory())throw Error('local_not_regular');
   for(const name of readdirSync(dir).sort()){
@@ -52,7 +58,7 @@ export function prepareCheckout(root){
   return dir;
  }catch(error){rmSync(dir,{recursive:true,force:true});throw error;}
 }
-export async function main({env=process.env,run=execFileSync,fetcher=fetch,manifest=localManifest,read=readFileSync,prepare=prepareCheckout,cleanup=rmSync,configDigest=effectiveConfigDigest}={}){
+export async function main({env=process.env,run=execFileSync,fetcher=fetch,manifest=localManifest,read=readFileSync,prepare=prepareCheckout,cleanup=rmSync,configDigest=effectiveConfigDigest,makeDir=mkdirSync}={}){
  const root=new URL('../',import.meta.url);
  const source=run('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
  const dirty=run('git',['status','--porcelain','--untracked-files=all'],{cwd:root,encoding:'utf8'});
@@ -71,8 +77,12 @@ export async function main({env=process.env,run=execFileSync,fetcher=fetch,manif
  try {
  const isolated=manifest(new URL('supabase/migrations/',new URL(`file://${workdir}/`)));
  if(pendingDigest(isolated)!==pendingDigest(local))throw Error('isolated_bytes_mismatch');
- const cliEnv=Object.fromEntries(['PATH','HOME','TMPDIR','PNPM_HOME','CI','SUPABASE_ACCESS_TOKEN','SUPABASE_DB_PASSWORD'].filter(k=>env[k]!==undefined).map(k=>[k,env[k]]));
- const cli=args=>run('pnpm',['dlx','supabase@2.109.1',...args],{cwd:workdir,env:cliEnv,stdio:'pipe',timeout:180000});
+ const cliEnv=Object.fromEntries(['PATH','CI','SUPABASE_ACCESS_TOKEN','SUPABASE_DB_PASSWORD'].filter(k=>env[k]!==undefined).map(k=>[k,env[k]]));
+ const home=join(workdir,'.isolated-home');
+ makeDir(home,{recursive:true});
+ Object.assign(cliEnv,{HOME:home,XDG_CONFIG_HOME:join(home,'config'),XDG_CACHE_HOME:join(home,'cache'),XDG_DATA_HOME:join(home,'data'),TMPDIR:join(home,'tmp')});
+ makeDir(cliEnv.TMPDIR,{recursive:true});
+ const cli=args=>run('pnpm',['dlx','supabase@2.109.1',...args,'--profile','supabase'],{cwd:workdir,env:cliEnv,stdio:'pipe',timeout:180000});
  // Password stays in the process environment, never argv, output or receipt.
  cli(['link','--project-ref',PROJECT]);
  const linked=read(join(workdir,'supabase','.temp','project-ref'),'utf8').trim();

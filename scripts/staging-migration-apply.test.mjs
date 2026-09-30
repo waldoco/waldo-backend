@@ -29,12 +29,12 @@ const fixture=(options={})=>{
   const rows=historyCalls===3?local:historyCalls===2&&options.drift?local:args.remote;
   return new Response(JSON.stringify(rows));
  };
- return {calls,options:{env,run,fetcher,manifest:()=>local,read:()=>options.wrongLink?'production':args.project,prepare:()=>'/fictional-isolated-workdir',cleanup:()=>{},configDigest:()=> 'stable-fixture-config'}};
+ return {calls,options:{env,run,fetcher,manifest:()=>local,read:()=>options.wrongLink?'production':args.project,prepare:()=>'/fictional-isolated-workdir',cleanup:()=>{},configDigest:()=> 'stable-fixture-config',makeDir:()=>{}}};
 };
 test('happy path: pinned CLI env-only password, dry-run before write and post-read',async()=>{
  const f=fixture();await main(f.options);
  const cli=f.calls.filter(c=>c.cmd==='pnpm');assert.equal(cli.length,3);
- assert.deepEqual(cli.map(c=>c.argv),[['dlx','supabase@2.109.1','link','--project-ref',args.project],['dlx','supabase@2.109.1','db','push','--linked','--dry-run'],['dlx','supabase@2.109.1','db','push','--linked','--yes']]);
+ assert.deepEqual(cli.map(c=>c.argv),[['dlx','supabase@2.109.1','link','--project-ref',args.project,'--profile','supabase'],['dlx','supabase@2.109.1','db','push','--linked','--dry-run','--profile','supabase'],['dlx','supabase@2.109.1','db','push','--linked','--yes','--profile','supabase']]);
  assert.ok(cli.every(c=>c.opts.stdio==='pipe'&&!c.argv.includes(f.options.env.SUPABASE_DB_PASSWORD)));
 });
 test('linked target mismatch stops before dry-run/write',async()=>{const f=fixture({wrongLink:true});await assert.rejects(main(f.options),/linked_target_mismatch/);assert.equal(f.calls.filter(c=>c.cmd==='pnpm').length,1);});
@@ -87,3 +87,15 @@ test('real filesystem: ignored nested env cannot bypass CLI environment allowlis
 import {readFileSync,readdirSync} from 'node:fs';
 
 test('effective linked config drift stops write',async()=>{const f=fixture();let reads=0;f.options.configDigest=()=>++reads===1?'before':'after';await assert.rejects(main(f.options),/effective_config_drift/);assert.ok(!f.calls.some(c=>c.argv.includes('--yes')));});
+import {effectiveConfigDigest} from './staging-migration-apply.mjs';
+test('real filesystem: root dotenv must not be invisible to effective config validation',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-root-env-test-'));
+ try{mkdirSync(join(dir,'supabase'));writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');
+ const before=effectiveConfigDigest(dir);writeFileSync(join(dir,'.env'),'SUPABASE_DB_PASSWORD=poison');
+ assert.throws(()=>effectiveConfigDigest(dir),/local_forbidden_input/);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+test('CLI HOME and profile are isolated from ambient custom endpoints',async()=>{
+ const f=fixture();f.options.env.HOME='/untrusted/home';await main(f.options);
+ for(const c of f.calls.filter(c=>c.cmd==='pnpm')){assert.notEqual(c.opts.env.HOME,'/untrusted/home');assert.equal(c.opts.env.HOME,'/fictional-isolated-workdir/.isolated-home');assert.ok(c.argv.includes('--profile'));}
+});

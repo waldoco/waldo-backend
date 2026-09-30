@@ -54,3 +54,10 @@ Sources consulted:
 
 The workflow does not enforce beta-only dispatch; the recipe selects beta explicitly.
 Credentials are the existing staging secrets; scope/exclusivity is not proved.
+
+CLI process environment uses a fresh HOME and XDG/TMP roots inside the isolated
+workdir and an explicit `--profile supabase` on every call. Root/parent dotenv is
+rejected before link and before write. Effective config digest covers linked temp
+metadata and all copied SQL, without printing their content. The pinned CLI profile
+source confirms the standard profile uses api.supabase.com and standard hosts.
+https://github.com/supabase/cli/blob/v2.109.1/apps/cli-go/internal/utils/profile.go
