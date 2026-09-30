@@ -18,9 +18,9 @@ Main is unchanged. Always select `--ref beta-mvp`; main still has the older work
    reviewed source or repository access is not permission to apply hosted changes.
 4. Pass that SHA and the packet's `pendingManifestSha256` to the explicit apply job.
    Missing/mismatched source, dirty/untracked files, target, history or digest stops it.
-5. The pinned CLI links in an isolated temporary checkout using environment-only
+5. The pinned CLI links in an isolated temporary checkout containing only regular migration files and a minimal generated config, rejecting source symlinks, nested env/cache/branches using environment-only
    credentials. Check the link result, run `db push --linked --dry-run`, reread
-   history and source immediately before applying, then `db push --linked --yes`.
+   history, source, copied bytes and the entire effective linked config immediately before applying, then `db push --linked --yes`.
    No `include-all`, seed, roles, repair, management-API SQL version invention or
    Worker deployment. Credentials and raw provider stdout/stderr are not printed.
 6. Read history after application and require the entire canonical manifest present.
@@ -32,7 +32,7 @@ lock out SQL writers outside this workflow. Freeze other migration writers durin
 run; if that cannot be established, do not run it. API preflight and CLI see history
 through different mechanisms, and there is no atomic compare-and-apply operation.
 A provider failure, timeout, partial result or failed post-read is unconfirmed, not
-safe to retry. Read live history and inspect the affected schema before deciding.
+safe to retry. The process timeout does not guarantee process-tree cancellation. Read live history and inspect the affected schema before deciding.
 Forward migrations are the default rollback; no automatic SQL undo is claimed.
 
 ## Current execution gap
@@ -51,3 +51,6 @@ Sources consulted:
   timestamp-version parameter established; do not use it to invent migration history.
 - Live `supabase@2.109.1 db push --help` and `link --help`: pinned flag verification,
   only help executed without linking or accessing a project.
+
+The workflow does not enforce beta-only dispatch; the recipe selects beta explicitly.
+Credentials are the existing staging secrets; scope/exclusivity is not proved.

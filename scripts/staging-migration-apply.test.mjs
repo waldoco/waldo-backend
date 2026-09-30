@@ -29,7 +29,7 @@ const fixture=(options={})=>{
   const rows=historyCalls===3?local:historyCalls===2&&options.drift?local:args.remote;
   return new Response(JSON.stringify(rows));
  };
- return {calls,options:{env,run,fetcher,manifest:()=>local,read:()=>options.wrongLink?'production':args.project,prepare:()=>'/fictional-isolated-workdir',cleanup:()=>{}}};
+ return {calls,options:{env,run,fetcher,manifest:()=>local,read:()=>options.wrongLink?'production':args.project,prepare:()=>'/fictional-isolated-workdir',cleanup:()=>{},configDigest:()=> 'stable-fixture-config'}};
 };
 test('happy path: pinned CLI env-only password, dry-run before write and post-read',async()=>{
  const f=fixture();await main(f.options);
@@ -50,3 +50,40 @@ test('CLI rejects ambient database-target/config overrides',async()=>{
  assert.equal(c.opts.env.SUPABASE_DB_PASSWORD,'fictional-fixture-password');}
 });
 test('copied byte read failure cleans up and never calls CLI',async()=>{const f=fixture();let reads=0,cleaned=0;f.options.manifest=()=>{if(++reads>1)throw Error('bad copy');return local;};f.options.cleanup=()=>cleaned++;await assert.rejects(main(f.options));assert.equal(cleaned,1);assert.ok(!f.calls.some(c=>c.cmd==='pnpm'));});
+import {mkdtempSync,mkdirSync,writeFileSync,symlinkSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {prepareCheckout} from './staging-migration-apply.mjs';
+import {localManifest} from './staging-migration-preflight.mjs';
+test('real filesystem: migration and config symlinks cannot enter isolated checkout',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-symlink-test-'));
+ try {
+ mkdirSync(join(dir,'supabase','migrations'),{recursive:true});writeFileSync(join(dir,'outside.sql'),'SELECT 1;');writeFileSync(join(dir,'outside.toml'),'project_id="fictional"');
+ symlinkSync(join(dir,'outside.sql'),join(dir,'supabase','migrations','20260930060000_link.sql'));
+ const root=pathToFileURL(dir+'/');
+ assert.throws(()=>localManifest(new URL('supabase/migrations/',root)),/local_not_regular/);
+ assert.throws(()=>prepareCheckout(root),/local_not_regular/);
+ rmSync(join(dir,'supabase','migrations','20260930060000_link.sql'));writeFileSync(join(dir,'supabase','migrations','20260930060000_regular.sql'),'SELECT 1;');
+ symlinkSync(join(dir,'outside.toml'),join(dir,'supabase','config.toml'));
+ assert.throws(()=>prepareCheckout(root),/local_not_regular/);
+ } finally {rmSync(dir,{recursive:true,force:true});}
+});
+test('real filesystem: ignored nested env cannot bypass CLI environment allowlist',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'waldo-env-test-'));let copy;
+ try{
+ mkdirSync(join(dir,'supabase','migrations'),{recursive:true});writeFileSync(join(dir,'supabase','migrations','20260930060000_regular.sql'),'SELECT 1;');
+ writeFileSync(join(dir,'supabase','config.toml'),'project_id="other"');
+ writeFileSync(join(dir,'supabase','.env'),'PGHOST=untrusted-target');
+ assert.throws(()=>prepareCheckout(pathToFileURL(dir+'/')),/local_forbidden_input/);
+ rmSync(join(dir,'supabase','.env'));mkdirSync(join(dir,'supabase','nested'));writeFileSync(join(dir,'supabase','nested','.env.local'),'PGHOST=other');
+ assert.throws(()=>prepareCheckout(pathToFileURL(dir+'/')),/local_forbidden_input/);
+ rmSync(join(dir,'supabase','nested'),{recursive:true});
+ copy=prepareCheckout(pathToFileURL(dir+'/'));
+ assert.equal(readFileSync(join(copy,'supabase','config.toml'),'utf8'),'project_id = "waldo-reviewed-staging"\n');
+ assert.deepEqual(readdirSync(join(copy,'supabase')).sort(),['config.toml','migrations']);
+ }finally{if(copy)rmSync(copy,{recursive:true,force:true});rmSync(dir,{recursive:true,force:true});}
+});
+import {readFileSync,readdirSync} from 'node:fs';
+
+test('effective linked config drift stops write',async()=>{const f=fixture();let reads=0;f.options.configDigest=()=>++reads===1?'before':'after';await assert.rejects(main(f.options),/effective_config_drift/);assert.ok(!f.calls.some(c=>c.argv.includes('--yes')));});

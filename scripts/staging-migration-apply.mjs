@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {readFileSync,mkdtempSync,cpSync,rmSync} from 'node:fs';
+import {readFileSync,mkdtempSync,copyFileSync,rmSync,lstatSync,readdirSync,mkdirSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -17,14 +17,42 @@ export function validateApply({source,expectedSource,dirty,project,expectedPendi
  if(pendingDigest(result.pending)!==expectedPending)throw Error('pending_digest_mismatch');
  return result;
 }
-export function prepareCheckout(root){
- const dir=mkdtempSync(join(tmpdir(),'waldo-reviewed-migrations-'));
- cpSync(new URL('supabase/',root),join(dir,'supabase'),{recursive:true});
- // Never inherit a cached linked target or CLI authentication from source.
- rmSync(join(dir,'supabase','.temp'),{recursive:true,force:true});
- return dir;
+export function effectiveConfigDigest(workdir){
+ const rows=[];
+ const scan=(dir,relative='')=>{
+  if(!lstatSync(dir).isDirectory())throw Error('local_not_regular');
+  for(const name of readdirSync(dir).sort()){
+   if(name.startsWith('.env')||['.branches','.cache'].includes(name))throw Error('local_forbidden_input');
+   const path=join(dir,name),stat=lstatSync(path),label=relative+name;
+   if(stat.isSymbolicLink()||(!stat.isFile()&&!stat.isDirectory()))throw Error('local_not_regular');
+   if(stat.isDirectory())scan(path,label+'/');else rows.push([label,createHash('sha256').update(readFileSync(path)).digest('hex')]);
+  }
+ };
+ scan(join(workdir,'supabase'));return pendingDigest(rows);
 }
-export async function main({env=process.env,run=execFileSync,fetcher=fetch,manifest=localManifest,read=readFileSync,prepare=prepareCheckout,cleanup=rmSync}={}){
+export function prepareCheckout(root){
+ const inputs=new URL('supabase/',root);
+ const scan=dir=>{
+  if(!lstatSync(dir).isDirectory())throw Error('local_not_regular');
+  for(const name of readdirSync(dir)){
+   if(name.startsWith('.env')||['.temp','.branches','.cache'].includes(name))throw Error('local_forbidden_input');
+   const path=new URL(name,dir),stat=lstatSync(path);
+   if(stat.isSymbolicLink()||(!stat.isFile()&&!stat.isDirectory()))throw Error('local_not_regular');
+   if(stat.isDirectory())scan(new URL(name+'/',dir));
+  }
+ };
+ scan(inputs);
+ const rows=localManifest(new URL('migrations/',inputs));
+ const dir=mkdtempSync(join(tmpdir(),'waldo-reviewed-migrations-'));
+ try {
+  mkdirSync(join(dir,'supabase','migrations'),{recursive:true});
+  // Ignore repository configuration, seed paths and arbitrary CLI dotenv/cache state.
+  writeFileSync(join(dir,'supabase','config.toml'),'project_id = "waldo-reviewed-staging"\n');
+  for(const row of rows)copyFileSync(new URL('migrations/'+row.filename,inputs),join(dir,'supabase','migrations',row.filename));
+  return dir;
+ }catch(error){rmSync(dir,{recursive:true,force:true});throw error;}
+}
+export async function main({env=process.env,run=execFileSync,fetcher=fetch,manifest=localManifest,read=readFileSync,prepare=prepareCheckout,cleanup=rmSync,configDigest=effectiveConfigDigest}={}){
  const root=new URL('../',import.meta.url);
  const source=run('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
  const dirty=run('git',['status','--porcelain','--untracked-files=all'],{cwd:root,encoding:'utf8'});
@@ -49,10 +77,13 @@ export async function main({env=process.env,run=execFileSync,fetcher=fetch,manif
  cli(['link','--project-ref',PROJECT]);
  const linked=read(join(workdir,'supabase','.temp','project-ref'),'utf8').trim();
  if(linked!==PROJECT)throw Error('linked_target_mismatch');
+ const effectiveConfig=configDigest(workdir);
  cli(['db','push','--linked','--dry-run']);
  // Re-read authoritative history immediately before the write. Drift cancels the run.
  validateApply({source:run('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),expectedSource,dirty:run('git',['status','--porcelain','--untracked-files=all'],{cwd:root,encoding:'utf8'}),project,expectedPending,local:manifest(new URL('supabase/migrations/',root)),remote:await readHistory(env.SUPABASE_ACCESS_TOKEN,project,fetcher)});
  if(pendingDigest(manifest(new URL('supabase/migrations/',new URL(`file://${workdir}/`))))!==pendingDigest(local))throw Error('isolated_bytes_mismatch');
+ if(configDigest(workdir)!==effectiveConfig)throw Error('effective_config_drift');
+ if(read(join(workdir,'supabase','.temp','project-ref'),'utf8').trim()!==PROJECT)throw Error('linked_target_mismatch');
  // No seed, roles, include-all or history repair. CLI maintains canonical version history.
  cli(['db','push','--linked','--yes']);
  const after=compareHistory(local,await readHistory(env.SUPABASE_ACCESS_TOKEN,project,fetcher));
