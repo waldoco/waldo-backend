@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "revision": "native36-v1-W01-W06-adapter-definitions-1",
+  "revision": "native36-v1-W01-W12-adapter-definitions-2",
   "sources": [
     {
       "family": "calendar",
@@ -266,6 +266,321 @@
         "list"
       ],
       "selected_id_filter_required": true
+    },
+    {
+      "family": "project_questions",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "dated",
+        "question",
+        "examples",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "public_snapshots",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "url",
+        "captured_at",
+        "title",
+        "bytes",
+        "digest"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "coach_sessions",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "coach",
+        "duration_minutes",
+        "eligible_windows",
+        "prescription",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "training_status",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "scheduled",
+        "performed",
+        "self_reported",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "travel_constraints",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "meeting_at",
+        "timezone",
+        "minimum_arrival_buffer_hours",
+        "maximum_all_in_amount",
+        "currency",
+        "points_preference",
+        "airline_preference",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "travel_quotes",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "option",
+        "currency",
+        "fare_amount",
+        "hotel_amount",
+        "ground_amount",
+        "total_amount",
+        "arrival",
+        "timezone",
+        "hotel_required",
+        "airline",
+        "fictional",
+        "availability",
+        "cancellation_terms",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "course_access",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "course_id",
+        "owned",
+        "access_status",
+        "content_revision",
+        "used",
+        "completion_status",
+        "usage_source",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "course_quotes",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "course_name",
+        "skill",
+        "currency",
+        "amount",
+        "merchant",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "orders",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "merchant",
+        "currency",
+        "total_amount",
+        "status",
+        "paid_amount",
+        "cancellation_status",
+        "cancellation_receipt_id",
+        "refund_id",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "refunds",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "order_id",
+        "order_revision",
+        "currency",
+        "requested_amount",
+        "accepted_amount",
+        "credited_amount",
+        "status",
+        "intent_id",
+        "provider_receipt_id",
+        "credited_at",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "merchant_policies",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "merchant",
+        "order_id",
+        "order_revision",
+        "effective_at",
+        "expires_at",
+        "authoritative",
+        "quote_id",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "cancellation_quotes",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "order_id",
+        "order_revision",
+        "policy_id",
+        "policy_revision",
+        "currency",
+        "order_total",
+        "refund_amount",
+        "fee_amount",
+        "authoritative",
+        "valid_from",
+        "valid_until",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "reward_terms",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "currency",
+        "threshold_amount",
+        "benefit_amount",
+        "period_start",
+        "period_end",
+        "eligibility_basis",
+        "benefit_type",
+        "fictional",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "spending",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "currency",
+        "amount",
+        "status",
+        "settled",
+        "eligible",
+        "planned_amount",
+        "paid_at",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "carts",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "revision",
+        "merchant",
+        "currency",
+        "amount",
+        "items",
+        "necessary",
+        "status",
+        "destination",
+        "approved_revision",
+        "bytes"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
     }
   ],
   "effects": [
@@ -337,6 +652,26 @@
         "thread_id",
         "watch_id",
         "reason"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "order.cancel",
+      "state_family": "orders",
+      "required_payload_fields": [
+        "order_id",
+        "expected_revision",
+        "currency",
+        "total_amount",
+        "policy_id",
+        "policy_revision",
+        "quote_id",
+        "quote_revision",
+        "refund_amount",
+        "fee_amount",
+        "window_start",
+        "window_end",
+        "purpose"
       ],
       "requires_exact_approval": true
     }
