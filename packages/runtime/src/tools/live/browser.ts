@@ -233,7 +233,7 @@ export const executeBrowserSubmit = async (
     if (!acted.ok) return `The final action failed (HTTP ${acted.status}). It may or may not have happened - check the page before retrying.`;
     const actBody = (await acted.json()) as { success?: boolean };
     if (!actBody.success) return 'The final action was rejected by the browser. It may or may not have happened - check the page before retrying.';
-    return `Done: ${proposal.action.description} on ${proposal.url}.`;
+    return `The browser accepted the action "${proposal.action.description}", but the final outcome is not verified. Do not retry the action until the result has been checked on the page.`;
   } catch (error) {
     return `The browser run failed: ${error instanceof Error ? error.message : String(error)}. Nothing may have happened - check the page before retrying.`;
   } finally {

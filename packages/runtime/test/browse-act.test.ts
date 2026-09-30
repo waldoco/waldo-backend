@@ -162,18 +162,19 @@ describe('executeBrowserSubmit', () => {
     steps: ['Add to cart'],
   } as const;
 
-  const executorFake = (opts: { binding?: unknown; observeAction?: object | null; failOp?: Op } = {}) => {
+  const executorFake = (opts: { binding?: unknown; observeAction?: object | null; failOp?: Op; actSuccess?: boolean; throwOp?: Op } = {}) => {
     const calls: Op[] = [];
     const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const op = opOf(String(input));
       calls.push(op);
+      if (opts.throwOp === op) throw new Error('response lost');
       if (opts.failOp === op) return new Response('err', { status: 500 });
       switch (op) {
         case 'start': return new Response(JSON.stringify({ success: true, data: { sessionId: 's9', available: true } }));
         case 'navigate': return new Response(JSON.stringify({ success: true, data: { result: null, actionId: 'n1' } }));
         case 'observe': return new Response(JSON.stringify({ success: true, data: { result: opts.observeAction === null ? [] : [opts.observeAction ?? proposal.action], actionId: 'o1' } }));
         case 'extract': return new Response(JSON.stringify({ success: true, data: { result: opts.binding ?? { total: 'Rs 499' }, actionId: 'e1' } }));
-        case 'act': return new Response(JSON.stringify({ success: true, data: { result: null, actionId: 'a1' } }));
+        case 'act': return new Response(JSON.stringify({ success: opts.actSuccess ?? true, data: { result: null, actionId: 'a1' } }));
         case 'end': return new Response(JSON.stringify({ success: true }));
       }
     }) as typeof fetch;
@@ -183,7 +184,10 @@ describe('executeBrowserSubmit', () => {
   it('acts only when the re-read binding matches the approved one, then ends the session', async () => {
     const { calls, fetcher } = executorFake();
     const message = await executeBrowserSubmit('k', 'p', undefined, proposal, fetcher);
-    expect(message).toContain('Done: Place the order');
+    expect(message).toContain('The browser accepted the action');
+    expect(message).toContain('outcome is not verified');
+    expect(message).toContain('Do not retry');
+    expect(message).not.toContain('Done');
     expect(calls).toContain('act');
     expect(calls[calls.length - 1]).toBe('end');
   });
@@ -228,8 +232,20 @@ describe('executeBrowserSubmit', () => {
   it('tolerates cosmetic binding differences (case/whitespace) but not real ones', async () => {
     const { calls, fetcher } = executorFake({ binding: { total: '  rs 499 ' } });
     const message = await executeBrowserSubmit('k', 'p', undefined, proposal, fetcher);
-    expect(message).toContain('Done');
+    expect(message).toContain('The browser accepted the action');
     expect(calls).toContain('act');
+  });
+
+  it('never reports a verified outcome after failed acknowledgment or response loss; never retries act', async () => {
+    for (const opts of [{ failOp: 'act' as const }, { actSuccess: false }, { throwOp: 'act' as const }]) {
+      const { calls, fetcher } = executorFake(opts);
+      const message = await executeBrowserSubmit('k', 'p', undefined, proposal, fetcher);
+      expect(message).not.toContain('Done');
+      expect(message).not.toContain('The browser accepted the action');
+      expect(message).toContain('before retrying');
+      expect(calls.filter((op) => op === 'act')).toHaveLength(1);
+      expect(calls.at(-1)).toBe('end');
+    }
   });
 
   it('missing keys or a failed start: nothing happens, no act', async () => {

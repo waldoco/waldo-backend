@@ -54,6 +54,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Both canonical migration lists stay in sync statically: `guard-migration-fixture-sync.mjs` compares them in gates.sh, because the SQL fixture itself only runs Mac-side and its drift is invisible in sandbox gates.
 
 ### Failure paths
+- A browser act acknowledgment is not a verified order, booking or message. Report outcome as unverified without final-state evidence, and never blind-retry after response loss.
 - Every external call (model, Telegram, Google) has a timeout, and its failure path sends the owner something true or nothing, never a broken half-state. Best-effort UX calls (reactions, typing indicators) are bounded too and fail soft; they never gate the work they precede.
 - A turn that fails still records what happened in the trace.
 - Model output is parsed defensively. Invalid output is rejected and logged, and it never partly applies.
@@ -105,6 +106,7 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 | Date | Bug | Class | Test added | Checklist line |
 |---|---|---|---|---|
+| 2026-09-30 | Browser submit executor said Done from a successful act envelope without final effect readback | Failure paths / honest claims | browse-act.test.ts acknowledgment and failed/false/lost-response cases | Browser action acknowledgment is not outcome verification |
 | 2026-09-26 | Forget deleted the claim row but left the forgotten text live in five stores: the episodes FTS index (search_episodes could resurface it), memory_backups payloads, the frozen legacy spots and core_file_revisions tables, and constellation nodes kept quoting it and referencing its id in supporting_spots; the console forget path added a re-admission barrier while the model-facing path did not. Found by the forget-coverage audit: red-first survivor scan showed {episodes:1, backups:1, spots:1, revisions:1, nodes:1} after a forget | Memory / trust boundaries | forget-coverage.test.ts: marker planted in all six stores, forgotten through the real applyClaimOps path, fresh-state scan asserts zero everywhere, node stops quoting the claim and drops its id, barrier blocks re-admission, absent legacy tables skip cleanly, result reports purged vs purge-incomplete:<stores> | Deletes that the owner asked for are real across every store, proven by a fresh-state re-scan |
 | 2026-09-23 | Post-turn memory and spot writers raced the next turn | Concurrency | settle-before-next-turn test (W0, 96c7683) | Concurrency: writes settle before the next turn |
 | 2026-09-23 | An approval could be applied after its time had passed, or over an edited event | Time, concurrency | approval expiry and etag tests (96c7683) | Time: past-scheduled outcome; Concurrency: version check |
