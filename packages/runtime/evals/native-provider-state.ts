@@ -77,3 +77,12 @@ export class SyntheticProviderCustody {
  // the same intent directly; no second apply required and no forced rollback.
  intentReadback(owner:string,kind:EffectKind,key:string):EffectReceipt|null{return structuredClone(this.intents.get(`${owner}:${kind}:${key}`)?.receipt??null);}
 }
+export type SyntheticExactApproval=Readonly<{owner_id:string;kind:EffectKind;target:string;approved_revision:string;payload_digest:string;effective_at:string;expires_at:string}>;
+export const syntheticPayloadDigest=(payload:unknown):string=>digest(payload);
+export const applyUnderExactApproval=(provider:SyntheticProviderCustody,request:EffectRequest,approval:SyntheticExactApproval,at:string):EffectReceipt=>{
+ const now=Date.parse(at),start=Date.parse(approval.effective_at),end=Date.parse(approval.expires_at);
+ if(!Number.isFinite(now)||!Number.isFinite(start)||!Number.isFinite(end)||start>=end||now<start||now>=end||
+ approval.owner_id!==request.owner_id||approval.kind!==request.kind||approval.target!==request.target||
+ !approval.approved_revision.trim()||approval.approved_revision!==request.approved_revision||approval.payload_digest!==digest(request.payload))throw new Error('synthetic exact approval differs from effect');
+ return provider.apply(request,[approval.kind]);
+};

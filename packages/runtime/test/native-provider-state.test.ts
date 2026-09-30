@@ -28,3 +28,12 @@ it('draft and send custody retain exact immutable approved bytes, no actual netw
  p.apply(send,['mail.send']);expect(p.readback('a').families.sent?.[0]?.recipient).toBe('fictional@example.invalid');
  expect(()=>p.apply({...send,payload:{...send.payload as object,body:'Changed body'}},['mail.send'])).toThrow('conflict');
 });
+import { applyUnderExactApproval,syntheticPayloadDigest,type SyntheticExactApproval } from '../evals/native-provider-state';
+it('exact approval binds owner/kind/target/revision/full payload and current validity, not a revision label alone',()=>{
+ const p=new SyntheticProviderCustody(states,()=> '2026-10-01T09:00:00Z');
+ const grant:SyntheticExactApproval={owner_id:'a',kind:'calendar.move',target:'existing',approved_revision:'v2',payload_digest:syntheticPayloadDigest(move.payload),effective_at:'2026-10-01T08:00:00Z',expires_at:'2026-10-01T10:00:00Z'};
+ for(const changed of [{...move,owner_id:'b'},{...move,target:'other'},{...move,approved_revision:'v3'},{...move,payload:{...move.payload as object,start:'2026-10-01T13:00:00Z'}},{...move,payload:{...move.payload as object,extra:'unreviewed'}}])expect(()=>applyUnderExactApproval(p,changed,grant,'2026-10-01T09:00:00Z')).toThrow('approval');
+ expect(()=>applyUnderExactApproval(p,move,grant,grant.expires_at)).toThrow('approval');
+ expect(p.readback('a')).toEqual(states[0]);
+ expect(applyUnderExactApproval(p,move,grant,'2026-10-01T09:00:00Z').state).toBe('applied');
+});
