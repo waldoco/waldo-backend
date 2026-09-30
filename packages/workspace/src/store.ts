@@ -136,7 +136,10 @@ export const workspaceStore = async (host: WorkspaceHost) => {
       if (!validId(operationId)) fail('invalid');
       const operation = transact(state => state.operations.find(o => o.operation_id === operationId));
       if (!operation) fail('not_found');
-      if (operation!.status === 'committed') return copyMeta(operation!.meta);
+      if (operation!.status === 'committed') {
+        if (!transact(state => state.files.some(f => f.file_id === operation!.meta.file_id && f.state === 'ready'))) fail('not_found');
+        return copyMeta(operation!.meta);
+      }
       if (operation!.body.binding.stateVersion !== binding.stateVersion) fail('rejected');
       await verifyBody(operation!.body);
       return commit(operation!);
