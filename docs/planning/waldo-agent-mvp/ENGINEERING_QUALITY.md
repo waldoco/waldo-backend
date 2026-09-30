@@ -77,7 +77,7 @@ Use each repository's own committed lockfile and package manager. Keep backend d
 
 Choose one update bot, initially Dependabot, to propose manageable scheduled PRs for supported ecosystems and Actions. Group coupled runtime/test packages; separate major upgrades, native platform upgrades and unrelated ecosystems. Review release notes and compatibility; automated proposal does not imply automatic merge. No bot configuration is installed by this documentation change. [Dependabot options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
 
-Retain the backend's current 14-day dependency release-age delay and narrowly justified exceptions. At the inspected baseline, June hotfix exclusions remain, including a broad `@cloudflare/workerd-*` exemption. Re-evaluate and expire unnecessary exemptions without changing resolved versions accidentally. Allow necessary dependency build scripts narrowly; keep a frozen-install smoke check. Use the installed pnpm 10 documentation, not current-major defaults. [pnpm 10 settings](https://pnpm.io/10.x/settings)
+The owner removed the backend's 14-day dependency release-age delay on September 30, 2026 at 23:23 IST to remove a build blocker. Keep exact toolchain pins, reviewed dependency PRs, narrow build-script allowances and frozen-install smoke checks. Do not restore an age rule or treat its removal as automatic upgrade/deploy approval. Use the installed pnpm 10 documentation, not current-major defaults. [pnpm 10 settings](https://pnpm.io/10.x/settings)
 
 Specific compatibility checks:
 

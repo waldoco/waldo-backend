@@ -24,17 +24,19 @@ const check = (config) => {
 
 try {
   if (check(source).status !== 0) throw new Error('current observability config rejected');
-  for (const [before, after, expected] of [
-    ['"invocation_logs": false', '"invocation_logs": true', 'full-URL invocation logs'],
-    ['"traces": { "enabled": false }', '"traces": { "enabled": true }', 'automatic traces'],
-  ]) {
-    const parts = source.split(before);
-    if (parts.length !== 3) throw new Error(`expected two ${before} settings`);
-    for (const occurrence of [1, 2]) {
-      const changed = parts.slice(0, occurrence).join(before) + after + parts.slice(occurrence).join(before);
-      const result = check(changed);
+  const config = JSON.parse(source.replace(/\/\/[^\n]*/g, '').replace(/,(\s*[}\]])/g, '$1'));
+  // Inspect actual environments, not textual occurrence counts: adding an isolated
+  // preview must not make the production/staging privacy regression stop running.
+  for (const target of ['production', 'staging']) {
+    for (const setting of ['invocation_logs', 'traces']) {
+      const changed = structuredClone(config);
+      const env = target === 'production' ? changed : changed.env.staging;
+      if (setting === 'invocation_logs') env.observability.logs.invocation_logs = true;
+      else env.observability.traces.enabled = true;
+      const expected = setting === 'invocation_logs' ? 'full-URL invocation logs' : 'automatic traces';
+      const result = check(JSON.stringify(changed));
       if (result.status !== 1 || !result.stderr.includes(expected)) {
-        throw new Error(`guard accepted unsafe setting ${expected} in occurrence ${occurrence}`);
+        throw new Error(`guard accepted unsafe setting ${expected} in ${target}`);
       }
     }
   }
