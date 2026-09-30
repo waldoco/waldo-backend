@@ -5,6 +5,7 @@ import { runInDurableObject } from 'cloudflare:test';
 import { afterEach,it,vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
+import {advanceNativeSourceEvent} from '../scenarios/native-source-event';
 import {nativeSelectedSource} from '../scenarios/native-selected-source';
 import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
 import { settleSmokeOwner } from '../scenarios/smoke-settle';
@@ -63,15 +64,19 @@ it('captures each admitted actual-model owner turn, adapter custody and usage wi
   await runInDurableObject(controlStub,async(_instance,state)=>{await state.storage.put('native-control-canary',{owner:manifest.control_owner,value:'CONTROL_ONLY_SYNTHETIC'});});
   const controlBefore=await runInDurableObject(controlStub,async(_instance,state)=>Array.from((await state.storage.list()).entries()));
   await runInDurableObject(stub,async(_instance,state)=>{await state.storage.put('google:accounts',[{id:`local:${manifest.candidate_owner}`,email:manifest.candidate_owner,scopes:null,refresh_token:'fictional-not-a-token'}]);});
-  const transcript:{id:string;at:string;owner_text:string;channel_sends:unknown}[]=[];
+  const transcript:{id:string;at:string;owner_text?:string;provider_event?:unknown;channel_sends:unknown}[]=[];
   for(const [index,turn] of bundle.turns.entries()){
-   if(turn.kind!=='owner_text'||!turn.text)throw new Error('blocked native supervisor turn');world.advance(turn.at);
+   if(turn.kind==='provider_event'){advanceNativeSourceEvent(world,manifest.world,manifest.candidate_owner,turn);transcript.push({id:turn.id,at:turn.at,provider_event:turn.payload,channel_sends:[]});continue;}
+   if(turn.kind!=='owner_text'||!turn.text)throw new Error('blocked native supervisor turn');
+   if((manifest.world.revisions??[]).some(r=>Date.parse(r.at)>Date.parse(world!.now())&&Date.parse(r.at)<=Date.parse(turn.at)))throw new Error('owner turn cannot consume provider revisions');
+   world.advance(turn.at);
    const previous=sends.length;const pending:Promise<unknown>[]=[];
    const response=await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook',{method:'POST',headers:{'x-telegram-bot-api-secret-token':'fictional-native-secret'},body:JSON.stringify({update_id:index+1,message:{message_id:index+1,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:turn.text}})}),env,work=>pending.push(work),directory);
    await Promise.all(pending);await runInDurableObject(stub,async(instance)=>settleSmokeOwner(instance as unknown as {queue:Promise<unknown>},transport));
    if(response.status!==200)throw new Error('native ingress rejected');
    transcript.push({id:turn.id,at:turn.at,owner_text:turn.text,channel_sends:sends.slice(previous)});
   }
+  for(const event of bundle.turns.filter(t=>t.kind==='provider_event')){const payload=event.payload as {source:string;id:string};if(!world.revisionLog(manifest.candidate_owner).some(r=>r.source===payload.source&&r.id===payload.id&&Date.parse(r.at)===Date.parse(event.at)))throw new Error('native event revision not captured');}
   const controlAfter=await runInDurableObject(controlStub,async(_instance,state)=>Array.from((await state.storage.list()).entries()));
   if(JSON.stringify(controlBefore)!==JSON.stringify(controlAfter)||world.accessLog(manifest.control_owner).length)throw new Error('native controlDO/source changed');
   const traces=await runInDurableObject(stub,async(_instance,state)=>state.storage.sql.exec('SELECT at, trace, hop, ok, model, input_tokens, output_tokens, cached_tokens, usd FROM trace_log ORDER BY id').toArray());

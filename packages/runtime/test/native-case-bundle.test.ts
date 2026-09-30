@@ -28,3 +28,12 @@ it('a declared-ready case cannot silently substitute an unimplemented source/eff
  const b=bundle();expect(inspectNativeExecutionSupport(b,{source_families:[],effect_kinds:[],turn_kinds:[],production_tools:[]})).toEqual(['unimplemented source adapter: calendar','unimplemented source adapter: priorities','unimplemented supervisor turn: owner_text','unavailable actual product tool: query_calendar']);
  expect(inspectNativeExecutionSupport(b,{source_families:b.required_source_families,effect_kinds:[],turn_kinds:['owner_text'],production_tools:b.manifest.supported_tools})).toEqual([]);
 });
+it('source revision support cannot admit an unbound provider event or silently timed revision',()=>{
+ const b=bundle();const at='2026-10-05T03:00:00Z';const revision={at,owner_id:'a',source:'calendar',id:'cal',patch:{title:'Revised'}};
+ const revised={...b,manifest:{...b.manifest,world:{...b.manifest.world,revisions:[revision]}}};
+ const support={source_families:b.required_source_families,effect_kinds:[],turn_kinds:['owner_text','provider_event'] as const,production_tools:b.manifest.supported_tools};
+ expect(inspectNativeExecutionSupport(revised,support)).toContain('unbound timed source revision: calendar/cal');
+ const event={id:'rev',kind:'provider_event' as const,at,payload:{owner_id:'a',source:'calendar',id:'cal',patch:{title:'Revised'}}};
+ expect(inspectNativeExecutionSupport({...revised,turns:[...b.turns,event]},support)).toEqual([]);
+ expect(inspectNativeExecutionSupport({...revised,turns:[...b.turns,{...event,payload:{...event.payload,patch:{title:'Different'}}}]},support)).toContain('unbound source provider event: rev');
+});

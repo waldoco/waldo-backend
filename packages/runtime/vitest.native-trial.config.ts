@@ -13,8 +13,9 @@ if(!paths.length||paths.length>6||new Set(paths).size!==paths.length)throw new E
 const bundles=paths.map(path=>parseNativeCaseBundle(readFileSync(path,'utf8')));
 if(new Set(bundles.map(b=>b.bundle.manifest.case_id)).size!==bundles.length)throw new Error('native trial duplicate case');
 // This initial concrete supervisor only implements read-only Google families and
-// owner text turns. Unsupported effect/source/event families remain blocked.
-const support={source_families:['calendar','mail','tasks'],effect_kinds:[],turn_kinds:['owner_text'] as const,
+// owner text and exact declared source revision turns. Other provider events and
+// effect/source families remain blocked.
+const support={source_families:['calendar','mail','tasks'],effect_kinds:[],turn_kinds:['owner_text','provider_event'] as const,
  production_tools:['query_calendar','get_communication','search_communication','read_thread','query_tasks']};
 for(const {bundle} of bundles){const missing=inspectNativeExecutionSupport(bundle,support);if(missing.length)throw new Error(`blocked_fixture ${bundle.manifest.case_id}: ${missing.join(';')}`);}
 const receiptKeys=JSON.parse(process.env.WALDO_NATIVE_RECEIPT_KEYS??'null') as Record<string,string>|null;
