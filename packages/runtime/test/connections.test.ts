@@ -27,8 +27,8 @@ describe('google proxy', () => {
 
   it('drops an omitted trailing optional arg instead of sending null across the wire', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { message_id: 'm1' } })));
-    await proxyOf(fetcher).client('do-a', 'c-1').sendRaw('raw-mime');
-    expect(JSON.parse(String(sent(fetcher)[1].body))).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'sendRaw', args: ['raw-mime'] });
+    await proxyOf(fetcher).client('do-a', 'c-1', undefined, {id:'approval:fixture'}).sendRaw('raw-mime');
+    expect(JSON.parse(String(sent(fetcher)[1].body))).toEqual({ do_name: 'do-a', op: 'call', connection: 'c-1', method: 'sendRaw', args: ['raw-mime'], intent_id:'approval:fixture' });
   });
 
 
@@ -49,7 +49,7 @@ describe('google proxy', () => {
 
   it('never sends or receives a token on a call; the runtime only holds the connection id', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ data: { draft_id: 'd1' } })));
-    expect(await proxyOf(fetcher).client('do-a', 'c-1').draft({ to: ['x@y.test'], subject: 's', body: 'b' })).toEqual({ draft_id: 'd1' });
+    expect(await proxyOf(fetcher).client('do-a', 'c-1', undefined, {id:'draft:fixture'}).draft({ to: ['x@y.test'], subject: 's', body: 'b' })).toEqual({ draft_id: 'd1' });
     expect(String(sent(fetcher)[1].body)).not.toMatch(/refresh_token|access_token/);
   });
 
@@ -89,7 +89,7 @@ describe('incremental Google access', () => {
     const client = { draft: async () => { throw new GoogleError(403, 'google 403: insufficient scopes'); } } as unknown as GoogleClient;
     const google = { client: async () => client };
     const draft = googleHandlers(google, { propose: async () => 'p', proposeSendEmail: async () => 'p', record: () => undefined }, { timezone: 'UTC', now: () => new Date() }).find((tool) => tool.name === 'draft_email')!;
-    const result = await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never);
+    const result = await draft.handle({ to: ['a@example.com'], subject: 'Hi', body: 'Body' } as never, {authenticatedUserId:'fixture',turnId:'turn',toolCallId:'call'} as never);
     expect(result).toMatchObject({
       ok: false, code: 'auth_failed',
       connect: { status: 'auth_required', service: 'google', reason: 'scope_missing', feature: 'mail' },
