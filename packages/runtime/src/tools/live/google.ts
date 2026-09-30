@@ -1,10 +1,12 @@
+import { availabilityWindows } from './availability';
 import type { ProxyIntent } from '../../connectors/proxy-intent';
 import { artifactMarker, extractArtifacts, quarantineArtifacts, type ArtifactKind, type ExtractedArtifact } from '../../security/artifact-hygiene';
 import {
+  queryAvailabilityArgsSchema, type QueryAvailabilityArgs,
   connectServiceArgsSchema, draftEmailArgsSchema, getCommunicationArgsSchema, readThreadArgsSchema, searchCommunicationArgsSchema, getTasksArgsSchema, proposeCalendarChangeArgsSchema, queryCalendarArgsSchema, sendEmailArgsSchema, TOOL_PERMISSIONS, triggerTypeSchema,
   type ConnectIntent, type ConnectServiceArgs, type DraftEmailArgs, type GetCommunicationArgs, type ReadThreadArgs, type SearchCommunicationArgs, type GetTasksArgs, type ProposeCalendarChangeArgs, type QueryCalendarArgs, type SendEmailArgs, type ToolHandler, type ToolName, type ToolResult,
 } from '@waldo/contracts';
-import { b64url, buildMime, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
+import { b64url, buildMime, validFreeBusyCalendar, GoogleError, sha256Hex, type GoogleClient, type GoogleFeature } from '../../connectors/google';
 import { EmailProposalError, type EmailSendProposal } from '../../channels/approvals';
 import type { ToolDispatcherContext } from '../dispatcher';
 import type { OwnerClock } from './get-context';
@@ -42,7 +44,7 @@ async function withGoogle<T>(google: GoogleAccess, feature: GoogleFeature, work:
     // A 403 means this feature's scope was never granted; a 401 means the stored grant is dead.
     if (error instanceof GoogleError && error.status === 403) return authFailed('scope_missing', feature);
     if (error instanceof GoogleError && error.status === 401) return authFailed('reauth_needed', feature);
-    return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error) };
+    return { ok: false, code: 'transient', error: error instanceof Error ? error.message : String(error), source_taint: 'external' };
   }
 }
 
@@ -227,6 +229,19 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       }
     },
   } satisfies ToolHandler<SendEmailArgs, unknown, ToolDispatcherContext>,
+  {
+    name:'query_availability',description:'Find duration-fitting free windows across explicit connected calendar IDs and supplied work windows. Reports unknown coverage instead of assuming inaccessible calendars are free. Read-only, no booking.',
+    schema:queryAvailabilityArgsSchema,trigger_allowlist:allowlist('query_availability'),autonomy_gated:false,
+    handle:(args:QueryAvailabilityArgs)=>withGoogle(google,'availability',async client=>{
+      const {date_range:range,calendar_ids:ids,work_windows:windows,duration_minutes:duration}=args;
+      const observed=await client.freeBusy(range.from,range.to,ids,clock.timezone);
+      if(Date.parse(observed.from)!==Date.parse(range.from)||Date.parse(observed.to)!==Date.parse(range.to))throw new Error('availability coverage differs');
+      const unavailable=ids.filter(id=>!validFreeBusyCalendar(observed.calendars?.[id])||Boolean(observed.calendars[id]!.errors?.length));
+      if(unavailable.length)return {status:'unknown' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:unavailable,free_windows:[],observed_at:clock.now().toISOString()};
+      return {status:'complete_provider_coverage' as const,from:range.from,to:range.to,timezone:clock.timezone,calendar_ids:ids,unavailable_calendar_ids:[],free_windows:availabilityWindows(range,ids.flatMap(id=>observed.calendars[id]!.busy),windows,duration),observed_at:clock.now().toISOString(),qualification:'Free according to queried calendars and supplied work windows; not a booking or guarantee of personal availability.'};
+    }),
+  } satisfies ToolHandler<QueryAvailabilityArgs,unknown,ToolDispatcherContext>,
+
 ];
 
 // The tool only reports the typed intent; the responder turns it into the channel's connect

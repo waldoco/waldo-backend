@@ -213,3 +213,14 @@ export const callMcpToolResultSchema = z.strictObject({
   source_taint: externalTaintSchema,
 });
 export type CallMcpToolResult = z.infer<typeof callMcpToolResultSchema>;
+
+// Explicit provider availability, not a calendar-event pagination heuristic.
+export const queryAvailabilityArgsSchema=z.strictObject({
+ date_range:z.strictObject({from:iso8601Schema,to:iso8601Schema}).refine(r=>Date.parse(r.from)<Date.parse(r.to),'range must advance'),
+ calendar_ids:z.array(z.string().min(1).max(254)).min(1).max(50).default(['primary']).refine(ids=>new Set(ids).size===ids.length,'duplicate calendar IDs'),
+ duration_minutes:z.int().min(1).max(1440),
+ work_windows:z.array(z.strictObject({start:iso8601Schema,end:iso8601Schema}).refine(w=>Date.parse(w.start)<Date.parse(w.end),'window must advance')).max(100).default([]),
+});
+export type QueryAvailabilityArgs=z.infer<typeof queryAvailabilityArgsSchema>;
+export const readOwnerContextArgsSchema=z.strictObject({topic:z.string().min(1).max(200),limit:z.int().min(1).max(12).default(8)});
+export type ReadOwnerContextArgs=z.infer<typeof readOwnerContextArgsSchema>;

@@ -1,3 +1,4 @@
+import { ownerContextHandler } from '../tools/live/owner-context';
 import {
   acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
   type ConnectIntent, type LLMTool, type LLMToolTurn, type ModelName,
@@ -128,7 +129,7 @@ export const createTelegramResponder = (
     // Typed store provenance for the provider's retrieval receipts (owner review on #212).
     ...(offloadStore === undefined ? {} : { toolOutputStore: offloadStore }),
   };
-  const handlers = [getContextHandler(clock), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
+  const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
     const started = Date.now();
     let reasoning: string | undefined;

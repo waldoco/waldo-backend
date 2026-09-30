@@ -220,6 +220,8 @@ describe('hook registry', () => {
         'get_tasks',
         'get_master_metrics',
         'get_context',
+        'query_availability',
+        'read_owner_context',
         'read_memory',
         'search_episodes',
         'search_connector',

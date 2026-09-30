@@ -9,6 +9,7 @@ const rejectEffect = (): never => { throw new Error('fixture effect requires a s
 const rejectRead = (): never => { throw new Error('fixture source not implemented'); };
 
 export const isolatedGoogleClient = (world: IsolatedSourceWorld, owner: string): GoogleClient => ({
+  freeBusy: async()=>rejectRead(),
   events: async (from, to, limit, includeDeclined) => world.list(owner, 'calendar')
     .filter((row) => day(String(row.start)) < day(to) && day(String(row.end)) >= day(from) && (includeDeclined || row.status !== 'declined'))
     .slice(0, limit).map((row) => copy<CalendarItem>(row)),
