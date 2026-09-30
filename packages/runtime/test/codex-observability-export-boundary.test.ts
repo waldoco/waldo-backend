@@ -211,4 +211,20 @@ describe('real exporter transport boundary', () => {
     expect(bodies[0]).not.toContain('MUTATED_');
   });
 
+  it('evicts globally oldest hops across interleaved traces rather than trace insertion order', async () => {
+    const bodies: string[] = [];
+    const log = otlpTurnExporter(config, context, async (_url, init) => { bodies.push(String(init.body)); return new Response(null); });
+    await log({ ...root('a'), hop: 'tool_a_old' });
+    await log({ ...root('b'), hop: 'tool_b_old' });
+    await log({ ...root('a'), hop: 'tool_a_new' });
+    for (let i = 0; i < 47; i++) await log({ ...root(`filler-${i}`), hop: 'tool_filler' });
+    for (let i = 0; i < 2; i++) await expect(log({ ...root(`overflow-${i}`), hop: 'tool_overflow' })).rejects.toThrow('otlp_buffer_evicted');
+    await log(root('a'));
+    await log(root('b'));
+    const spans = bodies.map((body) => JSON.parse(body).resourceSpans[0].scopeSpans[0].spans);
+    expect(spans[0].map((span: { name: string }) => span.name)).toEqual(['telegram.turn', 'tool_a_new']);
+    expect(spans[1].map((span: { name: string }) => span.name)).toEqual(['telegram.turn']);
+    expect(spans[0][0].attributes).toContainEqual({ key: 'langfuse.trace.metadata.buffer_evicted_hops', value: { stringValue: '2' } });
+  });
+
 });

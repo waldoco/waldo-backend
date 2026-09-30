@@ -6,7 +6,7 @@ export type OtlpConfig = Readonly<{ endpoint: string; headers: Readonly<Record<s
 export type TraceContext = Readonly<{ environment: string; release: string; channel: string; userId: string; sessionId: string; captureText: boolean }>;
 type Env = Readonly<{ LANGFUSE_PUBLIC_KEY?: string; LANGFUSE_SECRET_KEY?: string; LANGFUSE_BASE_URL?: string }>;
 type Send = (url: string, init: RequestInit) => Promise<Response>;
-type Span = Readonly<{ entry: TurnLogEntry; endMs: number }>;
+type Span = Readonly<{ entry: TurnLogEntry; endMs: number; arrival: number }>;
 
 // Bump when a name, tag or metadata key below changes meaning, so dashboards can filter by it.
 export const TRACE_SCHEMA_VERSION = '4';
@@ -58,6 +58,7 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   const context = { ...suppliedContext, captureText: resolveCaptureText({ WALDO_ENVIRONMENT: suppliedContext.environment, LANGFUSE_CAPTURE_TEXT: suppliedContext.captureText ? 'true' : 'false' }) };
   const validContext = [context.environment, context.release, context.channel, context.userId, context.sessionId].every((value) => typeof value === 'string' && value.trim().length > 0) && typeof suppliedContext.captureText === 'boolean';
   const pending = new Map<string, Span[]>();
+  let nextArrival = 0;
   let bufferedHops = 0;
   let evictedHops = 0;
   const exported = new Map<string, Readonly<{ traceId: string; rootId: string; rootHop: string; delivery: Promise<void> }>>();
@@ -194,13 +195,17 @@ export const otlpTurnExporter = (config: OtlpConfig, suppliedContext: TraceConte
   return (entry: TurnLogEntry): Promise<void> => {
     if (!validContext) return Promise.reject(new Error('otlp_context_invalid'));
     const gated = gateTraceEntry(entry, context.captureText);
-    const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now() };
+    const item = { entry: { ...gated, text: context.captureText && gated.text ? { ...gated.text } : undefined, usage: gated.usage ? { ...gated.usage } : undefined }, endMs: now(), arrival: nextArrival++ };
     const done = exported.get(entry.trace);
     if (done) return post([span(done.traceId, hex(8), done.rootId, item, [list('langfuse.trace.tags', tagsFor(context, [item]))], done.rootHop)], done.delivery);
     if (entry.hop !== 'turn' && entry.hop !== 'machine_turn') {
       const overflow = bufferedHops >= MAX_RETAINED;
       if (overflow) {
-        const oldest = pending.keys().next().value!;
+        let oldest = pending.keys().next().value!;
+        // Each trace's hops are arrival-ordered; compare heads across all traces.
+        for (const [trace, hops] of pending) {
+          if (hops[0]!.arrival < pending.get(oldest)![0]!.arrival) oldest = trace;
+        }
         const retained = pending.get(oldest)!.slice(1);
         if (retained.length) pending.set(oldest, retained); else pending.delete(oldest);
         bufferedHops--;
