@@ -12,8 +12,8 @@ At beta-mvp e1c20143227174fd2947b16b41c6434afd1cb701:
 
 - `channels/artifacts.ts` retains named markdown bodies with four document kinds and
   revisions, metadata in owner SQLite and bodies in R2. Bodies are read on demand as
-  external content, not injected as instructions. Its unscoped bucket adapter is being
-  fixed separately in #397 / PR #400.
+  external content, not injected as instructions. Its bucket adapter was owner-scoped in merged PR #400
+  (7a8c40db7b5d244a8ebb04d874398ba3b360720e); this is not a byte workspace.
 - `channels/files.ts` retains Telegram file references, not workspace bytes. The console
   fetches bytes from the provider when opening a file. This is not restart-safe custody.
 - `channels/telegram-owner-do.ts` constructs and registers artifact handlers. Core owns
@@ -136,7 +136,8 @@ contact or channel needs a separate scoped approval and delivery receipt, not th
 
 Start from research-only [PR #372](https://github.com/waldoco/waldo-backend/pull/372),
 `ORGO_COMPUTER_BAKEOFF_2026-09-29.md` and `SANDBOX_TIER_SPEC_2026-09-27.md`.
-Candidate list is Orgo, E2B, Maritime, Cloudflare Sandbox/Browser Run and Browserbase.
+Candidate list includes E2B, Modal and Daytona for external code execution, plus Orgo,
+Maritime and Cloudflare Sandbox/Browser Run as other research candidates. Browserbase is separate.
 Vendor claims are not measurements; none is selected here. Browserbase is a browser
 candidate, not proof of general Linux compute. Existing sandbox spec is a draft, not
 permission to instantiate paid cells or relax its no-secret/no-network boundary.
@@ -173,7 +174,7 @@ CI, deployed feature readback and eventual live compute receipts. No shell, reta
 login, public share, parity, production readiness or full workspace claim from this spec.
 Rollback keeps existing artifact APIs and provider-upload list intact; disable new handlers
 and routes without dropping ready metadata/body ownership. Open decisions: contracts lane
-schedule, limits/retention, legacy artifact recovery, provider tier/budget and live test scope.
+schedule, limits/retention, provider tier/budget and live test scope.
 
 
 ## September 30 static-audit comparison: Manus and browser continuity
@@ -204,8 +205,8 @@ Official Manus references read September 30:
 
 For Waldo browser depth, all current handlers start/end a session per call; approval replay
 uses a new session. `browser.ts` act acknowledgments do not include an authoritative final
-external receipt. #404 is a wording prerequisite only; approval ledger/toast still needs the
-core-owned typed outcome mapping reported separately. Plan owner-scoped sessions only with
+external receipt. Merged #413 (98ec95757a3250911037c688e9567b2e8ba19393) supplies
+typed unverified/uncertain outcomes and truthful approval ledger/toast; #404 was superseded. Plan owner-scoped sessions only with
 current provider documentation proving context and navigation state, bounded lifetimes,
 cleanup/revocation and isolated auth. Final effect proof needs the exact approved
 recipient/items/total/action plus provider or controlled-fixture receipt and response-loss
@@ -216,3 +217,102 @@ itself does not contain six hosts. Public egress policy and its configured roste
 this lane's ownership; core should verify the active bound policy before changing reach.
 These are vendor-described features and source observations, not measured competitor/Waldo
 outcomes, provider selection, spend approval or a new implementation commitment.
+
+
+## September 30 decision: DO control plane plus optional external execution
+
+Recommendation for review, not provider selection: retain DO + R2 as the owner-scoped
+control plane and durable file authority, and add an external compute adapter when a task
+needs Python, shell, package installation, document rendering or repository tests. DO-only
+is a valid tier for metadata, API orchestration and bounded text transforms; it is not a
+substitute for a Linux workspace. External services are allowed as candidates, not approved
+connections, charges or data destinations. No trial has run and no latency was measured.
+
+### Price and startup comparison
+
+Read September 30, 2026. USD, before credits/tax. Shared example: 600 seconds running,
+2 vCPU-equivalent and 4 GiB RAM, CPU-only, then terminate. Session figures are calculated
+resource estimates, not checkout totals. Exclude model/browser API usage, builds, transfers,
+retained snapshots/volumes, account plan fees and Waldo's existing control plane unless
+stated. Rates and limits must be rechecked before an approved trial.
+
+| Option | Published rate and illustrative 10-minute cost | Startup evidence, not Waldo p50/p95 | Capability delta and caution |
+|---|---|---|---|
+| DO-native + R2 | DO paid overage $12.50/million GB-s at allocated 128 MB and $0.15/million requests [D1]. At vendor example convention 0.128 GB, 600 active seconds = $0.000960 duration equivalent, plus requests/storage. Actual bill uses included allocations and rounding, not per-session settlement. Not a 2 vCPU/4 GiB machine. R2 Standard $0.015/GB-month, $4.50/million writes, $0.36/million reads [D3]. | No verified numeric cold-start figure found. Current Waldo startup unmeasured. | Current runtime coordinates tools and stores markdown artifacts. Proposed byte workspace still needed. DO CPU is 30 seconds default, configurable to 5 minutes per invocation [D2]; no proposed Linux shell/process environment. Cheapest tier for orchestration is not full execution parity. |
+| E2B | $0.000014/vCPU-s + $0.0000045/GiB-s, included sandbox storage [E1,E2]. `600*(2*0.000014+4*0.0000045)` = **$0.027600**. Hobby $0/month, Pro $150/month + usage, configurable resources and limits depend on plan. | ~150 ms reported by competing provider Beam, not independently measured here [X2]. Official pages fetched did not establish that numeric startup value. | Full Linux Firecracker microVM, shell/PTY, filesystem, Python/JS, full-state pause/resume, egress controls and R2 mounting described by vendor [E3,E4]. Fits untrusted code/data tasks. Do not mount an entire owner bucket or inject credentials; verify network deny and task-specific mounts. |
+| Modal Sandboxes | Physical core (2 vCPU equivalent) $0.00003942/core-s + $0.00000667/GiB-s [M1]. `600*(0.00003942+4*0.00000667)` = **$0.039660** at 1 core/4 GiB. Billing is `max(request, actual)` [M2], so bursts can increase this estimate. | Vendor says <1 second for pre-cached containers [M3], not uncached image pull/build or request-to-first-command total. | Shell execution, custom images, volumes and snapshots [M1,M4]. Default lifetime 5 minutes must be raised to 10 for this example; max documented 24 hours [M4]. Strong candidate for custom Python/data workloads, but image/build cost and resource bursts need caps. |
+| Daytona | Linux CPU/RAM rates were not exposed by fetched official pricing; page showed Windows $0.0858/vCPU-hour [T1]. Third-party MakerStack gives $0.000014/vCPU-s + $0.0000045/GiB-s + $0.00000003/GiB-s disk [X1]. **Provisional $0.027654** for 2 CPU/4 GiB/3 GiB disk over 600s ignoring free allowances; not approval-ready until Linux rates confirmed officially. | Vendor container startup <90 ms [T2]; image build/restore and full ready-to-command timing are not covered. Do not compare directly with Modal's cached figure. | Linux container default, separate VM tier for memory pause/resume; filesystem persists on stop, container archive moves bytes to storage [T2]. Stopped/paused disk stays billed; snapshots can stay billed after deletion [T3]. Container and VM costs/isolation must be tested separately. |
+
+Do not select from a headline timing or cheap CPU rate alone. CompareSandboxes [X3]
+reports Modal 800 ms and Daytona 90 ms, but its CPU-only hourly comparison omits Modal's
+physical-core-to-vCPU distinction and RAM. Beam [X2] also conflicts with current E2B official
+pages on self-hosting and Daytona lifecycle support. These are market context, not proof,
+security certification or authority. Current official documentation takes precedence for
+configuration; actual controlled trials decide runtime performance.
+
+### What each tier enables
+
+1. **Current Waldo:** named markdown artifact revisions, owner-local metadata and scoped
+   R2 bodies (#400). Telegram references are not retained binary files. No byte filesystem,
+   workspace materialization, shell, package install or file-generation pipeline is shipped.
+2. **Proposed DO-native workspace:** private byte custody, explicit manifest/revision/quotas,
+   binary upload/download and bounded text tools. Enables retained task inputs and outputs;
+   cannot by itself run Pandoc, Python/pandas, LibreOffice, npm tests or persistent services.
+3. **Proposed external ephemeral sandbox:** map a task to a fresh or resumed isolated cell,
+   mount only approved immutable inputs, run bounded code, harvest digest-verified outputs
+   back through workspace admission, then stop/delete with receipt. This addresses execution
+   gaps without an always-on machine. Retained bytes, installed packages and running process
+   continuity are separate acceptance dimensions.
+4. **Optional persistent/desktop tier:** needed only for tasks whose process or environment
+   must resume, GUI applications or browser continuity. Compare idle storage/compute billing,
+   state deletion and recovery independently. Browser login custody is not a workspace grant.
+
+### Decision and bakeoff gates
+
+Before any service connection, obtain owner approval for the named provider, allowed private
+input data, tier/resources, maximum total spend and undo/retained-storage cost. Free credits
+are not permission to consume them. No warm pool, subscription or automatic top-up by default.
+Pin image digest, SDK version, region and no-network policy before measuring. Keep provider
+credentials host-side, use owner/run-specific cells, and preserve R2 as the authoritative
+file store so provider changes do not migrate user identity or grants.
+
+Proposed trial per approved provider: 20 sequential fresh starts and 10 resume starts at the
+same requested resource shape, pinned image and region, followed by PDF/text rendering,
+CSV-to-chart, and tiny repo test tasks. Record creation-to-first-command and first-useful-output
+p50/p95, image cache/build status, actual billed resource seconds, pause/delete proof and
+restart digest roundtrip. Distinguish CPU vs wall time and physical cores vs vCPUs. Provider
+minimum resources may differ; report the difference instead of forcing false equivalence.
+No measurements or pass verdict exist yet.
+
+Reject a candidate if cross-owner mounts/keys leak, no-egress cannot be enforced, secrets
+enter the cell/model logs, output quotas or wall deadlines cannot stop execution, or unknown
+cleanup/billing remains. After isolation, rank by successful task output, cost per completed
+task and time-to-useful-output, not boot time alone. E2B is a reasonable first **approval
+candidate** for general code execution; Modal is the custom-image/data alternative; Daytona
+is the persistence alternative once official Linux costs and exact runtime class are known.
+No chosen service or default spend is established by this ranking.
+
+### Sources and confidence
+
+Official pages fetched September 30, rates are live-page observations with no published date:
+
+- [D1] https://developers.cloudflare.com/durable-objects/platform/pricing/ - duration/request pricing, memory allocation and rounding.
+- [D2] https://developers.cloudflare.com/durable-objects/platform/limits/ - CPU and storage limits.
+- [D3] https://developers.cloudflare.com/r2/pricing/ - Standard storage/operation rates.
+- [E1] https://www.e2b.dev/pricing - plan and resource rates.
+- [E2] https://e2b.dev/pricing.md - included storage, default configuration and plan limits. Billing search excerpt described a different default RAM value; use the actual pinned template, not an assumed default.
+- [E3] https://e2b.dev - microVM, filesystem, egress, lifecycle and region capabilities, vendor claims requiring trials.
+- [E4] https://www.e2b.dev/docs/sandbox - lifecycle/pause and timeout limits.
+- [M1] https://modal.com/products/sandboxes - core/RAM rates and volumes/snapshots.
+- [M2] https://modal.com/docs/guide/sandbox-resources.md - max(request, actual) billing.
+- [M3] https://modal.com/resources/code-sandbox - <1 second pre-cached startup claim only.
+- [M4] https://modal.com/docs/guide/sandbox - shell API, lifecycle and timeout.
+- [T1] https://www.daytona.io/pricing - pricing page fetch incomplete for Linux resource rates; Windows figure is not used for Linux calculation.
+- [T2] https://www.daytona.io/docs/en/sandboxes/ - container/VM distinction, startup claim and lifecycle matrix.
+- [T3] https://www.daytona.io/docs/en/billing.md - reserved-resource billing by state and delayed charges.
+
+Fetched third-party context, lower confidence and not price approval evidence:
+
+- [X1] https://makerstack.co/reviews/daytona-review/ - provisional Linux price model; not confirmed by official fetched page.
+- [X2] https://www.beam.cloud/blog/best-e2b-alternatives - competing vendor article, June 17, 2026; ~150 ms E2B claim and caveats, conflicts noted above.
+- [X3] https://comparesandboxes.com/compare/modal-vs-daytona/ - comparison site dated July 26, 2026; method not validated and units not comparable.
