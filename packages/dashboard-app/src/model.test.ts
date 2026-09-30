@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchOverview, readOverview } from './model';
+import { fetchOverview, readOverview, SignInRequired } from './model';
 
 const empty = { version: 1, as_of: '2026-09-29T07:40:00Z', timezone: 'Asia/Kolkata', brief: { status: 'not_sent', at: null }, waiting: { count: 0, first: null }, next_card: null, latest_activity: null, services: [] };
 describe('owner-scoped overview contract', () => {
@@ -20,7 +20,20 @@ describe('owner-scoped overview contract', () => {
     expect((await fetchOverview()).version).toBe(1);
     expect(mock.mock.calls[0]?.[0]).toBe('/console/dashboard/api/v1/overview');
     expect(mock.mock.calls[0]?.[1]).toMatchObject({ credentials: 'same-origin', cache: 'no-store' });
-    await expect(fetchOverview()).rejects.toThrow('Sign in');
+    await expect(fetchOverview()).rejects.toBeInstanceOf(SignInRequired);
     vi.unstubAllGlobals();
+  });
+  it('does not turn unavailable, malformed or rejected requests into empty records', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response('{broken', { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: 2 }), { status: 200 }))
+      .mockRejectedValueOnce(new TypeError('Network unavailable')));
+    try {
+      await expect(fetchOverview()).rejects.toThrow('could not load');
+      await expect(fetchOverview()).rejects.toThrow('unsupported data shape');
+      await expect(fetchOverview()).rejects.toThrow('unsupported data shape');
+      await expect(fetchOverview()).rejects.toThrow('Network unavailable');
+    } finally { vi.unstubAllGlobals(); }
   });
 });
