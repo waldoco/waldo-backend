@@ -1,4 +1,5 @@
 import { routerSignature, signedRpc, hex, type OwnerDirectoryEnv } from '../identity/owner-directory';
+import { ProxyIntentError, type ProxyIntent } from './proxy-intent';
 import { GOOGLE_METHODS, GoogleError, type GoogleClient, type GoogleTokens } from './google';
 
 // Google tokens live in Supabase Vault and are used only inside the connector-proxy Edge Function.
@@ -7,10 +8,10 @@ export type GoogleLink = Readonly<{ id: string; email: string; scopes: readonly 
 export type GoogleProxy = Readonly<{
   exchange(doName: string, code: string, redirectUri: string, codeVerifier?: string): Promise<GoogleLink | null>;
   adopt(doName: string, tokens: GoogleTokens): Promise<GoogleLink | null>;
-  client(doName: string, connection: string, health?: (error: string) => void): GoogleClient;
+  client(doName: string, connection: string, health?: (error: string) => void, intent?: ProxyIntent): GoogleClient;
   // Google-auth MCP servers (WALDO_MCP_SERVERS entries with auth:'google') on a Vault-backed
   // grant: the edge attaches the token and runs the call; the runtime never sees a bearer.
-  mcpCall(doName: string, connection: string, serverUrl: string, tool: string, args: Record<string, unknown>): Promise<unknown>;
+  mcpCall(doName: string, connection: string, serverUrl: string, tool: string, args: Record<string, unknown>, intent?: ProxyIntent): Promise<unknown>;
   revoke(doName: string, connection: string): Promise<boolean>;
 }>;
 
@@ -36,13 +37,15 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
   return {
     exchange: async (doName, code, redirectUri, codeVerifier) => link(await post({ do_name: doName, op: 'exchange', code, redirect_uri: redirectUri, ...(codeVerifier ? { code_verifier: codeVerifier } : {}) })),
     adopt: async (doName, tokens) => link(await post({ do_name: doName, op: 'adopt', refresh_token: tokens.refresh_token, email: tokens.email ?? 'google', scopes: tokens.scopes ?? [] })),
-    client: (doName, connection, health) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
+    client: (doName, connection, health, intent) => Object.fromEntries(METHODS.map((method) => [method, async (...args: unknown[]) => {
       try {
         // JSON arrays cannot hold undefined: an omitted trailing optional arg (sendRaw's threadId,
         // moveEvent/cancelEvent's etag) would cross the wire as null and fail typed validation.
         const wireArgs = [...args];
         while (wireArgs.length > 0 && wireArgs[wireArgs.length - 1] === undefined) wireArgs.pop();
-        const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs });
+        const effect = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(method);
+        if(effect&&!intent)throw new ProxyIntentError('intent_required');
+        const { data } = await post({ do_name: doName, op: 'call', connection, method, args: wireArgs, ...(effect?{intent_id:intent!.id}:{}) });
         health?.('');
         return data;
       } catch (error) {
@@ -50,7 +53,10 @@ export const googleProxy = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
         throw error;
       }
     }])) as unknown as GoogleClient,
-    mcpCall: async (doName, connection, serverUrl, tool, args) => (await post({ do_name: doName, op: 'mcp_call', connection, server_url: serverUrl, tool, args: [args] })).data,
+    mcpCall: async (doName, connection, serverUrl, tool, args, intent) => {
+      if(!intent)throw new ProxyIntentError('intent_required');
+      return(await post({ do_name: doName, op: 'mcp_call', connection, server_url: serverUrl, tool, args: [args], intent_id:intent.id })).data;
+    },
     revoke: async (doName, connection) => (await rpc('connection_revoke', `connrevoke.${doName}.${connection}`, { p_do_name: doName, p_connection: connection })) === true,
   };
 };

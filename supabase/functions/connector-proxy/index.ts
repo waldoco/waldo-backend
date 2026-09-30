@@ -2,6 +2,7 @@
 // sends a connection id and a typed operation, signed with the router secret, and gets data back.
 import { exchangeGoogleCode, GOOGLE_METHODS, googleClient, GoogleError, type GoogleClient, type GoogleMethod } from '../../../packages/runtime/src/connectors/google.ts';
 import { googleAccessToken } from '../../../packages/runtime/src/connectors/google.ts';
+import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
 
 const env = (name: string) => Deno.env.get(name) ?? '';
@@ -22,7 +23,7 @@ const same = (a: string, b: string) => {
 };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const fail = (status: number, message: string) => reply({ error: { status, message } }, status === 401 || status === 403 || status === 404 ? 200 : 502);
-const db = async (fn: string, args: Record<string, string>) => {
+const db = async (fn: string, args: Record<string, unknown>) => {
   const response = await fetch(`${url}/rest/v1/rpc/${fn}`, {
     method: 'POST', headers: { apikey: service, authorization: `Bearer ${service}`, 'content-profile': 'waldo', 'content-type': 'application/json' }, body: JSON.stringify(args),
   });
@@ -34,7 +35,7 @@ const store = async (doName: string, email: string, scopes: readonly string[], t
   return id ? reply({ id, email: email.toLowerCase(), scopes }) : fail(404, 'unknown owner');
 };
 
-type Body = Readonly<{ do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
+type Body = Readonly<{ intent_id?: string; do_name: string; op: 'exchange' | 'adopt' | 'call' | 'mcp_call'; server_url?: string; tool?: string; code?: string; code_verifier?: string; redirect_uri?: string; refresh_token?: string; email?: string; scopes?: string[]; connection?: string; method?: string; args?: unknown[] }>;
 
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
@@ -54,6 +55,14 @@ Deno.serve(async (request) => {
   return logged(started, body.op, body.op === 'call' ? body.method : undefined, await handle(body));
 });
 
+const intentDispatch = async (body: Body, dispatch: () => Promise<unknown>) => executeProxyIntent(
+  body.intent_id ? {id:body.intent_id} : undefined,
+  {do_name:body.do_name,connection:body.connection,op:body.op,method:body.method??null,server_url:body.server_url??null,tool:body.tool??null,args:body.args??[]},
+  {
+    claim: async(id,digest)=>await db('proxy_idem_claim',{p_do_name:body.do_name,p_connection:body.connection,p_key:id,p_digest:digest}) as IntentClaim|null,
+    store: async(id,result)=>(await db('proxy_idem_store',{p_do_name:body.do_name,p_connection:body.connection,p_key:id,p_result:result}))===true,
+  },dispatch);
+
 const handle = async (body: Body): Promise<Response> => {
   const app = { clientId, clientSecret, redirectUri: body.redirect_uri ?? '' };
   try {
@@ -71,10 +80,11 @@ const handle = async (body: Body): Promise<Response> => {
       let mcpRefreshError = '';
       try {
         const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = error; });
-        const { content } = await callMcpTransport({ url: body.server_url }, body.tool, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access);
+        const content = await intentDispatch(body, async()=> (await callMcpTransport({ url: body.server_url! }, body.tool!, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access)).content ?? null);
         await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
         return reply({ data: content ?? null });
       } catch (error) {
+        if(error instanceof ProxyIntentError)return fail(error.code==='intent_conflict'?409:503,error.code);
         if (mcpRefreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: mcpRefreshError });
         return fail(mcpRefreshError ? 401 : error instanceof McpAuthError ? error.status : 502, error instanceof Error ? error.message : String(error));
       }
@@ -85,10 +95,12 @@ const handle = async (body: Body): Promise<Response> => {
     let refreshError = '';
     const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; });
     try {
-      const data = await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? []));
+      const dispatch=async()=> (await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? [])))??null;
+      const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
       await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
       return reply({ data: data ?? null });
     } catch (error) {
+      if(error instanceof ProxyIntentError)return fail(error.code==='intent_conflict'?409:503,error.code);
       if (refreshError) await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: refreshError });
       return fail(refreshError ? 401 : error instanceof GoogleError ? error.status : 502, error instanceof Error ? error.message : String(error));
     }
