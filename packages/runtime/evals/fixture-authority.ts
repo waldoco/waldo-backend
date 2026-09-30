@@ -26,7 +26,9 @@ export class FixtureAuthorityClock {
       !manifest.world.owners.some((owner) => owner.id === manifest.control_owner)) throw new Error('invalid synthetic owners');
     for (const grant of manifest.grants) {
       this.owner(grant.owner_id);
-      if (!grant.purpose || !grant.scope || instant(grant.effective_at) >= instant(grant.expires_at)) throw new Error('invalid synthetic grant');
+      if (!grant.purpose || !grant.scope || !Array.isArray(grant.allowed_effects) ||
+        grant.allowed_effects.some((effect) => !effect) || new Set(grant.allowed_effects).size !== grant.allowed_effects.length ||
+        instant(grant.effective_at) >= instant(grant.expires_at)) throw new Error('invalid synthetic grant');
     }
     const branchIds = new Set<string>();
     for (const branch of manifest.branches) {
@@ -52,8 +54,11 @@ export class FixtureAuthorityClock {
     const active_grants = this.manifest.grants.filter((grant) => grant.owner_id === owner_id &&
       instant(grant.effective_at) <= this.nowMs && this.nowMs < instant(grant.expires_at));
     const active_branches = this.manifest.branches.filter((branch) => branch.owner_id === owner_id && instant(branch.trigger_at) <= this.nowMs);
-    // Branches narrow permission, never create it: without a current grant no effect is allowed.
-    const permitted_effects = active_grants.length ? [...new Set(active_branches.flatMap((branch) => branch.permitted_effects))] : [];
+    // A branch can only narrow a typed current grant. Neither prose scope nor the
+    // branch's own effect list authorizes a different effect.
+    const granted = new Set(active_grants.flatMap((grant) => grant.allowed_effects));
+    const permitted_effects = [...new Set(active_branches.flatMap((branch) => branch.permitted_effects))]
+      .filter((effect) => granted.has(effect));
     return structuredClone({ at: this.now(), owner_id, active_grants, active_branches, permitted_effects });
   }
 }

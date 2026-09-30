@@ -6,7 +6,7 @@ const spec = loadNativeSuite().find((row)=>row.id==='W23')!;
 const sources = { calendar:[{owner_id:'a',id:'event-a',title:'A'},{owner_id:'b',id:'event-b',title:'B'}],priorities:[{owner_id:'a',id:'goal-a',text:'A'}] };
 const m:NativeManifest = {case_id:'W23',candidate_owner:'a',control_owner:'b',visible_prompt:spec.user_prompt,
   world:{clock:spec.fixture.now,owners:[{id:'a'},{id:'b'}],sources},
-  grants:[{owner_id:'a',purpose:'calendar planning',scope:'read only',effective_at:'2026-10-04T00:00:00+05:30',expires_at:'2026-10-06T00:00:00+05:30'}],
+  grants:[{owner_id:'a',purpose:'calendar planning',scope:'read only',allowed_effects:[],effective_at:'2026-10-04T00:00:00+05:30',expires_at:'2026-10-06T00:00:00+05:30'}],
   branches:[],supported_tools:['query_calendar'],source_digest:`sha256:${createHash('sha256').update(JSON.stringify(sources)).digest('hex')}`};
 describe('native fixture readiness, not a trial',()=>{
   it('requires typed source rows, grant and digest before opening isolated run',()=>{
@@ -22,6 +22,9 @@ describe('native fixture readiness, not a trial',()=>{
     expect(inspectNativeManifest({...m,case_id:'R33',visible_prompt:r.user_prompt,world:{...m.world,clock:r.fixture.now}}).status).toBe('blocked_fixture');
     const w01=loadNativeSuite().find((row)=>row.id==='W01')!;
     const base={...m,case_id:'W01',visible_prompt:w01.user_prompt,world:{...m.world,clock:w01.fixture.now}};
-    expect(inspectNativeManifest({...base,branches:[{id:'approval',owner_id:'a',trigger_at:'2026-10-06T10:00:00+05:30',permitted_effects:['calendar.move']}]}).missing).toContain('typed owner branch under current grant');
+    const approval={id:'approval',owner_id:'a',trigger_at:'2026-10-05T10:00:00+05:30',permitted_effects:['calendar.move']};
+    expect(inspectNativeManifest({...base,branches:[approval]}).missing).toContain('typed owner branch under current grant');
+    expect(inspectNativeManifest({...base,grants:[{...m.grants[0]!,allowed_effects:['calendar.move']}],branches:[approval]}).missing).not.toContain('typed owner branch under current grant');
+    expect(inspectNativeManifest({...base,branches:[{...approval,trigger_at:'2026-10-06T10:00:00+05:30'}]}).missing).toContain('typed owner branch under current grant');
   });
 });
