@@ -38,6 +38,15 @@ function client(create: unknown): OpenAIResponsesClient {
 }
 
 describe('OpenAIResponsesAdapter', () => {
+  it.each(['synthetic-only\u2028\u2028', 'synthetic-only\n', ' synthetic-only', 'synthetic only', 'synthetic\0only', 'synthetic-☃', 'synthetic\ronly', 'synthetic\tonly', ''])('rejects malformed credential before calling an injected SDK client: %j', async (apiKey) => {
+    let calls = 0;
+    const adapter = new OpenAIResponsesAdapter({ apiKey, client: client(async () => { calls++; throw new Error('must not reach SDK'); }) });
+    const result = await adapter.complete(gatewayRequest());
+    expect(result).toEqual({ ok: false, code: 'auth_failed', error: 'OPENAI_API_KEY is unavailable' });
+    expect(calls).toBe(0);
+    if (apiKey) expect(JSON.stringify(result)).not.toContain(apiKey);
+  });
+
   it('maps Responses API output and usage metadata', async () => {
     let metadata: unknown;
     const adapter = new OpenAIResponsesAdapter({
