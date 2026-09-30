@@ -5,8 +5,10 @@ import { googleAccessToken } from '../../../packages/runtime/src/connectors/goog
 import { executeProxyIntent, ProxyIntentError, type IntentClaim } from '../../../packages/runtime/src/connectors/proxy-intent.ts';
 import { callMcpTransport, McpAuthError } from '../../../packages/runtime/src/connectors/mcp-transport.ts';
 
+declare const Deno: {env:{get(name:string):string|undefined};serve(handler:(request:Request)=>Promise<Response>):unknown};
+
 const env = (name: string) => Deno.env.get(name) ?? '';
-const [url, service, router, clientId, clientSecret] = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'WALDO_ROUTER_HMAC_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'].map(env);
+const url=env('SUPABASE_URL'), service=env('SUPABASE_SERVICE_ROLE_KEY'), router=env('WALDO_ROUTER_HMAC_SECRET'), clientId=env('GOOGLE_CLIENT_ID'), clientSecret=env('GOOGLE_CLIENT_SECRET');
 const METHODS = GOOGLE_METHODS;
 type Method = GoogleMethod;
 
@@ -40,7 +42,7 @@ type Body = Readonly<{ intent_id?: string; do_name: string; op: 'exchange' | 'ad
 // One structured line per call: operation, method, outcome and duration. Never the code, verifier,
 // token, account or arguments.
 const logged = async (started: number, op: string, method: string | undefined, response: Response) => {
-  const outcome = await response.clone().json().then((json: { error?: { status: number; message: string } }) => json.error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
+  const outcome = await response.clone().json().then(value => (value as {error?:{status:number;message:string}}).error ?? null).catch(() => ({ status: response.status, message: 'unreadable response' }));
   console.log(JSON.stringify({ hop: 'connector_proxy', op, ...(method ? { method } : {}), ok: !outcome, ms: Date.now() - started, ...(outcome ? { status: outcome.status, error: outcome.message } : {}) }));
   return response;
 };
@@ -81,7 +83,7 @@ const handle = async (body: Body): Promise<Response> => {
       try {
         const access = await googleAccessToken(app, { refresh_token: mcpToken }, fetch, (error) => { mcpRefreshError = error; });
         const content = await intentDispatch(body, async()=> (await callMcpTransport({ url: body.server_url! }, body.tool!, ((body.args ?? [])[0] ?? {}) as Record<string, unknown>, fetch, async () => access)).content ?? null);
-        await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
+        await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
         return reply({ data: content ?? null });
       } catch (error) {
         if(error instanceof ProxyIntentError)return fail(error.code==='intent_conflict'?409:503,error.code);
@@ -90,14 +92,18 @@ const handle = async (body: Body): Promise<Response> => {
       }
     }
     if (body.op !== 'call' || !body.connection || !METHODS.includes(body.method as Method)) return fail(404, 'unknown operation');
-    const token = await db('proxy_secret', { p_do_name: body.do_name, p_connection: body.connection }) as string | null;
-    if (!token) return fail(401, 'connection unavailable');
+    const access = await db('proxy_access', { p_do_name: body.do_name, p_connection: body.connection }) as {secret:string;scopes:unknown}[];
+    const grant=Array.isArray(access)?access[0]:undefined;
+    if(!grant||typeof grant.secret!=='string'||!grant.secret)return fail(401,'connection unavailable');
+    const required = body.method==='sendRaw' ? 'gmail.send' : body.method==='draft' ? 'gmail.compose' : ['createEvent','moveEvent','cancelEvent'].includes(body.method!) ? 'calendar.events' : null;
+    if(required && (!Array.isArray(grant.scopes)||!grant.scopes.includes(`https://www.googleapis.com/auth/${required}`)))return fail(403,'insufficient scopes');
+    const token=grant.secret;
     let refreshError = '';
     const client = googleClient(app, { refresh_token: token }, fetch, (error) => { refreshError = error; });
     try {
       const dispatch=async()=> (await (client[body.method as Method] as (...args: unknown[]) => Promise<unknown>)(...(body.args ?? [])))??null;
       const data = ['draft','sendRaw','createEvent','moveEvent','cancelEvent'].includes(body.method!) ? await intentDispatch(body,dispatch) : await dispatch();
-      await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' });
+      await db('proxy_health', { p_do_name: body.do_name, p_connection: body.connection, p_error: '' }).catch(()=>{console.log(JSON.stringify({hop:'connector_proxy_health',ok:false,code:'unavailable'}));});
       return reply({ data: data ?? null });
     } catch (error) {
       if(error instanceof ProxyIntentError)return fail(error.code==='intent_conflict'?409:503,error.code);
