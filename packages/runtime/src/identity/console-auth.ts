@@ -3,8 +3,9 @@ import { hex, linkCodeHash, routerSignature, signedRpc, type OwnerDirectoryEnv }
 export const OWNER_COOKIE = 'waldo_owner';
 
 export type AdminOverview = Readonly<{
-  owners: readonly Readonly<{ email: string | null; state: string; created_at: string; presences: readonly string[] }>[];
-  invites: readonly Readonly<{ id: string; email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null }>[];
+  owners: readonly Readonly<{ id?: string; email: string | null; state: string; created_at: string; presences: readonly string[]; issued_count?: number }>[];
+  invites: readonly Readonly<{ id: string; email: string | null; created_at: string; expires_at: string | null; used_at: string | null; revoked_at: string | null; issued_by?: string | null; issuer_email?: string | null }>[];
+  current_issuer?: Readonly<{ id: string; email: string | null; issued_count: number }>;
 }>;
 
 export type OwnerSettings = Readonly<{ timezone: string; quiet_start: string | null; quiet_end: string | null; volume: string }>;
@@ -151,4 +152,3 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
     },
   };
 };
-

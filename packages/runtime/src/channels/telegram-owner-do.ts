@@ -1,3 +1,4 @@
+import { adminRead, adminAction } from './dashboard-admin';
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
 import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
 import { eventAdmission } from './event-admission';
@@ -301,6 +302,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       } catch {
         return Response.json({ error: 'overview_unavailable' }, { status: 503, headers: DASHBOARD_OVERVIEW_HEADERS });
       }
+    }
+    const jsonAdmin = request.headers.get('accept') === 'application/json';
+    if (url.pathname === CONSOLE_ADMIN_PATH && jsonAdmin) {
+      if (request.method !== 'GET') return new Response('method not allowed', {status:405, headers:DASHBOARD_OVERVIEW_HEADERS});
+      return adminRead(consoleAuth(this.env), this.ctx.storage.kv.get<string>('do_name'), session.csrf);
+    }
+    if (url.pathname === CONSOLE_ACTION_PATH && request.method === 'POST' && jsonAdmin) {
+      return adminAction(request, session.csrf, consoleAuth(this.env), this.ctx.storage.kv.get<string>('do_name'));
     }
     const { ready, view, act, googleConnectUrl, openFile, desk } = this.setup();
     await ready;
