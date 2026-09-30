@@ -101,3 +101,14 @@ test('CLI HOME and profile are isolated from ambient custom endpoints',async()=>
 });
 
 test('root dotenv rejection occurs before credential-bearing link',async()=>{const f=fixture();f.options.configDigest=()=>{throw Error('local_forbidden_input');};await assert.rejects(main(f.options),/local_forbidden_input/);assert.ok(!f.calls.some(c=>c.cmd==='pnpm'));});
+test('real-fs fake CLI: workdir or enclosing dotenv prevents credential-bearing link',async()=>{
+ const parent=mkdtempSync(join(tmpdir(),'waldo-prelink-env-')),dir=join(parent,'isolated');mkdirSync(join(dir,'supabase','migrations'),{recursive:true});
+ writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');
+ try{for(const location of [dir,parent]){
+ const envFile=join(location,'.env');writeFileSync(envFile,'SUPABASE_DB_PASSWORD=poison');
+ const f=fixture();f.options.prepare=()=>dir;f.options.configDigest=effectiveConfigDigest;f.options.cleanup=()=>{};
+ await assert.rejects(main(f.options),/local_forbidden_input/);
+ assert.ok(!f.calls.some(c=>c.cmd==='pnpm'));
+ rmSync(envFile);
+ }}finally{rmSync(parent,{recursive:true,force:true});}
+});
