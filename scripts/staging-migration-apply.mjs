@@ -29,12 +29,21 @@ export function effectiveConfigDigest(workdir){
   if(readdirSync(home).some(name=>!allowed.has(name)))throw Error('local_forbidden_input');
   const supabaseHome=join(home,'.supabase');
   if(existsSync(supabaseHome)&&readdirSync(supabaseHome).some(name=>!['telemetry.json','traces'].includes(name)))throw Error('local_forbidden_input');
+  const anchored=target=>{
+   let path=home;
+   if(!lstatSync(path).isDirectory())throw Error('local_forbidden_input');
+   for(const segment of relative(home,target).split('/')){
+    path=join(path,segment);
+    if(existsSync(path)&&!lstatSync(path).isDirectory())throw Error('local_forbidden_input');
+   }
+  };
+  anchored(join(home,'cache','pnpm','dlx'));anchored(join(home,'data','pnpm','store','v10','projects'));
   const scanHome=dir=>{for(const name of readdirSync(dir)){
    const path=join(dir,name),stat=lstatSync(path);
    if(name.startsWith('.env'))throw Error('local_forbidden_input');
    if(stat.isSymbolicLink()){
     const cache=join(home,'cache','pnpm','dlx');
-    const inside=(base,target)=>{const rel=relative(base,target);return rel!== '..'&&!rel.startsWith('../')&&!isAbsolute(rel);};
+    const inside=(base,target)=>{const rel=relative(base,target);return rel!==''&&rel!== '..'&&!rel.startsWith('../')&&!isAbsolute(rel);};
     const projectIndex=join(home,'data','pnpm','store','v10','projects');
     if((!inside(cache,path)&&!inside(projectIndex,path))||!inside(realpathSync(cache),realpathSync(path)))throw Error('local_forbidden_input');
     continue;

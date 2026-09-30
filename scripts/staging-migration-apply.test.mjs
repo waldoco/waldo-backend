@@ -143,3 +143,13 @@ test('legitimate Supabase telemetry/traces permitted, profile remains forbidden'
  assert.doesNotThrow(()=>effectiveConfigDigest(dir));writeFileSync(join(dir,'.isolated-home','.supabase','profile'),'custom.yaml');assert.throws(()=>effectiveConfigDigest(dir),/local_forbidden_input/);
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+test('real-fs cache and project-index roots cannot redirect outside isolated home',()=>{
+ const parent=mkdtempSync(join(tmpdir(),'waldo-cache-root-'));
+ try{for(const path of ['cache/pnpm/dlx','data/pnpm/store/v10/projects']){
+ const dir=join(parent,path.startsWith('cache')?'case1':'case2');mkdirSync(join(dir,'supabase'),{recursive:true});writeFileSync(join(dir,'supabase','config.toml'),'project_id="fixture"');
+ const outside=join(parent,'outside');mkdirSync(outside,{recursive:true});writeFileSync(join(outside,'.env'),'poison');
+ const root=join(dir,'.isolated-home',path);mkdirSync(dirname(root),{recursive:true});symlinkSync(outside,root);
+ assert.throws(()=>effectiveConfigDigest(dir),/local_forbidden_input/);
+ }}finally{rmSync(parent,{recursive:true,force:true});}
+});
+import {dirname} from 'node:path';
