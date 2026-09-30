@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {readdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {readdirSync,readFileSync,writeFileSync,lstatSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 const PROJECT='togdshayyxycitzckpqv';
@@ -17,8 +17,10 @@ export function compareHistory(local,remote){
   return {appliedVersions:versions,pending:local.slice(versions.length)};
 }
 export function localManifest(dir){
+  if(!lstatSync(dir).isDirectory())throw Error('local_not_regular');
   const rows=readdirSync(dir).filter(name=>name.endsWith('.sql')).sort().map(name=>{
     if(!/^\d{14}_[a-z0-9_]+\.sql$/.test(name))throw new Error('local_filename');
+    if(!lstatSync(new URL(name,dir)).isFile())throw Error('local_not_regular');
     const bytes=readFileSync(new URL(name,dir));
     return {version:name.slice(0,14),filename:name,byteLength:bytes.length,sha256:sha(bytes)};
   });
@@ -53,7 +55,7 @@ export async function main(){
   const remote=await readHistory(process.env.SUPABASE_ACCESS_TOKEN,process.env.SUPABASE_PROJECT_ID);
   const result=compareHistory(local,remote);
   const packet={kind:'read_only_staging_migration_preflight',projectRef:PROJECT,sourceSha:head,
-    observedAt:new Date().toISOString(),localManifestSha256:sha(JSON.stringify(local)),...result,
+    observedAt:new Date().toISOString(),localManifestSha256:sha(JSON.stringify(local)),pendingManifestSha256:sha(JSON.stringify(result.pending)),...result,
     scopeProof:'GET history proves access to this endpoint only; token scope/exclusivity not established',
     digestProof:'Local committed SQL bytes only; applied hosted SQL digest not verified',
     apply:'not implemented; no db push, migration repair, query write or Worker deployment'};
