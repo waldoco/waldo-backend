@@ -28,9 +28,9 @@ const fixture=()=>{
   if(url==='https://fixture.googleapis.com/mcp'){
    const rpc=JSON.parse(String(init?.body));if(rpc.method==='initialize')return Response.json({result:{protocolVersion:'2025-06-18'}});
    if(rpc.method==='notifications/initialized')return new Response(null,{status:202});
-   effects++;return Response.json({result:{content:[{type:'text',text:'synthetic result'}]}});
+   effects++;if(lost)throw new Error('synthetic response loss');return Response.json({result:{content:[{type:'text',text:'synthetic result'}]}});
   }
-  if(url.includes('www.googleapis.com/calendar/')){effects++;return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
+  if(url.includes('www.googleapis.com/calendar/')){effects++;if(lost)throw new Error('synthetic response loss');return init?.method==='DELETE'?new Response(null,{status:204}):Response.json({id:'event-one',summary:'fixture',start:{dateTime:'2026-10-01T00:00:00Z'},end:{dateTime:'2026-10-01T01:00:00Z'}});}
   if(url.includes('gmail.googleapis.com')){effects++;if(lost)throw new Error('synthetic response loss');return Response.json({id:'provider-one'});}
   throw new Error('unexpected fictional transport');
  }));return{hops,rows,effects:()=>effects,lose:()=>{lost=true;},scope:(value:unknown)=>{scopes=value;},healthFail:()=>{healthFail=true;}};
@@ -77,4 +77,18 @@ it('effect-bearing MCP uses the same durable intent rail and foreign replay stay
  const first=await(await serve(await request(input))).json();expect(first).toMatchObject({data:[{type:'text',text:'synthetic result'}]});
  expect(await(await serve(await request(input))).json()).toEqual(first);expect(f.effects()).toBe(1);expect(f.hops.filter(h=>h==='token')).toHaveLength(1);expect(f.hops.indexOf('proxy_idem_claim')).toBeLessThan(f.hops.indexOf('token'));
  expect(await(await serve(await request({...input,args:[{value:'changed'}]}))).json()).toMatchObject({error:{message:'intent_conflict'}});expect(f.effects()).toBe(1);
+});
+
+it('every mutation retains an unknown result and never dispatches again after synthetic loss',async()=>{
+ const calls=[
+  {...body,method:'draft',args:[{to:['fictional@test.invalid'],subject:'fixture',body:'fixture'}]},
+  {...body,method:'createEvent',args:[{title:'fixture',start:'2026-10-01T00:00:00Z',end:'2026-10-01T01:00:00Z'}]},
+  {...body,method:'moveEvent',args:['event-one','2026-10-01T00:00:00Z','2026-10-01T01:00:00Z']},
+  {...body,method:'cancelEvent',args:['event-one']},
+  {do_name:'owner',op:'mcp_call',connection:'conn',server_url:'https://fixture.googleapis.com/mcp',tool:'synthetic_write',args:[{}],intent_id:'approval:mcp'},
+ ];
+ for(const input of calls){const f=fixture();f.lose();
+  expect(await(await serve(await request(input))).json()).toMatchObject({error:{message:'intent_pending'}});
+  expect(await(await serve(await request(input))).json()).toMatchObject({error:{message:'intent_pending'}});expect(f.effects()).toBe(1);
+ }
 });
