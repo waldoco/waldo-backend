@@ -1,5 +1,7 @@
 name: Opt-in owner DO model smoke
 on:
+  push:
+    branches: ['smoke/owner-read-20260930']
   workflow_dispatch:
     inputs:
       reviewed_scope:
@@ -11,7 +13,8 @@ permissions:
   contents: read
 jobs:
   read-smoke:
-    if: ${{ inputs.reviewed_scope }}
+    # Push is the explicitly approved fourth confirmation run only.
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.reviewed_scope) || (github.event_name == 'push' && github.ref == 'refs/heads/smoke/owner-read-20260930' && github.event.head_commit.message == 'Run reviewed settled fictional owner smoke 2026-09-30') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
