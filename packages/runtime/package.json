@@ -19,7 +19,8 @@
   },
   "dependencies": {
     "@waldo/contracts": "workspace:*",
-    "openai": "5.12.2"
+    "openai": "5.12.2",
+    "@waldo/workspace": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.16.20",
