@@ -19,8 +19,8 @@ it('actual owner event entry acknowledges durable admission, prevents duplicate 
  const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('event-admission-entry'));
  await runInDurableObject(stub,async(instance,state)=>{
   const entry=instance as unknown as {recordEvent(r:Request,b:string):Promise<Response>;setup():unknown};
-  const setup=entry.setup;let sends=0;let lose=false;const finished:{status:string;summary:string}[]=[];
-  entry.setup=()=>({runs:{start:()=>({id:'synthetic-event'}),finish:(_id:string,status:string,summary:string)=>{finished.push({status,summary});return true;}},api:{sendMessage:async()=>{sends++;if(lose)throw new Error('synthetic response loss');}},owner:42,log:()=>{}});
+  const setup=entry.setup;let sends=0;let lose=false;let skipped=false;const finished:{status:string;summary:string}[]=[];
+  entry.setup=()=>({runs:{start:()=>({id:'synthetic-event'}),finish:(_id:string,status:string,summary:string)=>{finished.push({status,summary});return true;}},api:{sendMessage:async()=>{sends++;if(lose)throw new Error('synthetic response loss');return skipped?undefined:{message_id:1};}},owner:42,log:()=>{}});
   try{
    const body=JSON.stringify({subject:'fixture',kind:'push',title:'fixture'});
    const request=(id:string,digest='a'.repeat(64))=>new Request('https://owner/event',{method:'POST',headers:{'x-waldo-event-source':'github','x-waldo-event-notify':'1','x-waldo-event-delivery':`id:${id}`,'x-waldo-event-digest':digest}});
@@ -28,6 +28,7 @@ it('actual owner event entry acknowledges durable admission, prevents duplicate 
    expect((await entry.recordEvent(request('one','b'.repeat(64)),body)).status).toBe(409);expect(sends).toBe(1);
    lose=true;expect((await entry.recordEvent(request('lost'),body)).status).toBe(200);expect((await entry.recordEvent(request('lost'),body)).status).toBe(200);expect(sends).toBe(2);expect(finished.at(-1)).toEqual({status:'stopped',summary:'github: notification outcome unknown; not retried'});
    expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE delivery='id:lost'").one().state).toBe('unknown');
+   lose=false;skipped=true;expect((await entry.recordEvent(request('skipped'),body)).status).toBe(200);expect(finished.at(-1)?.status).toBe('stopped');expect(state.storage.sql.exec<{state:string}>("SELECT state FROM event_admissions WHERE delivery='id:skipped'").one().state).toBe('unknown');
   }finally{entry.setup=setup;}
  });
 });

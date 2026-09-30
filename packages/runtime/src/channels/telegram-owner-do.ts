@@ -242,10 +242,11 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     try {
       if (notify) {
         const url = typeof envelope.url === 'string' ? envelope.url.slice(0, 300) : '';
-        await api.sendMessage({ chat_id: owner, text: `Event - ${summary}${url ? `\n${url}` : ''}` });
+        const ack=await api.sendMessage({ chat_id: owner, text: `Event - ${summary}${url ? `\n${url}` : ''}` });
+        if(!ack||typeof ack!=='object'||!Number.isSafeInteger((ack as {message_id?:unknown}).message_id)||Number((ack as {message_id:number}).message_id)<=0)throw new Error('notification_unacknowledged');
       }
       inbox.finish(source,delivery);
-      runs.finish(run.id, 'completed', summary);
+      runs.finish(run.id, 'completed', `${summary}: ${notify?'notification acknowledged':'admission recorded'}`.slice(0,200));
       log({ trace: run.id, hop: 'event_ingress', ms: 0, ok: true, detail: `${source}:${envelope.kind.slice(0, 60)}` });
     } catch (error) {
       runs.finish(run.id, 'stopped', `${source}: notification outcome unknown; not retried`.slice(0, 180));

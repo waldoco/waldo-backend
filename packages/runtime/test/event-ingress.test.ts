@@ -135,3 +135,8 @@ it('never acknowledges before owner admission and bounds an ignoring-abort fetch
 it('bounds raw provider body before signature work or owner admission',async()=>{
  const {ns,fetch}=namespace();expect((await run(post('uptime','x'.repeat(65537),{'x-waldo-event-token':'up-secret'}),{TELEGRAM_OWNER_DO:ns,WALDO_EVENT_SOURCES:SOURCES})).status).toBe(413);expect(fetch).not.toHaveBeenCalled();
 });
+it('caps signed GitHub repository subject to the same120character envelope bound',async()=>{
+ const {ns,fetch}=namespace();const body=JSON.stringify({repository:{full_name:'x'.repeat(5000)},commits:[]});
+ await run(post('github',body,{'x-github-event':'push','x-hub-signature-256':await sign('gh-secret',body)}),{TELEGRAM_OWNER_DO:ns,WALDO_EVENT_SOURCES:SOURCES});
+ expect(JSON.parse(String((fetch.mock.calls[0] as unknown as [string,RequestInit])[1].body)).subject).toHaveLength(120);
+});

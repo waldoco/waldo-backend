@@ -82,7 +82,7 @@ const githubEnvelope = (event: string, payload: Record<string, unknown>): EventE
     const first = head.split('\n')[0] ?? '';
     const pusher = (payload.pusher as { name?: string } | undefined)?.name ?? 'someone';
     return {
-      subject: repo, kind: 'push',
+      subject: cap(String(repo),120), kind: 'push',
       title: cap(`${pusher} pushed ${commits.length || 1} commit${commits.length === 1 ? '' : 's'}: ${first}`, 200),
       ...(typeof payload.compare === 'string' ? { url: cap(payload.compare, 300) } : {}),
     };
@@ -92,7 +92,7 @@ const githubEnvelope = (event: string, payload: Record<string, unknown>): EventE
     if (!pr) return null;
     const action = typeof payload.action === 'string' ? payload.action : 'updated';
     return {
-      subject: repo, kind: `pull_request.${cap(action, 30)}`,
+      subject: cap(String(repo),120), kind: `pull_request.${cap(action, 30)}`,
       title: cap(`PR #${pr.number ?? '?'} ${action}: ${pr.title ?? ''}`, 200),
       ...(typeof pr.html_url === 'string' ? { url: cap(pr.html_url, 300) } : {}),
     };
