@@ -1,7 +1,5 @@
 name: Opt-in owner DO model smoke
 on:
-  push:
-    branches: ['smoke/owner-read-20260930']
   workflow_dispatch:
     inputs:
       reviewed_scope:
@@ -13,8 +11,7 @@ permissions:
   contents: read
 jobs:
   read-smoke:
-    # Push is a one-run reviewed authorization, not an implicit input default.
-    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.reviewed_scope) || (github.event_name == 'push' && github.ref == 'refs/heads/smoke/owner-read-20260930' && github.event.head_commit.message == 'Run reviewed fictional owner smoke 2026-09-30') }}
+    if: ${{ inputs.reviewed_scope }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
