@@ -2,13 +2,16 @@
 
 September 30, 2026. Proposed design, docs only. No workspace tool, retained byte upload,
 compute binding, sandbox isolation or provider selection is implemented by this document.
-Step-3 integration is reviewed after the runner lands and remains behind the step-1 smoke
-merge gate. Owner requested capability parity and parallel work; that does not authorize
-paid provider trials, external publication or arbitrary shell effects.
+The step-1 smoke passed September 30 (run 36668847051); that releases the narrow
+feature-merge gate, not public tenancy, workspace or live execution readiness. Paid
+provider trials, external publication and arbitrary shell effects remain separate decisions.
 
 ## Current source and smallest useful outcome
 
-At beta-mvp e1c20143227174fd2947b16b41c6434afd1cb701:
+Original source snapshot: beta-mvp e1c20143227174fd2947b16b41c6434afd1cb701.
+Latest verified reference: beta-mvp 045e94a180c740b83b6b9091b73453cfa62adea2, fetched
+September 30 10:34 IST, includes #400/#413 and #405. Current-state statements below
+incorporate those merges; the original snapshot is not the latest base.
 
 - `channels/artifacts.ts` retains named markdown bodies with four document kinds and
   revisions, metadata in owner SQLite and bodies in R2. Bodies are read on demand as
@@ -36,13 +39,28 @@ existing artifact APIs stable; use a byte workspace store with explicit text-too
 Proposed new isolated `packages/workspace` package, with a concrete runtime consumer in
 its implementation PR. Avoid creating it before contracts and registration are scheduled.
 The package owns validation and operations, not authentication, grants or shell execution.
-Host supplies the canonical internal user identity bound to the immutable owner DO, an
-owner-local transactional metadata adapter, private R2
-body adapter, clock and full random file/revision IDs. Never accept owner scope in tool args. Telegram IDs are channel bindings, never tenant IDs.
-Every stored byte is owner-keyed. The core-owned tenancy model document will define the
-canonical internal user ID and its DO mapping; reconcile this proposed key scheme against
-that document before implementation. The current immutable DO-ID adapter in PR #400 is
-the first scoped storage instance, not an independent identity resolver.
+#405 already defines `waldo.owners.id` as the canonical internal owner UUID. Host supplies
+an authenticated, server-derived binding `{ownerId, environment, namespace, doName, doId,
+stateVersion}` plus owner-local transactional metadata, private R2 adapter, clock and full
+random file/revision IDs. `ownerId` is the principal; doName/opaque DO ID are locators, not
+identity. Telegram/WhatsApp subjects are changeable channel bindings. No scope field comes
+from tool arguments, upload query strings or unauthenticated headers.
+
+Before constructing a store, core must validate the directory's canonical owner and active
+state, namespace/environment against the configured binding, actual `ctx.id` against the
+expected locator, and the persisted immutable owner/doName/DO-ID map. Missing, stale,
+conflicting or wrong-environment mapping returns unavailable/rejected with no R2 access.
+There is no deploy-owner, channel-ID or fixture fallback. Repeat lifecycle/state admission
+before finalize/export/delete; do not admit suspended or revoked work through cached context.
+The existing #400 DO-ID prefix fixes body collisions, but does not establish canonical-owner
+mapping or environment segregation; do not extend it blindly to workspace bytes.
+
+Retain a host-controlled map `(environment, namespace, doName, doId) -> owners.id` and a
+source-indexed manifest of every pending/ready/tombstoned body key, revision and digest.
+This map must survive account/DO deletion and namespace/name relocation until export/purge
+receipts and survivor scans complete. Privileged export/delete uses this retained map with
+verified authority, never prefix guesses or a fresh client-supplied locator. Mapping changes
+require explicit versioned relocation/rollback, not silent key changes or stranded bytes.
 
 Each manifest row contains:
 
@@ -57,7 +75,11 @@ Each manifest row contains:
 | created_at / updated_at | Host injected clock |
 | state | pending, ready, tombstoned; ready only after body write and metadata commit |
 
-R2 key: `workspace/v1/<encoded immutable DO ID>/<opaque file ID>/<opaque blob ID>`.
+R2 key: `workspace/v1/<environment>/<encoded namespace>/<canonical owner UUID>/<opaque file ID>/<opaque blob ID>`.
+Environment and namespace are host-validated segments, not caller input. The manifest
+records the immutable doName/DO-ID binding and mapping version alongside this key.
+Staging and production share waldo-artifacts today, so environment separation is mandatory;
+the same owner/file/blob IDs in different environments must resolve to different keys.
 Metadata never stores a key supplied by the model/provider. Body keys and signed URLs are
 not model-visible. Logical paths are metadata only: no filesystem path joins at this tier.
 Read only a ready revision recorded by the authenticated owner's metadata store.
@@ -110,12 +132,34 @@ EXTERNAL_ORIGIN_TOOLS entry in `tools/handler.ts`, and direct contract/ACL tests
 actual registry export graph before editing rather than assuming a schema file registers it.
 Do not rename existing artifact tool fields or change current read offsets.
 
-Step-3 lane supplies isolated workspace store/handlers, R2 adapter, adversarial tests and
-console display changes only in the confirmed owned paths. Core supplies owner-local
-metadata adapter, binding validation and construction alongside the existing artifactBook
-near line 886 of `channels/telegram-owner-do.ts`, then adds handlers beside artifactHandlers
-near line 932. The line numbers describe this base, not a patch to apply blindly after drift.
-No second owner resolver, runloop or memory system. No runner/grader/harness modifications.
+Proposed implementation carve-out, pending main/core acceptance before any code edits:
+
+- Step 3: new `packages/workspace/src/store.ts`, `r2.ts`, `handlers.ts`, `index.ts`;
+  `packages/workspace/test/store.test.ts`, `r2.test.ts`, `handlers.test.ts`;
+  new `packages/runtime/src/channels/console-workspace.ts` (pure presentation/response
+  helpers only), `packages/runtime/test/console-workspace.test.ts`, and this design doc.
+- Package/bootstrap owner: new `packages/workspace/package.json`, `tsconfig.json`,
+  workspace dependency registration and lockfile changes. Not permission for step 3 to
+  edit package/config files before a separate coordinated grant.
+- Core: `packages/runtime/src/channels/telegram-owner-do.ts` for request routing, session/
+  CSRF checks, canonical immutable binding, transactional metadata adapter, store construction
+  and handler registration; `packages/runtime/src/identity/owner-directory.ts` plus a new
+  reviewed SQL migration for authenticated owner mapping; exact integration tests in new
+  `packages/runtime/test/workspace-owner-integration.test.ts`. Core decides final SQL path.
+- Contracts lane: new `packages/contracts/src/tools/schemas/workspace.ts` and
+  `workspace.test.ts`, plus reviewed exports/ToolName registration and existing
+  `packages/contracts/src/tools/permissions.ts`, `handler.ts` and their tests.
+
+Collision check against lane-7 prompt: it owns `packages/dashboard-app/src/**`, index.html,
+README, preview/asset scripts, runtime `dashboard-overview.ts`/test, `console-invites.ts`/test
+and CODEX_L7 docs. None overlaps the proposed step-3 paths above. Step 3 does not edit any
+of those paths, dashboard preview/assets/overview/invites or their routes. Existing
+`channels/console.ts` remains unchanged by this slice; workspace HTML lives only in the
+new pure helper, called through core-owned routing. If dashboard integration is later
+needed, hand a typed API/UI contract to lane 7 rather than touching its components.
+Recheck live path ownership at implementation start; this docs-only collision check is not
+an active implementation reservation or approval of the new paths. No second owner resolver,
+runloop or memory system. No runner/grader/harness changes.
 
 Proposed private routes under the existing authenticated console-owner routing:
 
@@ -127,8 +171,8 @@ Proposed private routes under the existing authenticated console-owner routing:
 - POST `/console/workspace/remove`: session + CSRF, exact ID/revision review, tombstone
   plus body cleanup receipt; pending/failed cleanup remains visible, never claim deletion.
 
-Core owns request routing and auth; step-3 defines response helpers/console UI and exact
-handed-off patches. Connect upload/export to a reviewed real consumer before merging store
+Core owns request routing and auth; step 3 defines only the new console-workspace helper
+and tests listed above. Connect upload/export to a reviewed real consumer before merging store
 code. First delivery is authenticated console download. Sending a generated file to a
 contact or channel needs a separate scoped approval and delivery receipt, not this export.
 
@@ -166,7 +210,10 @@ create/read/revise; multibyte limits; duplicate operation id; stale revisions; s
 quota reservations; response-loss recovery; restart; same IDs across two owners; other-owner
 file ID rejected; path traversal/encoded path rejected; false/missing size headers; R2 failure;
 missing binding; taint on every body read; hostile content remains data; private download auth;
-CSRF; tombstone/partial cleanup and no accidental share. Inspect console/upload/download UI
+CSRF; tombstone/partial cleanup and no accidental share; identical owner/file/blob IDs in
+staging vs production; wrong canonical mapped owner despite valid DO locator; missing map;
+wrong namespace/environment; relink without moving bytes; suspended finalize/export; retained
+map after owner deletion; relocation rollback and survivor scans for old/new keys. Inspect console/upload/download UI
 pixels before calling the visual surface ready.
 
 Proof layers are separate: unit store tests, adapter tests, Worker integration, exact-head
