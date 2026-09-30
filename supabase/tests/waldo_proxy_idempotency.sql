@@ -39,13 +39,13 @@ select is(waldo.proxy_idem_store('do-c', '00000000-0000-0000-0000-00000000000c',
 update waldo.owners set state = 'active' where do_name = 'do-c';
 select is(waldo.proxy_idem_claim('do-c', '00000000-0000-0000-0000-00000000000c', '', 'd1'), null, 'empty intent key refused');
 select is(waldo.proxy_idem_claim('do-c', '00000000-0000-0000-0000-00000000000c', 'empty-digest', ''), null, 'empty digest refused');
-set constraints proxy_idempotency_owner_connection_fk immediate;
+set constraints waldo.proxy_idempotency_owner_connection_fk immediate;
 select throws_ok($q$insert into waldo.proxy_idempotency(owner_id, connection, pkey, digest) values ('30000000-0000-0000-0000-00000000000c', '00000000-0000-0000-0000-00000000000d', 'direct', 'd1')$q$, '23503', null, 'composite FK rejects foreign relationship even via direct ledger insert');
-set constraints proxy_idempotency_owner_connection_fk deferred;
+set constraints waldo.proxy_idempotency_owner_connection_fk deferred;
 -- Existing delete_owner order must remain possible in one atomic transaction.
 delete from waldo.connections where owner_id = '30000000-0000-0000-0000-00000000000c';
 delete from waldo.owners where id = '30000000-0000-0000-0000-00000000000c';
-set constraints proxy_idempotency_owner_connection_fk immediate;
+set constraints waldo.proxy_idempotency_owner_connection_fk immediate;
 select is((select count(*) from waldo.proxy_idempotency where owner_id = '30000000-0000-0000-0000-00000000000c'), 0::bigint, 'owner cascade clears ledger after connection-first atomic deletion');
 select * from finish();
 rollback;
