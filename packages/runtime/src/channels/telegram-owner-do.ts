@@ -1,5 +1,5 @@
 import { pinProxyIntentRoute } from '../connectors/proxy-intent-route';
-import type { ProxyIntent } from '../connectors/proxy-intent';
+import { ProxyIntentError, type ProxyIntent } from '../connectors/proxy-intent';
 import { DurableObject } from 'cloudflare:workers';
 import { workspaceOwnerHost, workspaceRequest, workspaceUploadLease } from './workspace-host';
 import { workspaceDownload, workspacePage } from './console-workspace';
@@ -772,7 +772,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // The first healthy account whose grant covers the feature serves it.
       async client(feature: GoogleFeature = 'calendar', intent?: ProxyIntent) {
         const app = await googleApp();
-        if (!app) return null;
+        if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
         await google.migrate();
         const [all, failing, doName] = [await accounts(), await health(), vaultOwner()];
         const fit = all.filter((account) => googleHas(account.scopes, feature)).map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
@@ -917,7 +917,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = pinProxyIntentRoute(storage.sql,intent,'mcp:google',routes,routes.find((candidate) => !failing[candidate.id]) ?? routes[0]);
         if (!account) return null;
         if (account.refresh_token) {
-          if (!app) return null;
+          if (!app) {if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
           const token = await googleAccessToken(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
           return { mode: 'bearer' as const, token };
         }
