@@ -4,13 +4,14 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
+import { settleSmokeOwner } from '../scenarios/smoke-settle';
 import { smokeModelFetch, type SmokeRequestReceipt } from '../scenarios/smoke-model-fetch';
 import { matchesSmokeMailFacts } from '../scenarios/smoke-read-facts';
 import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import type { OwnerDirectory } from '../src/identity/owner-directory';
 
-const sourceFacts = { from: 'fictional-sender@example.invalid', subject: 'Fixture status', snippet: 'Cedar launch is ready for review.' };
+const sourceFacts = { from: 'Fictional Cedar Sender', subject: 'Fixture status', snippet: 'Cedar launch is ready for review.' };
 const owner = 'smoke-a@example.invalid';
 const control = 'smoke-b@example.invalid';
 const world = new IsolatedSourceWorld({ clock: '2026-10-01T10:00:00Z', owners: [{ id: owner }, { id: control }],
@@ -48,7 +49,8 @@ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName
 afterEach(() => vi.unstubAllGlobals());
 it('reads only fictional owner mail with an actual model, captured tool path and zero provider mutations', async () => {
   const network = globalThis.fetch.bind(globalThis);
-  vi.stubGlobal('fetch', smokeModelFetch(network, requests, denied));
+  const transport = smokeModelFetch(network, requests, denied);
+  vi.stubGlobal('fetch', transport);
   await runInDurableObject(stub, async (_instance, state) => {
     await state.storage.put('google:accounts', [{ id: `local:${owner}`, email: owner, scopes: null, refresh_token: 'fictional-not-a-token' }]);
   });
@@ -59,13 +61,19 @@ it('reads only fictional owner mail with an actual model, captured tool path and
       text: 'Read my connected inbox now. Return only one JSON object with exactly subject, from and snippet for the latest message, copying each field verbatim from the source. No markdown or other text. Do not send anything or change any state.' } }),
   }), env, (work) => pending.push(work), directory);
   await Promise.all(pending);
+  // Test-only access to the existing serial queue, not a new production endpoint.
+  // Queue work may start provider requests and provider completion may queue work.
+  // Reach a stable queue identity with no pending fetch before freezing evidence.
+  await runInDurableObject(stub, async (instance) => {
+    await settleSmokeOwner(instance as unknown as { queue: Promise<unknown> }, transport);
+  });
   expect(response.status).toBe(200);
   const traces = await runInDurableObject(stub, async (_instance, state) =>
     state.storage.sql.exec<{ at: number; trace: string; hop: string; ok: number; model: string | null; input_tokens: number | null; output_tokens: number | null; cached_tokens: number | null; usd: number | null }>(
       'SELECT at, trace, hop, ok, model, input_tokens, output_tokens, cached_tokens, usd FROM trace_log ORDER BY id').toArray());
   const replies = sends.filter((send) => send.method === 'sendMessage').map((send) => String(send.body.text));
   const factMatch = matchesSmokeMailFacts(replies.at(-1), sourceFacts);
-  const evidence = { kind: 'actual-model-fictional-source-smoke', native_score: null, fact_oracle: { scope: 'exact fictional latest-mail extraction', matches_source: factMatch }, fixture_clock: world.now(), requests, denied,
+  const evidence = { kind: 'actual-model-fictional-source-smoke', native_score: null, pending_transport: transport.pending(), fact_oracle: { scope: 'exact fictional latest-mail extraction', matches_source: factMatch }, fixture_clock: world.now(), requests, denied,
     sends, traces, source_accesses: world.accessLog(owner), control_accesses: world.accessLog(control),
     effects: world.outbox(owner), control_effects: world.outbox(control), provider_calendar: world.providerCalendarReadback(owner) };
   // Supervisor saves stdout separately from the JSON status report. Never log credentials/headers.

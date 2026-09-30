@@ -29,3 +29,11 @@ it('captures HTTP error status and malformed response classification',async()=>{
  const boundary=smokeModelFetch((async()=>new Response('not json',{status:401})) as typeof fetch,rows,[]);
  expect((await boundary(url,{method:'POST'})).status).toBe(401);expect(rows[0]).toMatchObject({status:401,failure:'response_json'});
 });
+
+it('settles outstanding fetch and body receipts without sleeps', async()=>{
+ let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});const rows:SmokeRequestReceipt[]=[];
+ const boundary=smokeModelFetch((async()=>{await gate;return Response.json({id:'settled',model:'fixture'});}) as typeof fetch,rows,[]);
+ const request=boundary(url,{method:'POST'});expect(boundary.pending()).toBe(1);expect(rows[0]?.status).toBe(null);
+ let settled=false;const drain=boundary.settle().then(()=>{settled=true;});await Promise.resolve();expect(settled).toBe(false);
+ release();await request;await drain;expect(boundary.pending()).toBe(0);expect(rows[0]).toMatchObject({status:200,response_id:'settled'});
+});
