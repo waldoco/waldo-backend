@@ -2,13 +2,11 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { auditIsolatedWorld } from '../evals/isolated-world-audit';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
-import { loadNativeSuite } from '../evals/waldo-native-suite';
 import type { NativeManifest } from '../evals/native-manifest';
-const spec = loadNativeSuite().find((row) => row.id === 'W01')!;
-const worldFixture = { clock: spec.fixture.now, owners: [{ id: 'a' }, { id: 'b' }], sources: { calendar: [{ owner_id: 'a', id: 'seed' }] } };
+const worldFixture = { clock: '2026-10-05T08:00:00+05:30', owners: [{ id: 'a' }, { id: 'b' }], sources: { calendar: [{ owner_id: 'a', id: 'seed' }] } };
 const manifest: NativeManifest = {
-  case_id: 'W01', candidate_owner: 'a', control_owner: 'b', visible_prompt: spec.user_prompt, world: worldFixture,
-  grants: [{ owner_id: 'a', purpose: 'synthetic test create', scope: 'calendar only', allowed_effects: ['calendar.create'], effective_at: spec.fixture.now, expires_at: '2026-10-05T10:00:00+05:30' }],
+  case_id: 'W01', candidate_owner: 'a', control_owner: 'b', visible_prompt: 'fictional owner fixture prompt', world: worldFixture,
+  grants: [{ owner_id: 'a', purpose: 'synthetic test create', scope: 'calendar only', allowed_effects: ['calendar.create'], effective_at: worldFixture.clock, expires_at: '2026-10-05T10:00:00+05:30' }],
   branches: [{ id: 'approved', owner_id: 'a', trigger_at: '2026-10-05T08:30:00+05:30', permitted_effects: ['calendar.create'] }],
   supported_tools: ['calendar.create'], source_digest: `sha256:${createHash('sha256').update(JSON.stringify(worldFixture.sources)).digest('hex')}`,
 };
