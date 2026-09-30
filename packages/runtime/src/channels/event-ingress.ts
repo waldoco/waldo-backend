@@ -108,7 +108,7 @@ export const handleEventIngress = async (
   const url = new URL(request.url);
   const source = url.pathname.slice(EVENT_INGRESS_PREFIX.length).replace(/\/+$/, '');
   const config = parseEventSources(env.WALDO_EVENT_SOURCES)[source];
-  if (request.method !== 'POST' || !config || !env.TELEGRAM_OWNER_DO || !source || source.includes('/')) {
+  if (request.method !== 'POST' || !config || !env.TELEGRAM_OWNER_DO || !source || source.length>60 || source.includes('/')) {
     return new Response('not found', { status: 404 });
   }
   const reader=request.body?.getReader();if(!reader)return new Response('invalid body',{status:400});
@@ -138,7 +138,7 @@ export const handleEventIngress = async (
   let explicit: unknown;
   try { explicit = (JSON.parse(body) as Record<string,unknown>).event_id; } catch { explicit = undefined; }
   const provider = source==='github' ? request.headers.get('x-github-delivery') : explicit;
-  if(provider!=null && (typeof provider!=='string'||!provider||provider.length>200))return new Response('invalid delivery identity',{status:400});
+  if(provider!=null && (typeof provider!=='string'||!provider||provider.length>200||/[\r\n]/.test(provider)))return new Response('invalid delivery identity',{status:400});
   const delivery = typeof provider==='string' ? `id:${provider}` : `body:${digest}`;
   const controller = new AbortController();let timer:ReturnType<typeof setTimeout>|undefined;
   try {
