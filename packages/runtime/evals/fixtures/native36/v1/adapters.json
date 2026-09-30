@@ -1,0 +1,344 @@
+{
+  "version": 1,
+  "revision": "native36-v1-W01-W06-adapter-definitions-1",
+  "sources": [
+    {
+      "family": "calendar",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "id",
+        "title",
+        "start",
+        "end",
+        "flexibility",
+        "timezone",
+        "revision",
+        "status",
+        "source_kind",
+        "etag",
+        "all_day"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "availability",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "id",
+        "free",
+        "source_kind",
+        "revision",
+        "kind",
+        "minutes",
+        "windows"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "priorities",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "id",
+        "title",
+        "required_minutes",
+        "status",
+        "source_kind",
+        "revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "owner_statements",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "kind",
+        "id",
+        "at",
+        "bytes",
+        "revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "health_projection",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "kind",
+        "id",
+        "at",
+        "freshness",
+        "energy",
+        "shareable",
+        "revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "private_health_notes",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "category",
+        "marker",
+        "bytes",
+        "revision"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "messages_window",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "category",
+        "marker",
+        "bytes",
+        "revision"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "project_b_notes",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "category",
+        "marker",
+        "bytes",
+        "revision"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "cross_owner_records",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "category",
+        "marker",
+        "bytes",
+        "revision"
+      ],
+      "read_methods": [],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "files",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "kind",
+        "id",
+        "revision",
+        "dated",
+        "bytes",
+        "digest",
+        "attachment_id",
+        "media_type",
+        "source_kind"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "mail",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "id",
+        "thread_id",
+        "at",
+        "from",
+        "to",
+        "subject",
+        "body",
+        "source_kind",
+        "revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "tasks",
+      "row_fields": [
+        "owner_id",
+        "source_id",
+        "id",
+        "title",
+        "duration_minutes",
+        "deadline",
+        "commitment",
+        "reducible",
+        "status",
+        "restart_context",
+        "source_kind",
+        "revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "drafts",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "recipient",
+        "subject",
+        "body",
+        "attachment_digest",
+        "approved_revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "sent",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "recipient",
+        "subject",
+        "body",
+        "attachment_digest",
+        "approved_revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    },
+    {
+      "family": "watches",
+      "row_fields": [
+        "owner_id",
+        "id",
+        "thread_id",
+        "sent_message_id",
+        "started_at",
+        "expires_at",
+        "status",
+        "cancelled_at",
+        "revision"
+      ],
+      "read_methods": [
+        "read",
+        "list"
+      ],
+      "selected_id_filter_required": true
+    }
+  ],
+  "effects": [
+    {
+      "kind": "calendar.create",
+      "state_family": "calendar",
+      "required_payload_fields": [
+        "title",
+        "start",
+        "end"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "calendar.move",
+      "state_family": "calendar",
+      "required_payload_fields": [
+        "expected_etag",
+        "start",
+        "end"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "calendar.cancel",
+      "state_family": "calendar",
+      "required_payload_fields": [
+        "expected_etag"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "mail.draft",
+      "state_family": "drafts",
+      "required_payload_fields": [
+        "recipient",
+        "subject",
+        "body"
+      ],
+      "requires_exact_approval": false
+    },
+    {
+      "kind": "mail.send",
+      "state_family": "sent",
+      "required_payload_fields": [
+        "recipient",
+        "subject",
+        "body",
+        "attachment_digest",
+        "attachments",
+        "thread_id"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "watch.start",
+      "state_family": "watches",
+      "required_payload_fields": [
+        "thread_id",
+        "sent_message_id",
+        "expires_at"
+      ],
+      "requires_exact_approval": true
+    },
+    {
+      "kind": "watch.stop",
+      "state_family": "watches",
+      "required_payload_fields": [
+        "thread_id",
+        "watch_id",
+        "reason"
+      ],
+      "requires_exact_approval": true
+    }
+  ]
+}
