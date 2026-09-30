@@ -1,0 +1,54 @@
+name: Opt-in native synthetic capture
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_scope:
+        description: 'Exact fixture, fictional-data disclosure, model and bounded spend reviewed'
+        required: true
+        type: boolean
+        default: false
+      case_id:
+        description: 'Reviewed core-owned case (W06 only)'
+        required: true
+        type: choice
+        options:
+          - W06
+permissions:
+  contents: read
+jobs:
+  capture:
+    if: ${{ inputs.reviewed_scope }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+      - run: pnpm install --frozen-lockfile
+      - name: Compile before model access
+        run: pnpm --filter @waldo/runtime exec tsc --project tsconfig.native-trial.json --noEmit
+      - name: Readiness and scripted supervisor without model access
+        env:
+          WALDO_NATIVE_DIAGNOSTIC_BUNDLE: evals/fixtures/native36-core/v1/W06.json
+        run: |
+          pnpm --filter @waldo/runtime exec vitest run --config vitest.scenarios.config.ts test/native-core-w06.test.ts
+          pnpm --filter @waldo/runtime exec vitest run --config vitest.native-supervisor-smoke.config.ts
+      - name: Capture actual model with synthetic selected sources
+        env:
+          WALDO_RUN_NATIVE_TRIAL: reviewed
+          WALDO_SMOKE_OPENAI_KEY: ${{ secrets.WALDO_SMOKE_OPENAI_KEY }}
+          WALDO_NATIVE_OUTPUT_DIR: ${{ runner.temp }}/native-capture
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm --filter @waldo/runtime exec tsx evals/native-run-cli.ts evals/fixtures/native36-core/v1/W06.json
+      - name: Preserve captured evidence (no key or raw failed transport)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-synthetic-capture-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-capture/
+          if-no-files-found: warn
+          retention-days: 7
