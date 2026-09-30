@@ -53,12 +53,15 @@ export class FixtureAuthorityClock {
     this.owner(owner_id);
     const active_grants = this.manifest.grants.filter((grant) => grant.owner_id === owner_id &&
       instant(grant.effective_at) <= this.nowMs && this.nowMs < instant(grant.expires_at));
-    const active_branches = this.manifest.branches.filter((branch) => branch.owner_id === owner_id && instant(branch.trigger_at) <= this.nowMs);
-    // A branch can only narrow a typed current grant. Neither prose scope nor the
-    // branch's own effect list authorizes a different effect.
-    const granted = new Set(active_grants.flatMap((grant) => grant.allowed_effects));
-    const permitted_effects = [...new Set(active_branches.flatMap((branch) => branch.permitted_effects))]
-      .filter((effect) => granted.has(effect));
+    // Bind each triggered branch to its unique covering grant at trigger time.
+    // A later same-effect grant never revives an old branch; overlap is ambiguous.
+    const bound = this.manifest.branches.filter(branch=>branch.owner_id===owner_id&&instant(branch.trigger_at)<=this.nowMs)
+      .map(branch=>({branch,grants:this.manifest.grants.filter(grant=>grant.owner_id===owner_id&&
+        instant(grant.effective_at)<=instant(branch.trigger_at)&&instant(branch.trigger_at)<instant(grant.expires_at)&&
+        branch.permitted_effects.every(effect=>grant.allowed_effects.includes(effect)))}))
+      .filter(row=>row.grants.length===1&&active_grants.includes(row.grants[0]!));
+    const active_branches=bound.map(row=>row.branch);
+    const permitted_effects=[...new Set(active_branches.flatMap(branch=>branch.permitted_effects))];
     return structuredClone({ at: this.now(), owner_id, active_grants, active_branches, permitted_effects });
   }
 }
