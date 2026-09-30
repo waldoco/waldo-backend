@@ -126,6 +126,7 @@ export const workspaceStore = async (host: WorkspaceHost) => {
         return copyMeta(reserved.operation.meta);
       }
       if (!reserved.fresh) { await verifyBody(reserved.operation.body); return commit(reserved.operation); }
+      await admit('write');
       await bounded(() => host.bodies.put(reserved.operation.body, bytes));
       return commit(reserved.operation);
     },
