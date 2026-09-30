@@ -20,3 +20,7 @@ ACL snapshots and one deterministic context digest changed only to include the t
 ## Open limitations
 
 Existing account selection still uses the first healthy account covering the feature. No account-selection API or calendar enumeration is added. Missing scope can surface as the existing not-connected affordance when account filtering returns no client; reconnect is necessary. Source mocks prove request/response semantics, not live Google consent or availability. Native scenario mapping for these tools remains explicitly blocked pending its own reviewed adapter.
+
+## Cold-review correction
+
+Independent review found malformed `errors:{reason:'notFound'}` could claim complete free coverage. Actual dispatcher repro failed red. The provider connector and actual handler now both validate calendar objects, busy arrays/intervals and errors arrays/items; malformed values give unknown/no openings or typed failure. Direct connector HTTP200 and actual dispatcher regressions cover null/nonobject rows and malformed error/busy shapes. This correction requires exact-new-head CI and reviewer re-gate; earlier six-green CI is not the correction's evidence.

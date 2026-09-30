@@ -148,6 +148,15 @@ export type TaskStatusFilter = 'todo' | 'in_progress' | 'done' | 'all';
 export type TaskItem = Readonly<{ id: string; title: string; status: 'todo' | 'done'; due?: string; updated?: string }>;
 type GoogleTask = Readonly<{ id: string; title?: string; status: string; due?: string; updated?: string }>;
 
+// Provider calendars are untrusted even when transport returned HTTP 200.
+export const validFreeBusyCalendar = (row: unknown): row is FreeBusyResult['calendars'][string] => {
+  const object = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const instant = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(v) && Number.isFinite(Date.parse(v));
+  if (!object(row) || !Array.isArray(row.busy)) return false;
+  if (Object.hasOwn(row, 'errors') && (!Array.isArray(row.errors) || !row.errors.every(e => object(e) && typeof e.reason === 'string' && e.reason.length > 0 && (!Object.hasOwn(e,'domain') || typeof e.domain === 'string')))) return false;
+  return row.busy.every(b => object(b) && instant(b.start) && instant(b.end) && Date.parse(b.start) < Date.parse(b.end));
+};
+
 export type FreeBusyResult=Readonly<{from:string;to:string;calendars:Readonly<Record<string,Readonly<{busy:readonly Readonly<{start:string;end:string}>[];errors?:readonly Readonly<{reason?:string}>[]}>>>}>;
 
 export type GoogleClient = Readonly<{
@@ -244,7 +253,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if(![from,to].every(s=>typeof s==='string'&&/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$/.test(s)&&Number.isFinite(Date.parse(s)))||Date.parse(from)>=Date.parse(to)||!Array.isArray(calendarIds)||!calendarIds.length||calendarIds.length>50||calendarIds.some(id=>typeof id!=='string'||!id.trim()||id.length>256)||new Set(calendarIds).size!==calendarIds.length)throw new Error('invalid freebusy request');
       const data=await call('https://www.googleapis.com/calendar/v3/freeBusy',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({timeMin:from,timeMax:to,timeZone:timezone,calendarExpansionMax:50,items:calendarIds.map(id=>({id}))})});
       const result=data as {timeMin?:string;timeMax?:string;calendars?:FreeBusyResult['calendars']};
-      if(!result.calendars||Date.parse(result.timeMin??'')!==Date.parse(from)||Date.parse(result.timeMax??'')!==Date.parse(to))throw new Error('freebusy coverage differs');
+      if(!result||typeof result!=='object'||!result.calendars||typeof result.calendars!=='object'||Array.isArray(result.calendars)||!Object.values(result.calendars).every(validFreeBusyCalendar)||Date.parse(result.timeMin??'')!==Date.parse(from)||Date.parse(result.timeMax??'')!==Date.parse(to))throw new Error('freebusy coverage differs');
       return {from:result.timeMin!,to:result.timeMax!,calendars:result.calendars};
     },
     event: async (id) => toItem(await call(`${EVENTS}/${encodeURIComponent(id)}`) as unknown as GoogleEvent),
