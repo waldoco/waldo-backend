@@ -10,7 +10,9 @@ const keys: ReceiptKeys = { runner:'runner-key', source_adapter:'source-key', ef
 const roles = { fixture_manifest:'runner', transcript:'runner', tool_trace:'runner', authority_timeline:'runner', source_revisions:'source_adapter', intercepted_effects:'effect_interceptor', final_state_readback:'provider_readback' } as const;
 const capture: CapturedTrial = { observed, isolation:{owners:[owner,'owner-b'],candidate_owner:owner},
   receipts:Object.entries(roles).map(([field,role]) => sealCaptureReceipt(observed,owner,field as keyof typeof roles,role,keys[role])),
-  actual_model_calls:1, scripted_model:false, observed_cost_usd:0.02 };
+  actual_model_calls:1, scripted_model:false, observed_cost_usd:0.02,
+  runner_usage:[{response_id:'res-1',model:'fixture-model',input_tokens:100,output_tokens:20,cached_tokens:0,billed_usd:0.02}],
+  provider_usage:[{response_id:'res-1',model:'fixture-model',input_tokens:100,output_tokens:20,cached_tokens:0,billed_usd:0.02}] };
 describe('native trial status truth', () => {
   it('distinguishes no run, scripted smoke, missing receipts and independent review', () => {
     expect(evaluateCapturedTrial('W23',null,keys).status).toBe('not_run');
@@ -18,6 +20,8 @@ describe('native trial status truth', () => {
     expect(evaluateCapturedTrial('W23',{...capture,actual_model_calls:0},keys).status).toBe('harness_error');
     expect(evaluateCapturedTrial('W23',{...capture,receipts:capture.receipts.slice(1)},keys).status).toBe('harness_error');
     expect(evaluateCapturedTrial('W23',capture,keys).status).toBe('review_pending');
+    expect(evaluateCapturedTrial('W23',{...capture,provider_usage:[]},keys).status).toBe('harness_error');
+    expect(evaluateCapturedTrial('W23',{...capture,observed_cost_usd:0.03},keys).status).toBe('harness_error');
   });
   it('keeps R33 blocked even when cost and model receipt are present', () => {
     const r33 = { ...observed, case_id:'R33' };
