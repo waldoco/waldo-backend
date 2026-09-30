@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { describe, it, expect } from "vitest";
 import {
   browserStateCustody,
@@ -268,5 +269,35 @@ describe("private browser storage-state custody (not a live driver)", () => {
     bytes[0] = 7;
     await a.save(bytes);
     expect(await a.load()).toEqual(new Uint8Array([7]));
+  });
+  it("snapshots exactly a Buffer view, not surrounding backing secrets", async () => {
+    const { store } = memory();
+    let backing: Uint8Array | undefined;
+    const a = await browserStateCustody(
+      binding,
+      await key(),
+      store,
+      async () => {
+        backing?.fill(9);
+        return true;
+      },
+    );
+    backing = new Uint8Array([99, 1, 2, 3, 88]);
+    await a.save(Buffer.from(backing.buffer, 1, 3));
+    expect(await a.load()).toEqual(new Uint8Array([1, 2, 3]));
+  });
+  it("snapshots offset view over oversized backing exactly", async () => {
+    const { store } = memory(),
+      a = await browserStateCustody(
+        binding,
+        await key(),
+        store,
+        async () => true,
+      );
+    const backing = new Uint8Array(1024 * 1024 + 100);
+    backing.fill(99);
+    backing.set([1, 2, 3], 10);
+    await a.save(new Uint8Array(backing.buffer, 10, 3));
+    expect(await a.load()).toEqual(new Uint8Array([1, 2, 3]));
   });
 });

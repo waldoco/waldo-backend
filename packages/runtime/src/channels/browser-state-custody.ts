@@ -121,7 +121,7 @@ export async function browserStateCustody(
       return plain;
     },
     async save(value: Uint8Array): Promise<void> {
-      const snapshot = value.slice();
+      const snapshot = new Uint8Array(value);
       if (snapshot.length > 1024 * 1024) throw new BrowserStateError("invalid");
       await check();
       const iv = crypto.getRandomValues(new Uint8Array(12));
