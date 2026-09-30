@@ -228,4 +228,45 @@ describe("private browser storage-state custody (not a live driver)", () => {
       ),
     ).rejects.toThrow("browser_state_rejected");
   });
+  it("snapshots caller bytes before asynchronous admission", async () => {
+    const { store } = memory();
+    let input: Uint8Array | undefined;
+    const a = await browserStateCustody(
+      binding,
+      await key(),
+      store,
+      async () => {
+        input?.fill(9);
+        return true;
+      },
+    );
+    input = new Uint8Array([1, 2, 3]);
+    await a.save(input);
+    expect(await a.load()).toEqual(new Uint8Array([1, 2, 3]));
+  });
+  it("snapshots resizable caller buffer before asynchronous admission", async () => {
+    const { store } = memory();
+    let buffer: ArrayBuffer | undefined;
+    const a = await browserStateCustody(
+      binding,
+      await key(),
+      store,
+      async () => {
+        if (buffer)
+          (buffer as ArrayBuffer & { resize(size: number): void }).resize(
+            1024 * 1024 + 1,
+          );
+        return true;
+      },
+    );
+    const Resizable = ArrayBuffer as unknown as new (
+      length: number,
+      options: { maxByteLength: number },
+    ) => ArrayBuffer;
+    buffer = new Resizable(1, { maxByteLength: 1024 * 1024 + 1 });
+    const bytes = new Uint8Array(buffer);
+    bytes[0] = 7;
+    await a.save(bytes);
+    expect(await a.load()).toEqual(new Uint8Array([7]));
+  });
 });

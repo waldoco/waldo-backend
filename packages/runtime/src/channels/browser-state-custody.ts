@@ -121,7 +121,8 @@ export async function browserStateCustody(
       return plain;
     },
     async save(value: Uint8Array): Promise<void> {
-      if (value.length > 1024 * 1024) throw new BrowserStateError("invalid");
+      const snapshot = value.slice();
+      if (snapshot.length > 1024 * 1024) throw new BrowserStateError("invalid");
       await check();
       const iv = crypto.getRandomValues(new Uint8Array(12));
       let encrypted: Uint8Array;
@@ -130,7 +131,7 @@ export async function browserStateCustody(
           await crypto.subtle.encrypt(
             { name: "AES-GCM", iv, additionalData: aad },
             key,
-            value.slice().buffer,
+            snapshot.buffer,
           ),
         );
       } catch {
