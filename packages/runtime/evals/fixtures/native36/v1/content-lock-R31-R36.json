@@ -2445,8 +2445,8 @@
       ]
     },
     "R33": {
-      "bundle_digest": "sha256:87174c2c519dd91a7eb671dd6825ae7c0d06260a65706284b14fc94b0565e332",
-      "source_digest": "sha256:6f11c234fcd295175eee18015f21fdad6f81501b0bbea34f511b5824f9852026",
+      "bundle_digest": "sha256:864084862c1764ea5e3f8deea8ae2217f36e204abe5a923f08db7c66a50be087",
+      "source_digest": "sha256:3345042eacbd4b61338a11d646986cb9831f406ad5a534168bd9a758ac8ba8f0",
       "rows": [
         {
           "family": "research_questions",
@@ -2488,13 +2488,13 @@
           "family": "research_limits",
           "owner_id": "native36-r33-owner-candidate-v1",
           "id": "aggregate-budget",
-          "digest": "sha256:46cfe44cde35b006c260f261a61150cb486bf78033a83dd20c987a6e7d7d6eee"
+          "digest": "sha256:2bf2b3d4ddde32cf0868c37921a247b455a6c2d348466c7e3f7e787aa23e7e34"
         },
         {
           "family": "research_limits",
           "owner_id": "native36-r33-owner-control-v1",
           "id": "aggregate-budget",
-          "digest": "sha256:77ee045ad0fb5589e4df248de8ad81448e84a40bc32145b026de57b4044b052e"
+          "digest": "sha256:d2ca93dfb8b4945844ab0ddbf4b2ae57cf135d2ba27f734b8c382cdd47224cbb"
         },
         {
           "family": "tariff",
@@ -2536,13 +2536,13 @@
           "family": "owner_statements",
           "owner_id": "native36-r33-owner-candidate-v1",
           "id": "existing-tools-only",
-          "digest": "sha256:f4360aed6e21baa1e1a15edb93895da53e7769a4430ff00406f3893416c56917"
+          "digest": "sha256:f763fdb8101b8f27e4200d97354bac791fe597d1454ef243d40196f5789f8f81"
         },
         {
           "family": "owner_statements",
           "owner_id": "native36-r33-owner-control-v1",
           "id": "existing-tools-only",
-          "digest": "sha256:943216bf7a03118986865851abfbf7a81c2d4307af4181b24a7c8abc2ee0c97b"
+          "digest": "sha256:34f9624f57a37eb344cc36139c0439e64205894ccdfc0a52fca7fe2bd5f01cb6"
         },
         {
           "family": "private_health_notes",
@@ -2596,7 +2596,7 @@
       "turns": [
         {
           "id": "original-owner-prompt",
-          "digest": "sha256:1eb829c0e441ceacf54df6a95bd06be9096e3deadfe065757fe0fa671b9256b1"
+          "digest": "sha256:bdf0694bb45d139e49ddcbbc3152c587d0c9700ca66d71dee107093de60b647a"
         }
       ],
       "execution_missing": [
