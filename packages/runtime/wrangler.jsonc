@@ -42,6 +42,27 @@
       "simple": { "limit": 120, "period": 60 }
     }
   ],
+  // Fail-closed PR infrastructure preview: isolated DOs, no external storage/provider secrets.
+  // Preview vars/bindings are not inherited. Assets and migrations stay top-level.
+  "previews": {
+    "vars": { "WALDO_ENVIRONMENT": "preview", "WALDO_RELEASE": "unreleased", "WALDO_OWNER_TELEGRAM_ID": "", "LANGFUSE_CAPTURE_TEXT": "false", "WALDO_EGRESS_ALLOWLIST": "" },
+    "observability": {
+      "enabled": true,
+      "logs": { "enabled": true, "invocation_logs": false },
+      "traces": { "enabled": false }
+    },
+    "durable_objects": {
+      "bindings": [
+        { "name": "RUNTIME_DO", "class_name": "RuntimeProbeDO" },
+        { "name": "RUN_LOOP_DO", "class_name": "RunLoopDO" },
+        { "name": "TRACER_DO", "class_name": "TracerDO" },
+        { "name": "TELEGRAM_OWNER_DO", "class_name": "TelegramOwnerDO" }
+      ]
+    },
+    "ratelimits": [
+      { "name": "RESPONSIBILITY_RATE_LIMITER", "namespace_id": "1002", "simple": { "limit": 120, "period": 60 } }
+    ]
+  },
   "env": {
     // Bindings, vars and secrets are NON-INHERITABLE in wrangler environments:
     // env.staging must carry the complete binding set, not just its additions.

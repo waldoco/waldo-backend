@@ -12,8 +12,10 @@ minimumReleaseAgeExclude:
   # Phase B needs the eviction test helpers that shipped only in 0.16.20 (2026-06-25, ~6d old, below the 14d gate); the aged 0.16.16 lacks them.
   - '@cloudflare/vitest-pool-workers@0.16.20'
   # Transitive exact-pins of the pool above, all 2026-06-25 and below the 14d gate; the gate applies to every resolved dep, not just direct ones. workerd (and its per-platform @cloudflare/workerd-* binaries, recorded in the lockfile for all platforms) is the workers-runtime binary pulled in via wrangler.
-  - 'miniflare@4.20260625.0'
-  - 'wrangler@4.105.0'
-  - 'workerd@1.20260625.1'
+  # Proposed exact Preview CLI + forced-transitive exemptions, for PR review:
+  # Wrangler >=4.135 is required; Sep18 release and exact transitives are <14 days.
+  - 'miniflare@4.20260625.0 || 5.20260918.0-alpha'
+  - 'wrangler@4.105.0 || 4.135.0'
+  - 'workerd@1.20260625.1 || 1.20260918.1'
   # Name glob (pnpm forbids a version union on a name pattern); scopes to the per-platform workerd binaries the lockfile records for every OS/arch, which share workerd's release date.
   - '@cloudflare/workerd-*'
