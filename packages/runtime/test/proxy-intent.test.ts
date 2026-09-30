@@ -57,3 +57,10 @@ it('lost edge response or malformed mutation response becomes pending, never fal
   const proxy=googleProxy(cfg,fetcher)!;await expect(proxy.client('owner','conn',undefined,{id:'approval:one'}).sendRaw('bytes')).rejects.toThrow('intent_pending');expect(fetcher).toHaveBeenCalledOnce();
  }
 });
+
+it('intent-bearing config/auth denials never erase earlier dispatch uncertainty',async()=>{
+ const cfg={SUPABASE_PROJECT_URL:'https://fixture.invalid',SUPABASE_PUBLISHABLE_KEY:'fixture',WALDO_ROUTER_HMAC_SECRET:'fixture'};
+ for(const status of [401,403,404,502]){const fetcher=vi.fn(async()=>Response.json({error:{status,message:'connector unavailable'}}));
+  await expect(googleProxy(cfg,fetcher)!.client('owner','conn',undefined,{id:'approval:one'}).sendRaw('bytes')).rejects.toThrow('intent_unavailable');expect(fetcher).toHaveBeenCalledOnce();
+ }
+});

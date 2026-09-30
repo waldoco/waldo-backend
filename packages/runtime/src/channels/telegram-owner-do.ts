@@ -779,7 +779,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         const account = pinProxyIntentRoute(storage.sql,intent,`google:${feature}`,fit,fit.find((candidate) => !failing[candidate.id]) ?? fit[0]);
         if (!account) return null;
         if (account.refresh_token) return googleClient(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
-        return vault && doName ? vault.client(doName, account.id, (error) => noteHealth(account.id, error), intent) : null;
+        if(!vault||!doName){if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
+        return vault.client(doName, account.id, (error) => noteHealth(account.id, error), intent);
       },
       async state() {
         await google.migrate();
@@ -921,7 +922,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const token = await googleAccessToken(app, { refresh_token: account.refresh_token, email: account.email }, fetch, (error) => noteHealth(account.id, error));
           return { mode: 'bearer' as const, token };
         }
-        return vault && doName ? { mode: 'proxy' as const, connection: account.id } : null;
+        if(!vault||!doName){if(intent)throw new ProxyIntentError('intent_unavailable');return null;}
+        return { mode: 'proxy' as const, connection: account.id };
       },
       proxy: async (serverUrl, tool, args, connection, intent) => {
         const doName = vaultOwner();
