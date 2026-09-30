@@ -27,7 +27,10 @@ export const captureFixtureAdapters = (world: IsolatedSourceWorld,
   const artifacts = {
     source_revisions: artifact('source_adapter', { accesses: world.accessLog(owner), revisions: world.revisionLog(owner) }),
     intercepted_effects: artifact('effect_interceptor', world.outbox(owner)),
-    final_state_readback: artifact('provider_readback', { calendar: world.providerCalendarReadback(owner) }),
+    final_state_readback: artifact('provider_readback', { calendar: world.providerCalendarReadback(owner), world_evidence: {
+      candidate_effects:world.outbox(owner), control_effects:world.outbox(identity.control_owner),
+      candidate_calendar:world.providerCalendarReadback(owner), control_calendar:world.providerCalendarReadback(identity.control_owner),
+    } }),
   };
   const roles = { source_revisions: 'source_adapter', intercepted_effects: 'effect_interceptor', final_state_readback: 'provider_readback' } as const;
   const receipts = (Object.keys(roles) as (keyof typeof roles)[]).map((field) =>
