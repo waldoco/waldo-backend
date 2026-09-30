@@ -4,6 +4,7 @@ import { env } from 'cloudflare:workers';
 import { runInDurableObject } from 'cloudflare:test';
 import { afterEach, expect, it, vi } from 'vitest';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
+import { smokeModelFetch, type SmokeRequestReceipt } from '../scenarios/smoke-model-fetch';
 import { matchesSmokeMailFacts } from '../scenarios/smoke-read-facts';
 import { isolatedGoogleClient } from '../scenarios/isolated-google-client';
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
@@ -18,7 +19,7 @@ const world = new IsolatedSourceWorld({ clock: '2026-10-01T10:00:00Z', owners: [
     { owner_id: control, id: 'mail-1', thread_id: 'thread-1', from: 'fictional-sender@example.invalid', subject: 'Control status', snippet: 'CONTROL_ONLY_BIRCH_SECRET', at: '2026-10-01T09:30:00Z' },
   ] } });
 const sends: { method: string; body: Record<string, unknown> }[] = [];
-const requests: { url: string; status: number; response_id: string | null; usage: unknown }[] = [];
+const requests: SmokeRequestReceipt[] = [];
 const denied: string[] = [];
 vi.mock('../src/seams/deps', async (load) => {
   const original = await load<typeof import('../src/seams/deps')>();
@@ -47,19 +48,7 @@ const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(doName
 afterEach(() => vi.unstubAllGlobals());
 it('reads only fictional owner mail with an actual model, captured tool path and zero provider mutations', async () => {
   const network = globalThis.fetch.bind(globalThis);
-  vi.stubGlobal('fetch', (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(input instanceof Request ? input.url : String(input));
-    const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
-    if (url.href !== 'https://api.openai.com/v1/responses' || method !== 'POST') {
-      denied.push(url.origin + url.pathname); throw new Error('unexpected smoke network destination');
-    }
-    // No redirects, even to another provider path. The model SDK uses maxRetries=0.
-    if (requests.length >= 8) throw new Error('smoke model request cap reached');
-    const response = await network(input, { ...init, redirect: 'error' });
-    const body = await response.clone().json() as { id?: string; usage?: unknown };
-    requests.push({ url: url.href, status: response.status, response_id: body.id ?? null, usage: body.usage ?? null });
-    return response;
-  }) as typeof fetch);
+  vi.stubGlobal('fetch', smokeModelFetch(network, requests, denied));
   await runInDurableObject(stub, async (_instance, state) => {
     await state.storage.put('google:accounts', [{ id: `local:${owner}`, email: owner, scopes: null, refresh_token: 'fictional-not-a-token' }]);
   });
