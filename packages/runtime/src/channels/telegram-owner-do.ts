@@ -636,7 +636,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       const doName = identity.get<string>('do_name');
       return !auth || !doName || auth.saveSettings(doName, settings);
     };
-    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date() };
+    const clock = { get timezone() { return identity.get<string>('timezone') ?? fallbackZone; }, now: () => new Date(deps.now()) };
     const book = reminderBook(this.ctx.storage.sql, scheduler, clock, () => deps.newRunId().slice(0, 8));
     const healthLogs = healthLogBook(signedRpc(this.env), identity.get<string>('do_name') ?? null, channel, clock, (error) =>
       log({ trace: `health:${channel}`, hop: 'health_log', ms: 0, ok: false, error: String(error) }),
@@ -849,7 +849,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       },
     };
     const desk = approvalDesk(storage.sql, {
-      call: routedCall, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => Date.now(),
+      call: routedCall, owner, google: () => google.client(), newId: () => deps.newRunId().slice(0, 8), now: () => deps.now(),
       timezone: clock.timezone, log,
       reviewUrl: async () => {
         const origin = await storage.get<string>('origin');

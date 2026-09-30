@@ -7,12 +7,21 @@ import type { OwnerDirectory, OwnerRoute } from '../src/identity/owner-directory
 import type { TelegramOwnerDO } from '../src/channels/telegram-owner-do';
 import { IsolatedSourceWorld } from '../scenarios/isolated-source-world';
 import { isolatedCalendarEffectClient, isolatedGoogleClient } from '../scenarios/isolated-google-client';
+import { auditIsolatedWorld } from '../evals/isolated-world-audit';
+import type { NativeManifest } from '../evals/native-manifest';
 
 const outbox: { method: string; body: Record<string, unknown> }[] = [];
 const modelInputs: unknown[] = [];
 const unexpectedFetches: string[] = [];
 let sourceWorld: IsolatedSourceWorld | null = null;
 let interceptCalendarEffects = false;
+vi.mock('../src/seams/deps', async (load) => {
+  const original = await load<typeof import('../src/seams/deps')>();
+  return { ...original, productionDeps: () => {
+    const deps = original.productionDeps();
+    return { ...deps, now: () => sourceWorld ? Date.parse(sourceWorld.now()) : deps.now() };
+  } };
+});
 vi.mock('../src/connectors/google', async (load) => {
   const original = await load<typeof import('../src/connectors/google')>();
   return { ...original, googleClient: (_app: unknown, tokens: { email?: string }) => {
@@ -210,10 +219,24 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(sourceWorld.providerCalendarReadback('a@example.invalid')).toEqual([expect.objectContaining({ title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30' })]);
     expect(sourceWorld.providerCalendarReadback('b@example.invalid')).toEqual([]);
     await runInDurableObject(doStub(81101), async (_instance, state) => {
-      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change' ORDER BY created_at DESC LIMIT 1").toArray()).toEqual([{ status: 'done' }]);
+      expect(state.storage.sql.exec<{ status: string }>("SELECT status FROM ledger WHERE kind = 'calendar_change' AND status = 'done' ORDER BY rowid DESC LIMIT 1").toArray()).toEqual([{ status: 'done' }]);
     });
     expect((await callback(81101, 81101, approve, update + 2)).status).toBe(200);
     expect(sourceWorld.outbox('a@example.invalid')).toHaveLength(1);
     expect(sourceWorld.providerCalendarReadback('a@example.invalid')).toHaveLength(1);
+    // Compare the actual fictional DO approval against the same fixture clock.
+    const fixture: NativeManifest = {
+      case_id: 'W01', candidate_owner: 'a@example.invalid', control_owner: 'b@example.invalid',
+      visible_prompt: 'scripted fixture approval',
+      world: { clock: '2026-09-29T13:00:00Z', owners: [{ id: 'a@example.invalid' }, { id: 'b@example.invalid' }], sources: {} },
+      grants: [{ owner_id: 'a@example.invalid', purpose: 'fictional calendar-create approval', scope: 'one fixture event',
+        allowed_effects: ['calendar.create'], effective_at: '2026-09-29T13:00:00Z', expires_at: '2026-09-29T13:30:00Z' }],
+      branches: [{ id: 'approved', owner_id: 'a@example.invalid', trigger_at: '2026-09-29T13:00:00Z', permitted_effects: ['calendar.create'] }],
+      supported_tools: ['calendar.create'], source_digest: 'not-a-native-manifest',
+    };
+    const evidence = { candidate_effects: sourceWorld.outbox('a@example.invalid'), control_effects: sourceWorld.outbox('b@example.invalid'),
+      candidate_calendar: sourceWorld.providerCalendarReadback('a@example.invalid'), control_calendar: sourceWorld.providerCalendarReadback('b@example.invalid') };
+    expect(auditIsolatedWorld(fixture, evidence).status).toBe('consistent_fixture');
+    expect(auditIsolatedWorld({ ...fixture, grants: [] }, evidence).errors).toContain('effect outside synthetic grant and branch');
   });
 });
