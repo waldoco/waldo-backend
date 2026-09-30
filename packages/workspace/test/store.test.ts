@@ -92,4 +92,10 @@ describe('retained byte store',()=>{
  const f=fixture(),s=await workspaceStore(f.host),m=await s.write(args());const put=f.host.bodies.put;f.host.bodies.put=async(b,v)=>{await put(b,v);f.suspend();};await expect(s.write(args(11,'pending'))).rejects.toThrow('workspace_rejected');
  f.host.binding={...binding,stateVersion:2};f.host.admit=async(b)=>({status:b.stateVersion===2?'ok':'rejected'});const resumed=await workspaceStore(f.host);expect((await resumed.read(m.file_id,1,0,10)).text).toBe('hello');expect(f.state().bodies[0]!.binding.stateVersion).toBe(1);await expect(resumed.reconcile(id(11))).rejects.toThrow('workspace_rejected');expect(f.state().operations[1]!.status).toBe('pending');await expect(s.read(m.file_id,1,0,10)).rejects.toThrow('workspace_rejected');
  });
+ it('retained revision bytes consume owner quota even after small replacement',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);const bytes=new Uint8Array(LIMITS.fileBytes);for(let i=0;i<10;i++)await s.write({...args(30000+i,'large',bytes),expected_revision:i});await expect(s.write({...args(30010,'large',new Uint8Array([1])),expected_revision:10})).rejects.toThrow('workspace_quota');expect(f.host.bodies.put).toHaveBeenCalledTimes(10);
+ });
+ it('bounded metadata pages validate cursor/limits and never include storage keys or bodies',async()=>{
+ const f=fixture(),s=await workspaceStore(f.host);await s.write(args());await s.write(args(11,'second'));const first=await s.list(undefined,1);expect(first.count).toBe(1);expect(first.next_cursor).not.toBeNull();const next=await s.list(first.next_cursor!,1);expect(next.count).toBe(1);expect(next.next_cursor).toBeNull();expect(JSON.stringify(first)).not.toMatch(/blob_id|binding|hello/);await expect(s.list(id(999),1)).rejects.toThrow('workspace_invalid');await expect(s.list(undefined,51)).rejects.toThrow('workspace_invalid');
+ });
 });
