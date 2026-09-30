@@ -28,6 +28,14 @@ describe('approval desk', () => {
         expect((await restarted.decide(id, 'a', 'test')).toast).toBe('Already handled.');
         expect(calls).toBe(before);
       }
+      for (const malformed of [null, undefined, 'old string result', { status: 'acknowledged_unverified' }, { status: 'rejected', message: '' }]) {
+        const desk = approvalDesk(state.storage.sql, { ...base, browserSubmit: async () => malformed as never });
+        const id = await desk.proposeBrowserSubmit(payload);
+        expect((await desk.decide(id, 'a', 'test')).toast).toBe('Outcome unknown');
+        expect(state.storage.sql.exec<{ status: string }>('SELECT status FROM ledger WHERE id = ?', id).one().status).toBe('uncertain');
+        expect(desk.pending(1000).some((item) => item.id === id)).toBe(false);
+        expect(desk.ledger([])).toContain('uncertain:');
+      }
       const throwing = approvalDesk(state.storage.sql, { ...base, browserSubmit: async () => { throw new Error('response lost'); } });
       const thrown = await throwing.proposeBrowserSubmit(payload);
       expect((await throwing.decide(thrown, 'a', 'test')).toast).toBe('Outcome unknown');

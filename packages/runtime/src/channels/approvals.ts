@@ -188,6 +188,9 @@ export const approvalDesk = (sql: SqlStorage, deps: Readonly<{
             let outcome: BrowserSubmitOutcome;
             try { outcome = await deps.browserSubmit(bp); }
             catch { outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' }; }
+            if (!outcome || typeof outcome !== 'object' || typeof outcome.message !== 'string' || !outcome.message.trim()) {
+              outcome = { status: 'uncertain', message: 'The browser outcome is unknown. Check the result before retrying.' };
+            }
             switch (outcome?.status) {
               case 'rejected':
                 setStatus(id, 'rejected'); out = { toast: 'Not done', message: outcome.message }; break;
