@@ -31,3 +31,11 @@ describe('evaluator-only fixture authority clock, not a real grant', () => {
     expect(() => new FixtureAuthorityClock({ ...fixture(), branches: [{ ...fixture().branches[0]!, owner_id: 'x' }] })).toThrow(/owner/);
   });
 });
+it('old branch cannot revive under a later grant; only a separate newly covered branch becomes active',()=>{
+ const f=fixture();const later={...f.grants[0]!,effective_at:'2026-10-05T09:00:00+05:30',expires_at:'2026-10-05T10:00:00+05:30'};
+ const clock=new FixtureAuthorityClock({...f,grants:[...f.grants,later]});clock.advance('2026-10-05T09:15:00+05:30');expect(clock.snapshot('a').permitted_effects).toEqual([]);expect(clock.snapshot('a').active_branches).toEqual([]);
+ const fresh=new FixtureAuthorityClock({...f,grants:[...f.grants,later],branches:[...f.branches,{...f.branches[0]!,id:'new-approval',trigger_at:'2026-10-05T09:10:00+05:30'}]});fresh.advance('2026-10-05T09:15:00+05:30');expect(fresh.snapshot('a').permitted_effects).toEqual(['calendar.move']);expect(fresh.snapshot('a').active_branches.map(b=>b.id)).toEqual(['new-approval']);
+});
+it('ambiguous overlapping grants never silently substitute to cover one branch',()=>{
+ const f=fixture();const clock=new FixtureAuthorityClock({...f,grants:[...f.grants,{...f.grants[0]!,purpose:'unrelated overlap'}]});clock.advance('2026-10-05T08:40:00+05:30');expect(clock.snapshot('a').permitted_effects).toEqual([]);
+});
