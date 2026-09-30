@@ -35,10 +35,17 @@ export type ArtifactBodies = Readonly<{
   get(key: string): Promise<string | null>;
 }>;
 
-export const r2ArtifactBodies = (bucket: R2Bucket): ArtifactBodies => ({
-  put: async (key, body) => { await bucket.put(key, body); },
-  get: async (key) => (await bucket.get(key))?.text() ?? null,
-});
+// Metadata is DO-local, but the bucket is shared. The immutable DO identity,
+// supplied by the authenticated host rather than tool args, scopes every body.
+// Never fall back to old unscoped keys: their owner cannot be proven by the key.
+export const r2ArtifactBodies = (bucket: R2Bucket, ownerScope: string): ArtifactBodies => {
+  if (typeof ownerScope !== 'string' || !ownerScope.trim()) throw new Error('Artifact owner scope is required');
+  const scoped = (key: string) => `artifacts/by-owner/${encodeURIComponent(ownerScope)}/${encodeURIComponent(key)}`;
+  return {
+    put: async (key, body) => { await bucket.put(scoped(key), body); },
+    get: async (key) => (await bucket.get(scoped(key)))?.text() ?? null,
+  };
+};
 
 export const inMemoryArtifactBodies = (): ArtifactBodies => {
   const map = new Map<string, string>();
