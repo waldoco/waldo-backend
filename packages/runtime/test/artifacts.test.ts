@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EXTERNAL_ORIGIN_TOOLS, TOOL_PERMISSIONS } from '@waldo/contracts';
-import { artifactBook, artifactHandlers, inMemoryArtifactBodies, type ArtifactMeta } from '../src/channels/artifacts';
+import { artifactBook, artifactHandlers, inMemoryArtifactBodies, r2ArtifactBodies, type ArtifactMeta } from '../src/channels/artifacts';
 
 type Row = ArtifactMeta;
 const fakeSql = () => {
@@ -145,5 +145,68 @@ describe('artifact handlers (A5)', () => {
         expect(tools).not.toContain('read_artifact');
       }
     }
+  });
+});
+
+
+describe('R2 owner artifact bodies', () => {
+  const bucket = () => {
+    const objects = new Map<string, string>();
+    const calls: string[] = [];
+    return {
+      objects, calls,
+      binding: {
+        async put(key: string, body: string) { calls.push(key); objects.set(key, body); },
+        async get(key: string) { calls.push(key); const body = objects.get(key); return body === undefined ? null : { async text() { return body; } }; },
+      } as unknown as R2Bucket,
+    };
+  };
+
+  it('same logical id in separate owners never overwrites or reads the other body, including revise and restart', async () => {
+    const shared = bucket();
+    const sqlA = fakeSql();
+    const sqlB = fakeSql();
+    const make = (sql: ReturnType<typeof fakeSql>, owner: string) => artifactBook(sql as never, r2ArtifactBodies(shared.binding, owner), clock, () => 'same-id');
+    const a = make(sqlA, 'owner-a');
+    const b = make(sqlB, 'owner-b');
+    const metaA = await a.create({ ...createArgs, body_markdown: 'owner A private' }, 'test');
+    const metaB = await b.create({ ...createArgs, body_markdown: 'owner B private' }, 'test');
+    expect(metaA.id).toBe(metaB.id);
+    expect((await a.read(metaA.id, 0, 8000))?.text).toBe('owner A private');
+    expect((await b.read(metaB.id, 0, 8000))?.text).toBe('owner B private');
+    await a.revise({ artifact_id: metaA.id, expected_revision: 1, body_markdown: 'owner A revision' }, 'test');
+    await b.revise({ artifact_id: metaB.id, expected_revision: 1, body_markdown: 'owner B revision' }, 'test');
+    expect((await make(sqlA, 'owner-a').read(metaA.id, 0, 8000))?.text).toBe('owner A revision');
+    expect((await make(sqlB, 'owner-b').read(metaB.id, 0, 8000))?.text).toBe('owner B revision');
+    expect(shared.objects.size).toBe(4);
+    expect(shared.calls.every((key) => key.startsWith('artifacts/by-owner/'))).toBe(true);
+  });
+
+  it('does not read legacy unscoped bodies, even when metadata references them', async () => {
+    const shared = bucket();
+    shared.objects.set('artifacts/art:legacy', 'legacy cannot be attributed by a shared key');
+    const store = r2ArtifactBodies(shared.binding, 'owner-a');
+    expect(await store.get('artifacts/art:legacy')).toBeNull();
+    expect(shared.calls).not.toContain('artifacts/art:legacy');
+  });
+
+  it('encodes namespaces and logical keys injectively instead of joining path segments', async () => {
+    const shared = bucket();
+    const a = r2ArtifactBodies(shared.binding, 'a/b');
+    const b = r2ArtifactBodies(shared.binding, 'a%2Fb');
+    await a.put('artifacts/art:x/r2', 'slash owner');
+    await b.put('artifacts/art:x/r2', 'percent owner');
+    expect(await a.get('artifacts/art:x/r2')).toBe('slash owner');
+    expect(await b.get('artifacts/art:x/r2')).toBe('percent owner');
+    expect(shared.objects.size).toBe(2);
+    expect([...shared.objects.keys()].every((key) => key.split('/').length === 4)).toBe(true);
+  });
+
+  it('refuses a missing or empty owner scope rather than silently using the shared namespace', () => {
+    const shared = bucket();
+    for (const owner of ['', ' ', undefined, null, 42]) {
+      expect(() => r2ArtifactBodies(shared.binding, owner as string)).toThrow('Artifact owner scope is required');
+    }
+    expect(shared.calls).toEqual([]);
   });
 });
