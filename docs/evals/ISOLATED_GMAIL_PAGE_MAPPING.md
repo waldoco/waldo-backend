@@ -13,8 +13,11 @@ sorts deterministically, and returns only normal message-list metadata, not body
 or arbitrary source fields. Absent category/inbox flags retain the existing fixture
 convention that authored mail rows belong to its Primary inbox.
 
-Synthetic cursor binds owner, exact query, limit and current rows digest; stale or
-mismatched cursor fails. It contains no source body/subject. It is a deterministic
+Synthetic cursor checks owner, exact query, limit and current filtered rows digest;
+stale or mismatched cursor fails. This unkeyed hash is not authentication: offsets
+can be edited and a caller knowing the rows can recompute the digest. It contains no source body/subject. It is a deterministic
 fixture cursor, not an authenticated Google cursor or real provider provenance.
+The Google-only integration keeps real owner A/B isolation and cursor/revision tests,
+but does not include the separate nativeSelectedSource wrapper test.
 No source writes, network, effect admission or scripted successful model answer.
 The full real-DO owner A/B source isolation test passes with the mapped path.

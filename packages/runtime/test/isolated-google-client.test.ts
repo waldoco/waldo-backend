@@ -53,7 +53,7 @@ describe('isolated Gmail pages',()=>{
   const w=fixture();const a=isolatedGoogleClient(w,'a');const page=await a.mailPage(query,1);
   expect(page.messages).toEqual([{id:'m1',thread_id:'shared',from:'sender@example.invalid',subject:'Alpha',snippet:'first',at:'2026-10-06T08:00:00Z'}]);expect(page.next_page_token).toBeNull();expect(page.result_size_estimate).toBe(1);expect(w.accessLog('b')).toEqual([]);
  });
- it('paginates selected owner rows, binds query/limit/owner and rejects revisions/forged cursors',async()=>{
+ it('paginates selected owner rows, checks query/limit/owner and rejects malformed or mismatched cursors',async()=>{
   const w=new IsolatedSourceWorld({clock:'2026-10-06T09:00:00Z',owners:[{id:'a'},{id:'b'}],sources:{mail:[1,2,3].map(i=>({owner_id:'a',id:`m${i}`,thread_id:'t',from:'a@example.invalid',subject:`${i}`,snippet:'s',at:`2026-10-06T0${i}:00:00Z`}))}});
   const a=isolatedGoogleClient(w,'a');const first=await a.mailPage(query,1);expect(first.messages[0]?.id).toBe('m3');expect(first.next_page_token).not.toBeNull();
   const second=await isolatedGoogleClient(w,'a').mailPage(query,1,first.next_page_token!);expect(second.messages[0]?.id).toBe('m2');
