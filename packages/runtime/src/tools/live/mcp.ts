@@ -6,19 +6,24 @@ class ToolExecutionError extends Error {}
 // token, or 'google' - the owner's connected Google account supplies the OAuth bearer. Vault-backed
 // accounts keep the token edge-side: the runtime sends server/tool/args and the edge attaches it.
 import type { ProxyIntent } from '../../connectors/proxy-intent';
+import { isGoogleFeature, type GoogleFeature } from '../../connectors/google';
 import { callMcpToolArgsSchema, triggerTypeSchema, TOOL_PERMISSIONS, type CallMcpToolArgs, type ToolHandler, type ToolName, type ToolResult } from '@waldo/contracts';
 import type { McpCallProposal } from '../../channels/approvals';
 import { callMcpTransport, McpAuthError, McpToolError, type McpTransportServer } from '../../connectors/mcp-transport';
 import type { ToolDispatcherContext } from '../dispatcher';
 
-export type McpServerConfig = McpTransportServer & Readonly<{ name: string; auth?: 'google' }>;
+// requires: the Google feature the serving grant must hold (drive = read-only). allow_tools: the only
+// tool names callable on this server; a server with requires must list them (fail closed).
+export type McpServerConfig = McpTransportServer & Readonly<{ name: string; auth?: 'google'; requires?: GoogleFeature; allow_tools?: readonly string[] }>;
 
 // Server registry is deploy config for alpha (env JSON); per-owner servers ride the vault later.
 export const mcpServers = (raw: string | undefined): readonly McpServerConfig[] => {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as McpServerConfig[];
-    return Array.isArray(parsed) ? parsed.filter((s) => s && typeof s.name === 'string' && typeof s.url === 'string') : [];
+    return Array.isArray(parsed) ? parsed.filter((s) => s && typeof s.name === 'string' && typeof s.url === 'string'
+      && (s.requires === undefined || (typeof s.requires === 'string' && isGoogleFeature(s.requires)))
+      && (s.allow_tools === undefined || (Array.isArray(s.allow_tools) && s.allow_tools.every((t) => typeof t === 'string')))) : [];
   } catch {
     return [];
   }
@@ -29,14 +34,14 @@ export const mcpServers = (raw: string | undefined): readonly McpServerConfig[] 
 // to the runtime, so the connector-proxy edge executes the call with the connection id instead.
 export type McpGoogleResolution = Readonly<{ mode: 'bearer'; token: string } | { mode: 'proxy'; connection: string }>;
 export type McpGoogleAuth = Readonly<{
-  resolve(intent?: ProxyIntent): Promise<McpGoogleResolution | null>;
+  resolve(intent?: ProxyIntent, feature?: GoogleFeature): Promise<McpGoogleResolution | null>;
   proxy(serverUrl: string, tool: string, args: Record<string, unknown>, connection: string, intent?: ProxyIntent): Promise<unknown>;
 }>;
 
 // Typed auth states shared by the turn handler (mapped to a connect card) and the approval
 // execution path (surfaced as the failure line).
 export class McpConnectError extends Error {
-  constructor(public readonly reason: 'not_connected' | 'reauth_needed' | 'scope_missing', message: string) { super(message); this.name = 'McpConnectError'; }
+  constructor(public readonly reason: 'not_connected' | 'reauth_needed' | 'scope_missing', message: string, public readonly feature?: GoogleFeature) { super(message); this.name = 'McpConnectError'; }
 }
 
 export const callMcp = async (server: McpTransportServer, tool: string, args: Record<string, unknown>, fetcher: typeof fetch = fetch): Promise<unknown> => {
@@ -51,18 +56,23 @@ export const callMcp = async (server: McpTransportServer, tool: string, args: Re
 // One execution path for both entry points (turn tool + approved card): resolves the server's
 // auth mode and runs the call, throwing McpConnectError for owner-actionable auth states.
 export const executeMcp = async (server: McpServerConfig, tool: string, args: Record<string, unknown>, googleAuth?: McpGoogleAuth, fetcher: typeof fetch = fetch, intent?: ProxyIntent): Promise<{ content: unknown; protocolVersion: string }> => {
+  if (server.allow_tools !== undefined && !server.allow_tools.includes(tool)) throw new ToolExecutionError(`tool "${tool}" is not allowed on MCP server "${server.name}"`);
+  if (server.requires !== undefined) {
+    if (server.allow_tools === undefined) throw new ToolExecutionError(`MCP server "${server.name}" requires an explicit tool allowlist`);
+    if (server.auth !== 'google') throw new ToolExecutionError(`MCP server "${server.name}" requires a google-auth server`);
+  }
   if (server.auth === 'google') {
-    if (!googleAuth) throw new McpConnectError('not_connected', 'Google is not connected');
-    const resolved = await googleAuth.resolve(intent);
-    if (resolved === null) throw new McpConnectError('not_connected', 'Google is not connected');
+    if (!googleAuth) throw new McpConnectError('not_connected', 'Google is not connected', server.requires);
+    const resolved = await googleAuth.resolve(intent, server.requires);
+    if (resolved === null) throw new McpConnectError('not_connected', 'Google is not connected', server.requires);
     if (resolved.mode === 'proxy') {
       try {
         const content = await googleAuth.proxy(server.url, tool, args, resolved.connection, intent);
         return { content, protocolVersion: 'proxied' };
       } catch (error) {
         const status = (error as { status?: number }).status;
-        if (status === 401) throw new McpConnectError('reauth_needed', 'the connected Google grant is no longer valid');
-        if (status === 403) throw new McpConnectError('scope_missing', 'the connected Google grant does not cover this MCP server');
+        if (status === 401) throw new McpConnectError('reauth_needed', 'the connected Google grant is no longer valid', server.requires);
+        if (status === 403) throw new McpConnectError('scope_missing', 'the connected Google grant does not cover this MCP server', server.requires);
         throw error;
       }
     }
@@ -70,11 +80,11 @@ export const executeMcp = async (server: McpServerConfig, tool: string, args: Re
     // model picks server names from deploy config, never URLs, but the allowlist holds even if
     // the config is later edited carelessly. Third-party OAuth MCP servers are the generic
     // flow's job (RFC 9728), not this shortcut's.
-    if (!/^https:\/\/([a-z0-9-]+\.)?googleapis\.com\//.test(server.url)) throw new McpConnectError('scope_missing', 'google bearer refused for a non-Google MCP host');
+    if (!/^https:\/\/([a-z0-9-]+\.)?googleapis\.com\//.test(server.url)) throw new McpConnectError('scope_missing', 'google bearer refused for a non-Google MCP host', server.requires);
     try {
       return await callMcpTransport(server, tool, args, fetcher, async () => resolved.token);
     } catch (error) {
-      if (error instanceof McpAuthError) throw new McpConnectError(error.status === 401 ? 'reauth_needed' : 'scope_missing', `google MCP ${error.status}`);
+      if (error instanceof McpAuthError) throw new McpConnectError(error.status === 401 ? 'reauth_needed' : 'scope_missing', `google MCP ${error.status}`, server.requires);
       if (error instanceof McpToolError) throw new ToolExecutionError(error.message);
       throw error;
     }
@@ -122,7 +132,7 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
       return { ok: true, data: { output: content, protocol: protocolVersion, source_taint: 'external' as const }, source_taint: 'external' };
     } catch (error) {
       if (error instanceof McpConnectError) {
-        return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason } };
+        return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
       }
       const message = error instanceof Error ? error.message : String(error);
       return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message };

@@ -9,6 +9,9 @@ export const GOOGLE_FEATURE_SCOPES = {
   availability: [`${AUTH}calendar.events.freebusy`],
   mail: [`${AUTH}gmail.readonly`, `${AUTH}gmail.send`, `${AUTH}gmail.compose`],
   tasks: [`${AUTH}tasks`],
+  // Read-only Drive for the Drive MCP server. Deliberately NOT in GOOGLE_CONSENT_SCOPES: asking for it
+  // is a separate owner-approved Google Cloud/consent change.
+  drive: [`${AUTH}drive.readonly`],
 } as const;
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
@@ -16,7 +19,9 @@ export const isGoogleFeature = (value: string): value is GoogleFeature => Object
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
   feature === 'availability'
     ? ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
-    : scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
+    : feature === 'drive'
+      ? GOOGLE_FEATURE_SCOPES.drive.every((scope) => scopes?.includes(scope) ?? false)
+      : scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
 

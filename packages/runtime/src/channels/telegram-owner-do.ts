@@ -66,7 +66,7 @@ import { TELEGRAM_WEBHOOK_PATH } from './telegram-webhook';
 import { createTelegramCaller, egressGate, gatedCaller, createTelegramOwnerApi } from './telegram-api';
 import { newProbeCapture, PROBE_RATE_LIMIT_PER_MINUTE, PROBE_RATE_WINDOW_MS, PROBE_TURN_DO_URL, type ProbeCaptureSlot } from './probe-turn';
 import { createWhatsAppMediaDownloader, whatsappIngressUpdates, whatsappTelegramShim } from './whatsapp-api';
-import { mcpServers, callMcpToolHandler, executeMcp, type McpGoogleAuth } from '../tools/live/mcp';
+import { mcpServers, callMcpToolHandler, executeMcp, McpConnectError, type McpGoogleAuth } from '../tools/live/mcp';
 import { sendMessageHandler } from '../tools/live/messaging';
 import { createTelegramFileDownloader } from './telegram-media';
 import { selectTranscriber } from '../llm/transcriber';
@@ -1193,9 +1193,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // mints a bearer here; a Vault-backed account keeps the token edge-side and the proxy runs
     // the call with the connection id (the runtime never sees a bearer).
     const mcpGoogleAuth: McpGoogleAuth = {
-      resolve: async (intent) => {
+      resolve: async (intent, feature) => {
         await google.migrate();
-        const [all, failing, doName, app] = [await accounts(), await health(), vaultOwner(), await googleApp()];
+        const [every, failing, doName, app] = [await accounts(), await health(), vaultOwner(), await googleApp()];
+        // A server that needs a feature (Drive read) only runs on a grant that holds it; connected
+        // accounts without it are a scope gap, not a missing connection.
+        const all = feature ? every.filter((candidate) => googleHas(candidate.scopes, feature)) : every;
+        if (feature && every.length > 0 && all.length === 0) throw new McpConnectError('scope_missing', `no connected Google grant covers ${feature}`, feature);
         const routes=all.map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,'mcp:google',routes,routes.find((candidate) => !failing[candidate.id]) ?? routes[0]);
         if (!account) return null;
