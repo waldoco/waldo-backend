@@ -15,6 +15,7 @@ export const llmAttachmentSchema = z.strictObject({
   data_base64: z.string().min(1),
 });
 export type LLMAttachment = z.infer<typeof llmAttachmentSchema>;
+export const LLM_ATTACHMENTS_MAX = 4;
 
 export const llmToolSchema = z.strictObject({
   name: z.string().min(1).max(64),
@@ -81,7 +82,7 @@ export const llmRequestSchema = z.strictObject({
   response_format: z.strictObject({ name: z.string().min(1).max(64), schema: z.record(z.string(), z.unknown()) }).optional(),
   // Owner-sent images and files for the final user message. Kept outside messages so text
   // sanitisation never rewrites binary data; providers without file input reject the request.
-  attachments: z.array(llmAttachmentSchema).min(1).max(4).optional(),
+  attachments: z.array(llmAttachmentSchema).min(1).max(LLM_ATTACHMENTS_MAX).optional(),
   tools: z.array(llmToolSchema).min(1).max(LLM_TOOLS_MAX).optional(),
   tool_turns: z.array(llmToolTurnSchema).max(64).optional(),
 });

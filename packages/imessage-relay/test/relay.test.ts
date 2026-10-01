@@ -52,6 +52,27 @@ const caps = (): IMessageCapabilities => {
 };
 const commandRequest = (f: ReturnType<typeof fixture>, commandId = 'fixture-command') => signed(f, { ...syntheticIMessageCommand(), commandId }, `nonce-${commandId}`);
 
+it('signature freshness is admission-only across delayed probe while current heartbeat and binding still fence execution', async () => {
+  const f = fixture(); let now = 1000;
+  const relay = new SignedRelay(f.store, policy, () => f.account, () => now);
+  let release!: (value: IMessageCapabilities) => void;
+  const probe = new Promise<IMessageCapabilities>(resolve => { release = resolve; });
+  const transport = new MockTransport(caps()); transport.probe = () => probe;
+  const beat = (nonce: string) => {
+    const raw = JSON.stringify({ version: 1, bridgeId: f.account.binding.bridgeId, accountId: f.account.binding.accountId, databaseGeneration: 'fixture-generation', status: 'online' });
+    relay.heartbeat(raw, signRelayRequest(raw, { version: 1, bridgeId: f.account.binding.bridgeId, accountId: f.account.binding.accountId, atMs: now, nonce }, f.account.key));
+  };
+  beat('initial-heartbeat'); const request = commandRequest(f);
+  try {
+    const pending = relay.execute(request.raw, request.headers, transport);
+    expect(f.store.snapshot().commands).toHaveLength(0);
+    now += policy.signatureMaxAgeMs + 1; beat('fresh-heartbeat-after-delayed-probe');
+    release(caps());
+    expect(await pending).toMatchObject({ state: 'local_recorded' });
+    expect(transport.executions).toBe(1);
+  } finally { f.store.close(); }
+});
+
 it('authenticates raw bytes before malformed JSON and rejects stale, future, wrong key/account and oversized requests', () => {
   const f = fixture();
   try {
