@@ -11,6 +11,7 @@ import { windowModelMessages, type ConversationWindowStats } from './window';
 export type JoinedConversationModel = Readonly<{
   complete(request: Readonly<{
     system: string;
+    skillPrompt?: string;
     messages: readonly ConversationModelMessage[];
     tools: readonly string[];
   }>): Promise<string>;
@@ -64,6 +65,7 @@ export class JoinedConversationPath {
     request.runScope?.admit();
     const text = await this.model.complete({
       system: composition.prompt,
+      ...(composition.skillPrompt ? { skillPrompt: composition.skillPrompt } : {}),
       messages: windowed.messages,
       tools: composition.evidence.tool_acl,
     });

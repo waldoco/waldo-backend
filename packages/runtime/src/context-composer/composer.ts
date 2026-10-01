@@ -1,6 +1,7 @@
 // Private orchestration implementation; the public ContextComposer seam is re-exported by index.ts.
 import {
   TOOL_PERMISSIONS,
+  wrapSkills,
   runtimeContextCheckpointSchema,
   trustedInvocationEnvelopeSchema,
   type SkillExclusion,
@@ -137,6 +138,7 @@ export function createContextComposer(deps: ContextComposerDependencies): Contex
         return Object.freeze({
           ok: true as const,
           prompt,
+          ...(skills.selected.length ? { skillPrompt: wrapSkills(skills.selected) } : {}),
           checkpoint: checkedCheckpoint.data,
           evidence,
         });

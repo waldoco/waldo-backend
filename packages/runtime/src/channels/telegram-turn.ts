@@ -17,7 +17,7 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
 });
 type CoreArgs = Parameters<typeof createOwnerResponder>;
-type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest extends [...infer Public, unknown?] ? Public : never : never];
+type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest extends [...infer Public, unknown?, unknown?] ? Public : never : never];
 export const createTelegramResponder = (...args: [...AdapterArgs, surface?: string]) => {
   const surface = args[20] ?? 'telegram';
   const readers = args[4];
