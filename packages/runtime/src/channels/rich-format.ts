@@ -19,6 +19,11 @@ export const renderArtifactBody=(kind:ArtifactKind,body:string):string=>{
 // link tokens without changing their URL bytes. Raw model HTML remains text.
 export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML'}>=>{
  const token=/\[([^\]\n]+)\]\((https?:\/\/[^\s<>"'`()]+)\)/g;let out='',start=0;
- for(const m of text.matchAll(token)){out+=escapeRich(text.slice(start,m.index));out+=`<a href="${escapeRich(m[2]!)}">${escapeRich(m[1]!)}</a>`;start=m.index!+m[0].length;}
+ for(const match of text.matchAll(token)){
+  const [whole,label,url]=match;
+  out+=escapeRich(text.slice(start,match.index));
+  out+=`<a href="${escapeRich(url!)}">${escapeRich(label!)}</a>`;
+  start=match.index!+whole.length;
+ }
  out+=escapeRich(text.slice(start));return{text:out,parse_mode:'HTML'};
 };
