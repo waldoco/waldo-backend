@@ -1,3 +1,5 @@
+import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
+import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
 import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
@@ -354,7 +356,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
     if (new URL(request.url).pathname === '/enqueue') return this.enqueue(request);
     const doName = request.headers.get('x-waldo-do-name');
-    if (doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
+    if (path !== MEMORY_GRAPH_PATH && doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
@@ -485,7 +487,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async console(request: Request): Promise<Response> {
     const access = consoleAccess(this.ctx.storage);
     const url = new URL(request.url);
-    const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH;
+    const memoryRoute = url.pathname === MEMORY_GRAPH_PATH;
+    const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH || memoryRoute;
     if (overviewRoute && request.method !== 'GET') return new Response('method not allowed', { status: 405, headers: DASHBOARD_OVERVIEW_HEADERS });
     const link = url.pathname === CONSOLE_PATH ? url.searchParams.get('t') : null;
     if (link && request.method === 'GET') return signInPage(link);
@@ -512,6 +515,16 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
       return Response.json(await nightlyDiagnostic(this.ctx.storage), { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
+    if (memoryRoute) {
+      try {
+        // Read directly after session admission. Never initialize runtime/memory
+        // schemas, provider clients, FTS or scheduler just to inspect this graph.
+        const paged = pageMemoryGraph(readMemoryGraph(this.ctx.storage.sql, this.ctx.id.toString()), url.searchParams);
+        return Response.json(paged.body, {status:paged.status,headers:DASHBOARD_OVERVIEW_HEADERS});
+      } catch {
+        return Response.json({error:'memory_unavailable'}, {status:503,headers:DASHBOARD_OVERVIEW_HEADERS});
+      }
     }
     if (overviewRoute) {
       try {
