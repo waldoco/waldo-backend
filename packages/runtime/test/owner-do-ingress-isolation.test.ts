@@ -36,7 +36,7 @@ vi.mock('../src/channels/telegram-api', async (load) => {
     ...original,
     createTelegramCaller: () => async (method: string, body: object) => {
       outbox.push({ method, body: body as Record<string, unknown> });
-      return method === 'getMe' ? { username: 'fixture_bot' } : true;
+      return method === 'getMe' ? { username: 'fixture_bot' } : method === 'sendMessage' ? { message_id: outbox.length, chat: { id: (body as {chat_id?: number}).chat_id } } : true;
     },
   };
 });
@@ -72,6 +72,12 @@ const send = async (subject: number, text: string, updateId: number, replyTo?: R
     body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text, ...(replyTo ? { reply_to_message: replyTo } : {}) } }),
   }), env, (work) => pending.push(work), directory);
   await Promise.all(pending);
+  await runInDurableObject(doStub(subject), async (instance, state) => {
+    const rows = state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? [];
+    for (const row of rows) if (row.status === 'pending') row.dueAt = 0;
+    state.storage.kv.put('telegram_final_outbox_v1', rows);
+    await instance.alarm();
+  });
   return response;
 };
 const callback = async (subject: number, from: number, data: string, updateId: number) => {
@@ -274,5 +280,73 @@ describe('real owner-DO ingress in a sealed test world', () => {
     expect(captured.receipts).toHaveLength(3);
     expect(auditIsolatedWorld(fixture, evidence).status).toBe('consistent_fixture');
     expect(auditIsolatedWorld({ ...fixture, grants: [] }, evidence).errors).toContain('effect outside synthetic grant and branch');
+  });
+});
+
+it('transport persistence transaction commits final and alarm together, rollback keeps neither', async () => {
+  const { persistTransportWake, armAlarm } = await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(81101), async (_instance, state) => {
+    const previous = await state.storage.getAlarm();
+    const due = Date.now() + 10000;
+    await persistTransportWake(state.storage, [], due);
+    expect(state.storage.kv.get('telegram_final_outbox_due_v1')).toBe(due);
+    expect(await state.storage.getAlarm()).not.toBeNull();
+    await expect(state.storage.transaction(async txn => {
+      await txn.put({ telegram_final_outbox_v1: [{ id: 'cut' }], telegram_final_outbox_due_v1: 999 });
+      await armAlarm(txn, Date.now() + 100000);
+      throw new Error('crash before commit');
+    })).rejects.toThrow('crash before commit');
+    expect(state.storage.kv.get('telegram_final_outbox_v1')).toEqual([]);
+    expect(state.storage.kv.get('telegram_final_outbox_due_v1')).toBe(due);
+    if (previous === null) await state.storage.deleteAlarm();
+  });
+});
+
+it('due transport backlog yields every second alarm to due scheduled work', async () => {
+  const { ensureSchema } = await import('../src/tracer/schema');
+  const { Scheduler } = await import('../src/scheduler/multiplexer');
+  const { productionDeps } = await import('../src/seams/deps');
+  await runInDurableObject(doStub(81101), async (instance, state) => {
+    ensureSchema(state.storage);
+    const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+    await scheduler.schedule({ id: 'fair-reminder', kind: 'reminder', dueAt: Date.now() - 100, occurrenceAt: Date.now() - 100, payloadRefs: { reminder_id: 'fair-reminder' } });
+    // A missing note still reaches the executor and settles its scheduler run.
+    const records = [1, 2].map(i => ({ id: `fair-${i}`, trace: `fair-${i}`, payload: { chat_id: 81101, text: 'fixture' }, digest: 'fixture',
+      ownerSubject: '81101', doName: state.storage.kv.get('do_name') ?? '', status: 'pending', dueAt: 0, createdAt: Date.now(), attempts: 0 }));
+    state.storage.kv.put('telegram_final_outbox_v1', records); state.storage.kv.put('telegram_final_outbox_due_v1', 0);
+    state.storage.kv.put('transport_last_alarm', false);
+    await instance.alarm();
+    expect(scheduler.read('fair-reminder')).not.toBeNull();
+    await instance.alarm();
+    expect(scheduler.read('fair-reminder')).toBeNull();
+    expect((state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1') ?? []).filter(r => r.status === 'pending')).toHaveLength(1);
+  });
+});
+
+it('crash after reminder final enqueue before schedule complete never repeats the model executor', async () => {
+  const { Scheduler } = await import('../src/scheduler/multiplexer');
+  const { productionDeps } = await import('../src/seams/deps');
+  const { TelegramFinalOutbox } = await import('../src/channels/telegram-final-outbox');
+  await runInDurableObject(doStub(81102), async (_instance, state) => {
+    const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
+    const occurrence = Date.now() - 1000;
+    await scheduler.schedule({ id: 'cut-reminder', kind: 'reminder', dueAt: occurrence, occurrenceAt: occurrence, payloadRefs: { reminder_id: 'cut-reminder' } });
+    const queue = new TelegramFinalOutbox(state.storage.kv);
+    let modelCalls = 0;
+    await expect(scheduler.dispatchDue({ reminder: async entry => {
+      modelCalls++;
+      await queue.enqueue({ id: `cut:${entry.id}:${entry.occurrence_at}`, trace: 'cut', payload: { chat_id: 81102, text: 'frozen' }, ownerSubject: '81102', doName: '', reminder: { id: entry.id, occurrence: entry.occurrence_at, runId: 'fixture', schedulerRunId: scheduler.runningRunId(entry.id, entry.occurrence_at), once: true } });
+      const error = new Error('crash-injection: after enqueue'); error.name = 'CrashInjectionError'; throw error;
+    } })).rejects.toThrow('crash-injection: after enqueue');
+    await scheduler.dispatchDue({ reminder: async () => { modelCalls++; } });
+    expect(modelCalls).toBe(1); expect(queue.records().filter(r => r.id.startsWith('cut:'))).toHaveLength(1);
+    expect(scheduler.read('cut-reminder')).toBeNull();
+    const history = state.storage.sql.exec<{ id: string; outcome: string }>('SELECT id, outcome FROM schedule_runs WHERE schedule_id = ?', 'cut-reminder').toArray();
+    expect(history).toHaveLength(1);
+    expect(history[0]?.outcome).toBe('running');
+    const final = queue.records().find(r => r.id.startsWith('cut:'))!;
+    scheduler.settleDelivery(final.reminder!.schedulerRunId!, true);
+    const settled = state.storage.sql.exec<{ outcome: string; delivery: string }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ?', 'cut-reminder').toArray();
+    expect(settled).toEqual([{ outcome: 'ok', delivery: 'sent' }]);
   });
 });
