@@ -33,7 +33,7 @@ const fakeSql = () => {
         return { toArray: () => [...rows.values()].sort((a, b) => b.updated_at - a.updated_at) };
       }
       if (query.startsWith('INSERT INTO artifact_exports')) { exportsRows.push(args as never); return { toArray: () => [] as Row[] }; }
-      if (query.startsWith('SELECT * FROM artifact_exports')) return { toArray: () => exportsRows.filter((r) => (r as unknown[])[1] === args[0]).map((a) => { const [id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at] = a as unknown[]; return { id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at }; }) as never };
+      if (query.startsWith('SELECT * FROM artifact_exports')) return { toArray: () => exportsRows.filter((r) => (r as unknown[])[1] === args[0] && (args.length < 3 || ((r as unknown[])[2] === args[1] && (r as unknown[])[3] === args[2]))).map((a) => { const [id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at] = a as unknown[]; return { id, source_artifact_id, source_revision, format, mime_type, byte_size, sha256, r2_key, created_at }; }) as never };
       throw new Error(`unexpected query: ${query}`);
     },
   };
@@ -54,8 +54,7 @@ const args = (id: string, rev = 1, format = 'pdf') => exportArtifactArgsSchema.p
 describe('export_artifact', () => {
   it('unsupported format writes nothing', async () => {
     const { meta, ex, bins, handler } = await setup('# Hi\n\n- a');
-    const r = await handler.handle(args(meta.id, 1, 'docx')) as { data: { status: string } };
-    expect(r.data.status).toBe('unsupported_format');
+    expect(await handler.handle(args(meta.id, 1, 'docx'))).toMatchObject({ ok: false, code: 'rejected', error: expect.stringContaining("'pdf'") });
     expect(ex.rows(meta.id)).toHaveLength(0);
     expect(await bins.getBytes(`${meta.id}/r1/exp:e1`)).toBeNull();
   });
@@ -67,9 +66,12 @@ describe('export_artifact', () => {
   });
   it('too large and non-Latin text give a typed receipt and write nothing', async () => {
     const big = await setup('x '.repeat(110_000));
-    expect(await big.handler.handle(args(big.meta.id))).toMatchObject({ data: { status: 'too_large' } });
+    expect(await big.handler.handle(args(big.meta.id))).toMatchObject({ ok: false, error: expect.stringContaining('too large') });
     const dev = await setup('# नमस्ते');
-    expect(await dev.handler.handle(args(dev.meta.id))).toMatchObject({ data: { status: 'render_failed' } });
+    expect(await dev.handler.handle(args(dev.meta.id))).toMatchObject({ ok: false, error: expect.stringContaining('non-Latin') });
+    const blank = await setup('   ');
+    expect(await blank.handler.handle(args(blank.meta.id))).toMatchObject({ ok: false, error: expect.stringContaining('empty') });
+    expect(blank.ex.rows(blank.meta.id)).toHaveLength(0);
     expect(dev.ex.rows(dev.meta.id)).toHaveLength(0);
     expect(await dev.bins.getBytes(`${dev.meta.id}/r1/exp:e1`)).toBeNull();
   });
@@ -84,6 +86,14 @@ describe('export_artifact', () => {
     expect(await hex(stored)).toBe(r.data.sha256);
     expect(row).toMatchObject({ sha256: r.data.sha256, byte_size: r.data.bytes, source_revision: 1 });
     if (process.env.PDF_OUT) (await import('node:fs')).writeFileSync(process.env.PDF_OUT, stored);
+  });
+  it('a repeat export of the same revision returns the stored receipt and writes nothing new', async () => {
+    const { meta, ex, handler } = await setup('# Hi\n\ntext');
+    const first = await handler.handle(args(meta.id)) as { data: { sha256: string; deduped: boolean } };
+    const second = await handler.handle(args(meta.id)) as { data: { sha256: string; deduped: boolean } };
+    expect(first.data.deduped).toBe(false);
+    expect(second.data).toMatchObject({ sha256: first.data.sha256, deduped: true });
+    expect(ex.rows(meta.id)).toHaveLength(1);
   });
   it('owner-scoped R2 keys cannot read across owners', async () => {
     const store = new Map<string, Uint8Array>();
