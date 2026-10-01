@@ -5,7 +5,7 @@ Source: owner iMessage on 2026-10-02 at 00:10 IST, answering two yes/no question
 ## D6: sandbox tier for browser tasks - YES, for now
 - Browser tasks may run in Cloudflare Containers that sleep when idle.
 - Scope as asked: staging only, prepare-only (no payments, no signing, no submit), hard cap $5 per month.
-- The per-task cost estimate behind the cap (about $0.001 per 5-minute task) comes from an internal note and was not re-verified.
+- The $5 cap is the owner-approved limit; no per-task price is claimed or verified here.
 - "For now": revisit before any raise of the cap, any production use or any spend-bearing task.
 
 ## D4: open browsing stance - YES
