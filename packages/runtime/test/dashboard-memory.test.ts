@@ -26,8 +26,9 @@ describe('dashboard memory projection', () => {
   });
   it('forgetting rows allow only a forget retry; retired rows allow nothing; holds carry kind and reason, never words', () => {
     const out = dashboardMemory({ ...base(), forgetting: [claim({ id: 5, status: 'purging' })], retired: [claim({ id: 6, status: 'dismissed' })], holds: [{ id: 7, kind: 'secret', reason: 'looks-like-a-key', created_at: '2026-09-30T00:00:00Z' }] });
-    expect(out.forgetting[0]!.allowed_actions).toEqual(['spot.forget']);
-    expect(out.retired[0]).toMatchObject({ status: 'dismissed', allowed_actions: [] });
+    expect(out.forgetting[0]).toEqual({ id: 5, text: 'Likes window seats', status: 'purging', allowed_actions: ['spot.forget'] });
+    expect(out.retired[0]).toEqual({ id: 6, text: 'Likes window seats', status: 'dismissed', allowed_actions: [] });
+    for (const row of [out.retired[0]!, out.forgetting[0]!]) for (const field of ['evidence', 'source', 'source_id', 'provenance', 'kind', 'origin', 'valid_until', 'seen_count']) expect(row).not.toHaveProperty(field);
     expect(out.holds).toEqual([{ id: 7, kind: 'secret', reason: 'looks-like-a-key', created_at: '2026-09-30' }]);
   });
   it('profile sections pass through as inert title and lines; no csrf', () => {

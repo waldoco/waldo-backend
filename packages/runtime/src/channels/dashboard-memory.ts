@@ -33,9 +33,10 @@ export const dashboardMemory = (input: Readonly<{
   version: 1 as const,
   as_of: new Date(input.now).toISOString(),
   spots: input.spots.map((claim) => spot(claim, claim.source === 'inferred' ? ['spot.confirm', 'spot.dismiss', 'spot.forget'] : ['spot.dismiss', 'spot.forget'])),
-  retired: input.retired.map((claim) => spot(claim, [])),
-  // A removal stuck mid-scrub stays visible with a retry; forget is the only action.
-  forgetting: input.forgetting.map((claim) => spot(claim, ['spot.forget'])),
+  // Console parity: dismissed/promoted rows show only the text and status; no evidence, source or provenance.
+  retired: input.retired.map((claim) => ({ id: claim.id, text: claim.text, status: claim.status, allowed_actions: [] as readonly Action[] })),
+  // A removal stuck mid-scrub stays visible with a retry; the console shows the text and Forget, nothing else.
+  forgetting: input.forgetting.map((claim) => ({ id: claim.id, text: claim.text, status: claim.status, allowed_actions: ['spot.forget'] as readonly Action[] })),
   holds: input.holds.map((hold) => ({ id: hold.id, kind: hold.kind, reason: hold.reason, created_at: day(hold.created_at) })),
   profile: input.profile.map((section) => ({ title: section.title, lines: [...section.lines] })),
 });
