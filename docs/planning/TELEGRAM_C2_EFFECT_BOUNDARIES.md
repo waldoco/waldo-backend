@@ -35,3 +35,29 @@ For started mutating request, close then resolve success/ambiguous: durable unce
 Purge cuts at every persisted phase, including redaction failure and scope closure: resumable exact deletion, no unrelated history rewrite, no misleading completed receipt. Maintenance runs may finish deletion but never publish owner success under a closed turn.
 
 Red-first local fixtures, actual DO storage tests, exact-head actual CI jobs, independent review precede merge/stage. Live normal Telegram after stage is only smoke proof; fake clock/deferred adapters are not live physical cancellation or full 180-second provider proof. Coverage exclusions stay on issue #492 until each slice is implemented and tested.
+
+## Review requirements: order and full inventory
+
+Effect-started durable identity/storage is a prerequisite for MUTATING leaf admission, not a retrofit after the first slices. Reads may ship first with admission alone; mutation semantics remain unchanged until journal plus host settlement authority exists. Normal publication and post-close host reconciliation metadata are different capabilities. No generic allow-closed switch.
+
+Before coding enumerate existing operation/purge journals, retention/access boundaries, schema/version compatibility, size/rate and reconciliation ownership. A digest alone may not permit reconciliation; never guess success. Secret-bearing payload retention/disclosure requires explicit design. Bring exact schema/config/migration effects as choices before requesting permission; this plan approves none.
+
+Inventory to complete at leaf level (each needs request, local store, inherited capability, post-close cleanup/settlement, proof or explicit exclusion):
+
+| Family | Requests and stores to inventory | Post-close authority |
+| --- | --- | --- |
+| Google, messaging/email | token acquisition/refresh, draft, proposal, relay, pagination; desk/cache/rotating token/consent | exact-operation reconciliation only; old run cannot poison newer refreshed tokens |
+| MCP/dynamic adapters | discovery/auth/call and adapter-local stores | no generic late-call continuation |
+| Browser custody/vault | start/navigate/observe/extract/act, cookies/session/custody/vault stores | end-only captured resource generation; never newer replacement session |
+| Standing orders/scheduler | covered responder proposals, SQL notes/schedule, alarm registration | exact durable schedule phase recovery; scheduler-originated turns outside budget |
+| Health/memory/background books | captured responder book writes vs independent background owners | typed target/version deletion maintenance only |
+| Dispatcher | trustedEffect prepare/reconcile, pre/post hooks, sanitiser, offload stores | distinct host settlement metadata, no normal publication |
+| Provider/children/fanout | fallback/repair/delegated branch requests and result stores | one deadline; branch-specific operation IDs and uncertainty |
+
+Direct callback/console/scheduler-originated work is excluded from this budget, but covered responder reminder/approval/scheduler PROPOSALS are not excluded. Approval execution gets a separately grounded run and its own effect uncertainty policy.
+
+Check-to-request issuance must be synchronous with host admission, no await in the gap, including body encoding/streaming and multi-page calls. Response acceptance is not remote mutation completion. Fanout admits each branch separately; closure stops new branches and already-issued branches retain distinct identities.
+
+SQL, KV, R2 and providers cannot share a transaction. Specify durable phase/CAS and compensation or uncertainty per pair. Note plus schedule uses one local transaction where possible; alarm registration is another durability boundary. Purge checks phase/version plus exact authorized targets before every write, CAS against current rows; key reuse never permits deleting a later unrelated row.
+
+Additional red-first proof: post-close token write, captured resource replacement, competing purge-version/history rewrite, failed fanout branch, marker storage failure yields ZERO remote calls, late remote success permits only host-owned exact-operation receipt and no normal final. No universal/no-late-provider claim until every inventory row is implemented or explicitly excluded.
