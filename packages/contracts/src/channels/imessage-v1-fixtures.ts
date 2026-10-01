@@ -1,7 +1,7 @@
 import { iMessageEventSchema, iMessageCommandSchema, type IMessageBinding } from './imessage-v1';
 export const syntheticIMessageBinding: IMessageBinding = {
   ownerId: 'fixture-owner', presenceId: 'fixture-presence', subject: 'owner@example.invalid',
-  bridgeId: 'fixture-bridge', accountId: 'fixture-account', chatGuid: 'iMessage;-;fixture-chat', verified: true, service: 'iMessage',
+  bridgeId: 'fixture-bridge', accountId: 'fixture-account', chatGuid: 'iMessage;-;fixture-chat', verified: true, conversationKind: 'direct', service: 'iMessage',
 };
 const base = {
   version: 1, bridgeId: 'fixture-bridge', accountId: 'fixture-account',

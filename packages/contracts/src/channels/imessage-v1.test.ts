@@ -59,3 +59,7 @@ it('rejects empty sends, invalid formatting ranges and path-bearing filenames', 
     expect(iMessageEventSchema.safeParse({ ...syntheticIMessageEvents.audio, attachments: [{ ...syntheticIMessageEvents.audio.attachments[0], filename }] }).success).toBe(false);
   }
 });
+it('requires a declared trusted audience without deriving it from opaque chat GUIDs', () => {
+  const c = syntheticIMessageCommand();
+  expect(iMessageCommandSchema.safeParse({ ...c, binding: { ...c.binding, conversationKind: undefined } }).success).toBe(false);
+});

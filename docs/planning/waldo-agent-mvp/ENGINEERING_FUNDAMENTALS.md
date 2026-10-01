@@ -194,3 +194,6 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 ### iMessage protocol scaffold
 - Reject empty outbound content, formatting outside text and path-bearing filenames at the versioned schema. Synthetic adversarial tests must reject these before native transport; local database evidence never means recipient delivery.
 - At admitted plural-media seams, reject singleton/array ambiguity and let the existing model schema reject excess files before memory/model effects; never silently drop or reorder attachments. Keep source references separate from loaded bytes and test the mocked model boundary.
+- Recheck durable command identity/digest/state inside the journal transaction after any awaited capability probe; test delayed concurrent identical and conflicting requests so one immutable command never executes twice.
+- Gate sticker files separately from ordinary files, and carry a trusted explicit audience discriminator instead of guessing opaque GUIDs. Group bindings remain rejected until owner membership/audience policy exists.
+- Relay ACK/cursor follows atomic storage commit; SQLite write-fault tests must show zero event/nonce/cursor delta. Timeout/crash quarantine survives reopen and late callbacks, while independent account/read lanes remain available.

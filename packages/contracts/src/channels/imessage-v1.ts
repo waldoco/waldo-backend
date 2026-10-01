@@ -41,7 +41,7 @@ export const iMessageEventSchema = z.discriminatedUnion('kind', [
 export type IMessageEvent = z.infer<typeof iMessageEventSchema>;
 export const iMessageBindingSchema = z.strictObject({
   ownerId: id, presenceId: id, subject: id, bridgeId: id, accountId: id, chatGuid: id,
-  verified: z.literal(true), service: z.literal('iMessage'),
+  verified: z.literal(true), conversationKind: z.enum(['direct', 'group']), service: z.literal('iMessage'),
 });
 export type IMessageBinding = z.infer<typeof iMessageBindingSchema>;
 const bound = { version: z.literal(1), commandId: id, ownerId: id, binding: iMessageBindingSchema, target: iMessageTargetSchema, service: z.literal('iMessage'), allowSMSFallback: z.literal(false) };

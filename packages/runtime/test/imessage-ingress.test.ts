@@ -38,3 +38,6 @@ describe('iMessage admitted seam fail closed', () => {
     expect(() => ownerTurnAttachments({ ...turn, attachments: [a, a, a, a, a] })).toThrow();
   });
 });
+it('rejects group audience declared by the trusted binding even when event claims private', () => {
+  expect(() => admittedIMessageTurn(syntheticIMessageEvents.text, { ...syntheticIMessageBinding, conversationKind: 'group' })).toThrow();
+});
