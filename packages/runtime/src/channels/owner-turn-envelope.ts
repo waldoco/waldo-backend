@@ -1,5 +1,5 @@
 import type { RunEffectScope } from './run-effect-scope';
-import type { LLMAttachment } from '@waldo/contracts';
+import { llmRequestSchema, type LLMAttachment } from '@waldo/contracts';
 import type { TurnTimer } from './owner-turn-types';
 import type { turnControl } from './turn-control';
 
@@ -27,6 +27,10 @@ export type OwnerTurnEnvelope = Readonly<{
   mediaNote?: string;
   replyTo?: ReplyContext;
   attachment?: LLMAttachment;
+  attachments?: readonly LLMAttachment[];
+  attachmentRefs?: readonly Readonly<{ reference: string; sourceMessageId: string; filename: string; mimeType: string; byteLength: number; sha256: string; caption?: string; kind: string; nativeVoice: boolean }>[];
+  messageRef?: Readonly<{ id: string; conversationRef: string; bridgeRef?: string; accountRef?: string; partIndex?: number; threadOriginatorId?: string }>;
+  service?: string;
   // Set by the channel host. When false, this turn skips its immediate memory write. Nightly consolidation and history indexing are separate and unaffected.
   memoryWrites?: boolean;
   runScope?: RunEffectScope;
@@ -45,3 +49,10 @@ export type OwnerResponder = Readonly<{
 
 // Host-selected surface, never inferred from owner text or transport payload.
 export const ownerTurnTrace = (surface: string, updateId: number): string => surface === 'telegram' ? `tg-${updateId}` : `${surface}-${updateId}`;
+
+export const ownerTurnAttachments = (turn: OwnerTurnEnvelope): readonly LLMAttachment[] | undefined => {
+  if (turn.attachment !== undefined && turn.attachments !== undefined) throw new Error('ambiguous turn media');
+  const attachments = turn.attachments ?? (turn.attachment ? [turn.attachment] : undefined);
+  if (!attachments?.length) return undefined;
+  return llmRequestSchema.shape.attachments.parse([...attachments]);
+};

@@ -193,3 +193,4 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 
 ### iMessage protocol scaffold
 - Reject empty outbound content, formatting outside text and path-bearing filenames at the versioned schema. Synthetic adversarial tests must reject these before native transport; local database evidence never means recipient delivery.
+- At admitted plural-media seams, reject singleton/array ambiguity and let the existing model schema reject excess files before memory/model effects; never silently drop or reorder attachments. Keep source references separate from loaded bytes and test the mocked model boundary.

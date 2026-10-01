@@ -10,11 +10,12 @@ export type OwnerDirectoryEnv = Readonly<{
 
 // Providers with a presence row: telegram (numeric chat id), whatsapp (E.164 digits).
 export type PresenceProvider = 'telegram' | 'whatsapp';
+export type PresenceLookupProvider = PresenceProvider | 'imessage';
 
 export type RedemptionOutcome = { kind: 'redeemed' | 'rejected' | 'uncertain' };
 export type OwnerDirectory = Readonly<{
   redeemHashed?(provider: PresenceProvider, subject: string, hash: string): Promise<RedemptionOutcome>;
-  byPresence(provider: PresenceProvider, subject: string): Promise<OwnerRoute | null>;
+  byPresence(provider: PresenceLookupProvider, subject: string): Promise<OwnerRoute | null>;
   redeem(provider: PresenceProvider, subject: string, code: string): Promise<OwnerRoute | null>;
 }>;
 
@@ -72,7 +73,7 @@ export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch,
 export const ownerDirectory = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch, now = () => Date.now()): OwnerDirectory => {
   const call = signedRpc(env, fetcher, now);
   if (!call) return deployOwner(env);
-  const byPresence = async (provider: PresenceProvider, subject: string): Promise<OwnerRoute | null> => {
+  const byPresence = async (provider: PresenceLookupProvider, subject: string): Promise<OwnerRoute | null> => {
     const [row] = (await call('route_presence', `route.${provider}.${subject}`, { p_provider: provider, p_subject: subject })) as RouteRow[];
     return row ? { doName: row.do_name, subject: row.subject, timezone: row.timezone } : null;
   };
