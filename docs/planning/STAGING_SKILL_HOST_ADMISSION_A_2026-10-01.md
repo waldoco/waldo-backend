@@ -63,3 +63,19 @@ Public design evidence, fetched October 1:
 - https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents describes just-in-time context retrieval principles. General guidance, not Waldo runtime evidence.
 
 No proprietary competitor internals are assumed or reproduced. This amendment is docs-only, with no merge, seed, schema migration, provider request or production activation.
+
+
+## Identity mapping amendment (source review at bae1fb56, docs only)
+Premise verified in source: createOwnerResponder derives its invocation, ownerId, cacheKey and safety authenticatedUserId from localTrustedBriefScheduleInput(), a fixed fixture. The directory RouteRow is {do_name, subject, timezone}. A stable identity exists in storage: waldo.owners has id (uuid primary key), unique do_name, auth_user_id, and state (active or suspended). route_presence does not return owners.id, so it never reaches the runtime. This is a design record, not an implementation or a live check.
+
+Option (a), preferred: extend the signed route lookup (new signed RPC or a changed route_presence) to also return owners.id. principal_ref derives from owners.id under a fixed namespace. tenant_ref is a separately reviewed value; "one owner per tenant" is an explicit policy decision, not a string derivation. This needs a Supabase migration. It is an OWNER-GO ITEM and nothing here applies it. Pgtap coverage for the new function and for suspended or unlinked owners is part of that slice.
+
+Option (b), fallback: use do_name as the principal key with no migration. It is unique, and in the migrations reviewed it is only referenced, never updated. Weaker, because it is the Durable Object routing label rather than a persistent id. Permitted only behind the fail-closed staging allowlist, and it must be replaced by (a) before any wider enablement.
+
+Required in either option:
+1. Bind together principal_ref, tenant_ref and the DO name from one verified directory result. The invocation, cacheKey and authenticatedUserId must come from that mapping. Today joined-path.ts compares invocation.principal_ref with authenticatedOwnerId, which holds by construction for the fixture, so that check proves nothing yet.
+2. Recheck owner state at resume. route_presence returns only active presences of active owners. Unlink, suspend and replace semantics for an in-flight run, and for any cached snapshot, are unspecified and must be tested.
+3. The staging allowlist names exact owner ids (or do_names for option b), never an env flag or channel hint.
+4. connectorSkills[] and the mutable repository reader are empty in the local composer. The current-connector snapshot has no source until the mapping and a connections read (waldo.owner_id_for exists for connections) are wired. Do not populate it from fixtures.
+5. Existing active-row count against the 24-row limit is read from the repository at activation, not hard-coded.
+Red-first proofs added: suspended owner, unlinked presence, two owners sharing a subject string, do_name reused after unlink, resume after revocation, fixture principal rejected on staging.
