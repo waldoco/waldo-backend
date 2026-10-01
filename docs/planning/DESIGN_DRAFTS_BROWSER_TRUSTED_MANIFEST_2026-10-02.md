@@ -4,14 +4,14 @@ Status: DESIGN ONLY. No code, no DO edits, no deploy, nothing run. Layer is SOUR
 
 ## 1. Browser-task adapter (prepare-only, staging)
 
-What exists: `browse_page` (read-only, public pages) and `browse_act` in `tools/live/browser.ts`, Stagehand hosted API, keys server-side, provider diagnostics never relayed. `browse_act` submits go through `approvals.proposeBrowserSubmit`, so a submit becomes an owner approval card rather than executing. The wiring audit (`waldo-wiring-audit-2026-10-02.md`, section 4, "The five blocked skills" line) lists `browser-task` as blocked with "needs vault, test account" (section 8 repeats "vault for browser-task").
+What exists: `browse_page` (read-only, public pages) and `browse_act` in `tools/live/browser.ts`, Stagehand hosted API, keys server-side, provider diagnostics never relayed. `browse_act` submits go through `approvals.proposeBrowserSubmit`, so a submit becomes an owner approval card rather than executing. An internal wiring audit (not committed to this repo, so not cited by path) lists `browser-task` as blocked on a vault entry and a test account.
 
 Proposal, prepare-only:
 1. Scope: the adapter drives a page up to, never through, the final submit. Output is a typed prepared-action record (target origin, field values entered, the exact submit control identified, a screenshot reference). The record is shown on the existing approval card. Executing the submit stays the owner's Do it on that card, as today.
 2. Credentials: any login uses a vault entry requested through a vault link; no secret in chat, tool args or model text. A test account is created by the owner, not by Waldo.
 3. Origin allowlist: the adapter refuses origins not on a staging allowlist. Money, signing and account-changing flows are out of scope for this adapter.
 4. Taint: page content is external; results are stamped external like other read tools.
-Unknown: whether `browse_act` already exposes a "stop before submit" mode or only act-and-propose; how screenshots would be stored (the new binary store from #539 could hold them, not decided). Needs the owner's decision on a test account and vault entry before any live run.
+Answered from source: `browse_act` (`tools/live/browser.ts` lines 78-81) already treats submit-like actions as irreversible, including submit, pay, order, send, delete, sign up, register and log in, stops the run (`irreversible_blocked`) and routes them to an approval card (`approval_pending`). So a stop-before-submit mode exists today, and login steps are gated the same way: a vault-based login cannot run silently inside this adapter. The design must either accept one approval card per login or define a separate, reviewed login path. The gate is a text match on the action description, kept as a hard safety line per the code comment. Still unknown: how screenshots would be stored (the binary store from #539 could hold them, not decided). Needs the owner's decision on a test account and vault entry before any live run.
 
 ## 2. Trusted-person coordination (identity mapping option (b))
 
