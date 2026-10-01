@@ -38,11 +38,20 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 // external-tainted privileged calls outright.
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 // Facts only, from the applied outcome. Nothing here is model-written.
-const memoryReceipt = (outcome: ClaimOutcome): string => {
-  const parts = [`stored ${outcome.written} new claim${outcome.written === 1 ? '' : 's'}${outcome.downgraded ? ` (${outcome.downgraded} kept only as inferred, not as the owner's stated fact)` : ''}`];
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number): string => {
+  const parts = [`stored ${plural(outcome.written, 'new claim', 'new claims')}${outcome.downgraded ? ` (${outcome.downgraded} kept only as inferred, not as the owner's stated fact)` : ''}`];
   if (outcome.held) parts.push(`held ${outcome.held} not stored${outcome.holdReasons.length ? ` (${outcome.holdReasons.join(', ')})` : ''}`);
-  if (outcome.forgot) parts.push(`forgot ${outcome.forgot} at the owner's request${outcome.purgeIncomplete.length ? `; removal incomplete in ${outcome.purgeIncomplete.join(', ')}` : '; removed from stored memory (the saved conversation text is redacted separately and is not covered by this line)'}`);
-  else if (outcome.forgetAllowed) parts.push('the owner asked to forget something but nothing was forgotten');
+  if (outcome.corrected) parts.push(`corrected ${plural(outcome.corrected, 'claim', 'claims')}`);
+  if (outcome.confirmed) parts.push(`confirmed ${plural(outcome.confirmed, 'claim', 'claims')}`);
+  if (outcome.dismissed) parts.push(`dismissed ${plural(outcome.dismissed, 'claim', 'claims')}`);
+  if (outcome.forgetClaimsRemoved) {
+    parts.push(`removed ${plural(outcome.forgetClaimsRemoved, 'claim', 'claims')} from stored memory at the owner's request${conversationLeft ? `, but ${plural(conversationLeft, 'saved conversation entry still contains', 'saved conversation entries still contain')} it` : ''}`);
+  } else if (outcome.forgetClaimsAttempted) {
+    parts.push(`tried to remove ${plural(outcome.forgetClaimsAttempted, 'claim', 'claims')} at the owner's request but removal is incomplete${outcome.purgeIncomplete.length ? ` in ${outcome.purgeIncomplete.join(', ')}` : ''}`);
+  }
+  if (outcome.forgetNodes) parts.push(`asked the store to delete ${plural(outcome.forgetNodes, 'pattern node', 'pattern nodes')} (not separately verified)`);
+  if (outcome.forgetAllowed && !outcome.forgetClaimsAttempted && !outcome.forgetNodes) parts.push('the owner asked to forget something but nothing was forgotten');
   return `${parts.join('; ')}.`;
 };
 
@@ -237,7 +246,7 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Describe saves and forgets only as listed here.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
@@ -328,14 +337,17 @@ export const createOwnerResponder = (
       let purgeIds: readonly number[] = [];
       let outcome: ClaimOutcome | undefined;
       const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared }, undefined, (result) => { outcome = result; });
-      const o = outcome as ClaimOutcome | undefined;
-      if (o !== undefined && (o.written || o.held || o.downgraded || o.forgot || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o));
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
       // Settle only once the KV conversation/ledger stores verify clean too; a KV
       // survivor leaves the claim 'purging' so a later retry can still find it.
-      if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
+      const settled = purgeIds.length === 0 || (conv === null || conv.remaining === 0);
+      if (purgeIds.length && settled) memory.settle(purgeIds);
+      // The receipt is emitted only now, after redaction and settle, so it can state what is true.
       const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
+      // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
+      const o = outcome as ClaimOutcome | undefined;
+      if (o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, purgeIds.length > 0 && !settled ? conv?.remaining ?? 0 : 0));
       return 'saved';
     } catch (error) {
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error', detail: stage });
@@ -366,17 +378,20 @@ export const createOwnerResponder = (
       } finally {
         turnWriting = false;
         turnNotice = '';
+        memoryReceipts.length = 0;
         turnReplyContext = '';
       }
     },
     async remind(id, conversationRef, note, time, surface) {
       await restored;
       pending = undefined;
+      memoryReceipts.length = 0;
       return converse(id, conversationRef, `[Reminder due now, set earlier by the owner: "${note}"] Send the reminder briefly in your own words. Do not add a sentence explaining that they asked for it.`, time, false, surface);
     },
     async prompt(id, conversationRef, said, time, surface) {
       await restored;
       pending = undefined;
+      memoryReceipts.length = 0;
       return converse(id, conversationRef, said, time, false, surface);
     },
     async consolidate(trace, day, sides) {
