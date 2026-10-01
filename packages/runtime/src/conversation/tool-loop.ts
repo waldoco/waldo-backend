@@ -141,7 +141,7 @@ export async function runToolLoop(input: Readonly<{
         }
       }
       seen.add(key);
-      const receipt = receiptUrl(result);
+      const receipt = receiptUrl(call.name, result);
       if (receipt !== null) receiptUrls.add(receipt);
       if (result.ok && mutationTools.has(call.name as never)) {
         noProgressTriples.clear();
