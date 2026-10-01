@@ -1,5 +1,6 @@
 import { ownerDirectory, type OwnerDirectory, type OwnerDirectoryEnv } from '../identity/owner-directory';
-import { createTelegramCaller } from './telegram-api';
+import {parseCodedSetup} from './telegram-link-command';
+import {linkCodeHash} from '../identity/owner-directory';
 
 export type TelegramWebhookEnv = Readonly<{
   TELEGRAM_OWNER_DO?: DurableObjectNamespace;
@@ -55,12 +56,6 @@ const sender = (update: SenderUpdate): string | null => {
   return id === undefined ? null : String(id);
 };
 
-const linkCode = (update: SenderUpdate): string | null => {
-  if (update.message?.chat?.type !== 'private') return null;
-  const [command, code] = (update.message.text ?? '').trim().split(/\s+/, 2);
-  return (command === '/start' || command === '/link') && code ? code : null;
-};
-
 // The webhook resolves which owner a Telegram sender belongs to and wakes only that owner's Durable Object.
 // A sender with no owner can only redeem a one-time link code issued from the console.
 export const handleTelegramWebhook = async (
@@ -84,6 +79,26 @@ export const handleTelegramWebhook = async (
   if (!subject) return new Response('ok');
   const owners = env.TELEGRAM_OWNER_DO;
   const origin = new URL(request.url).origin;
+  const coded = parseCodedSetup(update);
+  if (coded) {
+    const bot = env.TELEGRAM_BOT_TOKEN?.split(':')[0];
+    if (!bot || !/^\d+$/.test(bot) || !env.RESPONSIBILITY_RATE_LIMITER) return new Response('admission unavailable', { status: 503 });
+    try {
+      // Edge guard necessarily precedes durable duplicate lookup/DO allocation.
+      const senderOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `telegram-link-sender:${bot}:${coded.subject}` })).success;
+      const botOk = (await env.RESPONSIBILITY_RATE_LIMITER.limit({ key: `telegram-link-bot:${bot}` })).success;
+      if (!senderOk || !botOk) return new Response('too many requests', { status: 429 });
+      const name = `telegram-link:${bot}:${coded.subject}`;
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(body)))].map(x=>x.toString(16).padStart(2,'0')).join(''); // exact full-update digest
+      const hash = await linkCodeHash(coded.code);
+      const admission = await owners.get(owners.idFromName(name)).fetch('https://telegram-link/enqueue-link', {
+        method: 'POST', signal: AbortSignal.timeout(10_000),
+        headers: { 'x-waldo-inbox-secret': secret },
+        body: JSON.stringify({ bot, subject: coded.subject, name, id: coded.updateId, digest, hash }),
+      });
+      return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
+    } catch { return new Response('admission unavailable', { status: 503 }); }
+  }
   let route;
   try { route = await directory.byPresence('telegram', subject); }
   catch { return new Response('route unavailable', { status: 503 }); }
@@ -96,15 +111,6 @@ export const handleTelegramWebhook = async (
       return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
     } catch { return new Response('admission unavailable', { status: 503 }); }
   }
-  // Unknown/link redemption is deliberately outside supported-owner durable admission.
-  waitUntil((async () => {
-    const code = linkCode(update);
-    if (!code || !env.TELEGRAM_BOT_TOKEN) return undefined;
-    const linked = await directory.redeem('telegram', subject, code).catch(() => null);
-    return createTelegramCaller(env.TELEGRAM_BOT_TOKEN)('sendMessage', {
-      chat_id: Number(subject),
-      text: linked ? 'Linked. This chat now talks to your Waldo.' : 'That code did not work. Get a new one from your console.',
-    });
-  })().catch((error: unknown) => console.log(JSON.stringify({ hop: 'telegram_route', ok: false, error: String(error) }))));
+  // Unknown non-coded/unsupported setup is ignored, never model input.
   return new Response('ok');
 };

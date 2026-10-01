@@ -1,3 +1,6 @@
+import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
+import {drainLinkReceipt} from './telegram-link-controller';
+import {ownerDirectory} from '../identity/owner-directory';
 import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
@@ -309,7 +312,46 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
 
+  private async enqueueLink(request: Request): Promise<Response> {
+    const secret=this.env.TELEGRAM_WEBHOOK_SECRET;
+    if(request.method!=='POST'||!secret||!sameSecret(request.headers.get('x-waldo-inbox-secret')??'',secret))return new Response('forbidden',{status:403});
+    // No ad-hoc 2048 limit: same source-bound64KB update ingress cap as owner enqueue.
+    const raw=await request.text();if(raw.length>64_000)return new Response('too large',{status:413});
+    let data:LinkBinding & {id:number;digest:string;hash:string};try{data=JSON.parse(raw)}catch{return new Response('bad request',{status:400})}
+    const bot=this.env.TELEGRAM_BOT_TOKEN?.split(':')[0];
+    if(!data||data.bot!==bot||!/^\d+$/.test(data.bot)||!/^\d+$/.test(data.subject)||data.name!==`telegram-link:${bot}:${data.subject}`||!Number.isSafeInteger(data.id)||data.id<0||!/^[a-f0-9]{64}$/.test(data.digest)||!/^[a-f0-9]{64}$/.test(data.hash)||!this.env.TELEGRAM_OWNER_DO||this.env.TELEGRAM_OWNER_DO.idFromName(data.name).toString()!==this.ctx.id.toString())return new Response('forbidden',{status:403});
+    try{const result=await new TelegramLinkInbox(this.ctx.storage).admit({bot:data.bot,subject:data.subject,name:data.name},data.id,data.digest,data.hash);return new Response(result==='conflict'?'conflict':'ok',{status:result==='conflict'?409:result==='capacity'?503:200});}catch{return new Response('admission unavailable',{status:503})}
+  }
+  private async drainLink(mode:LinkBinding):Promise<void>{
+    const live=()=>{const stored=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);return this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]===mode.bot&&stored?.name===mode.name&&stored.bot===mode.bot&&stored.subject===mode.subject&&this.env.TELEGRAM_OWNER_DO?.idFromName(mode.name).toString()===this.ctx.id.toString();};
+    const inbox=new TelegramLinkInbox(this.ctx.storage);
+    try{
+      await inbox.maintain();
+      await drainLinkReceipt(inbox,ownerDirectory(this.env),live,mode.subject);
+      // Routing transport uses the same bounded outbox policy, not owner setup.
+      const transport=new TelegramFinalOutbox(this.ctx.storage.kv,Date.now,(rows,due)=>persistTransportWake(this.ctx.storage,rows,due));
+      const deliver={allowed:async (r:FinalRecord)=>live()&&r.bot===mode.bot&&r.ownerSubject===mode.subject&&r.doName===mode.name,send:(p:import('./telegram-final-outbox').FinalPayload)=>createTelegramCaller(this.env.TELEGRAM_BOT_TOKEN!)('sendMessage',p),settled:async()=>{}};
+      // Delivery gets a slot before transfer. A full outbox cannot starve its own
+      // drain behind an enqueue failure; one frozen transfer per alarm is fair.
+      await transport.drain(deliver);
+      const row=(await inbox.records()).find(r=>r.state==='frozen'&&r.text);
+      if(row){
+        try{
+          await transport.enqueue({id:`link:${mode.bot}:${row.id}`,trace:`link:${row.id}`,payload:{chat_id:Number(mode.subject),text:row.text!},bot:mode.bot,ownerSubject:mode.subject,doName:mode.name,expiresAt:row.frozenAt!+5*60_000});
+          await inbox.complete(row.id);
+        }catch(error){if(!(error instanceof Error)||error.message!=='final outbox capacity')throw error;}
+      }
+
+    }finally{
+      const {rearmSharedAlarm}=await import('../scheduler/alarm-slot');
+      await rearmSharedAlarm(this.ctx.storage,null,Date.now());
+    }
+  }
   override async fetch(request: Request): Promise<Response> {
+    const path=new URL(request.url).pathname;
+    if(path==='/enqueue-link')return this.enqueueLink(request);
+    if(this.ctx.storage.kv.get(LINK_MODE))return new Response('not found',{status:404});
+
     if (new URL(request.url).pathname === '/enqueue') return this.enqueue(request);
     const doName = request.headers.get('x-waldo-do-name');
     if (doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
@@ -601,6 +643,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   }
 
   override async alarm(): Promise<void> {
+    const mode=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);
+    if(mode){await this.serial(()=>this.drainLink(mode));return;}
     await this.serial(async () => {
       const { scheduler, fire, beat, nightly, briefs, cards, fireOrder, ready, log, finalOutbox, settleFinal, call, owner } = this.setup();
       await ready;

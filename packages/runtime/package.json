@@ -15,7 +15,7 @@
     "test:mutation:delivery-gate": "stryker run stryker.delivery-gate.config.mjs",
     "test:mutation:context-composer": "stryker run stryker.context-composer.config.mjs",
     "test:scenarios": "vitest run --config vitest.scenarios.config.ts",
-    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts"
+    "test:owner-ingress": "vitest run --config vitest.owner-ingress.config.ts && vitest run --config vitest.link-routing.config.ts"
   },
   "dependencies": {
     "@cloudflare/playwright": "1.3.6",
