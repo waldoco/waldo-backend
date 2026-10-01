@@ -50,8 +50,13 @@ describe('google oauth state', () => {
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/gmail.compose',
       'https://www.googleapis.com/auth/tasks',
+      'https://www.googleapis.com/auth/drive.readonly',
+      'https://www.googleapis.com/auth/documents.readonly',
+      'https://www.googleapis.com/auth/spreadsheets.readonly',
+      'https://www.googleapis.com/auth/presentations.readonly',
     ]);
-    expect(scopes.join(' ')).not.toMatch(/drive|documents|spreadsheets|presentations|contacts|gmail\.modify/);
+    // Read-only Workspace set only: no write, file or contacts scope.
+    expect(scopes.join(' ')).not.toMatch(/drive\.file|auth\/drive |auth\/documents |auth\/spreadsheets |auth\/presentations |contacts|gmail\.modify/);
     expect(url.searchParams.get('redirect_uri')).toBe(app.redirectUri);
   });
 });

@@ -21,8 +21,10 @@ describe('Drive read-only MCP slice (source only)', () => {
     expect(googleHas(['https://www.googleapis.com/auth/drive.file'], 'drive')).toBe(false);
   });
 
-  it('consent still does not ask for Drive: the scope change is a separate owner-approved step', () => {
-    expect(GOOGLE_CONSENT_SCOPES.some((scope) => scope.includes('drive'))).toBe(false);
+  it('consent asks once for the read-only Workspace set and never a write scope', () => {
+    for (const scope of [DRIVE, 'https://www.googleapis.com/auth/documents.readonly', 'https://www.googleapis.com/auth/spreadsheets.readonly', 'https://www.googleapis.com/auth/presentations.readonly']) expect(GOOGLE_CONSENT_SCOPES).toContain(scope);
+    for (const scope of ['documents', 'spreadsheets', 'presentations', 'drive', 'drive.file']) expect(GOOGLE_CONSENT_SCOPES).not.toContain(`https://www.googleapis.com/auth/${scope}`);
+    expect(new Set(GOOGLE_CONSENT_SCOPES).size).toBe(GOOGLE_CONSENT_SCOPES.length);
   });
 
   it('connect intent can name drive as the missing feature', () => {
@@ -94,5 +96,14 @@ describe('Drive read-only MCP slice (source only)', () => {
     const handler = callMcpToolHandler(JSON.stringify([plain]), undefined, auth);
     const out = await handler.handle({ server: 'g', tool: 't', args: {} }, {} as never);
     if (!out.ok) expect(out.connect?.feature).toBeUndefined();
+  });
+  it.each([['docs', 'documents.readonly'], ['sheets', 'spreadsheets.readonly'], ['slides', 'presentations.readonly']] as const)('%s needs its read scope plus drive.readonly and legacy grants never hold it', (feature, scope) => {
+    const own = `https://www.googleapis.com/auth/${scope}`;
+    expect(isGoogleFeature(feature)).toBe(true);
+    expect(googleHas([DRIVE, own], feature)).toBe(true);
+    expect(googleHas([own], feature)).toBe(false);
+    expect(googleHas([DRIVE], feature)).toBe(false);
+    expect(googleHas(null, feature)).toBe(false);
+    expect(connectIntentSchema.safeParse({ status: 'auth_required', service: 'google', reason: 'scope_missing', feature }).success).toBe(true);
   });
 });

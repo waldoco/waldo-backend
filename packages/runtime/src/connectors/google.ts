@@ -9,18 +9,23 @@ export const GOOGLE_FEATURE_SCOPES = {
   availability: [`${AUTH}calendar.events.freebusy`],
   mail: [`${AUTH}gmail.readonly`, `${AUTH}gmail.send`, `${AUTH}gmail.compose`],
   tasks: [`${AUTH}tasks`],
-  // Read-only Drive for the Drive MCP server. Deliberately NOT in GOOGLE_CONSENT_SCOPES: asking for it
-  // is a separate owner-approved Google Cloud/consent change.
+  // Read-only Workspace scopes for Google's MCP servers (draft: takes effect only when the owner deploys it
+  // and reconnects). Write scopes stay out until a separate approval-gated slice.
   drive: [`${AUTH}drive.readonly`],
+  docs: [`${AUTH}drive.readonly`, `${AUTH}documents.readonly`],
+  sheets: [`${AUTH}drive.readonly`, `${AUTH}spreadsheets.readonly`],
+  slides: [`${AUTH}drive.readonly`, `${AUTH}presentations.readonly`],
 } as const;
 export type GoogleFeature = keyof typeof GOOGLE_FEATURE_SCOPES;
+// Never granted implicitly: legacy null-scope grants do not hold these.
+const WORKSPACE_READ_FEATURES: readonly GoogleFeature[] = ['drive', 'docs', 'sheets', 'slides'];
 export const isGoogleFeature = (value: string): value is GoogleFeature => Object.hasOwn(GOOGLE_FEATURE_SCOPES, value);
 // Legacy null grants retain old features, never a newly introduced availability scope.
 export const googleHas = (scopes: readonly string[] | null | undefined, feature: GoogleFeature): boolean =>
   feature === 'availability'
     ? ['calendar.events.freebusy','calendar.freebusy','calendar.readonly','calendar'].some(scope => scopes?.includes(`${AUTH}${scope}`) ?? false)
-    : feature === 'drive'
-      ? GOOGLE_FEATURE_SCOPES.drive.every((scope) => scopes?.includes(scope) ?? false)
+    : WORKSPACE_READ_FEATURES.includes(feature)
+      ? GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false)
       : scopes === null || GOOGLE_FEATURE_SCOPES[feature].every((scope) => scopes?.includes(scope) ?? false);
 
 export const GOOGLE_CALLBACK_PATH = '/oauth/google/callback';
@@ -72,7 +77,7 @@ export async function readConsentState(secret: string, state: string): Promise<R
   return (await sign(secret, `${owner}.${nonce}`)) === mac ? { owner, nonce } : null;
 }
 
-export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks];
+export const GOOGLE_CONSENT_SCOPES: readonly string[] = ['openid', 'email', ...GOOGLE_FEATURE_SCOPES.calendar, ...GOOGLE_FEATURE_SCOPES.availability, ...GOOGLE_FEATURE_SCOPES.mail, ...GOOGLE_FEATURE_SCOPES.tasks, ...new Set([...GOOGLE_FEATURE_SCOPES.drive, ...GOOGLE_FEATURE_SCOPES.docs, ...GOOGLE_FEATURE_SCOPES.sheets, ...GOOGLE_FEATURE_SCOPES.slides])];
 
 export function googleConsentUrl(app: GoogleApp, state: string, codeChallenge: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
