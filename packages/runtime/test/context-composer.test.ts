@@ -1524,9 +1524,9 @@ describe('ContextComposer', () => {
     // The hash re-pins when the composed prompt legitimately changes (send_email joined the
 // user_message ACL ceiling wording, 2026-09-25; delegate_task joined it, 2026-09-26; the A9
 // health tools joined it, 2026-09-27; the A7 standing-order tools the A1 gmail tools and the A5 artifact tools joined it, 2026-09-27);
-// query_availability and read_owner_context joined it 2026-09-30.
+// query_availability and read_owner_context joined it 2026-09-30. read_mcp_tool joined it 2026-10-02.
 // determinism is proven by first===second above.
-    expect(first.checkpoint.context_ref).toBe('ctx_8966bed285c580411d26e989843b83f0');
+    expect(first.checkpoint.context_ref).toBe('ctx_5ce0e2143c1085136dffbe93ab10ec86');
     expect(first.prompt.indexOf('Workspace source key a- marker.')).toBeLessThan(
       first.prompt.indexOf('Workspace source key a: marker.'),
     );

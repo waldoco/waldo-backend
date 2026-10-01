@@ -34,7 +34,7 @@ const triggersGranting = (tool: string): readonly string[] =>
   );
 
 describe('toolName', () => {
-  it('is exactly the 57 canonical tools, in order', () => {
+  it('is exactly the 58 canonical tools, in order', () => {
     expect(toolNameSchema.options).toEqual([
       'get_crs',
       'get_health',
@@ -58,6 +58,7 @@ describe('toolName', () => {
       'list_artifacts',
       'read_artifact',
       'call_mcp_tool',
+      'read_mcp_tool',
       'write_task',
       'update_task',
       'draft_document',
@@ -234,6 +235,7 @@ describe('TOOL_PERMISSIONS', () => {
         'list_artifacts',
         'read_artifact',
         'call_mcp_tool',
+        'read_mcp_tool',
         'write_task',
         'update_task',
         'draft_document',
@@ -281,16 +283,20 @@ describe('TOOL_PERMISSIONS', () => {
     });
   });
 
-  it('grants no trigger the full surface — user_message tops out at 56 of 57', () => {
+  it('grants no trigger the full surface — user_message tops out at 57 of 58', () => {
     for (const trigger of triggerTypeSchema.options) {
       expect(TOOL_PERMISSIONS[trigger].length).toBeLessThan(toolNameSchema.options.length);
     }
-    expect(TOOL_PERMISSIONS.user_message).toHaveLength(56);
+    expect(TOOL_PERMISSIONS.user_message).toHaveLength(57);
   });
 
   it("keeps 'execute_code' typed but dispatchable nowhere (ADR-0050)", () => {
     expect(toolNameSchema.options).toContain('execute_code');
     expect(triggersGranting('execute_code')).toEqual([]);
+  });
+
+  it("grants 'read_mcp_tool' only in user_message, a read-only allowlisted bridge that is not privileged", () => {
+    expect(triggersGranting('read_mcp_tool')).toEqual(['user_message']);
   });
 
   it("grants 'call_mcp_tool' only in user_message — MCP is a gated bridge, not a bypass (ADR-0049)", () => {

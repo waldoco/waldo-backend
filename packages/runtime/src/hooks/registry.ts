@@ -169,6 +169,7 @@ export const TOOL_ARG_SCHEMAS: Partial<Record<ToolName, ToolArgSchema>> = Object
   read_document: readDocumentArgsSchema,
   read_tool_output: readToolOutputArgsSchema,
   call_mcp_tool: callMcpToolArgsSchema,
+  read_mcp_tool: callMcpToolArgsSchema,
   write_task: writeTaskArgsSchema,
   update_task: updateTaskArgsSchema,
   draft_document: draftDocumentArgsSchema,
