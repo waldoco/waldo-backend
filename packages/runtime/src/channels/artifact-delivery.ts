@@ -1,4 +1,5 @@
 import { ARTIFACT_BODY_MAX_CHARS } from '@waldo/contracts';
+import {renderArtifactBody} from './rich-format';
 import type { ArtifactBook, ArtifactMeta } from './artifacts';
 export const ARTIFACT_PATH = '/console/artifacts';
 export type ArtifactDelivery = Readonly<{status:'saved_internal'|'owner_link';url:string|null;audience:'unverified'|'owner_authenticated'}>;
@@ -29,7 +30,7 @@ export const artifactPage=async(request:Request, book:ArtifactBook):Promise<Resp
  if(first.total_chars>ARTIFACT_BODY_MAX_CHARS)return new Response('artifact too large',{status:413,headers});
  if(first.next_offset!==null || first.text.length>ARTIFACT_BODY_MAX_CHARS || first.text.length!==first.total_chars)return new Response('temporarily unavailable',{status:503,headers});
  if(book.byId(id)?.revision!==first.meta.revision)return new Response('revision changed; ask Waldo for the current link',{status:409,headers});
- return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(first.meta.name)}</title><style>body{margin:24px auto;padding:0 20px;max-width:760px;font:17px/1.6 system-ui;color:#222;background:#fafaf8}h1{font-size:26px;overflow-wrap:anywhere}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}small{color:#666}</style></head><body><h1>${esc(first.meta.name)}</h1><small>Private artifact · revision ${first.meta.revision}</small><pre>${esc(first.text)}</pre></body></html>`,{headers:{...headers,'content-type':'text/html; charset=utf-8'}});
+ return new Response(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(first.meta.name)}</title><style>body{margin:24px auto;padding:0 20px;max-width:760px;font:17px/1.6 system-ui;color:#222;background:#fafaf8}h1{font-size:26px;overflow-wrap:anywhere}pre{font:inherit;white-space:pre-wrap;overflow-wrap:anywhere}small{color:#666}article h2{font-size:22px}article p{margin:12px 0}ul{padding-left:24px}li{margin:6px 0}code{font-family:monospace}article{overflow-wrap:anywhere}</style></head><body><h1>${esc(first.meta.name)}</h1><small>Private artifact · revision ${first.meta.revision}</small><article>${renderArtifactBody(first.meta.kind,first.text)}</article></body></html>`,{headers:{...headers,'content-type':'text/html; charset=utf-8'}});
 };
 
 export const artifactReadAdmission = async (limiter: RateLimit|undefined, ownerScope:string):Promise<Response|null> => {
