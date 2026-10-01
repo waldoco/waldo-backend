@@ -23,7 +23,7 @@ For waldo-runtime-staging Previews Base only:
 
 The preview wrapper uses the project-local exact version, explicitly targets
 waldo-runtime-staging, requests ignoring dashboard Base configuration on preview creation,
-uses an explicit full-commit preview name rather than legacy branch state,
+uses a versioned stable feature-branch identity rather than legacy branch state,
 and permits no extra arguments. It invokes `wrangler preview`, never `deploy` or
 `versions deploy`. Do not replace the normal beta-mvp upload-only command.
 No production Worker or live staging promotion is part of this change.
@@ -63,3 +63,26 @@ An 800ms injected setup delay reproduced it. The test now parks the real platfor
 alarm one hour ahead, makes the persisted schedule due explicitly, then invokes the
 real alarm helper after eviction; numeric-heavy run ID, one delivery and durable
 DONE/acked assertions remain. No scheduler implementation or assertion is weakened.
+
+## Capacity repair (October 1)
+
+New previews use `pr-v3-<verified open PR number>`, one isolated state namespace set
+per PR rather than per commit. A bounded unauthenticated GitHub API lookup must find
+exactly one open same-repository PR with matching branch/full head and beta-mvp base.
+Failure, fork, mismatch, no PR or ambiguous results stop before deployment. Branch
+reuse across PRs creates a new identity; renaming the same PR retains its identity.
+Exact full commit stays in WALDO_RELEASE; review must use the immutable Unique
+Deployment URL, never the moving Preview URL. Workers Builds branch identity must
+match a local symbolic branch, or fill a detached checkout. Release branches and
+invalid plain Git branch syntax fail closed. v3 never adopts legacy branch state.
+Development state persists between commits of the same PR; tests remain hermetic.
+
+The retirement planner admits only a closed same-repository PR whose live head/ref
+match the event. It selects the v3 identity and exact current-head legacy isolated
+preview, never other old SHA records, unresolved previews or release state. Planner
+is not wired to write CI yet: deletion execution, secret scope and reopen/close
+race handling need their own review. The October1 approved one-time cleanup is
+separate and does not grant automatic future deletion.
+
+Refs: https://developers.cloudflare.com/workers/ci-cd/builds/configuration/
+and https://developers.cloudflare.com/workers/previews/get-started/ (checked Oct1).

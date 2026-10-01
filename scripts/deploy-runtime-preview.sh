@@ -10,7 +10,8 @@ if [ -n "$(git status --porcelain)" ]; then
   echo 'refusing preview from a dirty tree' >&2
   exit 1
 fi
-sha=$(git rev-parse --short HEAD)
 full_sha=$(git rev-parse HEAD)
+branch=$(git symbolic-ref --quiet --short HEAD || true)
+preview_name=$(node scripts/runtime-preview-pr.mjs "$branch" "${WORKERS_CI_BRANCH:-}" "$full_sha")
 cd packages/runtime
-exec pnpm exec wrangler preview --worker-name waldo-runtime-staging --ignore-base-config --var "WALDO_RELEASE:${sha}" --name "isolated-${full_sha}"
+exec pnpm exec wrangler preview --worker-name waldo-runtime-staging --ignore-base-config --var "WALDO_RELEASE:${full_sha}" --name "${preview_name}"
