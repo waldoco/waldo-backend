@@ -17,7 +17,7 @@ import { OpenAIResponsesAdapter } from '../llm/openai';
 import { InMemoryCircuitBreaker, RuntimeLLMProvider, type LLMGatewayAdapter } from '../llm/provider';
 import { CLINICAL_REDIRECT, messagingSystemPrompt, ownerClockLine } from '../prompt/messaging-behavior';
 import { DAY_PLAN_INSTRUCTION, DAY_PLAN_SCHEMA } from '../prompt/day-cards';
-import { applyClaimOps, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
+import { applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exchangeInput, MEMORY_INSTRUCTION, memoryPrompt, turnMemoryPrompt, MIGRATION_INSTRUCTION, NIGHTLY_MEMORY_INSTRUCTION, nightlyInput, PROMOTION_INSTRUCTION, PROMOTION_SCHEMA, promotionInput, type ClaimStore } from '../memory/claims';
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
@@ -37,6 +37,15 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 // delete/restore_message still halt. The taint gate still runs before this and blocks
 // external-tainted privileged calls outright.
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
+// Facts only, from the applied outcome. Nothing here is model-written.
+const memoryReceipt = (outcome: ClaimOutcome): string => {
+  const parts = [`stored ${outcome.written} new claim${outcome.written === 1 ? '' : 's'}${outcome.downgraded ? ` (${outcome.downgraded} kept only as inferred, not as the owner's stated fact)` : ''}`];
+  if (outcome.held) parts.push(`held ${outcome.held} not stored${outcome.holdReasons.length ? ` (${outcome.holdReasons.join(', ')})` : ''}`);
+  if (outcome.forgot) parts.push(`forgot ${outcome.forgot} at the owner's request${outcome.purgeIncomplete.length ? `; removal incomplete in ${outcome.purgeIncomplete.join(', ')}` : '; removal verified'}`);
+  else if (outcome.forgetAllowed) parts.push('the owner asked to forget something but nothing was forgotten');
+  return `${parts.join('; ')}.`;
+};
+
 export const ownerToolApproval = ({ tool }: { tool: string }): boolean => !EXTERNAL_REACH_TOOLS.has(tool);
 
 // Session canaries are per-runtime tripwires: random 16-hex tokens derived when the owner
@@ -228,7 +237,7 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Describe saves and forgets only as listed here.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
@@ -256,6 +265,8 @@ export const createOwnerResponder = (
   let turnWriting = false;
   let recordedHeard = 0;
   let turnNotice = '';
+  // Code-authored facts about what the memory writer did this turn, so the reply never guesses.
+  const memoryReceipts: string[] = [];
   let turnReplyContext = '';
   const quoteContext = async (reply: ReplyContext | undefined): Promise<string> => {
     if (!reply) return '';
@@ -315,7 +326,10 @@ export const createOwnerResponder = (
       stage = 'uncertain';
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
-      const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared });
+      let outcome: ClaimOutcome | undefined;
+      const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared }, undefined, (result) => { outcome = result; });
+      const o = outcome as ClaimOutcome | undefined;
+      if (o !== undefined && (o.written || o.held || o.downgraded || o.forgot || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o));
       const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
       // Settle only once the KV conversation/ledger stores verify clean too; a KV
       // survivor leaves the claim 'purging' so a later retry can still find it.
@@ -339,6 +353,7 @@ export const createOwnerResponder = (
       pending = media?.attachment ? [media.attachment] : undefined;
       turnWriting = memory !== undefined && memoryWrites && !probeGuard?.suppressMemory;
       recordedHeard = 0;
+      memoryReceipts.length = 0;
       // Record before reply: the owner's words are written first, so the reply sees corrections
       // and never acknowledges a save that did not happen. A failed write goes to the reply
       // through the system prompt, not the owner's text, so history stays the owner's words.
