@@ -60,7 +60,9 @@ export type ConnectServiceArgs = z.infer<typeof connectServiceArgsSchema>;
 
 export const getCommunicationArgsSchema = z.strictObject({
   date_range: dateRangeSchema.optional(),
-});
+  limit: z.int().min(1).max(500).default(10),
+  page_token: z.string().min(1).optional(),
+}).refine(args=>!args.page_token||Boolean(args.date_range),{error:'page_token requires the same explicit date_range',path:['date_range']});
 export type GetCommunicationArgs = z.infer<typeof getCommunicationArgsSchema>;
 
 // A1 gmail parity: free-text mail search (Gmail q passthrough; the handler appends

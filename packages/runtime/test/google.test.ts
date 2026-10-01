@@ -144,7 +144,7 @@ describe('google tools', () => {
         newMail: async (since: number, limit: number) => {
           seen.push(since);
           expect(limit).toBe(10);
-          return [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-24T10:00:00.000Z' }];
+          return [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-23T07:00:00.000Z' }];
         },
         draft: async () => ({}),
       } as never),
@@ -156,7 +156,7 @@ describe('google tools', () => {
     const data = result.data as { since: string; messages: unknown[] };
     expect(data.messages).toHaveLength(1);
     expect(Date.parse(data.since)).toBe(seen[0]);
-    expect(Date.now() - seen[0]!).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 5000);
+    expect(clock.now().getTime() - seen[0]!).toBe(24 * 60 * 60 * 1000);
   });
 
   it('E1: verification artifacts in mail are quarantined before the result reaches model context; ordinary mail flows', async () => {
@@ -164,9 +164,9 @@ describe('google tools', () => {
       client: async () => ({
         events: async () => [],
         newMail: async () => [
-          { id: 'm-otp', from: 'google-no-reply@accounts.google.com', subject: '123456 is your Google verification code', snippet: 'Enter 123456 to continue', at: '2026-09-25T09:00:00.000Z' },
-          { id: 'm-reset', from: 'no-reply@example.com', subject: 'Reset your password', snippet: 'Open https://app.example.com/auth/v1/verify?token=pkce_LIVESECRET&type=recovery to choose a new one', at: '2026-09-25T09:01:00.000Z' },
-          { id: 'm-receipt', from: 'receipts@amazon.com', subject: 'Your receipt from Amazon #112-3948572-1849561', snippet: 'Order total $12.34, arriving Thursday', at: '2026-09-25T09:02:00.000Z' },
+          { id: 'm-otp', from: 'google-no-reply@accounts.google.com', subject: '123456 is your Google verification code', snippet: 'Enter 123456 to continue', at: '2026-09-23T07:00:00.000Z' },
+          { id: 'm-reset', from: 'no-reply@example.com', subject: 'Reset your password', snippet: 'Open https://app.example.com/auth/v1/verify?token=pkce_LIVESECRET&type=recovery to choose a new one', at: '2026-09-23T07:01:00.000Z' },
+          { id: 'm-receipt', from: 'receipts@amazon.com', subject: 'Your receipt from Amazon #112-3948572-1849561', snippet: 'Order total $12.34, arriving Thursday', at: '2026-09-23T07:02:00.000Z' },
         ],
         draft: async () => ({}),
       } as never),
@@ -408,4 +408,27 @@ describe('gmail search + thread read (A1)', () => {
       expect(JSON.stringify(result)).not.toContain('http');
     }
   });
+});
+describe('Gmail provider pages',()=>{
+ it('preserves opaque cursor and estimate, fetches metadata, and encodes bounded q',async()=>{
+  const urls:string[]=[];
+  const fetcher=(async(input:RequestInfo|URL)=>{const url=String(input);urls.push(url);
+   if(url.includes('oauth2.googleapis.com'))return Response.json({access_token:'unit-token'});
+   if(url.includes('/messages?'))return Response.json({messages:[{id:'m1'}],nextPageToken:'next+/=',resultSizeEstimate:9});
+   return Response.json({threadId:'t1',snippet:'Notice',internalDate:'1790726401000',payload:{headers:[{name:'From',value:'notice@example.invalid'},{name:'Subject',value:'Notice'}]}});
+  }) as typeof fetch;
+  const page=await googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox after:1790726400 before:1790812800',20,'first+/=');
+  const request=new URL(urls.find(u=>u.includes('/messages?'))!);expect(request.searchParams.get('pageToken')).toBe('first+/=');expect(request.searchParams.get('q')).toContain('before:1790812800');
+  expect(page).toMatchObject({next_page_token:'next+/=',result_size_estimate:9,messages:[{id:'m1',thread_id:'t1',from:'notice@example.invalid'}]});
+ });
+ it('rejects malformed page metadata rather than silently claiming last page',async()=>{
+  for(const bad of [{nextPageToken:0},{nextPageToken:''},{resultSizeEstimate:-1},{messages:[{id:''}]}]){
+   const fetcher=(async(input:RequestInfo|URL)=>String(input).includes('oauth2.googleapis.com')?Response.json({access_token:'unit-token'}):Response.json(bad)) as typeof fetch;
+   await expect(googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox',10)).rejects.toThrow('invalid Gmail page response');
+  }
+ });
+});
+it('rejects array provider page instead of an empty complete query',async()=>{
+ const fetcher=(async(input:RequestInfo|URL)=>String(input).includes('oauth2.googleapis.com')?Response.json({access_token:'unit-token'}):Response.json([])) as typeof fetch;
+ await expect(googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox',10)).rejects.toThrow('invalid Gmail page response');
 });
