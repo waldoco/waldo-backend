@@ -206,7 +206,7 @@ describe('invite-gated signup', () => {
     expect(verify).toHaveBeenCalledWith('invitee@example.com', '123456', '+14155550100', 'ABC<123');
   });
 
-  it('phone is required and normalized to E.164; it rides hidden into verify and reaches owner provisioning', async () => {
+  it('legacy existing-owner signin retains normalized phone fields without asserting provisioning', async () => {
     const verify = vi.fn(async () => 'owner-abc');
     const a = auth({ verify });
     const limiter = { limit: vi.fn(async () => ({ success: true })) as unknown as RateLimit['limit'] } as unknown as RateLimit;

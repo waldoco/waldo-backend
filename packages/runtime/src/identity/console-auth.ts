@@ -78,15 +78,15 @@ export const consoleAuth = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetc
       if (!response.ok) throw new Error(`otp send ${response.status}`);
       return true;
     },
-    async verify(email, code, phone, inviteCode = '') {
+    async verify(email, code, _phone, inviteCode = '') {
       const address = email.trim().toLowerCase();
       const response = await auth('verify', { type: 'email', email: address, token: code.trim() });
       if (!response.ok) return null;
       const { user } = (await response.json()) as { user?: { id?: string; email?: string } };
       if (!user?.id || user.email?.toLowerCase() !== address) return null;
-      // The phone is part of the signed canonical data: it lands on the owner row, so an
-      // unsigned phone swap would be a tampered write the RPC must refuse.
-      const phoneE164 = (phone ?? '').trim();
+      // Sign-in may only resolve an already-bound owner. Empty phone makes the canonical
+      // RPC refuse new provisioning before invite consumption. Signup awaits phone proof.
+      const phoneE164 = '';
       const codeHash = inviteCode ? await linkCodeHash(inviteCode) : '';
       return (await rpc('owner_for_auth', `owner.${user.id}.${address}.${phoneE164}.${codeHash}`, { p_auth_user: user.id, p_email: address, p_phone: phoneE164, p_code_hash: codeHash })) as string | null;
     },
