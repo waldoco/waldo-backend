@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
+import { GoogleError, b64url, buildMime, consentState, exchangeGoogleCode, googleClient, googleConsentUrl, readConsentState, sha256Hex } from '../src/connectors/google';
 import { connectServiceHandler, googleHandlers, type GoogleAccess } from '../src/tools/live/google';
 
 const app = { clientId: 'cid', clientSecret: 'csecret', redirectUri: 'https://w.example/oauth/google/callback' };
@@ -162,6 +162,35 @@ describe('google tools', () => {
     expect(data.messages).toHaveLength(1);
     expect(Date.parse(data.since)).toBe(seen[0]);
     expect(clock.now().getTime() - seen[0]!).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it('get_communication falls back to the unpaged read when the connector proxy predates mailPage (404 unknown operation), and says so', async () => {
+    const google: GoogleAccess = {
+      client: async () => ({
+        events: async () => [],
+        mailPage: async () => { throw new GoogleError(404, 'unknown operation'); },
+        newMail: async () => [{ id: 'm1', from: 'a@b.c', subject: 'hi', snippet: 'snip', at: '2026-09-23T07:00:00.000Z' }],
+        draft: async () => ({}),
+      } as never),
+    };
+    const comms = googleHandlers(google, proposals, clock).find((h) => h.name === 'get_communication')!;
+    const result = await comms.handle({} as never);
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    const data = result.data as { messages: unknown[]; query: unknown; query_note: string; coverage: { pagination: string; complete: boolean; degraded: string } };
+    expect(data.messages).toHaveLength(1);
+    expect(data.coverage.degraded).toBe('proxy_without_mailPage');
+    expect(data.query).toBeNull();
+    expect(data.query_note).toBe('legacy_since_filter_no_gmail_query');
+    expect(data.coverage.pagination).toBe('unknown_not_returned_by_adapter');
+    expect(data.coverage.complete).toBe(false);
+  });
+
+  it('get_communication still surfaces other mailPage errors and cursor requests without a fallback', async () => {
+    const mk = (err: Error): GoogleAccess => ({ client: async () => ({ events: async () => [], mailPage: async () => { throw err; }, newMail: async () => [], draft: async () => ({}) } as never) });
+    const run = (g: GoogleAccess, args: object) => googleHandlers(g, proposals, clock).find((h) => h.name === 'get_communication')!.handle(args as never);
+    expect(await run(mk(new GoogleError(500, 'boom')), {})).toMatchObject({ ok: false });
+    expect(await run(mk(new GoogleError(404, 'unknown operation')), { page_token: 'x' })).toMatchObject({ ok: false });
   });
 
   it('E1: verification artifacts in mail are quarantined before the result reaches model context; ordinary mail flows', async () => {
