@@ -21,3 +21,13 @@ Later connector/mutable/edit/rollback stages require explicit version/provenance
 ## Proof and claim limits
 
 Source tests, exact actual CI jobs and independent adversarial review precede merge/stage. Then one real permitted owner turn must show the selected skill body influenced useful behavior without leaking the body or making unsupported permission claims. Fixture-selected rows alone are not live usefulness, edited-owner capability or autonomous learning proof. Keep ledger18-20 incomplete until their full outcomes are proved.
+
+## Review amendments, code scope
+
+Private wiring/tests limited to fake/local seam; gateway stays fail-closed. Omitted dependency preserves existing prompt/provenance/failure behavior. Owner-turn live snapshot is host Date.now(), accepts now+60s; caller cannot select date/revision. Test July16 historical incompatibility separately from valid live owner turns.
+
+SQL LIMIT25 is an overflow sentinel, not25accepted rows: loader MAX_SKILL_ROWS24,25or more fails closed. Test24accepted/25+rejected and existing body/JSON/token policies unchanged. Absent skills table fails closed withoutDDL.
+
+Repository has no owner identity parameter. It can only be supplied by the verified invocation's own owner host, not request/env selection, not cross-owner reused/global legacy fallback. Content hash proves identity, not curation authority; trusted row origin/version/identity_locked must be grounded before any seed. No seed in this slice.
+
+Use real async repository loading paused across run closure/resume; no stale prompt/tool/provider/sink publication. Fake/local code proof is not a deployed owner skill, gateway coverage or live usefulness. No owner-edit/self-rewrite.
