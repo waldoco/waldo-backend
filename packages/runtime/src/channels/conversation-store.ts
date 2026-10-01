@@ -64,6 +64,7 @@ export const redactConversationEntries = async (
   storage: KeyValueStorage,
   texts: readonly string[],
   marker: string,
+  scope?: RunEffectScope,
 ): Promise<Readonly<{ rewritten: number; remaining: number }>> => {
   const needles = [...new Set(texts.map((text) => text.trim()).filter(Boolean))];
   if (needles.length === 0) return { rewritten: 0, remaining: 0 };
@@ -78,7 +79,9 @@ export const redactConversationEntries = async (
       app = app.replace(pattern, marker);
     }
     if (model !== entry.modelPayload || app !== entry.appPayload) {
-      await storage.put(key, { ...entry, modelPayload: model, appPayload: app });
+      const rewrittenEntry = { ...entry, modelPayload: model, appPayload: app };
+      if (scope) { if (!storage.kv) throw new Error('fenced redaction store unavailable'); scope.commit(() => storage.kv!.put(key, rewrittenEntry)); }
+      else await storage.put(key, rewrittenEntry);
       rewritten += 1;
     }
   }

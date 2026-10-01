@@ -52,3 +52,27 @@ it('deadline uses the claim clock and late completion cannot publish',async()=>{
   const finals=s.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')!;expect(finals).toHaveLength(1);expect(finals[0]?.payload.text).toContain('In-flight changes may still finish');expect(JSON.stringify(finals)).not.toContain('LATE_DEADLINE');
  });seen.pause=false;
 });
+it('a host closure failure retains the serial queue when durable closure cannot be verified',async()=>{
+ seen.pause=false;await setup('fence-do-close-fault',async(i,s)=>{
+  await admit(i,s,5);
+  const internal=i as unknown as {closeRunAtomic:(r:unknown,reason:string,delivery?:boolean)=>void;drainInbox:()=>Promise<void>;serial:<T>(w:()=>Promise<T>)=>Promise<T>};
+  const original=internal.closeRunAtomic.bind(internal);let entered!:()=>void;const hit=new Promise<void>(r=>{entered=r;});
+  internal.closeRunAtomic=(r,reason,delivery)=>{if(reason==='execution_closed'){entered();throw new Error('injected close persistence fault');}original(r,reason,delivery);};
+  void internal.serial(()=>internal.drainInbox());await hit;let nextStarted=false;void internal.serial(async()=>{nextStarted=true;});
+  await new Promise(r=>setTimeout(r,20));expect(nextStarted).toBe(false);
+  internal.closeRunAtomic=original;
+  // Fault deliberately leaves the queue unresolved. This isolated DO is not reused.
+  await s.storage.deleteAlarm();
+ });
+});
+it('failure notice storage failure does not retain stale run slots or block the next run',async()=>{
+ seen.pause=true;await setup('fence-do-notice-fault',async(i,s)=>{
+  const inbox=await admit(i,s,6);let enter!:()=>void;const ready=new Promise<void>(r=>{enter=r;});seen.entered=enter;
+  const internal=i as unknown as {drainInbox:()=>Promise<void>;closeRunAtomic:(r:unknown,reason:string)=>void;activeAbort?:AbortController;activeScope?:unknown;activeInbox?:unknown;liveAttempts:Set<string>;setup:()=>{finalOutbox:{enqueueFenced:(...args:unknown[])=>Promise<void>}}};
+  const running=internal.drainInbox();await ready;const row=(await inbox.records())[0]!;const outbox=internal.setup().finalOutbox;const original=outbox.enqueueFenced.bind(outbox);outbox.enqueueFenced=async()=>{throw new Error('injected failure notice storage fault');};
+  internal.closeRunAtomic(row,'owner_stopped');internal.activeAbort!.abort();await running;
+  expect(internal.activeInbox).toBeNull();expect(internal.activeScope).toBeUndefined();expect(internal.activeAbort).toBeUndefined();expect(internal.liveAttempts.size).toBe(0);expect(await s.storage.getAlarm()).not.toBeNull();
+  seen.finish!({id:'late',output_text:'LATE',output:[],usage:{input_tokens:1,output_tokens:1}});seen.pause=false;outbox.enqueueFenced=original;
+  await admit(i,s,7);await internal.drainInbox();expect((await inbox.records()).find(r=>r.updateId===7)?.state).toBe('awaiting_delivery');
+ });seen.pause=false;
+});

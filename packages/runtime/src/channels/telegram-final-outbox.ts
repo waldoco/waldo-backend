@@ -20,9 +20,12 @@ const digest = async (payload: unknown) => [...new Uint8Array(await crypto.subtl
 export class TelegramFinalOutbox {
   constructor(private readonly kv: Kv, private readonly now: () => number = Date.now, private readonly persist?: (rows: FinalRecord[], due: number | null) => Promise<void>) {}
   records(): FinalRecord[] { return this.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []; }
-  private async save(rows: FinalRecord[]): Promise<void> {
+  private due(rows: FinalRecord[]): number | null {
     const due = rows.flatMap(r => r.status === 'pending' || r.status === 'attempting' || !r.settled ? [r.dueAt] : r.payload.text ? [r.createdAt + 86400000] : []);
-    const bound = due.length ? Math.min(...due) : null;
+    return due.length ? Math.min(...due) : null;
+  }
+  private async save(rows: FinalRecord[]): Promise<void> {
+    const bound = this.due(rows);
     if (this.persist) await this.persist(rows, bound);
     else { this.kv.put(FINAL_OUTBOX_KEY, rows); this.kv.put(FINAL_OUTBOX_DUE_KEY, bound); }
   }
@@ -65,8 +68,7 @@ export class TelegramFinalOutbox {
       }
       rows.push({ ...input, payload: { ...input.payload }, digest: hash, status: 'pending', dueAt: this.now() + 250, createdAt: this.now(), attempts: 0 });
       this.kv.put(FINAL_OUTBOX_KEY, rows);
-      const due = rows.flatMap(r => r.status === 'pending' || r.status === 'attempting' || !r.settled ? [r.dueAt] : []);
-      this.kv.put(FINAL_OUTBOX_DUE_KEY, due.length ? Math.min(...due) : null);
+      this.kv.put(FINAL_OUTBOX_DUE_KEY, this.due(rows));
     });
   }
   async drain(options: {

@@ -95,7 +95,7 @@ export const createOwnerResponder = (
   gateway?: LLMGatewayAdapter,
   // Forget support: redact forgotten claim text from the persisted rolling conversation window
   // (supplied by the owner DO, which owns the KV store). Counts only - never the text.
-  redactConversation?: (texts: readonly string[]) => Promise<Readonly<{ rewritten: number; remaining: number }>>,
+  redactConversation?: (texts: readonly string[], scope?: RunEffectScope) => Promise<Readonly<{ rewritten: number; remaining: number }>>,
   // Staging probe confinement (Codex #230/#231 holds): while a capture-mode /probe-turn runs,
   // this slot suppresses memory persistence and strips the live provider handlers from the
   // turn's tool loop and system prompt. Inert for real turns; the DO owns the slot.
@@ -264,6 +264,7 @@ export const createOwnerResponder = (
           );
         },
         onTool: (event) => {
+          privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
           privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: event.output });
@@ -352,7 +353,7 @@ export const createOwnerResponder = (
       let outcome: ClaimOutcome | undefined;
       privateRunScope?.admit();
       const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared }, undefined, (result) => { outcome = result; });
-      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
       // Settle only once the KV conversation/ledger stores verify clean too; a KV
       // survivor leaves the claim 'purging' so a later retry can still find it.
       const settled = purgeIds.length === 0 || (conv === null || conv.remaining === 0);
@@ -426,7 +427,7 @@ export const createOwnerResponder = (
       // taint, origin classes). Without them the mixed transcript is a fabrication check only.
       const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
       const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; }, grounding);
-      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
@@ -438,7 +439,7 @@ export const createOwnerResponder = (
       // Migration admits legacy facts only: the file payload can mention past forgets, so the
       // forget-intent gate is pinned shut here - nothing purges during a migration.
       const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: input }, false);
-      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },

@@ -276,6 +276,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       catch (error) { console.error('durable run closure failed'); await new Promise<never>(() => {}); throw error; }
       abort.abort();
       const closed = (this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? []).find(r => r.id === claimed.id);
+      try {
       if (closed?.state === 'quarantined') {
         const expiresAt = (closed.closedAt ?? Date.now()) + 5 * 60000;
         await this.setup().finalOutbox.enqueueFenced({ id: `failure:${claimed.id}:${attempt}`, trace: ownerTurnTrace('telegram', claimed.updateId),
@@ -288,12 +289,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           work();
         }));
       }
+      } catch { console.error('fixed failure notice unavailable'); } finally {
       if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
       this.activeInbox = null; this.liveAttempts.delete(attempt); await this.setup().scheduler.rearm();
+      }
     }
   }
 
@@ -1176,7 +1179,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; }), undefined,
+      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); return result; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
