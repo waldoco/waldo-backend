@@ -51,7 +51,7 @@ export type ChildLoopInput = Readonly<{
   handlers: readonly { name: string }[];
   ctx: ToolDispatcherContext;
   // The turn's control: round() returns steering text, or null when the owner stopped the turn.
-  controlRound: () => string | null;
+  controlRound: () => string | null | Promise<string | null>;
   // The turn's LLM step, pre-bound with trace/purpose/system prompt by the channel.
   complete: (content: string, tools: readonly unknown[] | undefined, turns: readonly LLMToolTurn[]) => ReturnType<ToolLoopStep>;
   // The parent turn's shared round budget; the child's rounds decrement it too.
@@ -74,7 +74,7 @@ export const runChildLoop = async (task: string, input: ChildLoopInput): Promise
     ctx: input.ctx,
     onSettle: (settled) => { exit = settled; },
     step: async (tools, turns) => {
-      const added = input.controlRound();
+      const added = await input.controlRound();
       if (added === null) {
         stopped = true;
         return { text: 'Stopped by the owner mid-task.' };

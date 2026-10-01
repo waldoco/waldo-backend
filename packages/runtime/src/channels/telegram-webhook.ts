@@ -77,18 +77,27 @@ export const handleTelegramWebhook = async (
     return new Response('forbidden', { status: 403 });
   }
   const body = await request.text();
-  const update = JSON.parse(body) as SenderUpdate;
+  let update: SenderUpdate;
+  try { update = JSON.parse(body) as SenderUpdate; } catch { return new Response('bad request', { status: 400 }); }
+  if (!update || typeof update !== 'object') return new Response('ok');
   const subject = sender(update);
   if (!subject) return new Response('ok');
   const owners = env.TELEGRAM_OWNER_DO;
   const origin = new URL(request.url).origin;
+  let route;
+  try { route = await directory.byPresence('telegram', subject); }
+  catch { return new Response('route unavailable', { status: 503 }); }
+  if (route) {
+    const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject,
+      'x-waldo-do-name': route.doName, 'x-waldo-inbox-secret': secret };
+    if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
+    try {
+      const admission = await owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/enqueue', { method: 'POST', body, headers, signal: AbortSignal.timeout(10_000) });
+      return new Response(admission.ok ? 'ok' : 'admission unavailable', { status: admission.ok ? 200 : admission.status === 409 ? 409 : 503 });
+    } catch { return new Response('admission unavailable', { status: 503 }); }
+  }
+  // Unknown/link redemption is deliberately outside supported-owner durable admission.
   waitUntil((async () => {
-    const route = await directory.byPresence('telegram', subject);
-    if (route) {
-      const headers: Record<string, string> = { 'x-waldo-origin': origin, 'x-waldo-telegram-subject': route.subject };
-      if (route.timezone) headers['x-waldo-timezone'] = route.timezone;
-      return owners.get(owners.idFromName(route.doName)).fetch('https://telegram-owner/turn', { method: 'POST', body, headers });
-    }
     const code = linkCode(update);
     if (!code || !env.TELEGRAM_BOT_TOKEN) return undefined;
     const linked = await directory.redeem('telegram', subject, code).catch(() => null);

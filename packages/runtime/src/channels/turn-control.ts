@@ -4,12 +4,30 @@ export const STOPPED_REPLY = 'Stopped. Nothing more on that one.';
 
 export const turnControl = () => {
   let running = false;
+  let target: string | null = null;
   let steerable = false;
   let stopped = false;
   let pending: { id: number; text: string }[] = [];
   let heard: string[] = [];
   const absorbed = new Set<number>();
+  let consume: ((ids: readonly number[]) => Promise<void>) | undefined;
   return {
+    bindTarget(id: string): void { target = id; },
+    stopTarget(id: string): boolean { if (target !== id || !running) return false; stopped = true; return true; },
+    steerTarget(targetId: string, id: number, text: string): boolean {
+      if (target !== targetId || !running || !steerable || stopped) return false;
+      pending.push({ id, text }); return true;
+    },
+    durableConsume(hook: (ids: readonly number[]) => Promise<void>): void { consume = hook; },
+    async roundAsync(): Promise<string | null> {
+      if (stopped) return null;
+      const claimed = pending.slice();
+      if (claimed.length && consume) await consume(claimed.map(note => note.id));
+      if (stopped) return null;
+      for (const note of claimed) { heard.push(note.text); absorbed.add(note.id); }
+      pending.splice(0, claimed.length);
+      return heard.length === 0 ? '' : `\n\n[While you were working, the owner added: ${heard.map(text => JSON.stringify(text)).join('; ')}. Take it into account in this answer.]`;
+    },
     begin(fromOwner: boolean): void {
       running = true;
       steerable = fromOwner;
@@ -19,6 +37,7 @@ export const turnControl = () => {
     },
     end(): readonly string[] {
       running = false;
+      target = null;
       return heard;
     },
     heard: (): readonly string[] => heard,

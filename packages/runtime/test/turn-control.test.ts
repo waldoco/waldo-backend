@@ -46,3 +46,19 @@ describe('turn control', () => {
     expect(control.absorbed(7)).toBe(false);
   });
 });
+
+it('durable steer consumption commits before text reaches a model round', async () => {
+  const control = turnControl(); control.begin(true); control.steer(91, 'more context');
+  let committed = false; control.durableConsume(async ids => { expect(ids).toEqual([91]); committed = true; });
+  expect(await control.roundAsync()).toContain('more context'); expect(committed).toBe(true); expect(control.absorbed(91)).toBe(true);
+});
+it('failed durable consumption never exposes steer text and a target stop never survives begin', async () => {
+  const control = turnControl(); control.begin(true); control.steer(92, 'uncommitted');
+  control.durableConsume(async () => { throw new Error('commit failed'); });
+  await expect(control.roundAsync()).rejects.toThrow('commit failed'); expect(control.heard()).toEqual([]);
+  control.stop(); expect(await control.roundAsync()).toBeNull(); control.end(); control.begin(true); expect(await control.roundAsync()).toBe('');
+});
+it('target-scoped stop and steer cannot hit the next running turn after an await', async()=>{
+  const control=turnControl();control.bindTarget('first');control.begin(true);control.end();control.bindTarget('second');control.begin(true);
+  expect(control.stopTarget('first')).toBe(false);expect(control.steerTarget('first',1,'old')).toBe(false);expect(await control.roundAsync()).toBe('');expect(control.stopTarget('second')).toBe(true);expect(await control.roundAsync()).toBeNull();
+});
