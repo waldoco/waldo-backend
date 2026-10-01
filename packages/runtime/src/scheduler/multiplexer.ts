@@ -147,7 +147,8 @@ export class Scheduler {
         // Telegram final already committed before a crash at executor-return/complete.
         // Advance scheduling without replaying its model/tools; outbox owns delivery settlement.
         const finals = this.storage.kv.get<readonly { reminder?: { id: string; occurrence: number } }[]>('telegram_final_outbox_v1') ?? [];
-        if (fresh.kind === 'reminder' && finals.some(r => r.reminder?.id === fresh.id && r.reminder.occurrence === fresh.occurrence_at)) {
+        const committedId = fresh.id, committedOccurrence = fresh.occurrence_at;
+        if (fresh.kind === 'reminder' && finals.some(r => r.reminder?.id === committedId && r.reminder.occurrence === committedOccurrence)) {
           this.complete(fresh, now);
           continue;
         }

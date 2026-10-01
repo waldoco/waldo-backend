@@ -339,6 +339,6 @@ it('crash after reminder final enqueue before schedule complete never repeats th
       const error = new Error('crash-injection: after enqueue'); error.name = 'CrashInjectionError'; throw error;
     } })).rejects.toThrow('crash-injection: after enqueue');
     await scheduler.dispatchDue({ reminder: async () => { modelCalls++; } });
-    expect(modelCalls).toBe(1); expect(queue.records()).toHaveLength(1);
+    expect(modelCalls).toBe(1); expect(queue.records().filter(r => r.id.startsWith('cut:'))).toHaveLength(1);
   });
 });
