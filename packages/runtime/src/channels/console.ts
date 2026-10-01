@@ -237,6 +237,9 @@ const serviceStatus = (view: ConsoleView) => {
 // Dismissal is the safe direction - it can only prevent a send, never cause one - so the
 // console offers Not now for open send proposals. That also un-strands proposals whose
 // Telegram approval card lost its inline keyboard (2026-09-28 staging receipt).
+// Open email/message send proposals the console may only dismiss (approve stays in chat).
+export const consoleMayDismiss = (item: ApprovalItem): boolean =>
+  (item.state === 'open' || item.state === 'review_only') && !(consoleMayApprove(item) && item.review?.kind === item.kind) && (item.kind === 'email_send' || item.kind === 'message_send');
 export const consoleMayApprove = (item: ApprovalItem | undefined): boolean => Boolean(item && item.state === 'open' && item.kind === 'calendar_change' && item.review?.kind === 'calendar_change');
 
 const APPROVAL_LABELS: Readonly<Record<string, string>> = {
@@ -256,7 +259,7 @@ const approvals = (view: ConsoleView) => {
     const canApprove = consoleMayApprove(item) && safeReview !== null;
     // Open send proposals are dismissible here: skipping changes nothing external, it only
     // closes the loop. Approving a send stays in chat with the exact words on the card.
-    const dismissible = (item.state === 'open' || item.state === 'review_only') && !canApprove && (item.kind === 'email_send' || item.kind === 'message_send');
+    const dismissible = consoleMayDismiss(item);
     const actions = canApprove
       ? form(view.csrf, 'approval.approve', 'Do it', { id: item.id }, { tone: 'primary' }) + form(view.csrf, 'approval.skip', 'Not now', { id: item.id })
       : item.state === 'open' || item.state === 'review_only'
