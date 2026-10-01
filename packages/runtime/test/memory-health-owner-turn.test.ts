@@ -47,7 +47,7 @@ it('a writer output carrying a dose is halted by the medical gate twice; nothing
   expect(seen.replyInputs[0]).toContain('only partly stored'); expect(seen.replyInputs[0]).not.toContain('nothing was stored');
 });
 
-it('a lab-value-only claim is stored by the real writer path and the next turn's reply prompt carries the claim (mocked reply, no answer or reliance shown)', async () => {
+it('a lab-value-only claim is stored by the real writer path and the next turn reply prompt carries the claim (mocked reply, no answer or reliance shown)', async () => {
   let stored: Array<{ kind: string; source: string; evidence: string }> = [];
   let memorySection = '';
   let ownerSection = '';
