@@ -109,9 +109,18 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const to = date_range?.to ?? clock.now().toISOString();
       const from = new Date(since).toISOString();
       const query=`in:inbox category:primary after:${Math.floor(since/1000)-1} before:${Math.ceil(Date.parse(to)/1000)}`;
-      const paged=typeof client.mailPage==='function';
+      let paged=typeof client.mailPage==='function';
       if(page_token&&!paged)throw new Error('Gmail pagination adapter unavailable');
-      const page=paged?await client.mailPage(query,limit,page_token):null;
+      let page=null as Awaited<ReturnType<NonNullable<typeof client.mailPage>>>|null;
+      if(paged){
+        try{page=await client.mailPage(query,limit,page_token);}
+        catch(error){
+          // A connector proxy deployed before mailPage existed answers 404 'unknown operation'.
+          // Degrade to the legacy sampled read (reported as unpaged) instead of failing the turn.
+          if(!(error instanceof GoogleError&&error.status===404&&error.message==='unknown operation')||page_token)throw error;
+          paged=false;
+        }
+      }
       const fetched=page? page.messages : await client.newMail(since,limit);
       const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
       return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query, next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
