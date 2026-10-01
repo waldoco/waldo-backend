@@ -139,6 +139,11 @@ type TestRunLoopInstance = {
       tool?: never;
     }) => Promise<{ ok: true } | { ok: false; reason: string; code?: 'rate_limited' | 'transient' }>;
   }): void;
+  __runLoopScheduleTrustedRunForTest(input: {
+    admission: TrustedInvocationAdmission;
+    snapshot_ref: string;
+    snapshot_at: number;
+  }): Promise<string>;
   __runLoopOpenTrustedRunForTest(input: {
     admission: TrustedInvocationAdmission;
     snapshot_ref: string;
@@ -3571,9 +3576,12 @@ describe('RunLoopDO trusted invocation convergence', () => {
         response(ROSTER.primary, toolCall('call-v2-second', 2)),
         response(ROSTER.primary, 'safe ephemeral synthesis'),
       ]);
-      const runId = await stub.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
-      await runInDurableObject(stub, (instance) => {
+      const runId = await runInDurableObject(stub, async (instance, state) => {
         const runLoop = instance as unknown as TestRunLoopInstance;
+        const runId = await runLoop.__runLoopScheduleTrustedRunForTest(trustedInput(trustedScheduledAdmission()));
+        // Keep the host alarm from firing between setup and the explicit crash assertion.
+        // runDurableObjectAlarm drives it explicitly; schedule due_at itself is unchanged.
+        await state.storage.setAlarm(Date.now() + 60_000);
         runLoop.__runLoopSetTestOverrides({
           gateway,
           contextComposer: frozenComposer().composer,
@@ -3584,6 +3592,7 @@ describe('RunLoopDO trusted invocation convergence', () => {
         } else {
           runLoop.__runLoopCrashAfterTrustedSynthesisReceipt = true;
         }
+        return runId;
       });
       await expect(runDurableObjectAlarm(stub)).rejects.toThrow(
         failure.crash === 'tool_checkpoint'
