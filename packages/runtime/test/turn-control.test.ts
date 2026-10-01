@@ -58,3 +58,7 @@ it('failed durable consumption never exposes steer text and a target stop never 
   await expect(control.roundAsync()).rejects.toThrow('commit failed'); expect(control.heard()).toEqual([]);
   control.stop(); expect(await control.roundAsync()).toBeNull(); control.end(); control.begin(true); expect(await control.roundAsync()).toBe('');
 });
+it('target-scoped stop and steer cannot hit the next running turn after an await', async()=>{
+  const control=turnControl();control.bindTarget('first');control.begin(true);control.end();control.bindTarget('second');control.begin(true);
+  expect(control.stopTarget('first')).toBe(false);expect(control.steerTarget('first',1,'old')).toBe(false);expect(await control.roundAsync()).toBe('');expect(control.stopTarget('second')).toBe(true);expect(await control.roundAsync()).toBeNull();
+});

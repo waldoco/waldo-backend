@@ -193,8 +193,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const attempt = crypto.randomUUID(); const claimed = await this.inbox.claim(row.id, attempt, crypto.randomUUID(), Date.now() + 180_000);
           if (claimed && this.activeInbox?.runId === control.targetRun) {
             this.liveAttempts.add(attempt);
-            if (control.kind === 'stop') { await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stop(); }
-            else this.runtimes.telegram?.control.steer(raw.update_id!, text!);
+            if (control.kind === 'stop') { await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stopTarget(control.targetRun); }
+            else this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, text!);
           }
         }
       }
@@ -213,6 +213,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const claimed = await this.inbox.claim(row.id, attempt, runId, Date.now() + 180_000); if (!claimed) return;
     this.liveAttempts.add(attempt); this.activeInbox = claimed;
     try {
+      this.setup().control.bindTarget(runId);
       this.setup().control.durableConsume(async ids => {
         for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && ids.includes(child.updateId) && child.attempt) await this.inbox.transition(child.id, child.attempt, 'consumed');
       });
@@ -229,7 +230,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await this.inbox.transition(row.id, attempt, 'quarantined', 'execution_uncertain');
     } finally {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
-        await this.inbox.transition(child.id, child.attempt, child.state === 'consumed' ? 'completed' : 'quarantined', child.state === 'consumed' ? 'absorbed_by_target' : 'not_consumed');
+        await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
       this.activeInbox = null; this.liveAttempts.delete(attempt); await this.setup().scheduler.rearm();
@@ -536,7 +537,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Reconcile finals before quarantining recovered claims with committed payloads.
       const finals = finalOutbox.records();
       const protectedAttempts = new Set(this.liveAttempts);
-      for (const final of finals) if (final.inbox) protectedAttempts.add(final.inbox.attempt);
+      for (const final of finals) if (final.inbox) {
+        protectedAttempts.add(final.inbox.attempt);
+        await this.inbox.transition(final.inbox.id, final.inbox.attempt, 'awaiting_delivery');
+      }
       await this.inbox.recover(protectedAttempts);
       const dueInbox = (await this.inbox.records()).some(r => r.state === 'admitted');
       const dueTransport = finals.some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled));
@@ -1145,6 +1149,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
           ...(turn.messageId === null ? {} : { reaction: { message_id: turn.messageId, emoji } }),
         });
+        if (this.activeInbox?.attempt) await this.inbox.transition(this.activeInbox.id, this.activeInbox.attempt, 'awaiting_delivery');
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),

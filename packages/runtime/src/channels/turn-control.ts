@@ -4,6 +4,7 @@ export const STOPPED_REPLY = 'Stopped. Nothing more on that one.';
 
 export const turnControl = () => {
   let running = false;
+  let target: string | null = null;
   let steerable = false;
   let stopped = false;
   let pending: { id: number; text: string }[] = [];
@@ -11,6 +12,12 @@ export const turnControl = () => {
   const absorbed = new Set<number>();
   let consume: ((ids: readonly number[]) => Promise<void>) | undefined;
   return {
+    bindTarget(id: string): void { target = id; },
+    stopTarget(id: string): boolean { if (target !== id || !running) return false; stopped = true; return true; },
+    steerTarget(targetId: string, id: number, text: string): boolean {
+      if (target !== targetId || !running || !steerable || stopped) return false;
+      pending.push({ id, text }); return true;
+    },
     durableConsume(hook: (ids: readonly number[]) => Promise<void>): void { consume = hook; },
     async roundAsync(): Promise<string | null> {
       if (stopped) return null;
@@ -30,6 +37,7 @@ export const turnControl = () => {
     },
     end(): readonly string[] {
       running = false;
+      target = null;
       return heard;
     },
     heard: (): readonly string[] => heard,

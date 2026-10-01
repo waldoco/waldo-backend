@@ -47,3 +47,7 @@ it('retains uncertain records past expiry rather than evicting for capacity', as
   const f = fixture(); await f.inbox.admit(f.binding, 1, 'possible effects'); await f.inbox.claim('7:telegram:1','a','r',2000); await f.inbox.transition('7:telegram:1','a','quarantined'); f.advance(); await f.inbox.recover(new Set());
   expect((await f.inbox.records())[0]?.state).toBe('quarantined'); expect(await f.inbox.admit(f.binding,1,'possible effects')).toBe('duplicate');
 });
+it('awaiting transport scrubs raw body and never rearms an expired execution deadline', async()=>{
+  const f=fixture();await f.inbox.admit(f.binding,1,'raw input');await f.inbox.claim('7:telegram:1','a','r',1100);await f.inbox.transition('7:telegram:1','a','awaiting_delivery');
+  expect((await f.inbox.records())[0]?.body).toBe('');expect(f.data.get('due')).toBeNull();f.advance();await f.inbox.recover(new Set());expect(f.data.get('due')).toBeNull();expect((await f.inbox.records())[0]?.state).toBe('awaiting_delivery');
+});

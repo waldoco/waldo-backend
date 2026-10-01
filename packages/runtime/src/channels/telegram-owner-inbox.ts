@@ -6,7 +6,7 @@ const CAPACITY = 512;
 export type InboxBinding = { bot: string; subject: string; doName: string };
 export type InboxRecord = InboxBinding & {
   id: string; digest: string; sequence: number; updateId: number; body: string;
-  admittedAt: number; state: 'admitted' | 'claimed' | 'consumed' | 'completed' | 'quarantined';
+  admittedAt: number; state: 'admitted' | 'claimed' | 'awaiting_delivery' | 'consumed' | 'completed' | 'quarantined';
   attempt?: string; runId?: string; deadline?: number; reason?: string;
   control?: { kind: 'stop' | 'steer'; targetRun: string };
 };
@@ -29,7 +29,7 @@ export class TelegramOwnerInbox {
       const rows = (await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? [];
       const prior = rows.find(r => r.id === id);
       if (prior) return prior.digest === digest && prior.subject === binding.subject && prior.doName === binding.doName ? 'duplicate' : 'conflict';
-      const retained = rows.filter(r => r.state === 'admitted' || r.state === 'claimed' || r.state === 'consumed' || r.state === 'quarantined' || r.admittedAt + RETENTION_MS > this.now());
+      const retained = rows.filter(r => r.state === 'admitted' || r.state === 'claimed' || r.state === 'awaiting_delivery' || r.state === 'consumed' || r.state === 'quarantined' || r.admittedAt + RETENTION_MS > this.now());
       if (retained.length >= CAPACITY) return 'capacity';
       const sequence = ((await txn.get<number>('telegram_owner_inbox_sequence_v1')) ?? 0) + 1;
       retained.push({ ...binding, id, digest, sequence, updateId, body, admittedAt: this.now(), state: 'admitted', ...(control ? { control } : {}) });
@@ -47,11 +47,11 @@ export class TelegramOwnerInbox {
       await this.persist(txn, rows, this.due(rows)); return structuredClone(row);
     });
   }
-  async transition(id: string, attempt: string, state: 'consumed' | 'completed' | 'quarantined', reason?: string): Promise<boolean> {
+  async transition(id: string, attempt: string, state: 'awaiting_delivery' | 'consumed' | 'completed' | 'quarantined', reason?: string): Promise<boolean> {
     return this.storage.transaction(async txn => {
       const rows = (await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? [];
       const row = rows.find(r => r.id === id);
-      if (!row || row.attempt !== attempt || (row.state !== 'claimed' && row.state !== 'consumed')) return false;
+      if (!row || row.attempt !== attempt || (row.state !== 'claimed' && row.state !== 'awaiting_delivery' && row.state !== 'consumed')) return false;
       row.state = state; if (reason) row.reason = reason;
       if (state !== 'consumed') row.body = '';
       await this.persist(txn, rows, this.due(rows)); return true;
@@ -59,7 +59,7 @@ export class TelegramOwnerInbox {
   }
   async recover(liveAttempts: ReadonlySet<string>): Promise<void> {
     await this.storage.transaction(async txn => {
-      const rows = ((await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? []).filter(r => r.state === 'admitted' || r.state === 'claimed' || r.state === 'consumed' || r.state === 'quarantined' || r.admittedAt + RETENTION_MS > this.now());
+      const rows = ((await txn.get<InboxRecord[]>(OWNER_INBOX_KEY)) ?? []).filter(r => r.state === 'admitted' || r.state === 'claimed' || r.state === 'awaiting_delivery' || r.state === 'consumed' || r.state === 'quarantined' || r.admittedAt + RETENTION_MS > this.now());
       for (const row of rows) if ((row.state === 'claimed' || row.state === 'consumed') && (!row.attempt || !liveAttempts.has(row.attempt))) {
         row.state = 'quarantined'; row.reason = 'recovered_uncertain'; row.body = '';
       }

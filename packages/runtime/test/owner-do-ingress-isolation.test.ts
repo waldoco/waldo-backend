@@ -387,7 +387,7 @@ it('three ready classes each progress within three alarms', async () => {
     await instance.alarm();await instance.alarm();await instance.alarm();
     expect(scheduler.read('three-fair-reminder')).toBeNull();
     const finals=state.storage.kv.get<import('../src/channels/telegram-final-outbox').FinalRecord[]>('telegram_final_outbox_v1')??[];expect(finals.find(r=>r.id==='three-fair-transport')?.status).toBe('delivered');
-    const rows=await state.storage.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1');expect(rows?.find(r=>r.updateId===998877)?.state).toBe('claimed');
+    const rows=await state.storage.get<import('../src/channels/telegram-owner-inbox').InboxRecord[]>('telegram_owner_inbox_v1');expect(rows?.find(r=>r.updateId===998877)?.state).toBe('awaiting_delivery');
   });
 });
 it('actual inbox record and alarm transaction rollback leave no admitted update', async()=>{
@@ -396,5 +396,35 @@ it('actual inbox record and alarm transaction rollback leave no admitted update'
     const before=await state.storage.get('telegram_owner_inbox_v1');const alarm=await state.storage.getAlarm();
     await expect(state.storage.transaction(async txn=>{await persistInboxWake(txn,[{id:'crash-cut'}],Date.now()+10000);throw new Error('cut before commit');})).rejects.toThrow('cut before commit');
     expect(await state.storage.get('telegram_owner_inbox_v1')).toEqual(before);expect(await state.storage.getAlarm()).toBe(alarm);
+  });
+});
+
+it('delayed consumed stop cannot stop a replacement run in the real DO', async()=>{
+  const { turnControl }=await import('../src/channels/turn-control');const subject=81102;const stub=doStub(subject);
+  await runInDurableObject(stub,async(instance,state)=>{
+    const internal=instance as unknown as {activeInbox:{runId:string}|null;runtimes:{telegram:{control:ReturnType<typeof turnControl>}};inbox:{transition:(...args:unknown[])=>Promise<boolean>}};
+    const control=turnControl();control.bindTarget('old-run');control.begin(true);internal.activeInbox={runId:'old-run'};internal.runtimes.telegram={control};
+    const original=internal.inbox.transition.bind(internal.inbox);let entered!:()=>void;const reached=new Promise<void>(r=>entered=r);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
+    internal.inbox.transition=async(...args)=>{if(args[2]==='consumed'){entered();await gate;}return original(...args);};
+    const request=new Request('https://telegram-owner/enqueue',{method:'POST',headers:{'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName},body:JSON.stringify({update_id:991122,message:{message_id:991122,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'/stop'}})});
+    const pending=instance.fetch(request);await reached;control.end();control.bindTarget('new-run');control.begin(true);internal.activeInbox={runId:'new-run'};release();expect((await pending).status).toBe(200);expect(await control.roundAsync()).toBe('');
+    internal.inbox.transition=original;internal.activeInbox=null;delete (internal.runtimes as {telegram?:unknown}).telegram;await state.storage.deleteAlarm();
+  });
+});
+it('a recovered consumed control is uncertain, never an answered child',async()=>{
+  const { TelegramOwnerInbox }=await import('../src/channels/telegram-owner-inbox');const { persistInboxWake }=await import('../src/scheduler/alarm-slot');
+  await runInDurableObject(doStub(81101),async(_instance,state)=>{
+    const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);await inbox.admit({bot:'hermetic-test-bot-token',subject:'81101',doName:route(81101).doName},992233,'steer',{kind:'steer',targetRun:'failed-target'});
+    const row=(await inbox.records()).find(r=>r.updateId===992233)!;await inbox.claim(row.id,'crashed','control',Date.now()+180000);await inbox.transition(row.id,'crashed','consumed');await inbox.recover(new Set());expect((await inbox.records()).find(r=>r.id===row.id)?.state).toBe('quarantined');await state.storage.deleteAlarm();
+  });
+});
+it('target execution throw after consumed steer never completes the child',async()=>{
+  const { TelegramOwnerInbox }=await import('../src/channels/telegram-owner-inbox');const { persistInboxWake }=await import('../src/scheduler/alarm-slot');const subject=81101;
+  await runInDurableObject(doStub(subject),async(instance,state)=>{
+    const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);const binding={bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName};
+    await inbox.admit(binding,993344,JSON.stringify({update_id:993344,message:{from:{id:subject},chat:{id:subject,type:'private'},text:'target'}}));
+    const internal=instance as unknown as {activeInbox:import('../src/channels/telegram-owner-inbox').InboxRecord|null;turn:()=>Promise<void>;drainInbox:()=>Promise<void>};const original=internal.turn.bind(internal);let childId='';
+    internal.turn=async()=>{const target=internal.activeInbox!;await inbox.admit(binding,993345,'steer',{kind:'steer',targetRun:target.runId!});const child=(await inbox.records()).find(r=>r.updateId===993345)!;childId=child.id;await inbox.claim(child.id,'consumed-child','control',Date.now()+180000);await inbox.transition(child.id,'consumed-child','consumed');throw new Error('target execution failed');};
+    await internal.drainInbox();expect((await inbox.records()).find(r=>r.id===childId)?.state).toBe('quarantined');expect((await inbox.records()).find(r=>r.id===childId)?.reason).toBe('consumed_target_outcome_uncertain');internal.turn=original;await state.storage.deleteAlarm();
   });
 });
