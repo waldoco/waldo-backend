@@ -17,27 +17,43 @@ export const renderArtifactBody=(kind:ArtifactKind,body:string):string=>{
 };
 // Applied only to already guarded final text. Convert existing HTTP(S) Markdown
 // link tokens without changing their URL bytes. Raw model HTML remains text.
-const telegramInline=(text:string):string=>{
- // Tokenize before escaping. Code is opaque; HTML is never trusted. No style,
- // images, autolinks or arbitrary markup are emitted.
- const tokens=/`([^`\n]+)`|\*\*([^*\n]+)\*\*/g;let out='',start=0;
- for(const m of text.matchAll(tokens)){
-  out+=escapeRich(text.slice(start,m.index));
-  out+=m[1]!==undefined?`<code>${escapeRich(m[1])}</code>`:`<b>${escapeRich(m[2]!)}</b>`;
-  start=m.index!+m[0].length;
+// Deliberately small grammar: code is opaque; bold and links cannot overlap
+// code. Unsupported nesting/malformed delimiters leave the ENTIRE reply literal.
+const parseTelegram=(text:string, label=false):string|null=>{
+ let out='',i=0;
+ while(i<text.length){
+  if(text.startsWith('```',i)){
+   if(label)return null;
+   const end=text.indexOf('```',i+3);if(end<0)return null;
+   let body=text.slice(i+3,end);const first=body.indexOf('\n');
+   if(first>=0&&/^[a-zA-Z0-9_-]*$/.test(body.slice(0,first)))body=body.slice(first+1);
+   out+=`<pre>${escapeRich(body)}</pre>`;i=end+3;continue;
+  }
+  if(text[i]==='`'){
+   if(label)return null;
+   const end=text.indexOf('`',i+1);if(end<0||text.slice(i+1,end).includes('\n'))return null;
+   out+=`<code>${escapeRich(text.slice(i+1,end))}</code>`;i=end+1;continue;
+  }
+  if(text.startsWith('**',i)){
+   if(text[i+2]==='*'||text[i-1]==='*')return null;
+   const end=text.indexOf('**',i+2);if(end<0)return null;
+   const body=text.slice(i+2,end);
+   if(!body||body.trim()!==body||/[`*\n]/.test(body)||body.includes('](')||text[end+2]==='*')return null;
+   out+=`<b>${escapeRich(body)}</b>`;i=end+2;continue;
+  }
+  if(text[i]==='['&&!label){
+   const close=text.indexOf('](',i+1);
+   if(close>=0){const end=text.indexOf(')',close+2);
+    if(end>=0){const url=text.slice(close+2,end);
+     if(/^https?:\/\/[^\s<>"'`()]+$/.test(url)){
+      const name=parseTelegram(text.slice(i+1,close),true);if(name===null)return null;
+      out+=`<a href="${escapeRich(url)}">${name}</a>`;i=end+1;continue;
+     }
+    }
+   }
+  }
+  out+=escapeRich(text[i]!);i++;
  }
- return out+escapeRich(text.slice(start));
+ return out;
 };
-export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML'}>=>{
- // Code alternatives precede links, so markup inside code stays literal.
- const token=/```(?:[^\n`]*\n)?([\s\S]*?)```|`([^`\n]+)`|\[([^\]\n]+)\]\((https?:\/\/[^\s<>"'`()]+)\)|\*\*([^*\n]+)\*\*/g;let out='',start=0;
- for(const m of text.matchAll(token)){
-  out+=escapeRich(text.slice(start,m.index));
-  if(m[1]!==undefined)out+=`<pre>${escapeRich(m[1])}</pre>`;
-  else if(m[2]!==undefined)out+=`<code>${escapeRich(m[2])}</code>`;
-  else if(m[3]!==undefined)out+=`<a href="${escapeRich(m[4]!)}">${telegramInline(m[3])}</a>`;
-  else out+=`<b>${escapeRich(m[5]!)}</b>`;
-  start=m.index!+m[0].length;
- }
- out+=escapeRich(text.slice(start));return{text:out,parse_mode:'HTML'};
-};
+export const telegramRichReply=(text:string):Readonly<{text:string;parse_mode:'HTML'}>=>({text:parseTelegram(text)??escapeRich(text),parse_mode:'HTML'});
