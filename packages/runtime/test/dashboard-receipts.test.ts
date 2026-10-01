@@ -6,6 +6,11 @@ describe('dashboard write receipts', () => {
   it('covers exactly the console notice keys, so the API and console cannot drift', () => {
     expect([...DASHBOARD_RECEIPT_KEYS].sort()).toEqual(Object.keys(NOTICES).sort());
   });
+  it('every notice key that names a failure maps to a non-applied outcome (guards a new failure notice defaulting to applied)', () => {
+    const failureLike = Object.keys(NOTICES).filter((key) => /failed|unavailable|incomplete|invalid/.test(key));
+    expect(failureLike.length).toBeGreaterThanOrEqual(4);
+    for (const key of failureLike) expect(dashboardReceipt(key).outcome).not.toBe('applied');
+  });
   it('returns the console message with a closed outcome', () => {
     expect(dashboardReceipt('spot.dismiss')).toEqual({ version: 1, key: 'spot.dismiss', outcome: 'applied', message: NOTICES['spot.dismiss'] });
     expect(dashboardReceipt('spot.forget.incomplete')).toMatchObject({ outcome: 'incomplete', message: NOTICES['spot.forget.incomplete'] });
