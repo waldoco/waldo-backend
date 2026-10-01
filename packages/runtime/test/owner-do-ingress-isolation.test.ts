@@ -311,7 +311,10 @@ it('due transport backlog yields every second alarm to due scheduled work', asyn
   await runInDurableObject(doStub(81101), async (instance, state) => {
     ensureSchema(state.storage);
     const scheduler = new Scheduler(state.storage.sql, state.storage, productionDeps());
-    await scheduler.schedule({ id: 'fair-reminder', kind: 'reminder', dueAt: Date.now() - 100, occurrenceAt: Date.now() - 100, payloadRefs: { reminder_id: 'fair-reminder' } });
+    // One captured instant: separate Date.now calls can cross a millisecond,
+    // placing occurrence after due and invalidating this fairness fixture.
+    const dueAt = Date.now() - 100;
+    await scheduler.schedule({ id: 'fair-reminder', kind: 'reminder', dueAt, occurrenceAt: dueAt, payloadRefs: { reminder_id: 'fair-reminder' } });
     // A missing note still reaches the executor and settles its scheduler run.
     const records = [1, 2].map(i => ({ id: `fair-${i}`, trace: `fair-${i}`, payload: { chat_id: 81101, text: 'fixture' }, digest: 'fixture',
       ownerSubject: '81101', doName: state.storage.kv.get('do_name') ?? '', status: 'pending', dueAt: 0, createdAt: Date.now(), attempts: 0 }));
