@@ -27,31 +27,31 @@ export const browsePageHandler = (
   trigger_allowlist: allowlist('browse_page'),
   autonomy_gated: false,
   async handle({ url, instruction }: BrowsePageArgs) {
-    if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.' };
+    if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
     const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     let session: string | null = null;
     const end = () => (session ? call(`/v1/sessions/${session}/end`, {}).catch(() => undefined) : Promise.resolve());
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
-      if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.` };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})` };
+      if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.`, source_taint: 'external' };
+      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})`, source_taint: 'external' };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
-      if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.' };
+      if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.', source_taint: 'external' };
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
-      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})` };
+      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})`, source_taint: 'external' };
 
       const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction, options: { model, timeout: 30000 } });
-      if (extracted.status === 401 || extracted.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${extracted.status}) - it needs replacing.` };
-      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})` };
+      if (extracted.status === 401 || extracted.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${extracted.status}) - it needs replacing.`, source_taint: 'external' };
+      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})`, source_taint: 'external' };
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
-      if (!extractBody.success) return { ok: false, code: 'transient', error: 'Extraction was rejected by the browser service.' };
+      if (!extractBody.success) return { ok: false, code: 'transient', error: 'Extraction was rejected by the browser service.', source_taint: 'external' };
       return { ok: true, data: { url, data: extractBody.data?.result ?? null }, source_taint: 'external' };
     } catch {
-      return { ok: false, code: 'transient', error: 'The browser request failed. No provider diagnostic was returned.' };
+      return { ok: false, code: 'transient', error: 'The browser request failed. No provider diagnostic was returned.', source_taint: 'external' };
     } finally {
       await end();
     }
@@ -104,7 +104,7 @@ export const browseActHandler = (
   autonomy_gated: false,
   mutates_state: true,
   async handle({ url, task, max_actions }: BrowseActArgs) {
-    if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.' };
+    if (!apiKey || !projectId) return { ok: false, code: 'auth_failed', error: 'Browsing is not set up on this Waldo yet.', source_taint: 'external' };
     const headers = { 'x-bb-api-key': apiKey, 'x-bb-project-id': projectId, 'content-type': 'application/json' };
     const call = (path: string, body: object) => fetcher(`${BASE}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
     const model = modelApiKey ? { modelName: MODEL, apiKey: modelApiKey } : MODEL;
@@ -113,20 +113,20 @@ export const browseActHandler = (
     const taken: string[] = [];
     try {
       const started = await call('/v1/sessions/start', { modelName: MODEL, verbose: 0 });
-      if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.` };
-      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})` };
+      if (started.status === 401 || started.status === 403) return { ok: false, code: 'auth_failed', error: `The browser key was rejected (HTTP ${started.status}) - it needs replacing.`, source_taint: 'external' };
+      if (!started.ok) return { ok: false, code: 'transient', error: `Browser session start failed (HTTP ${started.status})`, source_taint: 'external' };
       const startBody = (await started.json()) as { success?: boolean; data?: { sessionId?: string } };
       session = startBody.data?.sessionId ?? null;
-      if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.' };
+      if (!startBody.success || !session) return { ok: false, code: 'transient', error: 'Browser session start returned no session.', source_taint: 'external' };
 
       const navigated = await call(`/v1/sessions/${session}/navigate`, { url });
-      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})` };
+      if (!navigated.ok) return { ok: false, code: 'transient', error: `The page did not load (HTTP ${navigated.status})`, source_taint: 'external' };
 
       let stopped: BrowseActResult['stopped'] = 'cap_reached';
       let blocked: string | undefined;
       for (let step = 0; step < max_actions; step += 1) {
         const observed = await call(`/v1/sessions/${session}/observe`, { instruction: task, options: { model, timeout: 30000 } });
-        if (!observed.ok) return { ok: false, code: 'transient', error: `Observe failed (HTTP ${observed.status})` };
+        if (!observed.ok) return { ok: false, code: 'transient', error: `Observe failed (HTTP ${observed.status})`, source_taint: 'external' };
         const observeBody = (await observed.json()) as { success?: boolean; data?: { result?: BrowserAction[] } };
         const action = observeBody.data?.result?.[0];
         if (!observeBody.success || !action) { stopped = step === 0 ? 'no_action_found' : 'task_done'; break; }
@@ -146,7 +146,7 @@ export const browseActHandler = (
           stopped = 'irreversible_blocked'; blocked = action.description; break;
         }
         const acted = await call(`/v1/sessions/${session}/act`, { input: action, options: { model, timeout: 30000 } });
-        if (!acted.ok) return { ok: false, code: 'transient', error: `Act failed (HTTP ${acted.status})` };
+        if (!acted.ok) return { ok: false, code: 'transient', error: `Act failed (HTTP ${acted.status})`, source_taint: 'external' };
         const actBody = (await acted.json()) as { success?: boolean };
         if (!actBody.success) { stopped = 'no_action_found'; break; }
         taken.push(action.description);
@@ -154,7 +154,7 @@ export const browseActHandler = (
       }
 
       const extracted = await call(`/v1/sessions/${session}/extract`, { instruction: 'Summarise what this page now shows, relative to the task.', options: { model, timeout: 30000 } });
-      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})` };
+      if (!extracted.ok) return { ok: false, code: 'transient', error: `Extraction failed (HTTP ${extracted.status})`, source_taint: 'external' };
       const extractBody = (await extracted.json()) as { success?: boolean; data?: { result?: unknown } };
       const data: BrowseActResult = {
         url, actions_taken: taken, stopped,
@@ -163,7 +163,7 @@ export const browseActHandler = (
       };
       return { ok: true, data, source_taint: 'external' };
     } catch {
-      return { ok: false, code: 'transient', error: 'The browser request failed. No provider diagnostic was returned.' };
+      return { ok: false, code: 'transient', error: 'The browser request failed. No provider diagnostic was returned.', source_taint: 'external' };
     } finally {
       await end();
     }

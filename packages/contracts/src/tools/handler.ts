@@ -109,6 +109,8 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'search_connector',
   'read_tool_output',
   'read_artifact',
+  'browse_page',
+  'browse_act',
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the
   // summary - and its failure text - is externally influenced and stamped 'external' end-to-end.
   'delegate_task',
