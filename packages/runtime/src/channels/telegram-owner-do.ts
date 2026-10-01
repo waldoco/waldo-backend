@@ -315,7 +315,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async enqueueLink(request: Request): Promise<Response> {
     const secret=this.env.TELEGRAM_WEBHOOK_SECRET;
     if(request.method!=='POST'||!secret||!sameSecret(request.headers.get('x-waldo-inbox-secret')??'',secret))return new Response('forbidden',{status:403});
-    const raw=await request.text();
+    // No ad-hoc 2048 limit: same source-bound64KB update ingress cap as owner enqueue.
+    const raw=await request.text();if(raw.length>64_000)return new Response('too large',{status:413});
     let data:LinkBinding & {id:number;digest:string;hash:string};try{data=JSON.parse(raw)}catch{return new Response('bad request',{status:400})}
     const bot=this.env.TELEGRAM_BOT_TOKEN?.split(':')[0];
     if(!data||data.bot!==bot||!/^\d+$/.test(data.bot)||!/^\d+$/.test(data.subject)||data.name!==`telegram-link:${bot}:${data.subject}`||!Number.isSafeInteger(data.id)||data.id<0||!/^[a-f0-9]{64}$/.test(data.digest)||!/^[a-f0-9]{64}$/.test(data.hash)||!this.env.TELEGRAM_OWNER_DO||this.env.TELEGRAM_OWNER_DO.idFromName(data.name).toString()!==this.ctx.id.toString())return new Response('forbidden',{status:403});
@@ -329,11 +330,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await drainLinkReceipt(inbox,ownerDirectory(this.env),live,mode.subject);
       // Routing transport uses the same bounded outbox policy, not owner setup.
       const transport=new TelegramFinalOutbox(this.ctx.storage.kv,Date.now,(rows,due)=>persistTransportWake(this.ctx.storage,rows,due));
-      for(const row of await inbox.records())if(row.state==='frozen'&&row.text){
-        await transport.enqueue({id:`link:${mode.bot}:${row.id}`,trace:`link:${row.id}`,payload:{chat_id:Number(mode.subject),text:row.text},bot:mode.bot,ownerSubject:mode.subject,doName:mode.name,expiresAt:row.frozenAt!+5*60_000});
-        await inbox.complete(row.id);
+      const deliver={allowed:async (r:FinalRecord)=>live()&&r.bot===mode.bot&&r.ownerSubject===mode.subject&&r.doName===mode.name,send:(p:import('./telegram-final-outbox').FinalPayload)=>createTelegramCaller(this.env.TELEGRAM_BOT_TOKEN!)('sendMessage',p),settled:async()=>{}};
+      // Delivery gets a slot before transfer. A full outbox cannot starve its own
+      // drain behind an enqueue failure; one frozen transfer per alarm is fair.
+      await transport.drain(deliver);
+      const row=(await inbox.records()).find(r=>r.state==='frozen'&&r.text);
+      if(row){
+        try{
+          await transport.enqueue({id:`link:${mode.bot}:${row.id}`,trace:`link:${row.id}`,payload:{chat_id:Number(mode.subject),text:row.text!},bot:mode.bot,ownerSubject:mode.subject,doName:mode.name,expiresAt:row.frozenAt!+5*60_000});
+          await inbox.complete(row.id);
+        }catch(error){if(!(error instanceof Error)||error.message!=='final outbox capacity')throw error;}
       }
-      await transport.drain({allowed:async r=>live()&&r.bot===mode.bot&&r.ownerSubject===mode.subject&&r.doName===mode.name,send:p=>createTelegramCaller(this.env.TELEGRAM_BOT_TOKEN!)('sendMessage',p),settled:async()=>{}});
+
     }finally{
       const {rearmSharedAlarm}=await import('../scheduler/alarm-slot');
       await rearmSharedAlarm(this.ctx.storage,null,Date.now());

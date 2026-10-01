@@ -55,3 +55,11 @@ it('expired frozen reply and bot replacement never send or redeem',async()=>{
   await state.storage.put(LINK_MODE,{bot:'8',subject,name});await inbox.admit({bot:'8',subject,name},7,'d7','b'.repeat(64));await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(redeem);expect(observed.sends).toHaveLength(sent);expect((await inbox.records()).find(r=>r.id===7)?.hash).toBeUndefined();await state.storage.deleteAlarm();
  });
 });
+it('saturated outbox still drains and transfers a frozen receipt without repeating redemption',async()=>{
+ const bot=env.TELEGRAM_BOT_TOKEN!.split(':')[0]!;const subject='999994';const name=`telegram-link:${bot}:${subject}`;const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+ await runInDurableObject(stub,async(instance,state)=>{
+  const inbox=new TelegramLinkInbox(state.storage);await inbox.admit({bot,subject,name},8,'d8','a'.repeat(64));await inbox.freeze(8,'frozen retained');
+  const now=Date.now();await state.storage.put('telegram_final_outbox_v1',Array.from({length:256},(_,i)=>({id:'old'+i,trace:'fixture',payload:{chat_id:Number(subject),text:'old generic'},digest:'d'+i,bot,ownerSubject:subject,doName:name,status:'pending',dueAt:now-1,createdAt:now,attempts:0})));
+  const sent=observed.sends.length;const redeem=observed.redeem;await(instance as TelegramOwnerDO).alarm();expect(observed.sends).toHaveLength(sent+1);expect(observed.redeem).toBe(redeem);expect((await inbox.records())[0]?.state).toBe('completed');expect(state.storage.kv.get<any[]>('telegram_final_outbox_v1')!.some(r=>r.payload.text==='frozen retained')).toBe(true);expect(await state.storage.getAlarm()).toBeTypeOf('number');await state.storage.deleteAlarm();
+ });
+});
