@@ -340,5 +340,13 @@ it('crash after reminder final enqueue before schedule complete never repeats th
     } })).rejects.toThrow('crash-injection: after enqueue');
     await scheduler.dispatchDue({ reminder: async () => { modelCalls++; } });
     expect(modelCalls).toBe(1); expect(queue.records().filter(r => r.id.startsWith('cut:'))).toHaveLength(1);
+    expect(scheduler.read('cut-reminder')).toBeNull();
+    const history = state.storage.sql.exec<{ id: string; outcome: string }>('SELECT id, outcome FROM schedule_runs WHERE schedule_id = ?', 'cut-reminder').toArray();
+    expect(history).toHaveLength(1);
+    expect(history[0]?.outcome).toBe('running');
+    const final = queue.records().find(r => r.id.startsWith('cut:'))!;
+    scheduler.settleDelivery(final.reminder!.schedulerRunId!, true);
+    const settled = state.storage.sql.exec<{ outcome: string; delivery: string }>('SELECT outcome, delivery FROM schedule_runs WHERE schedule_id = ?', 'cut-reminder').toArray();
+    expect(settled).toEqual([{ outcome: 'ok', delivery: 'sent' }]);
   });
 });
