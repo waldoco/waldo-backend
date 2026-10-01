@@ -10,3 +10,4 @@ Slices: connections (#542), your-day (this PR). Not started: waiting queue/detai
 - `Grant` in the connections input carries calendar, mail and tasks only. It has no drive, docs, sheets or slides, so the UI must not claim those.
 - `health: "access_granted"` means no recorded refresh error. It does not prove the full scope is granted or that a live read works.
 - The your-day projection drops the planner's free-text reason on purpose (can carry model text). Add a closed reason code first if the UI needs it.
+- Waiting list `summary` is the desk's own line: sends include recipients and subject or a 117-char content preview, browser actions their bindings. Full review bodies are only in the per-item detail. The route must sit behind the owner gate and send `cache-control: private, no-store` (DASHBOARD_OVERVIEW_HEADERS).
