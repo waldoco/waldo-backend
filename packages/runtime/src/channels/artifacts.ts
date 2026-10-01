@@ -141,7 +141,7 @@ const allowlist = (name: ToolName) => triggerTypeSchema.options.filter((trigger)
 export const artifactHandlers = (book: ArtifactBook) => [
   {
     name: 'create_artifact',
-    description: "Save a working artifact (research brief, shortlist, half-built document, extracted data) with a name and kind. Returns its id - use read_artifact to read it back and revise_artifact to update it later. The owner is not shown artifacts automatically; mention what you saved.",
+    description: "Save a working artifact (research brief, shortlist, half-built document, extracted data) with a name and kind. Returns an internal id, not a user-usable file link. It does not publish, share, verify a viewing audience or deliver a file. Never build a URL from the id or claim a usable private/public link. For a requested deliverable, say it is saved internally but delivery is unavailable. Use read_artifact to read it back and revise_artifact to update it later.",
     schema: createArtifactArgsSchema,
     trigger_allowlist: allowlist('create_artifact'),
     autonomy_gated: false,
@@ -149,7 +149,7 @@ export const artifactHandlers = (book: ArtifactBook) => [
     // A mutation ack (id + revision), not stored content: taint-null like the other write tools.
     handle: async (args: CreateArtifactArgs) => {
       const meta = await book.create(args, 'tool:create_artifact');
-      return { ok: true, data: { artifact_id: meta.id, revision: meta.revision, stored_chars: args.body_markdown.length }, source_taint: null };
+      return { ok: true, data: { artifact_id: meta.id, revision: meta.revision, stored_chars: args.body_markdown.length, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     },
   } satisfies ToolHandler<CreateArtifactArgs, unknown, ToolDispatcherContext>,
   {
@@ -163,7 +163,7 @@ export const artifactHandlers = (book: ArtifactBook) => [
       const result = await book.revise(args, 'tool:revise_artifact');
       if (result.status === 'not_found') return { ok: false, code: 'not_found', error: 'No artifact with that id. Use list_artifacts to see what exists.' };
       if (result.status === 'conflict') return { ok: false, code: 'rejected', error: `Revision mismatch: the artifact is at revision ${result.current_revision}. Read it again and retry with expected_revision ${result.current_revision}.` };
-      return { ok: true, data: { artifact_id: result.meta.id, revision: result.meta.revision, stored_chars: args.body_markdown.length }, source_taint: null };
+      return { ok: true, data: { artifact_id: result.meta.id, revision: result.meta.revision, stored_chars: args.body_markdown.length, delivery: { status: 'saved_internal', url: null, audience: 'unverified' } }, source_taint: null };
     },
   } satisfies ToolHandler<ReviseArtifactArgs, unknown, ToolDispatcherContext>,
   {
