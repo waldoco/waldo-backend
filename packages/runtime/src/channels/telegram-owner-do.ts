@@ -1,4 +1,5 @@
 import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
+import { pageMemoryGraph } from './memory-graph-page';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
 import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
@@ -519,7 +520,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         // Read directly after session admission. Never initialize runtime/memory
         // schemas, provider clients, FTS or scheduler just to inspect this graph.
-        return Response.json(readMemoryGraph(this.ctx.storage.sql, this.ctx.id.toString()), {headers:DASHBOARD_OVERVIEW_HEADERS});
+        const paged = pageMemoryGraph(readMemoryGraph(this.ctx.storage.sql, this.ctx.id.toString()), url.searchParams);
+        return Response.json(paged.body, {status:paged.status,headers:DASHBOARD_OVERVIEW_HEADERS});
       } catch {
         return Response.json({error:'memory_unavailable'}, {status:503,headers:DASHBOARD_OVERVIEW_HEADERS});
       }
