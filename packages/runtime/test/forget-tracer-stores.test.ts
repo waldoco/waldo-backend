@@ -61,9 +61,36 @@ describe('forget coverage - tracer and scheduler stores', () => {
   // One gap marker per store. Each starts passing (so it.fails goes red) when purge covers that store;
   // the owner of that fix removes `.fails` on that one case in the same change.
   for (const storeName of STORES) {
-    it.fails(`GAP: purge leaves the forgotten text in ${storeName}`, async () => {
+    it(`purge clears the forgotten text from ${storeName}`, async () => {
       const run = await seedAndPurge();
       expect(run.after[storeName]).toBe(0);
     });
   }
+
+  // Policy (decided by the main agent under decide-and-log, not by the owner): unsent copies are
+  // deleted, history is redacted in place. Delivered Telegram text is outside our reach.
+  it('deletes unsent copies and redacts delivered history', async () => {
+    const out = await withStorage((storage) => {
+      const sql = storage.sql;
+      ensureSchema(storage);
+      const store = claimStore(sql);
+      const claimId = Number(sql.exec<{ id: number }>(`INSERT INTO claims (kind, text, source, evidence, created_at, last_seen_at) VALUES ('fact', ?, 'stated', 'owner said so', ?, ?) RETURNING id`, CLAIM_TEXT, AT, AT).one().id);
+      const payload = JSON.stringify({ text: `a "quoted" ${CLAIM_TEXT}` });
+      sql.exec(`INSERT INTO outbox (outbox_id, run_id, kind, idempotency_key, payload, status, created_at) VALUES ('p', 'rp', 'push', 'kp', ?, 'pending', 1), ('a', 'ra', 'push', 'ka', ?, 'acked', 1)`, payload, payload);
+      sql.exec(`INSERT INTO schedule (id, kind, occurrence_at, due_at, payload_json, status, created_at, updated_at) VALUES ('armed1', 'reminder', 1, 1, ?, 'armed', 1, 1), ('done1', 'reminder', 1, 1, ?, 'done', 1, 1)`, payload, payload);
+      const result = store.purge([claimId], AT);
+      return {
+        ready: result.ready,
+        outbox: sql.exec<{ outbox_id: string; payload: string }>('SELECT outbox_id, payload FROM outbox ORDER BY outbox_id').toArray(),
+        schedule: sql.exec<{ id: string; payload_json: string }>('SELECT id, payload_json FROM schedule ORDER BY id').toArray(),
+      };
+    });
+    expect(out.ready).toBe(true);
+    expect(out.outbox.map((row) => row.outbox_id)).toEqual(['a']);
+    expect(out.schedule.map((row) => row.id)).toEqual(['done1']);
+    for (const row of [...out.outbox.map((r) => r.payload), ...out.schedule.map((r) => r.payload_json)]) {
+      expect(row).not.toContain(MARKER);
+      expect(() => JSON.parse(row)).not.toThrow();
+    }
+  });
 });
