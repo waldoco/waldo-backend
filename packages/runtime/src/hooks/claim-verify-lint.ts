@@ -1,31 +1,18 @@
-// Advisory lint: a reply that claims a completed effect ("saved", "sent", "booked") should follow
-// a successful verification call in the same turn. Heuristic and advisory only: it never blocks
-// a reply and never decides truth. The caller supplies the verifier tool names; an empty list
-// fails closed (every claim is flagged) rather than guessing which tools verify.
-export type TurnStep =
-  | { readonly kind: 'tool_call'; readonly name: string; readonly ok: boolean }
-  | { readonly kind: 'reply'; readonly text: string };
+// Advisory check: a structured "done" claim must be backed by a successful tool receipt of the
+// same effect (and the same ref when the claim names one) earlier in the same turn. It reads
+// structured data only: no text is parsed, so it makes no judgment about wording. Advisory and
+// unwired; where claims come from (a typed field on the reply) is a separate, reviewed step.
+export type ToolReceipt = { readonly seq: number; readonly tool: string; readonly effect: string; readonly ok: boolean; readonly ref?: string };
+export type DoneClaim = { readonly seq: number; readonly effect: string; readonly ref?: string };
+export type ClaimFinding = { readonly claim_seq: number; readonly effect: string; readonly reason: 'no_matching_receipt' };
 
-export type ClaimFinding = { readonly step: number; readonly claim: string; readonly reason: 'no_verification_before_claim' };
-
-const CLAIM = /\b(saved|sent|booked|scheduled|created|deleted|forgotten|updated|added|removed|cancell?ed|moved)\b/i;
-const NEGATION = /\b(couldn'?t|could not|can'?t|cannot|didn'?t|did not|wasn'?t|was not|not|never|nothing was|failed|unable)\b/i;
-
-export const lintClaimsAgainstVerification = (steps: readonly TurnStep[], verifiers: readonly string[]): readonly ClaimFinding[] => {
-  const known = new Set(verifiers);
+export const checkClaimsAgainstReceipts = (claims: readonly DoneClaim[], receipts: readonly ToolReceipt[]): readonly ClaimFinding[] => {
+  const used = new Set<number>();
   const findings: ClaimFinding[] = [];
-  let verified = false;
-  steps.forEach((step, index) => {
-    if (step.kind === 'tool_call') {
-      if (step.ok && known.has(step.name)) verified = true;
-      return;
-    }
-    // Sentence-level so "I saved it" is checked even next to a question or a negated sentence.
-    for (const sentence of step.text.split(/(?<=[.!?])\s+/)) {
-      if (sentence.trim().endsWith('?') || NEGATION.test(sentence)) continue;
-      const match = CLAIM.exec(sentence);
-      if (match && !verified) { findings.push({ step: index, claim: match[1]!.toLowerCase(), reason: 'no_verification_before_claim' }); break; }
-    }
-  });
+  for (const claim of [...claims].sort((a, b) => a.seq - b.seq)) {
+    const index = receipts.findIndex((r, i) => !used.has(i) && r.ok && r.seq < claim.seq && r.effect === claim.effect && (claim.ref === undefined || r.ref === claim.ref));
+    if (index === -1) findings.push({ claim_seq: claim.seq, effect: claim.effect, reason: 'no_matching_receipt' });
+    else used.add(index);
+  }
   return findings;
 };

@@ -1,28 +1,30 @@
 import { describe, expect, it } from 'vitest';
-import { lintClaimsAgainstVerification, type TurnStep } from '../src/hooks/claim-verify-lint';
+import { checkClaimsAgainstReceipts, type DoneClaim, type ToolReceipt } from '../src/hooks/claim-verify-lint';
 
-const VERIFIERS = ['read_owner_context', 'query_calendar', 'search_communication'] as const;
-const call = (name: string, ok = true): TurnStep => ({ kind: 'tool_call', name, ok });
-const reply = (text: string): TurnStep => ({ kind: 'reply', text });
+const receipt = (over: Partial<ToolReceipt> = {}): ToolReceipt => ({ seq: 1, tool: 'create_event', effect: 'calendar_event_created', ok: true, ref: 'evt-1', ...over });
+const claim = (over: Partial<DoneClaim> = {}): DoneClaim => ({ seq: 2, effect: 'calendar_event_created', ref: 'evt-1', ...over });
 
-describe('claim-after-fresh-verification lint (advisory)', () => {
-  it('flags a completion claim with no verification call earlier in the turn', () => {
-    const out = lintClaimsAgainstVerification([reply('Done, I saved that to your calendar.')], VERIFIERS);
-    expect(out).toEqual([{ step: 0, claim: 'saved', reason: 'no_verification_before_claim' }]);
+describe('done-claim vs tool-receipt check (advisory, structured, no text parsing)', () => {
+  it('a claim with a matching successful receipt earlier in the turn is supported', () => {
+    expect(checkClaimsAgainstReceipts([claim()], [receipt()])).toEqual([]);
   });
-  it('passes when a successful verifier ran before the claim', () => {
-    expect(lintClaimsAgainstVerification([call('query_calendar'), reply('I scheduled it and confirmed it is on your calendar.')], VERIFIERS)).toEqual([]);
+  it('no receipt at all: unsupported', () => {
+    expect(checkClaimsAgainstReceipts([claim()], [])).toEqual([{ claim_seq: 2, effect: 'calendar_event_created', reason: 'no_matching_receipt' }]);
   });
-  it('a failed verifier or one that runs only after the claim does not count', () => {
-    expect(lintClaimsAgainstVerification([call('query_calendar', false), reply('It was booked.')], VERIFIERS)).toHaveLength(1);
-    expect(lintClaimsAgainstVerification([reply('It was booked.'), call('query_calendar')], VERIFIERS)).toHaveLength(1);
+  it('a failed receipt does not support a done claim', () => {
+    expect(checkClaimsAgainstReceipts([claim()], [receipt({ ok: false })])).toEqual([{ claim_seq: 2, effect: 'calendar_event_created', reason: 'no_matching_receipt' }]);
   });
-  it('ignores replies with no completion claim, and negated or question forms', () => {
-    expect(lintClaimsAgainstVerification([reply('Want me to save this?')], VERIFIERS)).toEqual([]);
-    expect(lintClaimsAgainstVerification([reply("I couldn't send it, nothing was sent.")], VERIFIERS)).toEqual([]);
-    expect(lintClaimsAgainstVerification([reply('Here are your three options.')], VERIFIERS)).toEqual([]);
+  it('a receipt that comes after the claim does not support it', () => {
+    expect(checkClaimsAgainstReceipts([claim({ seq: 1 })], [receipt({ seq: 2 })])).toHaveLength(1);
   });
-  it('unknown verifier list fails closed: every claim is flagged', () => {
-    expect(lintClaimsAgainstVerification([call('query_calendar'), reply('Saved.')], [])).toHaveLength(1);
+  it('effect and ref must both match', () => {
+    expect(checkClaimsAgainstReceipts([claim()], [receipt({ effect: 'email_sent' })])).toHaveLength(1);
+    expect(checkClaimsAgainstReceipts([claim()], [receipt({ ref: 'evt-2' })])).toHaveLength(1);
+  });
+  it('a claim naming no ref matches any successful receipt of that effect', () => {
+    expect(checkClaimsAgainstReceipts([claim({ ref: undefined })], [receipt({ ref: 'anything' })])).toEqual([]);
+  });
+  it('each receipt supports at most one claim', () => {
+    expect(checkClaimsAgainstReceipts([claim({ seq: 2, ref: undefined }), claim({ seq: 3, ref: undefined })], [receipt()])).toEqual([{ claim_seq: 3, effect: 'calendar_event_created', reason: 'no_matching_receipt' }]);
   });
 });
