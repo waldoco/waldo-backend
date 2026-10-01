@@ -92,6 +92,6 @@ it('an invented lab-only claim (evidence not in the owner message) is stored as 
   expect(memorySection).toContain('HbA1c was 7.2 last month');
   expect(memorySection).toContain('source="inferred" provenance="provisional"');
   expect(stored[0]!.origin).toBe('agent');
-  // The rendered evidence still reads as an owner quote the owner never said.
-  expect(memorySection).toContain('evidence: owner, tg-1: "my HbA1c was 7.2 last month"');
+  // The writer's quote is rendered, but labelled from the code-written origin (agent).
+  expect(memorySection).toContain('evidence (writer-stated quote, not found in the owner\'s words or shared content): owner, tg-1: "my HbA1c was 7.2 last month"');
 });

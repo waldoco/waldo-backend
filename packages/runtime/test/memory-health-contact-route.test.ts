@@ -48,3 +48,21 @@ it('an owner-grounded contact fact is stored and answers with the exact values',
     expect(prompt).toContain('riya@example.com');
   });
 });
+
+// Provenance presentation: the evidence label comes from code-written origin / source_ref, never
+// from the writer's text. Unknown (legacy NULL origin) stays unlabelled; no row is hidden or promoted.
+const rendered = (origin: string | undefined, sourceRef?: string): Promise<string | undefined> => withStore(`claims-label-${origin ?? 'null'}-${sourceRef ? 'ref' : 'noref'}`, (store) => {
+  store.add({ kind: 'health', text: 'HbA1c was 8.8', source: origin === 'owner' ? 'stated' : 'inferred', evidence: 'owner, tg-1: "my HbA1c was 8.8"', origin, source_ref: sourceRef }, AT);
+  const prompt = turnMemoryPrompt(store, 'what was my HbA1c?');
+  return prompt.split('\n').find((line) => line.startsWith('<claim '));
+});
+
+it('evidence label follows code-written origin: agent is labelled, owner-with-ref and unknown are unchanged, untrusted never rendered', async () => {
+  const quote = 'evidence: owner, tg-1: "my HbA1c was 8.8"';
+  expect(await rendered('owner', 'owner, tg-1')).toContain(`${quote} | source ref:`);
+  expect(await rendered('owner', 'owner, tg-1')).not.toContain('writer-stated');
+  expect(await rendered(undefined)).toContain(`| ${quote}`);
+  expect(await rendered(undefined)).not.toContain('writer-stated');
+  expect(await rendered('agent')).toContain('evidence (writer-stated quote, not found in the owner\'s words or shared content): owner, tg-1');
+  expect(await rendered('untrusted')).toBeUndefined(); // recall already excludes untrusted rows
+});
