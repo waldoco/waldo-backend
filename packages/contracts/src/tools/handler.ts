@@ -106,6 +106,7 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'web_search',
   'read_document',
   'call_mcp_tool',
+  'read_mcp_tool',
   'search_connector',
   'read_tool_output',
   'read_artifact',

@@ -52,6 +52,7 @@ export const PROBE_STRIPPED_TOOLS: readonly string[] = [
   'browse_page',
   'browse_act',
   'call_mcp_tool',
+  'read_mcp_tool',
   'connect_service',
 ];
 
