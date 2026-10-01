@@ -581,7 +581,10 @@ const correctionMatches = (old: Claim, replacement: { kind: string; text: string
 
 type ClaimOps = Readonly<{ add: readonly (NewClaim & { touches_forgotten: boolean })[]; corrections?: readonly { old_id: number; kind: string; text: string; evidence: string }[]; seen: readonly number[]; confirm: readonly number[]; dismiss: readonly number[]; forget_claims: readonly number[]; forget_nodes: readonly number[]; forget_topic: string | null }>;
 
-export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean): string => {
+// What this application of claim ops actually did, as counts the caller can report truthfully.
+export type ClaimOutcome = Readonly<{ written: number; held: number; holdReasons: readonly string[]; downgraded: number; corrected: number; confirmed: number; dismissed: number; forgetClaimsAttempted: number; forgetClaimsRemoved: number; forgetNodes: number; forgetAllowed: boolean; purgeIncomplete: readonly string[] }>;
+
+export const applyClaimOps = (store: ClaimStore, raw: string, at: string, evidence = 'owner agreed', onPurged?: (texts: readonly string[], ids: readonly number[]) => void, grounding?: ClaimGrounding, forgetAllowed?: boolean, onOutcome?: (outcome: ClaimOutcome) => void): string => {
   // Destructive ops need an explicit forget request in the text under review (see
   // FORGET_INTENT above). Callers that pass no override derive it from the grounding owner
   // section; migration-style callers with no live owner voice pass false explicitly.
@@ -697,6 +700,15 @@ export const applyClaimOps = (store: ClaimStore, raw: string, at: string, eviden
   }
   for (const id of forgetsAllowed ? ops.forget_nodes.filter((id) => nodes.has(id)) : []) store.forgetNode(id);
   const leftover = purge ? [...Object.keys(purge.remaining), ...purge.failed.map((store) => `${store}(failed)`)] : [];
+  onOutcome?.({
+    written, held: held.length, holdReasons: [...holdReasons], downgraded, corrected: corrected.size,
+    confirmed: new Set(ops.confirm.filter((id) => known.has(id))).size,
+    dismissed: new Set(ops.dismiss.filter((id) => known.has(id) && !correctionIds.has(id))).size,
+    // Unique ids, so a repeated id counts once; removed only when every store verified clean.
+    forgetClaimsAttempted: new Set(forgetIds).size, forgetClaimsRemoved: purge?.ready ? new Set(forgetIds).size : 0,
+    forgetNodes: forgetsAllowed ? new Set(ops.forget_nodes.filter((id) => nodes.has(id))).size : 0,
+    forgetAllowed: forgetsAllowed, purgeIncomplete: leftover,
+  });
   const reasons = holdReasons.size ? `(${[...holdReasons].join(',')})` : '';
   const blockedForgets = forgetsAllowed ? 0 : ops.forget_claims.length + ops.forget_nodes.length + (ops.forget_topic?.trim() ? 1 : 0);
   return `+${written} held${held.length}${reasons} seen${ops.seen.length} confirmed${ops.confirm.length} dismissed${ops.dismiss.length} forgot${forgetIds.length + (forgetsAllowed ? ops.forget_nodes.length : 0)}${blockedForgets ? ` forget-blocked${blockedForgets}(no-intent)` : ''}${downgraded ? ` downgraded${downgraded}` : ''}${corrected.size ? ` corrected${corrected.size}` : ''}${topic ? ' barrier' : ''}${purge ? (leftover.length ? ` purge-incomplete:${leftover.join(',')}` : ' purged') : ''}`;
