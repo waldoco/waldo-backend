@@ -19,16 +19,20 @@ export class TelegramFinalOutbox {
   constructor(private readonly kv: Kv, private readonly now: () => number = Date.now, private readonly persist?: (rows: FinalRecord[], due: number | null) => Promise<void>) {}
   records(): FinalRecord[] { return this.kv.get<FinalRecord[]>(FINAL_OUTBOX_KEY) ?? []; }
   private async save(rows: FinalRecord[]): Promise<void> {
-    const due = rows.filter(r => r.status === 'pending' || r.status === 'attempting' || !r.settled).map(r => r.dueAt);
+    const due = rows.flatMap(r => r.status === 'pending' || r.status === 'attempting' || !r.settled ? [r.dueAt] : r.payload.text ? [r.createdAt + 86400000] : []);
     const bound = due.length ? Math.min(...due) : null;
     if (this.persist) await this.persist(rows, bound);
     else { this.kv.put(FINAL_OUTBOX_KEY, rows); this.kv.put(FINAL_OUTBOX_DUE_KEY, bound); }
   }
+  async maintain(): Promise<void> {
+    const rows = this.records().map(r => r.settled && r.status !== 'pending' && this.now() >= r.createdAt + 86400000
+      ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, receiptUrls: [], reason: r.status === 'quarantined' ? 'expired_ambiguous_metadata' : r.reason } : r);
+    await this.save(rows);
+  }
   async enqueue(input: Omit<FinalRecord, 'digest' | 'status' | 'dueAt' | 'createdAt' | 'attempts'>): Promise<void> {
     const hash = await digest(input);
     let rows = this.records();
-    // After 24h retain content-free uncertainty metadata, never resend automatically.
-    rows = rows.map(r => r.status === 'quarantined' && r.settled && this.now() - r.createdAt > 86400000 ? { ...r, payload: { chat_id: r.payload.chat_id, text: '' }, receiptUrls: [], reason: 'expired_ambiguous_metadata' } : r);
+    await this.maintain(); rows = this.records();
     const known = rows.find(r => r.id === input.id);
     if (known) {
       if (known.digest !== hash) throw new Error('final outbox identity conflict');
@@ -48,6 +52,7 @@ export class TelegramFinalOutbox {
     send(payload: FinalPayload): Promise<unknown>;
     settled(record: FinalRecord): Promise<void>;
   }): Promise<void> {
+    await this.maintain();
     const rows = this.records();
     // attempting persisted before network is an uncertainty boundary after restart.
     for (const row of rows) if (row.status === 'attempting') {
@@ -73,7 +78,7 @@ export class TelegramFinalOutbox {
         row.status = result === undefined ? 'blocked' : 'quarantined'; row.reason = result === undefined ? 'egress_blocked' : 'invalid_ack';
       } else { row.status = 'delivered'; row.messageId = messageId as number; }
     } catch (error) {
-      if (error instanceof TelegramRejection && error.retryable && row.attempts < MAX_ATTEMPTS) {
+      if (error instanceof TelegramRejection && error.retryable && !(typeof error.retryAfter === 'number' && error.retryAfter > 3600) && row.attempts < MAX_ATTEMPTS) {
         row.status = 'pending'; row.reason = 'provider_rejected';
         row.dueAt = this.now() + Math.max(30_000 * row.attempts, (typeof error.retryAfter === 'number' && Number.isFinite(error.retryAfter) && error.retryAfter >= 0 ? Math.min(3600, error.retryAfter) : 0) * 1_000);
       } else {

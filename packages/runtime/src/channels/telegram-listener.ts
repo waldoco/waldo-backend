@@ -29,6 +29,7 @@ export type TelegramOwnerListenerOptions = Readonly<{
   api: TelegramOwnerApi;
   respond(turn: TelegramInboundTurn, time: TurnTimer): Promise<string>;
   queueFinal?(turn: TelegramInboundTurn, payload: Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>, reaction: string): Promise<void>;
+  clearTurnReceipts?(trace: string): void;
   turnTimeoutMs?: number;
   reactionTimeoutMs?: number;
   chooseReaction?(turn: TelegramInboundTurn): Promise<string | null>;
@@ -165,6 +166,7 @@ export class TelegramOwnerListener {
       log('turn', now() - started, false, error instanceof Error ? error.message : String(error), turnFailureCode(error));
       return 'failed';
     } finally {
+      this.options.clearTurnReceipts?.(trace);
       clearInterval(typingTimer);
     }
   }

@@ -444,6 +444,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       // Transport gets a fresh invocation and never shares the response/tool budget.
       const preferSchedule = this.ctx.storage.kv.get<boolean>('transport_last_alarm') === true;
       const dueSchedule = scheduler.hasDue();
+      await finalOutbox.maintain();
       if ((!preferSchedule || !dueSchedule) && finalOutbox.records().some(r => r.status === 'attempting' || (r.status === 'pending' && r.dueAt <= Date.now()) || (r.status !== 'pending' && !r.settled))) {
         this.ctx.storage.kv.put('transport_last_alarm', true);
         try { await finalOutbox.drain({
@@ -1043,6 +1044,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),
+      clearTurnReceipts: trace => { turnReceiptUrls.delete(trace); },
       saveOffset: (offset) => this.ctx.storage.put(channel === 'whatsapp' ? 'wa_offset' : 'offset', offset),
     }) : null;
     const fire = async (entry: ScheduleEntry) => {
@@ -1072,7 +1074,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const text = (await responder.remind(trace, owner, note, time)).trim() || note;
         if (channel === 'telegram') {
-          await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text },
+          await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, receiptUrls: [...(turnReceiptUrls.get(trace) ?? [])],
             ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
             reminder: { id: entry.id, occurrence: entry.occurrence_at, runId: run.id, schedulerRunId: scheduler.runningRunId(entry.id, entry.occurrence_at), once: entry.recurrence === null },
           });
@@ -1090,7 +1092,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         log({ trace, hop: 'reminder', ms: Date.now() - started, ok: false, error: String(error) });
         log({ trace, hop: 'machine_turn', ms: Date.now() - started, ok: false, detail: 'reminder' });
         throw error;
-      }
+      } finally { turnReceiptUrls.delete(trace); }
     };
     // A7: a daily standing-order fire runs the same machine-turn path as a reminder. The gate
     // text inside the fire message carries the confirm_first semantics; escalation decides who
