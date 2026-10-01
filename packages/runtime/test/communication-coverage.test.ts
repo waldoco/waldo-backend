@@ -20,3 +20,17 @@ it('reports a truncated sampled page even when upper-bound filtering removes eve
  const result=await handler.handle({date_range:{from:'2026-09-30T00:00:00Z',to:'2026-10-01T00:00:00Z'}} as never);
  expect(result).toMatchObject({ok:true,data:{messages:[],coverage:{complete:false,fetched_count:10,returned_count:0,page_limit:10,upper_bound_applied_after_page:true}}});
 });
+it('requests the exact bounded page and exposes provider pagination rather than assuming completeness',async()=>{
+ const requests:unknown[]=[];
+ const handler=googleHandlers({client:async()=>({mailPage:async(...args:unknown[])=>{requests.push(args);return {messages:[messages[1]],next_page_token:'page-2',result_size_estimate:17};}} as never)},desk,clock).find(h=>h.name==='get_communication')!;
+ const args=getCommunicationArgsSchema.parse({date_range:{from:'2026-09-30T00:00:00Z',to:'2026-10-01T00:00:00Z'},limit:20,page_token:'page-1'});
+ const result=await handler.handle(args as never);
+ expect(requests).toEqual([['in:inbox category:primary after:1790726400 before:1790812800',20,'page-1']]);
+ expect(result).toMatchObject({ok:true,data:{next_page_token:'page-2',result_size_estimate:17,coverage:{pagination:'provider_page',complete:false,upper_bound_applied_after_page:false,page_limit:20}}});
+});
+it('requires a pinned window for cursor continuation and keeps changed/invalid rows incomplete',async()=>{
+ expect(getCommunicationArgsSchema.safeParse({page_token:'next'}).success).toBe(false);
+ const handler=googleHandlers({client:async()=>({mailPage:async()=>({messages:[messages[3]],next_page_token:null,result_size_estimate:1})} as never)},desk,clock).find(h=>h.name==='get_communication')!;
+ const result=await handler.handle({date_range:{from:'2026-09-30T00:00:00Z',to:'2026-10-01T00:00:00Z'}} as never);
+ expect(result).toMatchObject({ok:true,data:{messages:[],coverage:{complete:false}}});
+});

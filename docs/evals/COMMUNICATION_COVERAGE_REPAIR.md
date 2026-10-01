@@ -19,3 +19,22 @@ Documents nextPageToken and resultSizeEstimate, which the existing adapter drops
 https://developers.google.com/workspace/gmail/api/guides/filtering
 Documents query filtering and API/UI differences. Notification sender display
 names remain untrusted and never establish a reply recipient or current CI state.
+
+## Connector cursor/query follow-up
+
+The concrete Google client now has read-only mailPage(q,limit,pageToken), preserves
+nextPageToken/resultSizeEstimate and validates response metadata before returning.
+The shared GOOGLE_METHODS roster exposes it on the Vault/proxy rail without a
+separate hand-maintained allowlist. get_communication uses exact epoch after/before
+query bounds, filters the final metadata timestamps to [from,to), and exposes the
+provider cursor and estimate. Cursor continuation requires the same explicit date
+range; rolling default time must not silently change between pages. A first page
+without a next cursor and without filtered rows can describe complete coverage of
+that query, not all categories/accounts. Subsequent pages are never described as a
+whole query. Provider estimates are not counts. No automatic paging/model loops.
+
+Legacy synthetic/read adapters that lack mailPage retain explicitly marked unknown
+pagination and the previous sampled-page limitation. The isolated native Google
+adapter denies mailPage until it has a concrete fixture mapping. No fixture row
+injection, sender unmasking, account metadata, proxy live deployment or hosted
+query is claimed. The new method is read-only and requires no intent/send grant.

@@ -99,22 +99,26 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
   } satisfies ToolHandler<QueryCalendarArgs, unknown, ToolDispatcherContext>,
   {
     name: 'get_communication',
-    description: "Read a sampled page from the connected Gmail account's Primary inbox category, not the entire inbox or all accounts. Defaults to a rolling 24-hour window, not today. Inspect the returned coverage; pagination is unknown and an empty page does not prove no mail in the requested range.",
+    description: "Read a sampled page from the connected Gmail account's Primary inbox category, not the entire inbox or all accounts. Defaults to a rolling 24-hour window, not today. Inspect coverage and next_page_token, then pass the same date_range with page_token for subsequent pages. Legacy adapters lack pagination; an empty legacy page does not prove no mail in the requested range.",
     schema: getCommunicationArgsSchema,
     trigger_allowlist: allowlist('get_communication'),
     autonomy_gated: false,
-    handle: ({ date_range }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
+    handle: ({ date_range,limit=10,page_token }: GetCommunicationArgs) => withGoogle(google, 'mail', async (client) => {
       const since = date_range?.from ? Date.parse(date_range.from) : clock.now().getTime() - DAY_MS;
       const to = date_range?.to ?? clock.now().toISOString();
       const from = new Date(since).toISOString();
-      const fetched = await client.newMail(since, 10);
+      const query=`in:inbox category:primary after:${Math.floor(since/1000)} before:${Math.ceil(Date.parse(to)/1000)}`;
+      const paged=typeof client.mailPage==='function';
+      if(page_token&&!paged)throw new Error('Gmail pagination adapter unavailable');
+      const page=paged?await client.mailPage(query,limit,page_token):null;
+      const fetched=page? page.messages : await client.newMail(since,limit);
       const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
-      return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, coverage: {
+      return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query, next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
         scope: 'inbox_primary_category', account_selection: 'connected_adapter_account_not_all_accounts',
-        retrieval_window: date_range ? 'explicit_date_range' : 'rolling_24_hours', page_limit: 10,
-        fetched_count: fetched.length, returned_count: messages.length, pagination: 'unknown_not_returned_by_adapter',
-        upper_bound_applied_after_page: true, complete: false,
-        limitation: 'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
+        retrieval_window: date_range ? 'explicit_date_range' : 'rolling_24_hours', page_limit: limit,
+        fetched_count: fetched.length, returned_count: messages.length, pagination: paged?'provider_page':'unknown_not_returned_by_adapter',
+        upper_bound_applied_after_page: !paged, complete: paged&&page!.next_page_token===null&&page_token===undefined&&fetched.length===messages.length,
+        limitation: paged?'Primary inbox category from one adapter account. Provider cursor describes remaining pages; result size is an estimate. Not all accounts or categories.':'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
       } };
     }),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,

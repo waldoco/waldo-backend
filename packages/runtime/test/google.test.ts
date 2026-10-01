@@ -409,3 +409,22 @@ describe('gmail search + thread read (A1)', () => {
     }
   });
 });
+describe('Gmail provider pages',()=>{
+ it('preserves opaque cursor and estimate, fetches metadata, and encodes bounded q',async()=>{
+  const urls:string[]=[];
+  const fetcher=(async(input:RequestInfo|URL)=>{const url=String(input);urls.push(url);
+   if(url.includes('oauth2.googleapis.com'))return Response.json({access_token:'unit-token'});
+   if(url.includes('/messages?'))return Response.json({messages:[{id:'m1'}],nextPageToken:'next+/=',resultSizeEstimate:9});
+   return Response.json({threadId:'t1',snippet:'Notice',internalDate:'1790726401000',payload:{headers:[{name:'From',value:'notice@example.invalid'},{name:'Subject',value:'Notice'}]}});
+  }) as typeof fetch;
+  const page=await googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox after:1790726400 before:1790812800',20,'first+/=');
+  const request=new URL(urls.find(u=>u.includes('/messages?'))!);expect(request.searchParams.get('pageToken')).toBe('first+/=');expect(request.searchParams.get('q')).toContain('before:1790812800');
+  expect(page).toMatchObject({next_page_token:'next+/=',result_size_estimate:9,messages:[{id:'m1',thread_id:'t1',from:'notice@example.invalid'}]});
+ });
+ it('rejects malformed page metadata rather than silently claiming last page',async()=>{
+  for(const bad of [{nextPageToken:0},{nextPageToken:''},{resultSizeEstimate:-1},{messages:[{id:''}]}]){
+   const fetcher=(async(input:RequestInfo|URL)=>String(input).includes('oauth2.googleapis.com')?Response.json({access_token:'unit-token'}):Response.json(bad)) as typeof fetch;
+   await expect(googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox',10)).rejects.toThrow('invalid Gmail page response');
+  }
+ });
+});

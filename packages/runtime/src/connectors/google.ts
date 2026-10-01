@@ -170,6 +170,7 @@ export type GoogleClient = Readonly<{
   moveEvent(id: string, start: string, end: string, etag?: string): Promise<CalendarItem>;
   cancelEvent(id: string, etag?: string): Promise<void>;
   changedEvents(since: number, from: number, to: number): Promise<readonly CalendarChange[]>;
+  mailPage(query:string,limit:number,pageToken?:string):Promise<Readonly<{messages:readonly MailItem[];next_page_token:string|null;result_size_estimate:number|null}>>;
   newMail(since: number, limit: number): Promise<readonly MailItem[]>;
   searchMail(query: string, limit: number): Promise<readonly MailItem[]>;
   readThread(threadId: string, limit: number): Promise<readonly ThreadMessage[]>;
@@ -179,7 +180,7 @@ export type GoogleClient = Readonly<{
 // Single source for the connector-proxy allowlist: the runtime's vault client and the Supabase
 // connector-proxy Edge Function both build from this list, so a method added to GoogleClient but
 // missed here fails `satisfies` / the parity test instead of breaking live calls on Vault installs.
-export const GOOGLE_METHODS = ['freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks'] as const satisfies readonly (keyof GoogleClient)[];
+export const GOOGLE_METHODS = ['mailPage','freeBusy', 'events', 'draft', 'sendRaw', 'findSentByMessageId', 'event', 'createEvent', 'moveEvent', 'cancelEvent', 'changedEvents', 'newMail', 'searchMail', 'readThread', 'tasks'] as const satisfies readonly (keyof GoogleClient)[];
 export type GoogleMethod = (typeof GOOGLE_METHODS)[number];
 
 const b64urlDecode = (data: string): string => {
@@ -278,6 +279,13 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       return (json.items ?? [])
         .filter((event) => event.attendees?.find((a) => a.self)?.responseStatus !== 'declined')
         .map((event) => ({ ...toItem({ ...event, start: event.start ?? {}, end: event.end ?? {} }), status: event.status ?? 'confirmed', created: event.created ?? '' }));
+    },
+    async mailPage(query,limit,pageToken) {
+      if(typeof query!=='string'||!query.trim()||!Number.isSafeInteger(limit)||limit<1||limit>500||(pageToken!==undefined&&(typeof pageToken!=='string'||!pageToken)))throw new Error('invalid Gmail page request');
+      const url=new URL(GMAIL);url.search=new URLSearchParams({q:query,maxResults:String(limit),...(pageToken?{pageToken}:{})}).toString();
+      const data=await call(url.toString()) as {messages?:{id:string}[];nextPageToken?:string;resultSizeEstimate?:number};
+      if(!data||typeof data!=='object'||(data.messages!==undefined&&(!Array.isArray(data.messages)||data.messages.some(m=>!m||typeof m.id!=='string'||!m.id)))||(data.nextPageToken!==undefined&&(typeof data.nextPageToken!=='string'||!data.nextPageToken))||(data.resultSizeEstimate!==undefined&&(!Number.isSafeInteger(data.resultSizeEstimate)||data.resultSizeEstimate<0)))throw new Error('invalid Gmail page response');
+      return {messages:await mailItems((data.messages??[]).map(m=>m.id)),next_page_token:data.nextPageToken??null,result_size_estimate:data.resultSizeEstimate??null};
     },
     async newMail(since, limit) {
       return mailItems(await listIds(`in:inbox category:primary after:${Math.floor(since / 1000)}`, limit));
