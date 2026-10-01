@@ -177,8 +177,11 @@ describe('google tools', () => {
     const result = await comms.handle({} as never);
     expect(result).toMatchObject({ ok: true });
     if (!result.ok) return;
-    const data = result.data as { messages: unknown[]; coverage: { pagination: string; complete: boolean } };
+    const data = result.data as { messages: unknown[]; query: unknown; query_note: string; coverage: { pagination: string; complete: boolean; degraded: string } };
     expect(data.messages).toHaveLength(1);
+    expect(data.coverage.degraded).toBe('proxy_without_mailPage');
+    expect(data.query).toBeNull();
+    expect(data.query_note).toBe('legacy_since_filter_no_gmail_query');
     expect(data.coverage.pagination).toBe('unknown_not_returned_by_adapter');
     expect(data.coverage.complete).toBe(false);
   });

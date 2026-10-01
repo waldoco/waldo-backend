@@ -110,6 +110,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const from = new Date(since).toISOString();
       const query=`in:inbox category:primary after:${Math.floor(since/1000)-1} before:${Math.ceil(Date.parse(to)/1000)}`;
       let paged=typeof client.mailPage==='function';
+      let degraded=false;
       if(page_token&&!paged)throw new Error('Gmail pagination adapter unavailable');
       let page=null as Awaited<ReturnType<NonNullable<typeof client.mailPage>>>|null;
       if(paged){
@@ -119,16 +120,17 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
           // Degrade to the legacy sampled read (reported as unpaged) instead of failing the turn.
           if(!(error instanceof GoogleError&&error.status===404&&error.message==='unknown operation')||page_token)throw error;
           paged=false;
+          degraded=true;
         }
       }
       const fetched=page? page.messages : await client.newMail(since,limit);
       const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
-      return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query, next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
+      return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query: degraded?null:query, ...(degraded?{query_note:'legacy_since_filter_no_gmail_query'}:{}), next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
         lower_bound_query: paged?'previous_epoch_second_then_exact_timestamp_filter':'legacy_adapter_lower_bound_unverified',
         cursor_query_binding: page_token?'caller_supplied_window_not_authenticated_to_cursor':'first_page',
         scope: 'inbox_primary_category', account_selection: 'connected_adapter_account_not_all_accounts',
         retrieval_window: date_range ? 'explicit_date_range' : 'rolling_24_hours', page_limit: limit,
-        fetched_count: fetched.length, returned_count: messages.length, pagination: paged?'provider_page':'unknown_not_returned_by_adapter',
+        ...(degraded?{degraded:'proxy_without_mailPage'}:{}), fetched_count: fetched.length, returned_count: messages.length, pagination: paged?'provider_page':'unknown_not_returned_by_adapter',
         upper_bound_applied_after_page: !paged, complete: paged&&page!.next_page_token===null&&page_token===undefined&&fetched.length===messages.length,
         limitation: paged?'Primary inbox category from one adapter account. Provider cursor is opaque and not authenticated to this supplied query/window. Result size is an estimate. Not all accounts or categories.':'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
       } };
