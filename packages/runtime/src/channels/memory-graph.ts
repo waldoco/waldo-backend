@@ -7,7 +7,7 @@ const finite=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?v:null;
 const ref=(scope:string,kind:string,n:number)=>`${scope}:${kind}:${n}`;
 export const projectMemoryGraph=(input:Readonly<{scope:string;claims:readonly Row[];nodes:readonly Row[];edges:readonly Row[];complete:boolean;unavailable?:boolean;purgePending?:boolean}>)=>{
  let partial=!input.complete;const suppressed=input.claims.filter(c=>c.status==='purging'||c.status==='forgotten');
- const claims=input.claims.filter(c=>id(c.id)&&['active','promoted'].includes(text(c.status))&&!text(c.text).includes('[forgotten]')).map(c=>({id:ref(input.scope,'claim',c.id as number),local_id:c.id as number,kind:text(c.kind),text:text(c.text),source:text(c.source),origin:['owner','agent','shared','untrusted'].includes(text(c.origin))?text(c.origin):'legacy',status:text(c.status),evidence:{kind:'writer_note' as const,text:text(c.evidence)},source_reference:{state:text(c.source_ref)?'unverified' as const:'unavailable' as const,link:null},recorded_at:text(c.created_at),writer_seen_count:finite(c.seen_count)}));
+ const claims=suppressed.length||input.purgePending?[]:input.claims.filter(c=>id(c.id)&&['active','promoted'].includes(text(c.status))&&!text(c.text).includes('[forgotten]')).map(c=>({id:ref(input.scope,'claim',c.id as number),local_id:c.id as number,kind:text(c.kind),text:text(c.text),source:text(c.source),origin:['owner','agent','shared','untrusted'].includes(text(c.origin))?text(c.origin):'legacy',status:text(c.status),evidence:{kind:'writer_note' as const,text:text(c.evidence)},source_reference:{state:text(c.source_ref)?'unverified' as const:'unavailable' as const,link:null},recorded_at:text(c.created_at),writer_seen_count:Number.isSafeInteger(c.seen_count)&&Number(c.seen_count)>=1?Number(c.seen_count):null}));
  const byId=new Map(claims.map(c=>[c.local_id,c]));
  // Pending purge can leave labels/summaries/edges quoting a forgotten claim.
  // Fail closed for interpretations until existing purge completes, not a delete guarantee.
@@ -26,6 +26,7 @@ export const projectMemoryGraph=(input:Readonly<{scope:string;claims:readonly Ro
 export const readMemoryGraph=(sql:Pick<SqlStorage,'exec'>,scope:string)=>{
  const tables=new Set(sql.exec<{name:string}>("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('claims','constellation_nodes','constellation_edges','purge_pending')").toArray().map(r=>r.name));
  const read=(name:string):Row[]=>tables.has(name)?sql.exec<Record<string,SqlStorageValue>>(`SELECT * FROM ${name}`).toArray():[];
+ if(!tables.has('purge_pending'))return projectMemoryGraph({scope,claims:[],nodes:[],edges:[],complete:false,unavailable:!tables.has('claims')});
  const claims=read('claims');const pending=new Set(read('purge_pending').map(r=>r.claim_id));
  const safe=claims.map(c=>pending.has(c.id)?{...c,status:'purging'}:c);
  const purgeKnown=tables.has('purge_pending');

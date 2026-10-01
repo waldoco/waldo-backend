@@ -355,7 +355,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
 
     if (new URL(request.url).pathname === '/enqueue') return this.enqueue(request);
     const doName = request.headers.get('x-waldo-do-name');
-    if (doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
+    if (path !== MEMORY_GRAPH_PATH && doName && this.ctx.storage.kv.get<string>('do_name') !== doName) this.ctx.storage.kv.put('do_name', doName);
     if (new URL(request.url).pathname === '/grant-console' && request.method === 'POST') return new Response(await consoleAccess(this.ctx.storage).grant());
     if (new URL(request.url).pathname.startsWith(CONSOLE_PATH)) return this.console(request);
     const body = await request.text();
