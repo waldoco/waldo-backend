@@ -258,6 +258,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
       const hasEpisodes = tableExists(sql, 'episodes');
       const hasSpots = tableExists(sql, 'spots');
       const hasRevisions = tableExists(sql, 'core_file_revisions');
+      const hasCards = tableExists(sql, 'update_cards');
+      const hasPlan = tableExists(sql, 'day_plan');
       // SQLite LIKE is case-insensitive but replace() is case-sensitive: a casing variant of
       // the forgotten text would match the predicate yet survive the redaction. Fetch the
       // matching rows and redact in JS with a case-insensitive literal replace instead.
@@ -299,6 +301,22 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
             if (redactedText !== row.text || redactedEvidence !== row.evidence) sql.exec('UPDATE claims SET text = ?, evidence = ? WHERE id = ?', redactedText, redactedEvidence, row.rid);
           }
         });
+        // Derived text the model reads back (unfolded update cards, day-plan reasons). Rows and
+        // their send state stay; only the forgotten text is rewritten. Card changes are JSON, so
+        // they are redacted per parsed value, not by raw substring (JSON escapes quotes).
+        if (hasCards) attempt('update_cards', () => {
+          for (const row of sql.exec<{ id: number; changes: string; text: string | null }>('SELECT id, changes, text FROM update_cards').toArray()) {
+            const changes = JSON.stringify(JSON.parse(row.changes), (_key, value: unknown) => typeof value === 'string' ? ci(value) : value);
+            const redactedText = row.text === null ? null : ci(row.text);
+            if (changes !== JSON.stringify(JSON.parse(row.changes)) || redactedText !== row.text) sql.exec('UPDATE update_cards SET changes = ?, text = ? WHERE id = ?', changes, redactedText, row.id);
+          }
+        });
+        if (hasPlan) attempt('day_plan', () => {
+          for (const row of sql.exec<{ rid: number; reason: string }>(`SELECT rowid AS rid, reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray()) {
+            const redacted = ci(row.reason);
+            if (redacted !== row.reason) sql.exec('UPDATE day_plan SET reason = ? WHERE rowid = ?', redacted, row.rid);
+          }
+        });
         attempt('constellation_nodes', () => {
           for (const row of sql.exec<{ id: number; label: string; summary: string }>(`SELECT id, label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray()) {
             const redactedLabel = ci(row.label); const redactedSummary = ci(row.summary);
@@ -328,6 +346,8 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
         attempt('memory_backups', () => add('memory_backups', sql.exec<{ payload: string }>(`SELECT payload FROM memory_backups WHERE payload LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.payload)).length));
         if (hasSpots) attempt('legacy_spots', () => add('legacy_spots', sql.exec<{ text: string }>(`SELECT text FROM spots WHERE text LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.text)).length));
         if (hasRevisions) attempt('legacy_core_files', () => add('legacy_core_files', sql.exec<{ content: string }>(`SELECT content FROM core_file_revisions WHERE content LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.content)).length));
+        if (hasCards) attempt('update_cards', () => add('update_cards', sql.exec<{ changes: string; text: string | null }>('SELECT changes, text FROM update_cards').toArray().filter((row) => exact(`${row.text ?? ''}\n${JSON.parse(row.changes).map((change: Record<string, unknown>) => Object.values(change).join(' ')).join('\n')}`)).length));
+        if (hasPlan) attempt('day_plan', () => add('day_plan', sql.exec<{ reason: string }>(`SELECT reason FROM day_plan WHERE reason LIKE ? ESCAPE '\\'`, like).toArray().filter((row) => exact(row.reason)).length));
         attempt('constellation_nodes', () => add('constellation_nodes', sql.exec<{ label: string; summary: string }>(`SELECT label, summary FROM constellation_nodes WHERE label LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\'`, like, like).toArray().filter((row) => exact(row.label) || exact(row.summary)).length));
       }
       // No deletion here: settlement is a separate step (settle()) the caller runs only after
