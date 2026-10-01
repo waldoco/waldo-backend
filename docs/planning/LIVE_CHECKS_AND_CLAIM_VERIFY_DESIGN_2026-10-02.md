@@ -18,7 +18,7 @@ Unknown until run: whether the console trace page shows hop names at this granul
 Goal: confirm a long conversation keeps working: context stays bounded, earlier facts survive, tool receipts stay truthful.
 Design: one scripted Telegram thread to the staging bot, about 30 short turns, mixing (a) a planted fact early ("my sister's flight lands Tuesday"), (b) two read-only tool turns (Gmail paged read, calendar 7-day), (c) a recall question at the end, (d) an artifact create then export once `export_artifact` is registered.
 Pass criteria, each from structured evidence not wording: the final recall matches the planted fact; the turn trace shows no failed hop; per-turn input token usage (usage ledger) stays below a stated ceiling and does not grow linearly without bound; tool receipts for the read turns exist and match the claims made.
-Cost: this runs the real model on staging, so it spends owner model budget. It needs the owner's go on spend, and each turn is a message sent as the owner to his own staging bot, so it is run only inside the existing owner-approved staging live-check lane. Not run tonight.
+Cost: this runs the real model on staging, so it spends owner model budget. It runs only with the owner's explicit go: it spends model budget, and each turn is a message sent as the owner to his own staging bot. No standing approval covers it. Not run tonight.
 
 ## 3. Claim-verify wiring
 
