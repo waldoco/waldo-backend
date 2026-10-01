@@ -39,7 +39,7 @@ import { toolOutputLedger } from '../conversation/tool-output-ledger';
 const EXTERNAL_REACH_TOOLS = new Set(['execute_action', 'delete_message', 'restore_message']);
 // Facts only, from the applied outcome. Nothing here is model-written.
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number): string => {
+const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number, conversationRedacted: number): string => {
   const parts = [`stored ${plural(outcome.written, 'new claim', 'new claims')}${outcome.downgraded ? ` (${outcome.downgraded} kept only as inferred, not as the owner's stated fact)` : ''}`];
   if (outcome.held) parts.push(`held ${outcome.held} not stored${outcome.holdReasons.length ? ` (${outcome.holdReasons.join(', ')})` : ''}`);
   if (outcome.corrected) parts.push(`corrected ${plural(outcome.corrected, 'claim', 'claims')}`);
@@ -53,6 +53,7 @@ const memoryReceipt = (outcome: ClaimOutcome, conversationLeft: number): string 
   } else if (outcome.forgetClaimsAttempted) {
     parts.push(`tried to remove ${plural(outcome.forgetClaimsAttempted, 'claim', 'claims')} at the owner's request but removal is incomplete${outcome.purgeIncomplete.length ? ` in ${outcome.purgeIncomplete.join(', ')}` : ''}`);
   }
+  if (conversationRedacted) parts.push(`redacted ${plural(conversationRedacted, 'saved conversation entry', 'saved conversation entries')} that quoted it`);
   if (outcome.forgetNodes) parts.push(`asked the store to delete ${plural(outcome.forgetNodes, 'pattern node', 'pattern nodes')} (not separately verified)`);
   if (outcome.forgetAllowed && !outcome.forgetClaimsAttempted && !outcome.forgetNodes) parts.push('the owner asked to forget something but nothing was forgotten');
   return `${parts.join('; ')}.`;
@@ -249,7 +250,7 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
@@ -350,7 +351,7 @@ export const createOwnerResponder = (
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: true, detail: `${detail}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}${interrupted ? ` interrupted${interrupted}` : ''}` });
       // Emitted last, after redaction, settle and logging: an error above returns 'uncertain' with no receipt.
       const o = outcome as ClaimOutcome | undefined;
-      if (o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, purgeIds.length > 0 && !settled ? conv?.remaining ?? 0 : 0));
+      if (o !== undefined && (o.written || o.held || o.downgraded || o.corrected || o.confirmed || o.dismissed || o.forgetClaimsAttempted || o.forgetNodes || o.forgetAllowed)) memoryReceipts.push(memoryReceipt(o, purgeIds.length > 0 && !settled ? conv?.remaining ?? 0 : 0, conv?.rewritten ?? 0));
       return 'saved';
     } catch (error) {
       log({ trace: id, hop: 'memory', ms: Date.now() - started, ok: false, error: String(error), code: 'provider_error', detail: stage });

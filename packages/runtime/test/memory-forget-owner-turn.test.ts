@@ -114,6 +114,26 @@ it('corrections, confirmations and dismissals are listed, each unique id once', 
   });
 });
 
+it('a completed conversation cleanup is counted in the receipt, and the prompt forbids saying nothing else changed', async () => {
+  await session('forget-live-o', async (turn) => {
+    await saved(turn);
+    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
+    expect(receiptOf(system())).toContain('removed 1 claim from stored memory');
+    expect(receiptOf(system())).toContain('redacted 1 saved conversation entry');
+    expect(system()).toContain('do not say that nothing else changed');
+  }, async () => ({ rewritten: 1, remaining: 0 }));
+  await session('forget-live-p', async (turn) => {
+    await saved(turn);
+    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
+    expect(receiptOf(system())).not.toContain('redacted');
+  }, async () => ({ rewritten: 0, remaining: 0 }));
+  await session('forget-live-q', async (turn) => {
+    await saved(turn);
+    await turn('tg-2', 'forget only that pref', ops({ forget_claims: [1] }));
+    expect(receiptOf(system())).toContain('redacted 3 saved conversation entries');
+  }, async () => ({ rewritten: 3, remaining: 0 }));
+});
+
 it('a conversation redaction that leaves entries behind is stated, not reported as clean', async () => {
   await session('forget-live-j', async (turn) => {
     await saved(turn);
