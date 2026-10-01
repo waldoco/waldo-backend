@@ -11,8 +11,14 @@ Source review at beta-mvp. Today: `create_artifact`, `revise_artifact`, `list_ar
 - Receipt returned to the model: `{status:'exported'|'unsupported_format'|'render_failed'|'too_large', artifact_id, bytes, mime_type, sha256, delivery}`. The model may say "exported" only from `status:'exported'`.
 - Pixel check: the test harness renders page 1 to an image and the reviewer inspects it; a byte count alone is not proof.
 
-## Open decision (blocks the code)
-Which renderer runs inside a Cloudflare Worker or its container tier, and its license, size and cost. Candidates need checking against current docs before choice; I have not verified any. Until chosen, no dependency is added.
+## Renderer decision (2026-10-02, decide-and-log by the main agent; owner asked for a pick, not for a specific library)
+Chosen: pdf-lib (MIT, pure JS, no filesystem or native code, runs in a Worker). Checked on npm 2026-10-02: pdf-lib 1.17.1 MIT, last published 2022-05-12 (stable, not actively maintained); pdfmake 0.3.11 MIT, published 2026-06-12; jspdf 4.2.1 MIT. Reasons for pdf-lib: smallest surface, no layout engine that could fetch or evaluate anything, we only need headings, paragraphs and lists from trusted markdown.
+Known limits, stated up front:
+- Built-in fonts cover Latin (WinAnsi) only. Text with other scripts (for example Devanagari) returns `unsupported_text`, not a garbled or blank PDF. Embedding a Unicode font (pdf-lib + fontkit, MIT) is a later slice and needs its own size review.
+- Worker bundle size is NOT measured. npm unpacked sizes (pdf-lib about 19 MB, mostly non-runtime files) do not predict the bundled size. The code slice must build the Worker and record the real size against the Workers limit before merge.
+- pdfmake is the fallback if hand layout proves too limited; it needs bundled fonts and has not been checked in a Worker.
+- Not considered: Cloudflare Browser Rendering (paid per use; spend needs the owner).
+Reversal: remove the tool registration and the dependency; text artifacts are untouched.
 
 ## Red-first tests for the code slice
 unsupported format returns the typed receipt and writes nothing; revision mismatch writes nothing; hostile markdown (script tags, remote image URLs) produces no network call and no active content; wrong-owner read denied; oversize returns `too_large`; a render failure never yields an `exported` receipt.
