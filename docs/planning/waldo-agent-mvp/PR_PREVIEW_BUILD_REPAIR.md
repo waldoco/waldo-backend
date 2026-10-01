@@ -66,18 +66,23 @@ DONE/acked assertions remain. No scheduler implementation or assertion is weaken
 
 ## Capacity repair (October 1)
 
-New previews use `pr-v2-<24-hex branch SHA256>`, one isolated state namespace set
-per feature branch rather than per commit. Exact full commit stays in WALDO_RELEASE;
-review must use the immutable Unique Deployment URL, never the moving Preview URL.
-WORKERS_CI_BRANCH supplies branch identity in Workers Builds; local feature branches
-use symbolic-ref. Release branches, detached HEAD without CI identity and malformed
-branch values fail closed. v2 never adopts legacy branch preview state. Feature
-branches must not be reused for a different owner or PR. This is development state,
-not a proof of clean per-commit runtime state; tests remain hermetic.
+New previews use `pr-v3-<verified open PR number>`, one isolated state namespace set
+per PR rather than per commit. A bounded unauthenticated GitHub API lookup must find
+exactly one open same-repository PR with matching branch/full head and beta-mvp base.
+Failure, fork, mismatch, no PR or ambiguous results stop before deployment. Branch
+reuse across PRs creates a new identity; renaming the same PR retains its identity.
+Exact full commit stays in WALDO_RELEASE; review must use the immutable Unique
+Deployment URL, never the moving Preview URL. Workers Builds branch identity must
+match a local symbolic branch, or fill a detached checkout. Release branches and
+invalid plain Git branch syntax fail closed. v3 never adopts legacy branch state.
+Development state persists between commits of the same PR; tests remain hermetic.
 
 The retirement planner admits only a closed same-repository PR whose live head/ref
-match the event. It selects the v2 identity and the exact current-head legacy
-isolated preview, never other old SHA records, unresolved previews or release state.
-The planner is deliberately not wired to write CI yet: future deletion execution,
-CI secret scope and reopen/close race handling require their own review. The October
-1 approved one-time cleanup is separate and does not grant automatic future deletion.
+match the event. It selects the v3 identity and exact current-head legacy isolated
+preview, never other old SHA records, unresolved previews or release state. Planner
+is not wired to write CI yet: deletion execution, secret scope and reopen/close
+race handling need their own review. The October1 approved one-time cleanup is
+separate and does not grant automatic future deletion.
+
+Refs: https://developers.cloudflare.com/workers/ci-cd/builds/configuration/
+and https://developers.cloudflare.com/workers/previews/get-started/ (checked Oct1).
