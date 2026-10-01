@@ -68,4 +68,31 @@ describe('Drive read-only MCP slice (source only)', () => {
     expect(out.ok).toBe(false);
     if (!out.ok) { expect(out.code).toBe('rejected'); expect(out.connect).toBeUndefined(); }
   });
+  it('proxy 403 on a drive server is a scope gap that names drive', async () => {
+    const [server] = mcpServers(JSON.stringify([entry]));
+    const auth: McpGoogleAuth = {
+      resolve: async () => ({ mode: 'proxy', connection: 'c1' }),
+      proxy: async () => { throw Object.assign(new Error('forbidden'), { status: 403 }); },
+    };
+    await expect(executeMcp(server!, 'list_files', {}, auth)).rejects.toMatchObject({ reason: 'scope_missing', feature: 'drive' });
+  });
+
+  it('the handler connect card carries feature drive so the link is not a calendar default', async () => {
+    const auth: McpGoogleAuth = {
+      resolve: async () => ({ mode: 'proxy', connection: 'c1' }),
+      proxy: async () => { throw Object.assign(new Error('forbidden'), { status: 403 }); },
+    };
+    const handler = callMcpToolHandler(JSON.stringify([entry]), undefined, auth);
+    const out = await handler.handle({ server: 'drive', tool: 'list_files', args: {} }, {} as never);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.connect).toMatchObject({ reason: 'scope_missing', feature: 'drive' });
+  });
+
+  it('a non-drive google server keeps a card without a feature', async () => {
+    const plain = { name: 'g', url: 'https://x.googleapis.com/mcp', auth: 'google' };
+    const auth: McpGoogleAuth = { resolve: async () => null, proxy: async () => [] };
+    const handler = callMcpToolHandler(JSON.stringify([plain]), undefined, auth);
+    const out = await handler.handle({ server: 'g', tool: 't', args: {} }, {} as never);
+    if (!out.ok) expect(out.connect?.feature).toBeUndefined();
+  });
 });

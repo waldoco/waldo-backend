@@ -1199,7 +1199,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         // A server that needs a feature (Drive read) only runs on a grant that holds it; connected
         // accounts without it are a scope gap, not a missing connection.
         const all = feature ? every.filter((candidate) => googleHas(candidate.scopes, feature)) : every;
-        if (feature && every.length > 0 && all.length === 0) throw new McpConnectError('scope_missing', `no connected Google grant covers ${feature}`);
+        if (feature && every.length > 0 && all.length === 0) throw new McpConnectError('scope_missing', `no connected Google grant covers ${feature}`, feature);
         const routes=all.map(account=>({...account,rail:account.refresh_token?'local' as const:'proxy' as const}));
         const account = pinProxyIntentRoute(storage.sql,intent,'mcp:google',routes,routes.find((candidate) => !failing[candidate.id]) ?? routes[0]);
         if (!account) return null;
