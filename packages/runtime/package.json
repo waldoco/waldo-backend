@@ -21,7 +21,8 @@
     "@cloudflare/playwright": "1.3.6",
     "@waldo/contracts": "workspace:*",
     "@waldo/workspace": "workspace:*",
-    "openai": "5.12.2"
+    "openai": "5.12.2",
+    "pdf-lib": "1.17.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.16.20",
