@@ -11,7 +11,7 @@ import { delegateTaskHandler, runChildLoop, SUBAGENT_SYSTEM_PROMPT, withDelegati
 import { inMemoryToolOutputStore } from '../conversation/tool-output-store';
 import { readToolOutputHandler } from '../tools/read-tool-output';
 import { getContextHandler, type OwnerClock } from '../tools/live/get-context';
-import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters } from '../run-loop/adapters';
+import { localTrustedBriefScheduleInput, localTrustedBriefTurnSnapshot, resolveRunLoopAdapters, type LocalSystemSkillBinding } from '../run-loop/adapters';
 import type { ContextHealthMaterial } from '../context-composer/types';
 import { JoinedConversationPath } from '../conversation/joined-path';
 import { OpenAIResponsesAdapter } from '../llm/openai';
@@ -120,6 +120,8 @@ export const createOwnerResponder = (
   health?: (trace?: string) => Promise<ContextHealthMaterial | null>,
   reactionChoices: readonly string[] = [],
   privateRunScope?: RunEffectScope,
+  // Private host dependency only. No channel/env/request repository selection or seed.
+  privateSystemSkills?: LocalSystemSkillBinding,
 ): OwnerResponder => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -129,7 +131,7 @@ export const createOwnerResponder = (
   const CANARIES = newSessionCanaryTokens();
   const cacheKey = `waldo:${ownerId}`;
   let traceId = '';
-  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { toolOutputs: async () => toolLedger?.recent() ?? [], ...(health === undefined ? {} : { health: () => health(traceId) }) });
+  const adapters = resolveRunLoopAdapters({ WALDO_ENV: 'local' }, { ...(privateSystemSkills ? { localSystemSkills: privateSystemSkills } : {}), toolOutputs: async () => toolLedger?.recent() ?? [], ...(health === undefined ? {} : { health: () => health(traceId) }) });
   // Tool outputs from the current turn; flushed to the ledger when the turn's entries persist.
   const pendingToolOutputs: Array<{ tool: string; ok: boolean; at: number; taint: 'external'; summary: string }> = [];
   const circuitBreaker = new InMemoryCircuitBreaker();
@@ -255,7 +257,7 @@ export const createOwnerResponder = (
           entries[entries.length - 1] = { ...entries[entries.length - 1]!, content: entries[entries.length - 1]!.content + added };
           const ordersSection = standingOrders?.() ?? '';
           return complete(trace, 'reply',
-          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : [])].join('\n\n'),
+          [messagingSystemPrompt(turnHandlers.map((handler) => handler.name)), ownerClockLine(clock), ...(turnNotice ? [turnNotice] : []), ...(memoryReceipts.length ? [`Memory this turn (recorded by the system before your reply): ${memoryReceipts.join(' ')} Report saves, corrections and forgets only as listed here; do not say that nothing else changed.`] : []), ...(memory ? [turnMemoryPrompt(memory, ownerCurrentText)] : []), ...(ordersSection ? [ordersSection] : []), ...(privateSystemSkills && request.skillPrompt ? [request.skillPrompt] : [])].join('\n\n'),
           entries,
           undefined,
           pending,
@@ -376,7 +378,7 @@ export const createOwnerResponder = (
   return {
     async respond(turn, time) {
       if (turn.runScope && privateRunScope !== turn.runScope) {
-        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope);
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope, privateSystemSkills);
         control.route(scoped.control);
         try { return await scoped.respond(turn, time); }
         finally { control.unroute(scoped.control); }
