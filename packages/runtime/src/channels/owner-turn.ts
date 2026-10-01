@@ -86,8 +86,7 @@ export const createOwnerResponder = (
   // Memory-writer model (2026-09-27 staging receipt: nano hallucinated forget_claims that
   // wiped claims 1-6 and persisted a bare "yes" as a Gmail-fetch agreement). Memory writes
   // are durable state, so they escalate one rung under cheapest-passing: nano demonstrably
-  // does not pass for claim_ops. Bare affirmative/negative turns ("yes") escalate to it for
-  // the reply hop too - context-binding is where nano failed worst.
+  // does not pass for claim_ops.
   memoryModel: ModelName = OPENAI_GPT_6_LUNA_MODEL,
   // Durable settle: the owner DO passes ctx.waitUntil here so an in-flight memory write
   // survives the reply returning. Without it, hibernation kills the write silently
@@ -234,7 +233,6 @@ export const createOwnerResponder = (
           pending,
           tools,
           turns,
-          replyModelOverride,
           );
         },
         onTool: (event) => {
@@ -250,12 +248,6 @@ export const createOwnerResponder = (
   // Set by converse() for the duration of one submit: delegate_task rides owner chat turns
   // only, never reminder/scheduled machine turns that flow through the same closure.
   let ownerTurnActive = false;
-  // Bare affirmative/negative turns ("yes", "ok", "nahi") are context-binding-heavy: the
-  // reply model must attach them to the pending question. The nano-tier reply model failed exactly this
-  // class on 2026-09-27 (a "yes" to the greeting-alignment question was answered with a
-  // hallucinated Gmail offer, with correct history in the prompt), so these turns escalate
-  // to memoryModel for their reply hop. Set by respond() for the duration of one submit.
-  let replyModelOverride: ModelName | undefined;
   let memoryFailureNotified = false;
   // The reply this turn just sent, so chooseReaction reacts to the exchange (gist of what the
   // owner saw) instead of the owner's message alone - the 😢-on-stress class (2026-09-27 sweep).
@@ -274,10 +266,7 @@ export const createOwnerResponder = (
     await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
     for (const entry of pendingToolOutputs.splice(0)) await toolLedger?.record(entry);
     parentId = publication.leafId;
-    // Self-name prefix strip (2026-09-27 staging receipt: 8 of 22 replies opened with
-    // "Waldo:"/"Waldo here." - a friend texting never signs their own messages, and the
-    // prefixed history taught the model to keep doing it).
-    const out = publication.text.replace(/^\s*waldo(?:\s+here)?\s*[:.,!\-]\s*/i, '');
+    const out = publication.text;
     lastReply = out;
     return out;
   };
@@ -290,13 +279,7 @@ export const createOwnerResponder = (
       const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
       pending = media?.attachment ? [media.attachment] : undefined;
       const said = [turn.text, media?.note].filter(Boolean).join('\n');
-      replyModelOverride = /^\s*(yes|yeah|yep|yup|sure|ok(?:ay)?|no|nope|nah|haan?|nahi|accha|theek(?:\s+hai)?|done|right|correct|exactly)\b[.!…? ]*$/i.test(turn.text ?? '') ? memoryModel : undefined;
-      let text: string;
-      try {
-        text = await converse(id, turn.conversationRef, said, time, true, turn.surface);
-      } finally {
-        replyModelOverride = undefined;
-      }
+      const text = await converse(id, turn.conversationRef, said, time, true, turn.surface);
       const owner = [turn.text ?? '', ...control.end()].filter(Boolean).join('\n');
       if (memory && memoryWrites && !probeGuard?.suppressMemory) {
         const started = Date.now();
