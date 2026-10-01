@@ -35,9 +35,9 @@ describe('episode history', () => {
       expect((await store.load()).entries).toHaveLength(4);
 
       const knee = index.search('knee', 5);
-      expect(knee).toEqual([{ speaker: 'owner', at: null, snippet: 'My [knee] hurts after running' }]);
+      expect(knee).toEqual([{ ref: expect.any(String), entry_id: 'tg-1', speaker: 'owner', at: null, snippet: 'My [knee] hurts after running' }]);
       expect(index.search('physio', 5).map((hit) => hit.speaker)).toEqual(expect.arrayContaining(['owner', 'waldo']));
-      expect(index.search('physio riya', 5, Date.parse('2026-09-23T00:00:00Z'))).toEqual([{ speaker: 'owner', at: '2026-09-23T09:00:00.000Z', snippet: 'Chai with [Riya] at 5' }]);
+      expect(index.search('physio riya', 5, Date.parse('2026-09-23T00:00:00Z'))).toEqual([{ ref: expect.any(String), entry_id: 'tg-3', speaker: 'owner', at: '2026-09-23T09:00:00.000Z', snippet: 'Chai with [Riya] at 5' }]);
       expect(index.search('"; DROP TABLE episodes; --', 5)).toEqual([]);
 
       const day = index.since(Date.parse('2026-09-22T12:00:00Z'), 10_000);
@@ -47,7 +47,7 @@ describe('episode history', () => {
       const handler = searchEpisodesHandler(index);
       expect(handler.trigger_allowlist).toContain('user_message');
       const result = await handler.handle(handler.schema.parse({ query: 'physio' }), {} as never);
-      expect(result.ok && result.data.hits.length).toBe(2);
+      expect(result.ok && result.data.hits?.length).toBe(2);
     });
   });
 
@@ -90,6 +90,54 @@ describe('episode history', () => {
       const nightly = scheduler.read(NIGHTLY_ID)!;
       expect([nightly.kind, nightly.due_at, nightly.recurrence]).toEqual(['dreaming', Date.parse('2026-09-23T21:30:00Z'), { type: 'daily_local', time: '03:00', timezone: 'Asia/Kolkata' }]);
       await scheduler.cancel(NIGHTLY_ID);
+    });
+  });
+
+  // Recall diagnostic (staging 2026-10-01): a snippet is a 16-token fragment, so an exact value
+  // (price, time) outside the fragment was unrecoverable, and the model asserted an older
+  // answer as the latest. The hit now names its source turn and the full text is retrievable.
+  it('a hit names its exact row and the full text behind a truncated snippet is retrievable', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-source'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const index = episodeIndex(state.storage.sql);
+      const full = `latest options test arrive ${'so '.repeat(30)}A leaves 16:30 for 22k, B leaves 17:45 for 18.5k, C leaves 19:10 for 15k`;
+      index.add('tg-9', 'owner', full, Date.parse('2026-10-01T02:31:18Z'));
+      const [hit] = index.search('latest options test arrive', 5);
+      expect(hit!.entry_id).toBe('tg-9');
+      expect(hit!.snippet).not.toContain('18.5k');
+      expect(index.get(hit!.ref)!.text).toBe(full);
+      expect(index.get('999999')).toBeNull();
+      expect(index.get('1; DROP')).toBeNull();
+      for (const bad of ['0', '-1', '007', '1.5', '']) expect(index.get(bad)).toBeNull();
+    });
+  });
+
+  it('the same entry_id indexed twice keeps both rows, and each hit recovers its own body', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-dup'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const index = episodeIndex(state.storage.sql);
+      index.add('tg-5', 'owner', 'budget is 22k for the trip', 100);
+      index.add('tg-5', 'owner', 'budget is 18.5k for the trip after all', 200);
+      const hits = index.search('budget trip', 5);
+      expect(hits).toHaveLength(2);
+      expect(new Set(hits.map((hit) => hit.ref)).size).toBe(2);
+      // Each hit's ref returns that hit's own row, never the earlier row sharing its entry_id.
+      for (const hit of hits) expect(index.get(hit.ref)!.text.toLowerCase()).toContain(hit.snippet.replace(/[\[\]]/g, '').toLowerCase().split(' ').slice(-1)[0]!.replace('...', ''));
+      const bodies = hits.map((hit) => index.get(hit.ref)!.text).sort();
+      expect(bodies).toEqual(['budget is 18.5k for the trip after all', 'budget is 22k for the trip']);
+    });
+  });
+
+  it('search stays relevance-ranked: a newer, less relevant turn is not promoted', async () => {
+    const stub = env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName('episodes-order'));
+    await runInDurableObject(stub, async (_instance, state) => {
+      const index = episodeIndex(state.storage.sql);
+      index.add('tg-1', 'owner', 'flight options', Date.parse('2026-09-30T10:00:00Z'));
+      index.add('tg-2', 'owner', 'flight options flight options flight', Date.parse('2026-09-30T11:00:00Z'));
+      index.add('tg-3', 'owner', 'any of the flight options is fine as long as I arrive by six', Date.parse('2026-10-01T02:00:00Z'));
+      const ids = index.search('flight options', 3).map((hit) => hit.entry_id);
+      expect(ids[0]).not.toBe('tg-3');
+      expect(ids).toContain('tg-3');
     });
   });
 });

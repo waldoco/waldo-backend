@@ -112,11 +112,25 @@ export type ReadMemoryArgs = z.infer<typeof readMemoryArgsSchema>;
 
 // The model-facing bound of the episode FTS5 leg — episodeSearchArgsSchema (memory/episode)
 // is the internal gateway shape; this seam additionally caps what the model may request.
-export const searchEpisodesArgsSchema = z.strictObject({
-  query: z.string().min(1).max(500),
-  limit: z.int().min(1).max(20).default(5),
-  date_range: dateRangeSchema.optional(),
-});
+// Two distinct modes. Search takes `query` (with optional limit and date_range). Exact-source
+// takes `ref`, a value copied from a prior search hit, and returns that stored turn in
+// full. The two never mix: a request names exactly one, and date_range is search-only.
+// (limit carries a schema default, so it is inert in exact-source mode, not rejected.)
+export const searchEpisodesArgsSchema = z
+  .strictObject({
+    query: z.string().min(1).max(500).optional(),
+    ref: z.string().min(1).max(200).optional(),
+    limit: z.int().min(1).max(20).default(5),
+    date_range: dateRangeSchema.optional(),
+  })
+  .superRefine((args, ctx) => {
+    if ((args.query === undefined) === (args.ref === undefined)) {
+      ctx.addIssue({ code: 'custom', message: 'provide exactly one of query or ref', path: ['query'] });
+    }
+    if (args.ref !== undefined && args.date_range !== undefined) {
+      ctx.addIssue({ code: 'custom', message: 'date_range applies to query searches only', path: ['date_range'] });
+    }
+  });
 export type SearchEpisodesArgs = z.infer<typeof searchEpisodesArgsSchema>;
 
 // execute_action runs only a previously proposed-and-confirmed action: the confirmation

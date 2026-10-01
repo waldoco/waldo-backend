@@ -109,6 +109,9 @@ export const EXTERNAL_ORIGIN_TOOLS: readonly ToolName[] = [
   'search_connector',
   'read_tool_output',
   'read_artifact',
+  // search_episodes: stored history can hold Waldo replies and machine rows that quoted email or
+  // web text, so hits and recovered turns are data, never instructions or owner authority.
+  'search_episodes',
   'browse_page',
   'browse_act',
   // delegate_task: child handbacks carry whatever the child read (web, connector text), so the

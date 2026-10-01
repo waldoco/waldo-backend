@@ -161,6 +161,16 @@ describe('searchEpisodesArgs', () => {
     });
   });
 
+  it('takes exactly one of query or ref, and date_range only with query', () => {
+    expect(searchEpisodesArgsSchema.parse({ ref: '9' })).toEqual({ ref: '9', limit: 5 });
+    expect(searchEpisodesArgsSchema.safeParse({}).success).toBe(false);
+    expect(searchEpisodesArgsSchema.safeParse({ query: 'q', ref: '9' }).success).toBe(false);
+    expect(searchEpisodesArgsSchema.safeParse({ ref: '' }).success).toBe(false);
+    expect(
+      searchEpisodesArgsSchema.safeParse({ ref: '9', date_range: { from: '2026-09-01T00:00:00Z', to: '2026-10-01T00:00:00Z' } }).success,
+    ).toBe(false);
+  });
+
   it('rejects an empty query and limit over 20', () => {
     expect(searchEpisodesArgsSchema.safeParse({ query: '' }).success).toBe(false);
     expect(searchEpisodesArgsSchema.safeParse({ query: 'q', limit: 21 }).success).toBe(false);
