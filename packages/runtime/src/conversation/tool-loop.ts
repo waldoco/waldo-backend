@@ -1,3 +1,4 @@
+import { guardArtifactLinks, receiptUrl } from './artifact-link-guard';
 import { toolNameSchema, toolParameters, type ConnectIntent, type LLMTool, type LLMToolCall, type LLMToolTurn } from '@waldo/contracts';
 import { dispatchTool, type DispatchToolOptions, type ToolDispatcherContext } from '../tools/dispatcher';
 import type { ToolOutputStore } from './tool-output-store';
@@ -92,6 +93,8 @@ export async function runToolLoop(input: Readonly<{
   const offered = new Set<string>();
   const noProgressTriples = new Map<string, number>();
   const noProgressBlocked = new Set<string>();
+  // Delivery URLs returned by successful tool receipts this loop; the final reply may show no other artifact link.
+  const receiptUrls = new Set<string>();
   // Mutation-resets-streak: a state change landing between repeats makes the next identical
   // call a new experiment, not a loop. Waldo's mutation class is the autonomy-gated/privileged
   // set (ADR-0049: direct external mutation or send) plus desk-routed state mutations
@@ -112,7 +115,7 @@ export async function runToolLoop(input: Readonly<{
     const response = await input.step(offer ? tools : undefined, turns);
     if (response.tool_calls === undefined) {
       input.onSettle?.(exit);
-      return response.text;
+      return guardArtifactLinks(response.text, receiptUrls);
     }
     let anyOk = false;
     let anyGenuineFailure = false;
@@ -138,6 +141,8 @@ export async function runToolLoop(input: Readonly<{
         }
       }
       seen.add(key);
+      const receipt = receiptUrl(call.name, result);
+      if (receipt !== null) receiptUrls.add(receipt);
       if (result.ok && mutationTools.has(call.name as never)) {
         noProgressTriples.clear();
         noProgressBlocked.clear();
