@@ -183,3 +183,10 @@ The owner wants senior product-engineer rigor on every slice, so a bug class sho
 - Communication reads must expose the actual date range, category/account scope and pagination limits. Empty or filtered sampled pages are not complete inbox evidence.
 
 - A newly preferred provider page method must have a concrete isolated read mapping; a rejection-only stub breaks real-DO fixture source coverage. Query/cursor mapping must preserve owner/selection and expose no body bytes.
+
+### Telegram durable admission regression (1 October 2026)
+- Webhook success follows atomic owner inbox record plus alarm commit, not background invocation start. Test record/alarm rollback in actual Workers storage.
+- Dedupe uses bot/channel/update identity plus content digest. Never use a high-water offset to exclude already admitted lower IDs or callbacks.
+- The narrow inbox route verifies private sender/chat and immutable owner host before binding or effects. Concurrent first binding is checked inside admission transaction.
+- Claim before effects. Resume only unclaimed work; retain uncertain tombstones and quarantine recovered claims. Final delivery must settle its matching run, never adjacent work.
+- Control notes target one current run. Persist consumption before model exposure; a consumed or stopped note never replays as an independent later turn. Three due classes each get service within three alarms.

@@ -212,7 +212,7 @@ export const createOwnerResponder = (
           handlers: activeHandlers,
           budget: turnBudget,
           ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
-          controlRound: () => control.round(),
+          controlRound: () => control.roundAsync(),
           complete: (content, tools, turns) =>
             complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns),
           onTool: (event) => {
@@ -234,7 +234,7 @@ export const createOwnerResponder = (
         maxSteps: MAX_TOOL_ROUNDS,
         ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
-          const added = control.round();
+          const added = await control.roundAsync();
           if (added === null) return { text: STOPPED_REPLY };
           // Steered additions are recorded before the round that answers them.
           const heard = control.heard();

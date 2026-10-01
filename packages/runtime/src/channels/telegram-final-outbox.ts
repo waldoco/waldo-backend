@@ -9,6 +9,7 @@ export type FinalRecord = {
   id: string; trace: string; payload: FinalPayload; digest: string;
   receiptUrls?: string[]; ownerSubject: string; doName: string; status: 'pending' | 'attempting' | 'delivered' | 'quarantined' | 'blocked';
   dueAt: number; createdAt: number; attempts: number; settled?: boolean; messageId?: number; reason?: string;
+  inbox?: { id: string; runId: string; attempt: string };
   reaction?: { message_id: number; emoji: string };
   reminder?: { id: string; occurrence: number; runId: string; schedulerRunId: string | null; once: boolean };
 };

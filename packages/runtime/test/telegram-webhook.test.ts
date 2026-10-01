@@ -21,14 +21,15 @@ const run = async (request: Request, env: TelegramWebhookEnv, directory?: OwnerD
 afterEach(() => vi.unstubAllGlobals());
 
 describe('handleTelegramWebhook', () => {
-  it('hands a verified update from the configured owner to their Durable Object and answers at once', async () => {
+  it('waits for authenticated owner inbox admission before answering', async () => {
     const { fetch, idFromName, ns } = namespace();
     const env: TelegramWebhookEnv = { TELEGRAM_OWNER_DO: ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42', WALDO_OWNER_TIMEZONE: 'Asia/Kolkata' };
     expect((await run(post('s3cret'), env)).status).toBe(200);
     expect(idFromName).toHaveBeenCalledWith('42');
-    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/turn', {
+    expect(fetch).toHaveBeenCalledWith('https://telegram-owner/enqueue', {
       method: 'POST', body: message(42),
-      headers: { 'x-waldo-origin': 'https://w.test', 'x-waldo-telegram-subject': '42', 'x-waldo-timezone': 'Asia/Kolkata' },
+      signal: expect.any(AbortSignal),
+      headers: { 'x-waldo-do-name': '42', 'x-waldo-inbox-secret': 's3cret', 'x-waldo-origin': 'https://w.test', 'x-waldo-telegram-subject': '42', 'x-waldo-timezone': 'Asia/Kolkata' },
     });
   });
 
@@ -89,4 +90,17 @@ describe('handleTelegramWebhook', () => {
     expect((await run(post('s3cret'), { ...env, TELEGRAM_WEBHOOK_SECRET: undefined })).status).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
   });
+});
+
+it('does not return success before admission resolves, or when admission fails', async () => {
+  const n = namespace(); let release!: (r: Response) => void;
+  n.fetch.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve; }));
+  let finished = false; const result = run(post('s3cret'), { TELEGRAM_OWNER_DO: n.ns, TELEGRAM_WEBHOOK_SECRET: 's3cret', WALDO_OWNER_TELEGRAM_ID: '42' }).then(r => { finished = true; return r; });
+  await vi.waitFor(() => expect(n.fetch).toHaveBeenCalled()); expect(finished).toBe(false); release(new Response('failed', {status:503})); expect((await result).status).toBe(503);
+});
+it('returns deliberate errors for malformed payload and failed directory', async () => {
+  const n = namespace(); const env = { TELEGRAM_OWNER_DO: n.ns, TELEGRAM_WEBHOOK_SECRET: 's3cret' };
+  expect((await run(post('s3cret', '{'), env)).status).toBe(400);
+  expect((await run(post('s3cret'), env, { byPresence: async () => { throw new Error('offline'); }, redeem: async () => null })).status).toBe(503);
+  expect(n.fetch).not.toHaveBeenCalled();
 });

@@ -11,7 +11,8 @@ export async function armAlarm(storage: Pick<DurableObjectStorage, 'setAlarm'>, 
 // persisted transport due time, including an empty schedule (formerly deleteAlarm).
 export async function rearmSharedAlarm(storage: DurableObjectStorage, scheduleDue: number | null, now: number): Promise<void> {
   const outboxDue = (await storage.get<number | null>('telegram_final_outbox_due_v1')) ?? null;
-  const bounds = [scheduleDue, outboxDue].filter((v): v is number => v !== null);
+  const inboxDue = (await storage.get<number | null>('telegram_owner_inbox_due_v1')) ?? null;
+  const bounds = [scheduleDue, outboxDue, inboxDue].filter((v): v is number => v !== null);
   if (!bounds.length) { await storage.deleteAlarm(); return; }
   await armAlarm(storage, Math.max(Math.min(...bounds), now + 250));
 }
@@ -25,4 +26,13 @@ export async function persistTransportWake(storage: DurableObjectStorage, record
       await armAlarm(txn, Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
     }
   });
+}
+
+// Inbox admission ACK is permitted only after this transaction commits its wake.
+export async function persistInboxWake(txn: DurableObjectTransaction, records: unknown, due: number | null): Promise<void> {
+  await txn.put({ telegram_owner_inbox_v1: records, telegram_owner_inbox_due_v1: due });
+  if (due !== null) {
+    const existing = await txn.getAlarm();
+    await armAlarm(txn, Math.max(Date.now() + 250, existing === null ? due : Math.min(existing, due)));
+  }
 }

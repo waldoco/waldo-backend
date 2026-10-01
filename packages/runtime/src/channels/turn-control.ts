@@ -9,7 +9,18 @@ export const turnControl = () => {
   let pending: { id: number; text: string }[] = [];
   let heard: string[] = [];
   const absorbed = new Set<number>();
+  let consume: ((ids: readonly number[]) => Promise<void>) | undefined;
   return {
+    durableConsume(hook: (ids: readonly number[]) => Promise<void>): void { consume = hook; },
+    async roundAsync(): Promise<string | null> {
+      if (stopped) return null;
+      const claimed = pending.slice();
+      if (claimed.length && consume) await consume(claimed.map(note => note.id));
+      if (stopped) return null;
+      for (const note of claimed) { heard.push(note.text); absorbed.add(note.id); }
+      pending.splice(0, claimed.length);
+      return heard.length === 0 ? '' : `\n\n[While you were working, the owner added: ${heard.map(text => JSON.stringify(text)).join('; ')}. Take it into account in this answer.]`;
+    },
     begin(fromOwner: boolean): void {
       running = true;
       steerable = fromOwner;
