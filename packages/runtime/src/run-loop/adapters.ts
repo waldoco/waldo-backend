@@ -14,6 +14,7 @@ import {
   type ContextComposer,
   type ContextComposerDependencies,
   type ContextSource,
+  type SystemSkillRepository,
 } from '../context-composer';
 import type { ContextFragment, ContextHealthMaterial } from '../context-composer/types';
 import type { HookRuntimeContext } from '../hooks/registry';
@@ -110,7 +111,14 @@ export type RunLoopTestOverrides = {
   rateLimitCheck?: RunLoopSafetyCallbacks['rateLimitCheck'];
 };
 
+export type LocalSystemSkillBinding = Readonly<{
+  principal_ref: string;
+  tenant_ref: string;
+  repository: SystemSkillRepository;
+  budget: ResolvedSkillBudget;
+}>;
 type ResolveRunLoopAdaptersOptions = {
+  localSystemSkills?: LocalSystemSkillBinding;
   deps?: Deps;
   toolOutputs?: () => Promise<readonly ContextFragment[]>;
   // D5: derived health context (zones only, Art-9) for the composer's health material slot.
@@ -142,11 +150,14 @@ export function resolveRunLoopAdapters(
       deliveryTextFallback: RUN_LOOP_DELIVERY_TEXT,
       providerMode: 'fake',
       safety: localPermissiveSafety(),
-      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs, options.health),
+      contextComposer: createLocalTrustedBriefContextComposer(options.toolOutputs, options.health, options.localSystemSkills),
       replayArtifacts: localTrustedBriefReplayArtifacts(),
     };
   }
 
+  if (options.localSystemSkills) {
+    throw new Error('host system skills are local-only');
+  }
   assertGatewayAllowed(env, waldoEnv);
   return {
     deps: options.deps ?? productionDeps(),
@@ -286,6 +297,7 @@ export function localTrustedBriefScheduleInput(): Readonly<{
 function createLocalTrustedBriefContextComposer(
   toolOutputs: () => Promise<readonly ContextFragment[]> = async () => [],
   health: () => Promise<ContextHealthMaterial | null> = async () => null,
+  hostSkills?: LocalSystemSkillBinding,
 ): ContextComposer {
   const dependencies: ContextComposerDependencies = {
     staged_inputs: {
@@ -365,6 +377,17 @@ function createLocalTrustedBriefContextComposer(
     system_skills: {
       async list(request) {
         assertLocalTrustedBriefSnapshot(request);
+        if (hostSkills) {
+          // This private local invocation has one host binding. No request/env
+          // identity can select a different repository. No legacy/default fallback.
+          if (
+            hostSkills.principal_ref !== LOCAL_TRUSTED_BRIEF_PRINCIPAL_REF ||
+            hostSkills.tenant_ref !== LOCAL_TRUSTED_BRIEF_TENANT_REF
+          ) {
+            throw new ContextSourceUnavailableError();
+          }
+          return hostSkills.repository.list(request);
+        }
         return {
           rows: [],
           snapshot: localTrustedBriefAttestation(request, 'rev_44444444444444444444444444444444'),
@@ -388,7 +411,7 @@ function createLocalTrustedBriefContextComposer(
         };
       },
     },
-    skill_budget: LOCAL_TRUSTED_BRIEF_SKILL_BUDGET,
+    skill_budget: hostSkills?.budget ?? LOCAL_TRUSTED_BRIEF_SKILL_BUDGET,
     recall: {
       async recall(request) {
         assertLocalTrustedBriefRequest({
