@@ -284,7 +284,7 @@ export function googleClient(app: GoogleApp, tokens: GoogleTokens, fetcher: Fetc
       if(typeof query!=='string'||!query.trim()||!Number.isSafeInteger(limit)||limit<1||limit>500||(pageToken!==undefined&&(typeof pageToken!=='string'||!pageToken)))throw new Error('invalid Gmail page request');
       const url=new URL(GMAIL);url.search=new URLSearchParams({q:query,maxResults:String(limit),...(pageToken?{pageToken}:{})}).toString();
       const data=await call(url.toString()) as {messages?:{id:string}[];nextPageToken?:string;resultSizeEstimate?:number};
-      if(!data||typeof data!=='object'||(data.messages!==undefined&&(!Array.isArray(data.messages)||data.messages.some(m=>!m||typeof m.id!=='string'||!m.id)))||(data.nextPageToken!==undefined&&(typeof data.nextPageToken!=='string'||!data.nextPageToken))||(data.resultSizeEstimate!==undefined&&(!Number.isSafeInteger(data.resultSizeEstimate)||data.resultSizeEstimate<0)))throw new Error('invalid Gmail page response');
+      if(!data||typeof data!=='object'||Array.isArray(data)||(data.messages!==undefined&&(!Array.isArray(data.messages)||data.messages.some(m=>!m||typeof m.id!=='string'||!m.id)))||(data.nextPageToken!==undefined&&(typeof data.nextPageToken!=='string'||!data.nextPageToken))||(data.resultSizeEstimate!==undefined&&(!Number.isSafeInteger(data.resultSizeEstimate)||data.resultSizeEstimate<0)))throw new Error('invalid Gmail page response');
       return {messages:await mailItems((data.messages??[]).map(m=>m.id)),next_page_token:data.nextPageToken??null,result_size_estimate:data.resultSizeEstimate??null};
     },
     async newMail(since, limit) {

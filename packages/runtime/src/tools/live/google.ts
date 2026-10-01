@@ -114,11 +114,12 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const fetched=page? page.messages : await client.newMail(since,limit);
       const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
       return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query, next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
+        cursor_query_binding: page_token?'caller_supplied_window_not_authenticated_to_cursor':'first_page',
         scope: 'inbox_primary_category', account_selection: 'connected_adapter_account_not_all_accounts',
         retrieval_window: date_range ? 'explicit_date_range' : 'rolling_24_hours', page_limit: limit,
         fetched_count: fetched.length, returned_count: messages.length, pagination: paged?'provider_page':'unknown_not_returned_by_adapter',
         upper_bound_applied_after_page: !paged, complete: paged&&page!.next_page_token===null&&page_token===undefined&&fetched.length===messages.length,
-        limitation: paged?'Primary inbox category from one adapter account. Provider cursor describes remaining pages; result size is an estimate. Not all accounts or categories.':'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
+        limitation: paged?'Primary inbox category from one adapter account. Provider cursor is opaque and not authenticated to this supplied query/window. Result size is an estimate. Not all accounts or categories.':'One sampled Primary-inbox page; pagination is unavailable. A newer page may exclude messages in an older requested window. Empty results do not prove the range is empty.',
       } };
     }),
   } satisfies ToolHandler<GetCommunicationArgs, unknown, ToolDispatcherContext>,

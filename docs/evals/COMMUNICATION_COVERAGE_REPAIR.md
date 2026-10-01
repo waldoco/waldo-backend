@@ -27,8 +27,9 @@ nextPageToken/resultSizeEstimate and validates response metadata before returnin
 The shared GOOGLE_METHODS roster exposes it on the Vault/proxy rail without a
 separate hand-maintained allowlist. get_communication uses exact epoch after/before
 query bounds, filters the final metadata timestamps to [from,to), and exposes the
-provider cursor and estimate. Cursor continuation requires the same explicit date
-range; rolling default time must not silently change between pages. A first page
+provider cursor and estimate. Cursor continuation requires an explicit date
+range. The caller is told to reuse the same range, but this source does not bind the
+opaque provider token to a prior query. Returned coverage names that uncertainty; rolling default time must not silently change between pages. A first page
 without a next cursor and without filtered rows can describe complete coverage of
 that query, not all categories/accounts. Subsequent pages are never described as a
 whole query. Provider estimates are not counts. No automatic paging/model loops.

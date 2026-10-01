@@ -428,3 +428,7 @@ describe('Gmail provider pages',()=>{
   }
  });
 });
+it('rejects array provider page instead of an empty complete query',async()=>{
+ const fetcher=(async(input:RequestInfo|URL)=>String(input).includes('oauth2.googleapis.com')?Response.json({access_token:'unit-token'}):Response.json([])) as typeof fetch;
+ await expect(googleClient(app,{refresh_token:'unit-refresh'},fetcher).mailPage('in:inbox',10)).rejects.toThrow('invalid Gmail page response');
+});
