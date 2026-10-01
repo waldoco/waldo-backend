@@ -1,3 +1,4 @@
+import { MEMORY_GRAPH_PATH, readMemoryGraph } from './memory-graph';
 import {TelegramLinkInbox,LINK_MODE,type LinkBinding} from './telegram-link-inbox';
 import {drainLinkReceipt} from './telegram-link-controller';
 import {ownerDirectory} from '../identity/owner-directory';
@@ -485,7 +486,8 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async console(request: Request): Promise<Response> {
     const access = consoleAccess(this.ctx.storage);
     const url = new URL(request.url);
-    const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH;
+    const memoryRoute = url.pathname === MEMORY_GRAPH_PATH;
+    const overviewRoute = url.pathname === DASHBOARD_OVERVIEW_PATH || memoryRoute;
     if (overviewRoute && request.method !== 'GET') return new Response('method not allowed', { status: 405, headers: DASHBOARD_OVERVIEW_HEADERS });
     const link = url.pathname === CONSOLE_PATH ? url.searchParams.get('t') : null;
     if (link && request.method === 'GET') return signInPage(link);
@@ -512,6 +514,15 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     // Narrow owner-authenticated scheduler receipt. No arbitrary id or SQL.
     if (url.pathname === `${CONSOLE_PATH}/diagnostics/nightly` && request.method === 'GET') {
       return Response.json(await nightlyDiagnostic(this.ctx.storage), { headers: { 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' } });
+    }
+    if (memoryRoute) {
+      try {
+        // Read directly after session admission. Never initialize runtime/memory
+        // schemas, provider clients, FTS or scheduler just to inspect this graph.
+        return Response.json(readMemoryGraph(this.ctx.storage.sql, this.ctx.id.toString()), {headers:DASHBOARD_OVERVIEW_HEADERS});
+      } catch {
+        return Response.json({error:'memory_unavailable'}, {status:503,headers:DASHBOARD_OVERVIEW_HEADERS});
+      }
     }
     if (overviewRoute) {
       try {
