@@ -1,5 +1,5 @@
 import type { ConsoleAuth } from '../identity/console-auth';
-import { newInviteCode } from '../identity/invite-code';
+import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { parseConsoleAction } from './console';
 import { DASHBOARD_OVERVIEW_HEADERS } from './dashboard-overview';
 
@@ -23,6 +23,6 @@ export async function adminAction(request: Request, csrf: string, auth: ConsoleA
     const code = action.action === 'invite.create' ? newInviteCode() : '';
     const done = auth && doName && await (action.action === 'invite.create' ? auth.invite(doName, action.value, code) : auth.revokeInvite(doName, action.id));
     if (!done) return reply({ error: 'not_completed' }, 409);
-    return reply(code ? { code, message: `Invite for ${action.value} (expires in 14 days). ${INVITE_HONESTY}` } : { message: `Invite revoked. ${INVITE_HONESTY}` });
+    return reply(code ? { code, link: inviteLink(request.url, action.value, code), message: `Invite for ${action.value} (expires in 14 days). ${INVITE_HONESTY}` } : { message: `Invite revoked. ${INVITE_HONESTY}` });
   } catch { return reply({ error: 'outcome_unavailable' }, 503); }
 }

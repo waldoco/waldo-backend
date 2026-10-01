@@ -25,7 +25,7 @@ import { fileBook, fileResponse } from './files';
 import { consoleAuth, presenceRecheck, type OwnerSettings } from '../identity/console-auth';
 import { CONSOLE_ADMIN_PATH, renderAdmin } from './console-admin';
 import { CONSOLE_INVITES_PATH, renderMemberInvites } from './console-invites';
-import { newInviteCode } from '../identity/invite-code';
+import { newInviteCode, inviteLink } from '../identity/invite-code';
 import { type ConsoleAction, type ConsoleSession, type ConsoleView, consoleAccess, consoleActionTraceDetail, consoleMayApprove, signInPage, telegramLinked, CONSOLE_ACTION_PATH, CONSOLE_COOKIE, CONSOLE_FILE_PATH, CONSOLE_GOOGLE_PATH, CONSOLE_PATH, CONSOLE_RUNS_PATH, CONSOLE_PAGES, NOTICES, parseConsoleAction, renderConsole, sessionCookie } from './console';
 import { FIRE_TARGETS, parseHarnessCommand, traceBook, type TraceBook } from './harness';
 import { langfuseOtlpConfig, otlpTurnExporter } from '../observability/otlp-turns';
@@ -557,13 +557,13 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (action?.action === 'invite.create' || action?.action === 'invite.revoke') {
         const code = action.action === 'invite.create' ? newInviteCode() : '';
         const done = admin && doName ? await (action.action === 'invite.create' ? admin.invite(doName, action.value, code) : admin.revokeInvite(doName, action.id)) : false;
-        if (done && code) return new Response(`Invite for ${action.value}: ${code} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
+        if (done && code) return new Response(`Invite for ${action.value}: ${inviteLink(request.url, action.value, code)} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } });
         return new Response(null, { status: 303, headers: { location: done ? CONSOLE_ADMIN_PATH : `${CONSOLE_PATH}?m=invalid` } });
       }
       if (action?.action === 'invite.member') {
         const code = newInviteCode();
         const done = admin && doName ? await admin.memberInvite(doName, action.value, code) : false;
-        return done ? new Response(`Invite for ${action.value}: ${code} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : back('invalid');
+        return done ? new Response(`Invite for ${action.value}: ${inviteLink(request.url, action.value, code)} (expires in 14 days). Copy it now and send it yourself. Waldo did not email anyone.`, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' } }) : back('invalid');
       }
       if (action?.action === 'telegram.unlink') {
         const done = admin && doName ? await admin.unlinkTelegram(doName) : false;

@@ -41,7 +41,7 @@ describe('consoleAuth', () => {
     expect((allowed.mock.calls[1] as [string])[0]).toBe('https://db.test/auth/v1/otp');
   });
 
-  it('binds an invite code hash to the OTP gate and owner redemption without sending raw code to the directory', async () => {
+  it('binds an invite code hash to the OTP gate and existing-owner resolution without provisioning from collected phone or sending raw code to the directory', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(json(true)).mockResolvedValueOnce(json({}))
       .mockResolvedValueOnce(json({ user: { id: 'u-1', email: 'invited@example.com' } }))
       .mockResolvedValueOnce(json('owner-1'));
@@ -53,8 +53,9 @@ describe('consoleAuth', () => {
     const bound = JSON.parse(String((fetcher.mock.calls[3] as [string, RequestInit])[1].body));
     expect(gate.p_code_hash).toMatch(/^[0-9a-f]{64}$/);
     expect(bound.p_code_hash).toBe(gate.p_code_hash);
+    expect(bound.p_phone).toBe('');
     expect(gate.p_sig).toBe(await routerSignature('router', 1_790_000_000, `signin.invited@example.com.${gate.p_code_hash}`));
-    expect(bound.p_sig).toBe(await routerSignature('router', 1_790_000_000, `owner.u-1.invited@example.com.+14155550100.${gate.p_code_hash}`));
+    expect(bound.p_sig).toBe(await routerSignature('router', 1_790_000_000, `owner.u-1.invited@example.com..${gate.p_code_hash}`));
     expect(JSON.stringify(fetcher.mock.calls)).not.toContain(code);
   });
 
@@ -114,4 +115,11 @@ describe('consoleAuth', () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ p_do_name: 'do-a', p_timezone: 'Asia/Kolkata', p_quiet_start: '22:00', p_quiet_end: '', p_volume: 'low', p_sig: await routerSignature('router', 1_790_000_000, 'settings.do-a.Asia/Kolkata.22:00..low') });
     expect(await auth.saveSettings('do-a', { timezone: 'Mars/Olympus', quiet_start: null, quiet_end: null, volume: 'normal' })).toBe(false);
   });
+});
+
+it('legacy signup cannot send an unverified phone to the atomic owner creation path', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(json({ user: { id: 'new-auth', email: 'new@example.com' } })).mockResolvedValueOnce(json(null));
+  expect(await consoleAuth(env, fetcher as typeof fetch, now)!.verify('new@example.com', '123456', '+14155550100', 'ABCDEFGHJKLMNPQRSTUV')).toBeNull();
+  const payload = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
+  expect(payload.p_phone).toBe('');
 });

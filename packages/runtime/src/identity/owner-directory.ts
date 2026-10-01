@@ -1,3 +1,5 @@
+import { withRequestTimeout } from './request-timeout';
+
 export type OwnerRoute = Readonly<{ doName: string; subject: string; timezone: string | null }>;
 
 export type OwnerDirectoryEnv = Readonly<{
@@ -49,24 +51,17 @@ export const signedRpc = (env: OwnerDirectoryEnv, fetcher: typeof fetch = fetch,
   if (!base || !key || !secret) return null;
   return async (fn: string, message: string, args: Record<string, string | number>): Promise<unknown> => {
     const at = Math.floor(now() / 1000);
-    // Match the existing webhook-to-DO admission bound, including response body.
-    const signal = AbortSignal.timeout(10_000);
-    const work = (async () => {
+    return withRequestTimeout(async signal => {
+      const signature = await routerSignature(secret, at, message);
+      signal.throwIfAborted();
       const response = await fetcher(`${base}/rest/v1/rpc/${fn}`, {
         method: 'POST', signal,
         headers: { apikey: key, 'content-profile': 'waldo', 'content-type': 'application/json' },
-        body: JSON.stringify({ ...args, p_at: at, p_sig: await routerSignature(secret, at, message) }),
+        body: JSON.stringify({ ...args, p_at: at, p_sig: signature }),
       });
       if (!response.ok) throw new Error(`owner directory ${response.status}`);
       return response.json();
-    })();
-    // Fetch normally honors AbortSignal. The race also bounds an injected adapter
-    // or a stalled response decoder. Losing work cannot commit another effect.
-    let abort!: () => void;
-    const closed = new Promise<never>((_resolve,reject) => { abort=()=>reject(new Error('owner directory timeout')); signal.addEventListener('abort',abort,{once:true}); });
-    try { return await Promise.race([work,closed]); }
-    finally { signal.removeEventListener('abort',abort); }
-
+    });
   };
 };
 
