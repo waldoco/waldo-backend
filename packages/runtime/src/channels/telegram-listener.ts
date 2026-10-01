@@ -1,3 +1,4 @@
+import {telegramRichReply} from './rich-format';
 import { ownerTurnTrace } from './owner-turn-envelope';
 import { telegramReaction } from './reactions';
 import type { TelegramInboundTurn, TelegramPollingAdapter, TelegramUnsupportedTurn } from './telegram-polling';
@@ -16,7 +17,7 @@ class TurnTimeout extends Error {
 export type TelegramOwnerApi = Readonly<{
   setMessageReaction(request: Readonly<{ chat_id: number; message_id: number; reaction: readonly Readonly<{ type: 'emoji'; emoji: string }>[] }>): Promise<unknown>;
   sendChatAction(request: Readonly<{ chat_id: number; action: 'typing' }>): Promise<unknown>;
-  sendMessage(request: Readonly<{ chat_id: number; text: string }>): Promise<unknown>;
+  sendMessage(request: Readonly<{ chat_id: number; text: string; parse_mode?: 'HTML' }>): Promise<unknown>;
 }>;
 
 export type { TurnLogEntry, TurnText, TurnTimer } from './owner-turn-types';
@@ -137,7 +138,10 @@ export class TelegramOwnerListener {
       const text = (await time('respond', () => Promise.race([this.options.respond(turn, time), timeout]).finally(() => clearTimeout(timer)))).trim();
       if (text.length === 0) throw new Error('empty reply');
       clearTimeout(progressTimer);
-      await time('send', () => api.sendMessage({ chat_id, text }));
+      // The responder has already applied current-turn artifact receipt admission.
+      // Rich formatting is confined to this final reply, never progress/events/errors.
+      const rich = telegramRichReply(text);
+      await time('send', () => api.sendMessage({ chat_id, ...(rich.text===text ? {text} : rich) }));
       const chosen = telegramReaction(await choice);
       await react('resolved', chosen !== null && chosen !== ack ? chosen : this.options.doneEmoji ?? '👌');
       this.options.log?.({ trace, hop: 'turn', ms: now() - started, ok: true, text: { input: turn.text, output: text } });

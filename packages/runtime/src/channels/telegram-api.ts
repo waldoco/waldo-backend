@@ -1,4 +1,3 @@
-import {telegramRichReply} from './rich-format';
 import type { TelegramOwnerApi } from './telegram-listener';
 
 // Every Bot API call is bounded: a hung response (the API applied the change but the
@@ -47,5 +46,5 @@ export const egressGate = (localBlocked: () => boolean, recheck?: () => Promise<
 export const createTelegramOwnerApi = (call: ReturnType<typeof createTelegramCaller>): TelegramOwnerApi => ({
   setMessageReaction: (request) => call('setMessageReaction', request),
   sendChatAction: (request) => call('sendChatAction', request),
-  sendMessage: (request) => call('sendMessage', {...request,...telegramRichReply(request.text)}),
+  sendMessage: (request) => call('sendMessage', request),
 });
