@@ -30,7 +30,7 @@ const parseTelegram=(text:string, label=false):string|null=>{
    out+=`<pre>${escapeRich(body)}</pre>`;i=end+3;continue;
   }
   if(text[i]==='`'){
-   if(label)return null;
+   if(label||text[i+1]==='`')return null;
    const end=text.indexOf('`',i+1);if(end<0||text.slice(i+1,end).includes('\n'))return null;
    out+=`<code>${escapeRich(text.slice(i+1,end))}</code>`;i=end+1;continue;
   }
@@ -46,7 +46,8 @@ const parseTelegram=(text:string, label=false):string|null=>{
    if(close>=0){const end=text.indexOf(')',close+2);
     if(end>=0){const url=text.slice(close+2,end);
      if(/^https?:\/\/[^\s<>"'`()]+$/.test(url)){
-      const name=parseTelegram(text.slice(i+1,close),true);if(name===null)return null;
+      const labelText=text.slice(i+1,close);if(labelText.includes('['))return null;
+      const name=parseTelegram(labelText,true);if(name===null)return null;
       out+=`<a href="${escapeRich(url)}">${name}</a>`;i=end+1;continue;
      }
     }
