@@ -272,8 +272,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     } finally {
       clearTimeout(timeout);
       // Failed durable closure must keep the serial queue held. Never abort/release first.
-      try { this.closeRunAtomic(claimed, 'execution_closed'); }
-      catch (error) { console.error('durable run closure failed'); await new Promise<never>(() => {}); throw error; }
+      for (;;) {
+        try { this.closeRunAtomic(claimed, 'execution_closed'); break; }
+        catch { console.error('durable run closure failed'); await new Promise(resolve => setTimeout(resolve, 1000)); }
+      }
       abort.abort();
       const closed = (this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? []).find(r => r.id === claimed.id);
       try {
@@ -291,11 +293,17 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       } catch { console.error('fixed failure notice unavailable'); } finally {
       if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
+      try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
-      this.activeInbox = null; this.liveAttempts.delete(attempt); await this.setup().scheduler.rearm();
+      } catch { console.error('child quarantine deferred to host recovery'); } finally {
+        if (this.activeInbox?.runId === runId) this.activeInbox = null;
+        // Serial owner execution is over; retained child claims are recovered as uncertain.
+        this.liveAttempts.clear();
+        await this.setup().scheduler.rearm();
+      }
       }
     }
   }

@@ -58,10 +58,10 @@ it('a host closure failure retains the serial queue when durable closure cannot 
   const internal=i as unknown as {closeRunAtomic:(r:unknown,reason:string,delivery?:boolean)=>void;drainInbox:()=>Promise<void>;serial:<T>(w:()=>Promise<T>)=>Promise<T>};
   const original=internal.closeRunAtomic.bind(internal);let entered!:()=>void;const hit=new Promise<void>(r=>{entered=r;});
   internal.closeRunAtomic=(r,reason,delivery)=>{if(reason==='execution_closed'){entered();throw new Error('injected close persistence fault');}original(r,reason,delivery);};
-  void internal.serial(()=>internal.drainInbox());await hit;let nextStarted=false;void internal.serial(async()=>{nextStarted=true;});
+  const held=internal.serial(()=>internal.drainInbox());await hit;let nextStarted=false;const next=internal.serial(async()=>{nextStarted=true;});
   await new Promise(r=>setTimeout(r,20));expect(nextStarted).toBe(false);
   internal.closeRunAtomic=original;
-  // Fault deliberately leaves the queue unresolved. This isolated DO is not reused.
+  await held;await next;expect(nextStarted).toBe(true);
   await s.storage.deleteAlarm();
  });
 });
@@ -75,4 +75,11 @@ it('failure notice storage failure does not retain stale run slots or block the 
   seen.finish!({id:'late',output_text:'LATE',output:[],usage:{input_tokens:1,output_tokens:1}});seen.pause=false;outbox.enqueueFenced=original;
   await admit(i,s,7);await internal.drainInbox();expect((await inbox.records()).find(r=>r.updateId===7)?.state).toBe('awaiting_delivery');
  });seen.pause=false;
+});
+it('child quarantine read failure still clears target slots and rearms shared wake',async()=>{
+ seen.pause=false;await setup('fence-do-child-fault',async(i,s)=>{
+  await admit(i,s,8);const internal=i as unknown as {drainInbox:()=>Promise<void>;inbox:{records:()=>Promise<unknown>};activeInbox:unknown;activeScope:unknown;liveAttempts:Set<string>};
+  const original=internal.inbox.records.bind(internal.inbox);let reads=0;internal.inbox.records=async()=>{reads++;if(reads===2)throw new Error('injected child records fault');return original();};
+  await internal.drainInbox();expect(internal.activeInbox).toBeNull();expect(internal.activeScope).toBeUndefined();expect(internal.liveAttempts.size).toBe(0);expect(await s.storage.getAlarm()).not.toBeNull();internal.inbox.records=original;
+ });
 });
