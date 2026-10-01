@@ -375,10 +375,15 @@ export const claimStore = (sql: Sql, transaction?: <T>(work: () => T) => T) => {
           }
         });
         if (hasHeld) attempt('held_candidates', () => {
+          // Redact in place: the run journal pairs a held run with its held row (push_class and
+          // event_id), so deleting the row would strand that run. The same redaction runs on the
+          // matching run_candidates row, which keeps the pair equal.
           for (const row of sql.exec<{ user_id: string; event_id: string; candidate_json: string }>(`SELECT user_id, event_id, candidate_json FROM held_candidates WHERE candidate_json LIKE ? ESCAPE '\\'`, like).toArray()) {
             if (!hits(row.candidate_json)) continue;
-            sql.exec('DELETE FROM held_candidates WHERE user_id = ? AND event_id = ?', row.user_id, row.event_id);
-            tally('deleted', 'held_candidates');
+            const redactedJson = redactPayload(row.candidate_json);
+            const redactedEvent = (JSON.parse(redactedJson) as { event_id?: string }).event_id ?? row.event_id;
+            sql.exec('UPDATE held_candidates SET candidate_json = ?, event_id = ? WHERE user_id = ? AND event_id = ?', redactedJson, redactedEvent, row.user_id, row.event_id);
+            tally('redacted', 'held_candidates');
           }
         });
         if (hasSchedule) attempt('schedule', () => {

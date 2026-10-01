@@ -69,9 +69,11 @@ describe('forget coverage - tracer and scheduler stores', () => {
     });
   }
 
-  // Policy (decided by the main agent under decide-and-log, not by the owner): unsent copies that nothing
-  // depends on are deleted, undelivered outbox runs are terminalised (never delivered with a placeholder),
-  // history and recurring schedules are redacted in place. Delivered Telegram text is outside our reach.
+  // Policy: decided by the main agent under decide-and-log; the owner's own 01:21 IST message (iMessage
+  // phonemsg-01M3WGB9CKWEM22W0KX9YSK0F9) says to take decisions and log them. One-shot unsent schedule
+  // rows are deleted; held rows, history and recurring schedules are redacted in place so no run strands;
+  // undelivered outbox runs are terminalised (never delivered with a placeholder). Those messages are
+  // not delivered. Text already delivered to Telegram is outside our reach.
   it('applies the delete / terminalise / redact policy with real journal rows and a clean resume', async () => {
     const out = await withStorage((storage) => {
       const sql = storage.sql;
@@ -100,15 +102,15 @@ describe('forget coverage - tracer and scheduler stores', () => {
     });
     expect(out.result.ready).toBe(true);
     expect(out.result.receipt).toEqual({
-      deleted: { held_candidates: 1, schedule: 1 },
-      redacted: { outbox: 1, schedule: 1 },
+      deleted: { schedule: 1 },
+      redacted: { outbox: 1, held_candidates: 1, schedule: 1 },
       terminalised: { outbox_pending: 1, outbox_sent_unacked: 1 },
     });
     // The GATED and SINK_SENT runs are terminalised, so resume never picks them up; only the acked run
     // (untouched, already delivered) remains for the normal resume path to finish.
     expect(out.resume?.run_id ?? 'ra').toBe('ra');
     expect(out.states).toEqual({ rg: 'FAILED', rs: 'FAILED', ra: 'ACK_RECORDED' });
-    expect(out.held).toBe(0);
+    expect(out.held).toBe(1);
     expect(out.schedule.map((row) => row.id)).toEqual(['recurring']);
     for (const row of Object.values(out.outbox).flat().map((r) => r.payload)) expect(row).not.toContain(MARKER);
     for (const row of out.schedule.map((r) => r.payload_json)) {
