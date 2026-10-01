@@ -315,14 +315,14 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private async enqueueLink(request: Request): Promise<Response> {
     const secret=this.env.TELEGRAM_WEBHOOK_SECRET;
     if(request.method!=='POST'||!secret||!sameSecret(request.headers.get('x-waldo-inbox-secret')??'',secret))return new Response('forbidden',{status:403});
-    const raw=await request.text();if(raw.length>2048)return new Response('bad request',{status:400});
+    const raw=await request.text();
     let data:LinkBinding & {id:number;digest:string;hash:string};try{data=JSON.parse(raw)}catch{return new Response('bad request',{status:400})}
     const bot=this.env.TELEGRAM_BOT_TOKEN?.split(':')[0];
     if(!data||data.bot!==bot||!/^\d+$/.test(data.bot)||!/^\d+$/.test(data.subject)||data.name!==`telegram-link:${bot}:${data.subject}`||!Number.isSafeInteger(data.id)||data.id<0||!/^[a-f0-9]{64}$/.test(data.digest)||!/^[a-f0-9]{64}$/.test(data.hash)||!this.env.TELEGRAM_OWNER_DO||this.env.TELEGRAM_OWNER_DO.idFromName(data.name).toString()!==this.ctx.id.toString())return new Response('forbidden',{status:403});
     try{const result=await new TelegramLinkInbox(this.ctx.storage).admit({bot:data.bot,subject:data.subject,name:data.name},data.id,data.digest,data.hash);return new Response(result==='conflict'?'conflict':'ok',{status:result==='conflict'?409:result==='capacity'?503:200});}catch{return new Response('admission unavailable',{status:503})}
   }
   private async drainLink(mode:LinkBinding):Promise<void>{
-    const live=()=>{const stored=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);return this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]===mode.bot&&stored?.name===mode.name&&stored.bot===mode.bot&&stored.subject===mode.subject;};
+    const live=()=>{const stored=this.ctx.storage.kv.get<LinkBinding>(LINK_MODE);return this.env.TELEGRAM_BOT_TOKEN?.split(':')[0]===mode.bot&&stored?.name===mode.name&&stored.bot===mode.bot&&stored.subject===mode.subject&&this.env.TELEGRAM_OWNER_DO?.idFromName(mode.name).toString()===this.ctx.id.toString();};
     const inbox=new TelegramLinkInbox(this.ctx.storage);
     try{
       await inbox.maintain();

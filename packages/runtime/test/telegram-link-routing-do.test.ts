@@ -1,4 +1,4 @@
-import{env,runInDurableObject}from'cloudflare:test';import{expect,it}from'vitest';import type{TelegramOwnerDO}from'../src/channels/telegram-owner-do';import{TelegramLinkInbox,LINK_MODE,LINK_ROWS}from'../src/channels/telegram-link-inbox';
+import{env,runInDurableObject}from'cloudflare:test';import{expect,it,vi}from'vitest';import type{TelegramOwnerDO}from'../src/channels/telegram-owner-do';import{TelegramLinkInbox,LINK_MODE,LINK_ROWS}from'../src/channels/telegram-link-inbox';
 it('actual routing object persists mode/wake and blocks console/grant/owner routes',async()=>{
  const bot=env.TELEGRAM_BOT_TOKEN!.split(':')[0]!;const subject='777777';const name=`telegram-link:${bot}:${subject}`;
  const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
@@ -10,6 +10,20 @@ it('actual routing object persists mode/wake and blocks console/grant/owner rout
   for(const path of ['/console','/grant-console','/enqueue','/'])expect((await(instance as TelegramOwnerDO).fetch(new Request('https://route'+path))).status).toBe(404);
   expect(await state.storage.get('telegram_subject')).toBeUndefined();expect(await state.storage.get('do_name')).toBeUndefined();expect(await state.storage.get('webhook_updates')).toBeUndefined();
   const store=new TelegramLinkInbox(state.storage);await store.begin(1);const reconstructed=new TelegramLinkInbox(state.storage);expect((await reconstructed.records())[0]?.state).toBe('attempting');expect((await reconstructed.records())[0]?.hash).toBeUndefined();
+  await state.storage.deleteAlarm();
+ });
+});
+
+const observed=vi.hoisted(()=>({redeem:0,sends:[]as unknown[]}));
+vi.mock('../src/identity/owner-directory',async load=>({...await load<typeof import('../src/identity/owner-directory')>(),ownerDirectory:()=>({byPresence:async()=>null,redeemHashed:async()=>{observed.redeem++;return{kind:'rejected'}}})}));
+vi.mock('../src/channels/telegram-api',async load=>({...await load<typeof import('../src/channels/telegram-api')>(),createTelegramCaller:()=>async(method:string,payload:any)=>{if(method!=='sendMessage')throw Error('owner setup provider call');observed.sends.push(payload);return{message_id:1,chat:{id:payload.chat_id}}}}));
+it('reconstructed routing mode alarm uses frozen generic transport without owner setup or second redemption',async()=>{
+ const bot=env.TELEGRAM_BOT_TOKEN!.split(':')[0]!;const subject='888888';const name=`telegram-link:${bot}:${subject}`;const stub=env.TELEGRAM_OWNER_DO!.get(env.TELEGRAM_OWNER_DO!.idFromName(name));
+ await runInDurableObject(stub,async(instance,state)=>{
+  const inbox=new TelegramLinkInbox(state.storage);await inbox.admit({bot,subject,name},2,'d'.repeat(64),'a'.repeat(64));
+  await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(1);expect(observed.sends).toHaveLength(1);expect(observed.sends[0]).toMatchObject({chat_id:Number(subject),text:'That code did not work. Get a new one from your console.'});
+  await(instance as TelegramOwnerDO).alarm();expect(observed.redeem).toBe(1);expect(observed.sends).toHaveLength(1);expect((await inbox.records())[0]?.hash).toBeUndefined();
+  expect(await state.storage.get('do_name')).toBeUndefined();expect(await state.storage.get('webhook_updates')).toBeUndefined();expect(await state.storage.get('telegram_subject')).toBeUndefined();
   await state.storage.deleteAlarm();
  });
 });
