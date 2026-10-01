@@ -47,21 +47,27 @@ it('a writer output carrying a dose is halted by the medical gate twice; nothing
   expect(seen.replyInputs[0]).toContain('only partly stored'); expect(seen.replyInputs[0]).not.toContain('nothing was stored');
 });
 
-it('a lab-value-only claim is stored by the real writer path and a no-op writer turn still answers from the claim', async () => {
+it('a lab-value-only claim is stored by the real writer path and the next turn's reply prompt carries the claim (mocked reply, no answer or reliance shown)', async () => {
   let stored: Array<{ kind: string; source: string; evidence: string }> = [];
   let memorySection = '';
   let ownerSection = '';
   let noopWriterCalls = -1;
+  let memoryIndex = -1;
+  let storedAfter: string[] = [];
   await session('owner-turn-health-lab', op(`owner, tg-1: "${SAID_LAB}"`, 'HbA1c was 9.1 last week'), SAID_LAB, async ({ store, turn2 }) => {
     stored = store.claims().map((c) => ({ kind: c.kind, source: c.source, evidence: c.evidence }));
     const before = seen.writerInputs.length;
     await turn2();
     noopWriterCalls = seen.writerInputs.length - before;
     const sys = system();
-    memorySection = sys.slice(sys.indexOf('Owner memory'));
+    memoryIndex = sys.indexOf('Owner memory');
+    memorySection = sys.slice(memoryIndex);
+    storedAfter = store.claims().map((c) => c.text);
     ownerSection = sys;
   });
   expect(stored).toEqual([{ kind: 'health', source: 'stated', evidence: `owner, tg-1: "${SAID_LAB}"` }]);
+  expect(memoryIndex).toBeGreaterThanOrEqual(0);
+  expect(storedAfter).toEqual(['HbA1c was 9.1 last week']); // stored text after the second (no-op) turn
   expect(noopWriterCalls).toBe(1); // turn 2's writer ran and was a strict no-op
   expect(memorySection).toContain('HbA1c was 9.1 last week'); // system prompt memory section, from the store
   expect(ownerSection).not.toContain('Answer again');
@@ -73,12 +79,15 @@ it('a lab-value-only claim is stored by the real writer path and a no-op writer 
 it('an invented lab-only claim (evidence not in the owner message) is stored as inferred and reaches the next reply prompt', async () => {
   let stored: Array<{ source: string; origin: string | null | undefined; text: string }> = [];
   let memorySection = '';
+  let memoryIndex = -1;
   await session('owner-turn-health-invented', op('owner, tg-1: "my HbA1c was 7.2 last month"', 'HbA1c was 7.2 last month'), 'I felt tired today', async ({ store, turn2 }) => {
     stored = store.claims().map((c) => ({ source: c.source, origin: (c as { origin?: string | null }).origin, text: c.text }));
     await turn2();
     const sys = system();
-    memorySection = sys.slice(sys.indexOf('Owner memory'));
+    memoryIndex = sys.indexOf('Owner memory');
+    memorySection = sys.slice(memoryIndex);
   });
+  expect(memoryIndex).toBeGreaterThanOrEqual(0);
   expect(stored.map((c) => [c.source, c.text])).toEqual([['inferred', 'HbA1c was 7.2 last month']]);
   expect(memorySection).toContain('HbA1c was 7.2 last month');
   expect(memorySection).toContain('source="inferred" provenance="provisional"');
