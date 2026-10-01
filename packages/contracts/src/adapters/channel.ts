@@ -232,7 +232,12 @@ export const telegramMessageUpdateSchema = z.strictObject({
     document: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
     voice: telegramFileSchema.extend({ mime_type: z.string().min(1).max(128).optional() }).optional(),
     audio: telegramFileSchema.extend({ file_name: z.string().min(1).max(256).optional(), mime_type: z.string().min(1).max(128).optional() }).optional(),
-    reply_to_message: z.looseObject({ message_id: z.int().positive() }).optional(),
+    reply_to_message: z.looseObject({
+      message_id: z.int().positive(),
+      from: z.looseObject({ id: z.int().positive(), is_bot: z.boolean() }).optional(),
+      chat: z.looseObject({ id: z.int(), type: z.string() }).optional(),
+      text: z.string().max(4096).optional(), caption: z.string().max(1024).optional(),
+    }).optional(),
     quote: z.looseObject({}).optional(),
     link_preview_options: z.looseObject({}).optional(),
   }).refine(

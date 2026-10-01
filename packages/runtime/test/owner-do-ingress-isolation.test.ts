@@ -50,7 +50,7 @@ vi.mock('openai', () => ({
         : 'Synthetic answer from the model adapter.';
       const input = JSON.stringify(body);
       const wantsMail = input.includes('Read the fixture inbox');
-      const wantsProposal = input.includes('Propose a fixture calendar event');
+      const wantsProposal = input.includes('Propose a fixture calendar event') && !input.includes('REPLY_FIXTURE_TARGET');
       const hasToolOutput = input.includes('function_call_output');
       const output = name === 'claim_ops' || hasToolOutput ? []
         : wantsProposal ? [{ type: 'function_call', call_id: 'fixture-calendar-proposal', name: 'propose_calendar_change', arguments: JSON.stringify({ action: 'create', title: 'Fixture meeting', start: '2026-10-01T10:00:00+05:30', end: '2026-10-01T10:30:00+05:30', reason: 'test-only owner request' }) }]
@@ -65,11 +65,11 @@ const { handleTelegramWebhook } = await import('../src/channels/telegram-webhook
 let sequence = 0;
 const route = (subject: number): OwnerRoute => ({ doName: `hermetic-owner-${subject}`, subject: String(subject), timezone: 'Asia/Kolkata' });
 const directory: OwnerDirectory = { byPresence: async (provider, subject) => provider === 'telegram' && ['81101', '81102'].includes(subject) ? route(Number(subject)) : null, redeem: async () => null };
-const send = async (subject: number, text: string, updateId: number) => {
+const send = async (subject: number, text: string, updateId: number, replyTo?: Record<string, unknown>) => {
   const pending: Promise<unknown>[] = [];
   const response = await handleTelegramWebhook(new Request('https://fixture.invalid/telegram/webhook', {
     method: 'POST', headers: { 'x-telegram-bot-api-secret-token': 'hermetic-test-webhook-secret' },
-    body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text } }),
+    body: JSON.stringify({ update_id: updateId, message: { message_id: updateId, from: { id: subject, is_bot: false }, chat: { id: subject, type: 'private' }, text, ...(replyTo ? { reply_to_message: replyTo } : {}) } }),
   }), env, (work) => pending.push(work), directory);
   await Promise.all(pending);
   return response;
@@ -202,17 +202,34 @@ describe('real owner-DO ingress in a sealed test world', () => {
     const ledgerState = async () => runInDurableObject(doStub(81101), async (_instance, state) =>
       state.storage.sql.exec<{ kind: string; status: string }>('SELECT kind, status FROM ledger WHERE kind = ? ORDER BY created_at DESC LIMIT 1', 'calendar_change').toArray());
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'open' }]);
+    // Real reply_to_message ingress while a proposal is open. The model is scripted:
+    // this proves context plumbing and unchanged task state, not interpretation quality.
+    modelInputs.length = 0;
+    const quote = 'REPLY_FIXTURE_TARGET: waiting for review on the fixture meeting';
+    expect((await send(81101, '?', update + 1, {
+      message_id: update, date: 1, from: { id: 99123, is_bot: true },
+      chat: { id: 81101, type: 'private' }, text: quote,
+    })).status).toBe(200);
+    const replyInput = modelInputs.find((body) => JSON.stringify(body).includes(quote));
+    expect(replyInput).toBeDefined();
+    expect(JSON.stringify(replyInput)).toContain('observed_author_id');
+    expect(JSON.stringify(replyInput)).toContain('99123');
+    expect(JSON.stringify(replyInput)).toContain('external quoted data');
+    expect(modelInputs.filter((body) => JSON.stringify(body).includes('claim_ops'))
+      .every((body) => !JSON.stringify(body).includes(quote))).toBe(true);
+    expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'open' }]);
+    expect(sourceWorld.outbox('a@example.invalid')).toEqual([]);
     // First try the forged sender on A's DO directly: this exercises the approval
     // desk's owner check, not only the webhook directory's normal routing.
     await doStub(81101).fetch('https://telegram-owner/turn', { method: 'POST', headers: { 'x-waldo-telegram-subject': '81101' },
-        body: JSON.stringify({ update_id: update + 1, callback_query: { id: `fixture-forgery-${update}`, from: { id: 81102 }, data: approve, message: { message_id: update, chat: { id: 81101 } } } }) });
+        body: JSON.stringify({ update_id: update + 2, callback_query: { id: `fixture-forgery-${update}`, from: { id: 81102 }, data: approve, message: { message_id: update, chat: { id: 81101 } } } }) });
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'open' }]);
     expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-forgery-${update}` && item.body.text === 'Not available.')).toBe(true);
-    expect((await callback(81101, 81101, skip, update + 2)).status).toBe(200);
+    expect((await callback(81101, 81101, skip, update + 3)).status).toBe(200);
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
-    expect((await callback(81101, 81101, approve, update + 3)).status).toBe(200);
+    expect((await callback(81101, 81101, approve, update + 4)).status).toBe(200);
     expect(await ledgerState()).toEqual([{ kind: 'calendar_change', status: 'skipped' }]);
-    expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-query-${update + 3}` && item.body.text === 'Already handled.')).toBe(true);
+    expect(outbox.some((item) => item.method === 'answerCallbackQuery' && item.body.callback_query_id === `fixture-query-${update + 4}` && item.body.text === 'Already handled.')).toBe(true);
     expect((await send(81101, 'Propose a fixture calendar event, but do not commit it.', update)).status).toBe(200);
     expect(outbox.filter((item) => item.method === 'sendMessage' && String(item.body.text).startsWith('Proposed:'))).toHaveLength(1);
   });

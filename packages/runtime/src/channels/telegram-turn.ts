@@ -13,6 +13,7 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   conversationRef: `${surface}-${turn.chatId}`,
   surface,
   text: turn.text,
+  ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
 });
 type CoreArgs = Parameters<typeof createOwnerResponder>;
 type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest : never];

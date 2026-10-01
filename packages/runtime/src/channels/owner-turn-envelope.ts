@@ -4,12 +4,27 @@ import type { turnControl } from './turn-control';
 
 // Auth and provider parsing happen in adapters. This is the admitted content
 // boundary consumed by the conversation, memory and tool loop.
+// Provider identifiers are opaque strings. Observed author metadata never proves
+// owner authority, even when its value matches the admitted sender.
+export type ReplyContext = Readonly<{
+  surface: string;
+  messageId: string;
+  conversationRef: string | null;
+  authorId: string | null;
+  authorIsBot: boolean | null;
+  text: string;
+  truncated: boolean;
+  sourceTaint: 'external';
+}>;
+export const REPLY_QUOTE_LIMIT = 2048;
+
 export type OwnerTurnEnvelope = Readonly<{
   traceId: string;
   conversationRef: string;
   surface: string;
   text: string;
   mediaNote?: string;
+  replyTo?: ReplyContext;
   attachment?: LLMAttachment;
   // Set by the channel host. When false, this turn skips its immediate memory write. Nightly consolidation and history indexing are separate and unaffected.
   memoryWrites?: boolean;
