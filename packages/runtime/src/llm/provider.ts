@@ -1,3 +1,4 @@
+import type { RunEffectScope } from '../channels/run-effect-scope';
 import {
   ESCALATION_RULES,
   FALLBACK_LADDER,
@@ -60,6 +61,7 @@ type GatewayAttemptFallbackStep = Extract<
 >;
 
 export type LLMGatewayRequest = {
+  runScope?: RunEffectScope;
   request: LLMRequest;
   route: ModelRoute;
   step: GatewayStep;
@@ -148,6 +150,7 @@ export type RuntimeLLMRenderInput = {
 };
 
 export type RuntimeLLMRequest = {
+  runScope?: RunEffectScope;
   trigger: unknown;
   policy?: RoutingPolicy;
   spend?: RouteSpendState;
@@ -362,6 +365,7 @@ export class RuntimeLLMProvider {
     const attempts: LLMAttempt[] = [];
 
     for (const plan of attemptPlan(effectiveRoute, spendCapped)) {
+      input.runScope?.admit();
       if (this.circuitBreaker.isOpen(plan.step.provider)) {
         attempts.push({
           outcome: 'skipped',
@@ -407,7 +411,9 @@ export class RuntimeLLMProvider {
 
       let gatewayResult: AdapterResult<LLMResponse>;
       try {
+        input.runScope?.admit();
         gatewayResult = await this.gateway.complete({
+          ...(input.runScope ? { runScope: input.runScope } : {}),
           request: sanitisedRequest.request,
           route: effectiveRoute,
           step: plan.step,

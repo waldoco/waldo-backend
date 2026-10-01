@@ -52,7 +52,10 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       return { ok: false, code: 'auth_failed', error: 'OPENAI_API_KEY is unavailable' };
     }
 
+    input.runScope?.admit();
     const controller = new AbortController();
+    const abortRun = () => controller.abort();
+    input.runScope?.signal.addEventListener('abort', abortRun, { once: true });
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const startedAt = Date.now();
     try {
@@ -100,6 +103,7 @@ export class OpenAIResponsesAdapter implements LLMGatewayAdapter {
       return { ok: false, code: openAIErrorCode(error), error: 'OpenAI request failed' };
     } finally {
       clearTimeout(timeout);
+      input.runScope?.signal.removeEventListener('abort', abortRun);
     }
   }
 }

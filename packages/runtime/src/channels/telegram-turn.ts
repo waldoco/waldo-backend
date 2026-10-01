@@ -13,10 +13,11 @@ export const telegramTurnEnvelope = (turn: TelegramInboundTurn, surface = 'teleg
   conversationRef: `${surface}-${turn.chatId}`,
   surface,
   text: turn.text,
+  ...(turn.runScope ? { runScope: turn.runScope } : {}),
   ...(turn.replyTo ? { replyTo: turn.replyTo } : {}),
 });
 type CoreArgs = Parameters<typeof createOwnerResponder>;
-type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest : never];
+type AdapterArgs = [key: CoreArgs[0], store?: CoreArgs[1], memory?: CoreArgs[2], log?: CoreArgs[3], readers?: MediaReaders, ...rest: CoreArgs extends [unknown, unknown?, unknown?, unknown?, ...infer Rest] ? Rest extends [...infer Public, unknown?] ? Public : never : never];
 export const createTelegramResponder = (...args: [...AdapterArgs, surface?: string]) => {
   const surface = args[20] ?? 'telegram';
   const readers = args[4];
@@ -25,7 +26,9 @@ export const createTelegramResponder = (...args: [...AdapterArgs, surface?: stri
   const core = createOwnerResponder(...coreArgs);
   const envelope = (turn: TelegramInboundTurn) => telegramTurnEnvelope(turn, surface);
   const respond: TelegramOwnerListenerOptions['respond'] = async (turn, time) => {
+    turn.runScope?.admit();
     const media = turn.media ? await time('media', () => loadTelegramMedia(turn.media!, readers ?? {})) : undefined;
+    turn.runScope?.admit();
     return core.respond({ ...envelope(turn), ...(media?.note ? { mediaNote: media.note } : {}), ...(media?.attachment ? { attachment: media.attachment } : {}) }, time);
   };
   return {

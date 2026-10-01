@@ -65,10 +65,11 @@ export const episodeIndex = (sql: SqlStorage): EpisodeIndex => {
 
 export const indexedConversationStore = (store: ConversationStore, index: EpisodeIndex, now: () => number): ConversationStore => ({
   load: () => store.load(),
-  async save(entries, leafId) {
-    await store.save(entries, leafId);
+  async save(entries, leafId, scope) {
+    await store.save(entries, leafId, scope);
     const at = now();
-    for (const entry of entries) index.add(entry.id, speakerOf(entry.id), entry.appPayload, at);
+    const commit = () => { for (const entry of entries) index.add(entry.id, speakerOf(entry.id), entry.appPayload, at); };
+    if (scope) scope.commit(commit); else commit();
   },
 });
 

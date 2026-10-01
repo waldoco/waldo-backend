@@ -1,3 +1,4 @@
+import type { RunEffectScope } from './run-effect-scope';
 import { ownerContextHandler } from '../tools/live/owner-context';
 import {
   sanitiseResultSchema, acceptTrustedInvocation, buildSessionState, ConversationTree, OPENAI_GPT_6_LUNA_MODEL, OPENAI_PROVIDER, routingPolicySchema, WALDO_CHAT_MODEL,
@@ -94,7 +95,7 @@ export const createOwnerResponder = (
   gateway?: LLMGatewayAdapter,
   // Forget support: redact forgotten claim text from the persisted rolling conversation window
   // (supplied by the owner DO, which owns the KV store). Counts only - never the text.
-  redactConversation?: (texts: readonly string[]) => Promise<Readonly<{ rewritten: number; remaining: number }>>,
+  redactConversation?: (texts: readonly string[], scope?: RunEffectScope) => Promise<Readonly<{ rewritten: number; remaining: number }>>,
   // Staging probe confinement (Codex #230/#231 holds): while a capture-mode /probe-turn runs,
   // this slot suppresses memory persistence and strips the live provider handlers from the
   // turn's tool loop and system prompt. Inert for real turns; the DO owns the slot.
@@ -118,6 +119,7 @@ export const createOwnerResponder = (
   // owner DO wires the signed-rail book; undefined composes with no health material.
   health?: (trace?: string) => Promise<ContextHealthMaterial | null>,
   reactionChoices: readonly string[] = [],
+  privateRunScope?: RunEffectScope,
 ): OwnerResponder => {
   const fixture = localTrustedBriefScheduleInput();
   const accepted = acceptTrustedInvocation(fixture.admission);
@@ -143,6 +145,7 @@ export const createOwnerResponder = (
   };
   const handlers = [getContextHandler(clock), ownerContextHandler(memory), ...tools, ...(offloadStore === undefined ? [] : [readToolOutputHandler(offloadStore)])];
   const complete = async (trace: string, purpose: string, system: string, content: string | readonly ConversationModelMessage[], format?: Readonly<{ name: string; schema: Record<string, unknown> }>, attachments?: readonly LLMAttachment[], tools?: readonly LLMTool[], turns?: readonly LLMToolTurn[], modelOverride?: ModelName) => {
+    privateRunScope?.admit();
     const started = Date.now();
     let reasoning: string | undefined;
     const effectivePolicy = modelOverride === undefined || modelOverride === model ? policy
@@ -157,6 +160,7 @@ export const createOwnerResponder = (
     }));
     const adapter = gateway ?? new OpenAIResponsesAdapter({ apiKey: openaiApiKey, onResponseMetadata: (metadata) => { reasoning = metadata.reasoning; } });
     const result = await new RuntimeLLMProvider({ gateway: adapter, circuitBreaker }).complete({
+      ...(privateRunScope ? { runScope: privateRunScope } : {}),
       trigger: 'user_message',
       policy: effectivePolicy,
       renderRequest: () => ({
@@ -166,6 +170,7 @@ export const createOwnerResponder = (
         ...(tools ? { tools: [...tools] } : {}), ...(turns?.length ? { tool_turns: [...turns] } : {}),
       }),
     }, safety);
+    privateRunScope?.admit();
     const input = JSON.stringify([{ role: 'system', content: system }, ...userMessages, ...(turns ?? [])]);
     if (!result.ok) log({ trace, hop: `llm_${purpose}`, ms: Date.now() - started, ok: false, code: [result.code, result.halted_by, result.scribe?.reason].filter(Boolean).join(':'), shape: { system_bytes: new TextEncoder().encode(system).byteLength, request_bytes: new TextEncoder().encode(input).byteLength }, text: { input } });
     else log({
@@ -211,7 +216,7 @@ export const createOwnerResponder = (
           const result = await runChildLoop(task, {
           handlers: activeHandlers,
           budget: turnBudget,
-          ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+          ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
           controlRound: () => control.roundAsync(),
           complete: (content, tools, turns) =>
             complete(trace, 'subagent', SUBAGENT_SYSTEM_PROMPT, [{ role: 'user', content }], undefined, undefined, tools as never, turns),
@@ -232,7 +237,7 @@ export const createOwnerResponder = (
         budget: turnBudget,
         ...(offloadStore === undefined ? {} : { offload: offloadStore }),
         maxSteps: MAX_TOOL_ROUNDS,
-        ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
+        ctx: { ...safety, ...(turnReplyContext ? { toolArgSourceTaint: 'external' as const } : {}), turnId: trace, ...(privateRunScope ? { runScope: privateRunScope } : {}), session: buildSessionState({ trigger: 'user_message', canary_tokens: CANARIES, started_at: Date.now() }) },
         step: async (tools, turns) => {
           const added = await control.roundAsync();
           if (added === null) return { text: STOPPED_REPLY };
@@ -259,7 +264,9 @@ export const createOwnerResponder = (
           );
         },
         onTool: (event) => {
+          privateRunScope?.admit();
           log({ trace, hop: `tool_${event.call.name}`, ms: event.ms, ok: event.ok, ...(event.error ? { error: event.error } : {}), ...(event.code ? { code: [event.code, event.reason].filter(Boolean).join(':') } : {}), ...(event.guard ? { guard: event.guard } : {}), text: { input: event.call.arguments, output: event.output } });
+          privateRunScope?.admit();
           pendingToolOutputs.push({ tool: event.call.name, ok: event.ok, at: Date.now(), taint: 'external', summary: event.output });
         },
         ...(offerConnect ? { onConnect: offerConnect } : {}),
@@ -311,13 +318,16 @@ export const createOwnerResponder = (
     ownerTurnActive = fromOwner;
     control.begin(fromOwner);
     const publication = await time('joined_path', () => path.submit({
+      ...(privateRunScope ? { runScope: privateRunScope } : {}),
       authenticatedOwnerId: ownerId, invocation,
       context: { ...localTrustedBriefTurnSnapshot(), canary_tokens: CANARIES, replay_context_ref: null },
       userEntry: { id, ownerId, chatId: conversationRef, parentId, threadAnchorId: null, surface, modelPayload: said, appPayload: said, modelProjection: { mode: 'include' } },
       assistantEntryId: `${id}-reply`,
     })).finally(() => { ownerTurnActive = false; control.end(); });
-    await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId);
-    for (const entry of pendingToolOutputs.splice(0)) await toolLedger?.record(entry);
+    privateRunScope?.admit();
+    await store?.save([tree.get(id)!, tree.get(publication.leafId)!], publication.leafId, privateRunScope);
+    for (const entry of pendingToolOutputs.splice(0)) { privateRunScope?.admit(); await toolLedger?.record(entry, privateRunScope); }
+    privateRunScope?.admit();
     parentId = publication.leafId;
     const out = publication.text;
     lastReply = out;
@@ -331,6 +341,7 @@ export const createOwnerResponder = (
   } as const;
   const record = async (id: string, owner: string, shared: string): Promise<'saved' | 'failed' | 'uncertain'> => {
     if (!memory) return 'saved';
+    privateRunScope?.admit();
     const started = Date.now();
     memory.beginSettle(id, new Date().toISOString());
     let stage: 'failed' | 'uncertain' = 'failed';
@@ -340,11 +351,13 @@ export const createOwnerResponder = (
       let purged: readonly string[] = [];
       let purgeIds: readonly number[] = [];
       let outcome: ClaimOutcome | undefined;
+      privateRunScope?.admit();
       const detail = applyClaimOps(memory, raw, new Date().toISOString(), `owner, ${id}`, (texts, ids) => { purged = texts; purgeIds = ids; }, { owner, shared }, undefined, (result) => { outcome = result; });
-      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
       // Settle only once the KV conversation/ledger stores verify clean too; a KV
       // survivor leaves the claim 'purging' so a later retry can still find it.
       const settled = purgeIds.length === 0 || (conv === null || conv.remaining === 0);
+      privateRunScope?.admit();
       if (purgeIds.length && settled) memory.settle(purgeIds);
       // The receipt is emitted only now, after redaction and settle, so it can state what is true.
       const interrupted = memory.sweepInterruptedSettles(new Date(started - 10 * 60 * 1000).toISOString());
@@ -362,6 +375,13 @@ export const createOwnerResponder = (
   };
   return {
     async respond(turn, time) {
+      if (turn.runScope && privateRunScope !== turn.runScope) {
+        const scoped = createOwnerResponder(openaiApiKey, store, memory, log, clock, tools, model, offload, toolLedger, offerConnect, gateway, redactConversation, probeGuard, standingOrders, runs, memoryModel, egressAllowlist, health, reactionChoices, turn.runScope);
+        control.route(scoped.control);
+        try { return await scoped.respond(turn, time); }
+        finally { control.unroute(scoped.control); }
+      }
+      privateRunScope?.admit();
       const memoryWrites = turn.memoryWrites !== false;
       await restored;
       const id = turn.traceId;
@@ -407,7 +427,7 @@ export const createOwnerResponder = (
       // taint, origin classes). Without them the mixed transcript is a fabrication check only.
       const grounding = sides ? { owner: sides.owner, waldo: sides.waldo } : { owner: day };
       const summary = applyClaimOps(memory, raw, new Date().toISOString(), `owner, day of ${trace}`, (texts, ids) => { purged = texts; purgeIds = ids; }, grounding);
-      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
@@ -419,7 +439,7 @@ export const createOwnerResponder = (
       // Migration admits legacy facts only: the file payload can mention past forgets, so the
       // forget-intent gate is pinned shut here - nothing purges during a migration.
       const summary = applyClaimOps(memory, raw, new Date().toISOString(), 'owner agreed', (texts, ids) => { purged = texts; purgeIds = ids; }, { owner: input }, false);
-      const conv = purged.length && redactConversation ? await redactConversation(purged) : null;
+      const conv = purged.length && redactConversation ? await redactConversation(purged, privateRunScope) : null;
       if (purgeIds.length && (conv === null || conv.remaining === 0)) memory.settle(purgeIds);
       return `${summary}${conv ? `; conv ${conv.rewritten} redacted${conv.remaining ? ` ${conv.remaining} left` : ''}` : ''}`;
     },
@@ -435,6 +455,10 @@ export const createOwnerResponder = (
     control,
     planDay: (trace, input) => ask(trace, 'day_plan', DAY_PLAN_INSTRUCTION, memory ? `${memoryPrompt(memory)}\n\n${input}` : input, { name: 'day_plan', schema: DAY_PLAN_SCHEMA }),
     chooseReaction: async (turn) => {
+      if (turn.runScope && privateRunScope !== turn.runScope) {
+        return createOwnerResponder(openaiApiKey, undefined, undefined, log, clock, [], model, false, undefined, undefined, gateway, undefined, probeGuard, undefined, undefined, memoryModel, egressAllowlist, undefined, reactionChoices, turn.runScope).chooseReaction(turn);
+      }
+      privateRunScope?.admit();
       const quote = await quoteContext(turn.replyTo);
       const gist = lastReply === undefined ? turn.text : `${turn.text}\n\n[Your reply just sent: ${lastReply.slice(0, 500)}]`;
       return (JSON.parse(await ask(turn.traceId, 'reaction', reactionInstruction(reactionChoices), [gist, quote].filter(Boolean).join('\n\n'), { name: 'reaction', schema: reactionSchema(reactionChoices) })) as { reaction?: string }).reaction ?? null;

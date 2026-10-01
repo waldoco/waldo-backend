@@ -1,3 +1,4 @@
+import type { RunEffectScope } from './run-effect-scope';
 import { REPLY_QUOTE_LIMIT, type ReplyContext } from './owner-turn-envelope';
 import { telegramMessageUpdateSchema, telegramUnsupportedMessageSchema, type TelegramMessageUpdate } from '@waldo/contracts';
 
@@ -22,6 +23,7 @@ export type TelegramInboundTurn = Readonly<{
   text: string;
   media?: TelegramMedia;
   replyTo?: ReplyContext;
+  runScope?: RunEffectScope;
 }>;
 
 export type TelegramUnsupportedTurn = Omit<TelegramInboundTurn, 'text' | 'sentAt' | 'media'> & Readonly<{ note?: string }>;

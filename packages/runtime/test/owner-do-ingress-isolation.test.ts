@@ -402,12 +402,15 @@ it('actual inbox record and alarm transaction rollback leave no admitted update'
 it('delayed consumed stop cannot stop a replacement run in the real DO', async()=>{
   const { turnControl }=await import('../src/channels/turn-control');const subject=81102;const stub=doStub(subject);
   await runInDurableObject(stub,async(instance,state)=>{
-    const internal=instance as unknown as {activeInbox:{runId:string}|null;runtimes:{telegram:{control:ReturnType<typeof turnControl>}};inbox:{transition:(...args:unknown[])=>Promise<boolean>}};
-    const control=turnControl();control.bindTarget('old-run');control.begin(true);internal.activeInbox={runId:'old-run'};internal.runtimes.telegram={control};
+    const internal=instance as unknown as {activeInbox:import('../src/channels/telegram-owner-inbox').InboxRecord|null;runtimes:{telegram:{control:ReturnType<typeof turnControl>}};inbox:{transition:(...args:unknown[])=>Promise<boolean>}};
+    const { TelegramOwnerInbox }=await import('../src/channels/telegram-owner-inbox');const { persistInboxWake }=await import('../src/scheduler/alarm-slot');
+    const inbox=new TelegramOwnerInbox(state.storage,persistInboxWake);await inbox.admit({bot:'hermetic-test-bot-token',subject:String(subject),doName:route(subject).doName},991121,'target');
+    const oldTarget=(await inbox.claim('hermetic-test-bot-token:telegram:991121','old-attempt','old-run',Date.now()+150000))!;
+    const control=turnControl();control.bindTarget('old-run');control.begin(true);internal.activeInbox=oldTarget;internal.runtimes.telegram={control};
     const original=internal.inbox.transition.bind(internal.inbox);let entered!:()=>void;const reached=new Promise<void>(r=>entered=r);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
     internal.inbox.transition=async(...args)=>{if(args[2]==='consumed'){entered();await gate;}return original(...args);};
     const request=new Request('https://telegram-owner/enqueue',{method:'POST',headers:{'x-waldo-inbox-secret':'hermetic-test-webhook-secret','x-waldo-telegram-subject':String(subject),'x-waldo-do-name':route(subject).doName},body:JSON.stringify({update_id:991122,message:{message_id:991122,from:{id:subject,is_bot:false},chat:{id:subject,type:'private'},text:'/stop'}})});
-    const pending=instance.fetch(request);await reached;control.end();control.bindTarget('new-run');control.begin(true);internal.activeInbox={runId:'new-run'};release();expect((await pending).status).toBe(200);expect(await control.roundAsync()).toBe('');
+    const pending=instance.fetch(request);await reached;control.end();control.bindTarget('new-run');control.begin(true);internal.activeInbox={...oldTarget,runId:'new-run',attempt:'new-attempt'};release();expect((await pending).status).toBe(200);expect(await control.roundAsync()).toBe('');
     internal.inbox.transition=original;internal.activeInbox=null;delete (internal.runtimes as {telegram?:unknown}).telegram;await state.storage.deleteAlarm();
   });
 });

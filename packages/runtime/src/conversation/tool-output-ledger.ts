@@ -1,3 +1,4 @@
+import type { RunEffectScope } from '../channels/run-effect-scope';
 // Recent tool outputs as composable context (BUILD_ORDER 12). The tool loop's outputs
 // used to live only inside one turn; this ledger keeps the last few so the context
 // composer can stage them as tool_result sources with provenance and taint.
@@ -17,6 +18,7 @@ const MAX_KEPT = 6;
 const MAX_SUMMARY_CHARS = 500;
 
 type KeyValueStorage = {
+  kv?: Pick<DurableObjectStorage['kv'], 'put' | 'delete'>;
   get<T>(key: string): Promise<T | undefined>;
   list<T>(options: { prefix: string }): Promise<Map<string, T>>;
   put(entries: Record<string, unknown>): Promise<void>;
@@ -47,11 +49,16 @@ const admitsForPrompt = (summary: string, taint: SourceTaint): boolean => {
 };
 
 export const toolOutputLedger = (storage: KeyValueStorage) => ({
-  async record(entry: Omit<ToolOutputEntry, 'at'> & { at: number }): Promise<void> {
+  async record(entry: Omit<ToolOutputEntry, 'at'> & { at: number }, scope?: RunEffectScope): Promise<void> {
     const summary = entry.summary.length > MAX_SUMMARY_CHARS ? `${entry.summary.slice(0, MAX_SUMMARY_CHARS)}...` : entry.summary;
     // Admission guard at write time: a poisoned summary is dropped, never persisted.
     if (!admitsForPrompt(summary, entry.taint)) return;
     const count = (await storage.get<number>('toolout-count')) ?? 0;
+    if (scope) {
+      if (!storage.kv) throw new Error('fenced synchronous ledger unavailable');
+      scope.commit(() => { storage.kv!.put(entryKey(count), { ...entry, summary }); storage.kv!.put('toolout-count', count + 1); if (count + 1 > MAX_KEPT) storage.kv!.delete(entryKey(count - MAX_KEPT)); });
+      return;
+    }
     await storage.put({ [entryKey(count)]: { ...entry, summary }, 'toolout-count': count + 1 });
     // Ring: drop the oldest once we exceed the cap.
     if (count + 1 > MAX_KEPT) await storage.delete([entryKey(count - MAX_KEPT)]);
@@ -88,7 +95,7 @@ export const toolOutputLedger = (storage: KeyValueStorage) => ({
 // Forget coverage: a claim's exact text can be quoted inside a kept tool-output summary, so
 // purge redacts the ring in place (same literal match as the conversation store; paraphrases
 // remain the documented limit). Rows keep their keys, order and taint stamps.
-export const redactToolOutputLedger = async (storage: KeyValueStorage, texts: readonly string[], marker: string): Promise<number> => {
+export const redactToolOutputLedger = async (storage: KeyValueStorage, texts: readonly string[], marker: string, scope?: RunEffectScope): Promise<number> => {
   const rows = await storage.list<ToolOutputEntry>({ prefix: 'toolout:' });
   let touched = 0;
   const writes: Record<string, unknown> = {};
@@ -108,6 +115,9 @@ export const redactToolOutputLedger = async (storage: KeyValueStorage, texts: re
       touched += 1;
     }
   }
-  if (Object.keys(writes).length) await storage.put(writes);
+  if (Object.keys(writes).length) {
+    if (scope) { if (!storage.kv) throw new Error('fenced redaction ledger unavailable'); scope.commit(() => { for (const [key, value] of Object.entries(writes)) storage.kv!.put(key, value); }); }
+    else await storage.put(writes);
+  }
   return touched;
 };

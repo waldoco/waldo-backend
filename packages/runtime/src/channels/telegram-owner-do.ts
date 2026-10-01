@@ -1,3 +1,4 @@
+import { ClosedRunError, type RunEffectScope } from './run-effect-scope';
 import { receiptUrl } from '../conversation/artifact-link-guard';
 import { TelegramOwnerInbox, OWNER_INBOX_KEY, type InboxRecord } from './telegram-owner-inbox';
 import { sameSecret } from './telegram-webhook';
@@ -151,6 +152,22 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
   private readonly inbox = new TelegramOwnerInbox(this.ctx.storage, persistInboxWake);
   private readonly liveAttempts = new Set<string>();
   private activeInbox: InboxRecord | null = null;
+  private activeScope: RunEffectScope | undefined;
+  private activeAbort: AbortController | undefined;
+
+  private closeRunAtomic(run: InboxRecord, reason: string, awaitingDelivery = false): void {
+    this.ctx.storage.transactionSync(() => {
+      const rows = this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? [];
+      const row = rows.find(r => r.id === run.id);
+      if (!row || row.attempt !== run.attempt || row.runId !== run.runId) throw new Error('run closure identity mismatch');
+      if (row.closedAt !== undefined) return;
+      row.closedAt = Date.now(); row.body = ''; row.reason = reason;
+      if (row.state === 'claimed') row.state = awaitingDelivery ? 'awaiting_delivery' : 'quarantined';
+      this.ctx.storage.kv.put('telegram_owner_inbox_v1', rows);
+      const due = rows.flatMap(r => r.state === 'admitted' ? [Date.now() + 250] : r.state === 'claimed' || r.state === 'consumed' ? [r.deadline ?? Date.now() + 250] : r.state === 'completed' ? [r.admittedAt + 25 * 3600000] : []);
+      this.ctx.storage.kv.put('telegram_owner_inbox_due_v1', due.length ? Math.min(...due) : null);
+    });
+  }
 
   private async enqueue(request: Request): Promise<Response> {
     const secret = this.env.TELEGRAM_WEBHOOK_SECRET;
@@ -193,7 +210,10 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
           const attempt = crypto.randomUUID(); const claimed = await this.inbox.claim(row.id, attempt, crypto.randomUUID(), Date.now() + 180_000);
           if (claimed && this.activeInbox?.runId === control.targetRun) {
             this.liveAttempts.add(attempt);
-            if (control.kind === 'stop') { await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stopTarget(control.targetRun); }
+            if (control.kind === 'stop') {
+              if (target && target.runId === control.targetRun) { this.closeRunAtomic(target, 'owner_stopped'); this.activeAbort?.abort(); }
+              await this.inbox.transition(row.id, attempt, 'consumed'); this.runtimes.telegram?.control.stopTarget(control.targetRun);
+            }
             else this.runtimes.telegram?.control.steerTarget(control.targetRun, raw.update_id!, text!);
           }
         }
@@ -210,8 +230,25 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       await this.inbox.transition(row.id, attempt, 'quarantined', 'target_run_not_live'); return;
     }
     const attempt = crypto.randomUUID(); const runId = crypto.randomUUID();
-    const claimed = await this.inbox.claim(row.id, attempt, runId, Date.now() + 180_000); if (!claimed) return;
+    const claimed = await this.inbox.claim(row.id, attempt, runId, Date.now() + 150_000); if (!claimed) return;
     this.liveAttempts.add(attempt); this.activeInbox = claimed;
+    const abort = new AbortController();
+    const scope: RunEffectScope = {
+      runId, attempt, deadline: claimed.deadline!, signal: abort.signal,
+      admit: () => { scope.commit(() => undefined); },
+      commit: work => this.ctx.storage.transactionSync(() => {
+        const current = (this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? []).find(r => r.id === claimed.id);
+        if (!current || current.state !== 'claimed' || current.closedAt !== undefined || current.runId !== runId || current.attempt !== attempt
+          || current.subject !== claimed.subject || current.bot !== claimed.bot || current.doName !== claimed.doName
+          || this.ctx.storage.kv.get<string>('telegram_subject') !== claimed.subject || this.ctx.storage.kv.get<string>('do_name') !== claimed.doName
+          || this.ctx.storage.kv.get<boolean>('telegram_unlinked') || abort.signal.aborted || Date.now() >= claimed.deadline!) throw new ClosedRunError();
+        const result = work();
+        if (result && typeof (result as { then?: unknown }).then === 'function') throw new Error('run commit must be synchronous');
+        return result;
+      }),
+    };
+    this.activeScope = scope; this.activeAbort = abort;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       this.setup().control.bindTarget(runId);
       this.setup().control.durableConsume(async ids => {
@@ -222,18 +259,52 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       }
       const raw = JSON.parse(row.body) as RawUpdate;
       const direct = Boolean(raw.callback_query || parseHarnessCommand(raw.message?.text) || ['/stop', '/ledger'].includes(raw.message?.text?.trim() ?? ''));
-      await this.turn(raw, 'telegram', true);
+      if (direct) await this.turn(raw, 'telegram', true);
+      else {
+        const expired = new Promise<never>((_, reject) => { abort.signal.addEventListener('abort', () => reject(new ClosedRunError()), { once: true }); timeout = setTimeout(() => reject(new ClosedRunError()), Math.max(0, scope.deadline - Date.now())); });
+        await Promise.race([this.turn(raw, 'telegram', true, scope), expired]);
+      }
       if (direct) await this.inbox.transition(row.id, attempt, 'completed', 'direct_path_returned');
       const final = this.setup().finalOutbox.records().find(r => r.inbox?.runId === runId);
       if (!final && !direct) await this.inbox.transition(row.id, attempt, 'quarantined', 'no_final_effects_uncertain');
     } catch {
       await this.inbox.transition(row.id, attempt, 'quarantined', 'execution_uncertain');
     } finally {
+      clearTimeout(timeout);
+      // Failed durable closure must keep the serial queue held. Never abort/release first.
+      for (;;) {
+        try { this.closeRunAtomic(claimed, 'execution_closed'); break; }
+        catch { console.error('durable run closure failed'); await new Promise(resolve => setTimeout(resolve, 1000)); }
+      }
+      abort.abort();
+      const closed = (this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? []).find(r => r.id === claimed.id);
+      try {
+      if (closed?.state === 'quarantined') {
+        const expiresAt = (closed.closedAt ?? Date.now()) + 5 * 60000;
+        await this.setup().finalOutbox.enqueueFenced({ id: `failure:${claimed.id}:${attempt}`, trace: ownerTurnTrace('telegram', claimed.updateId),
+          payload: { chat_id: Number(claimed.subject), text: closed.reason === 'owner_stopped' ? 'Stopped. In-flight changes may still finish.' : 'This run did not finish. In-flight changes may still finish. Please check before retrying changes.' },
+          ownerSubject: claimed.subject, doName: claimed.doName, bot: claimed.bot, expiresAt,
+        }, work => this.ctx.storage.transactionSync(() => {
+          const current = (this.ctx.storage.kv.get<InboxRecord[]>('telegram_owner_inbox_v1') ?? []).find(r => r.id === claimed.id);
+          if (!current || current.runId !== runId || current.attempt !== attempt || current.closedAt === undefined || Date.now() >= expiresAt
+            || this.ctx.storage.kv.get<string>('telegram_subject') !== claimed.subject || this.ctx.storage.kv.get<string>('do_name') !== claimed.doName || this.ctx.storage.kv.get<boolean>('telegram_unlinked')) return;
+          work();
+        }));
+      }
+      } catch { console.error('fixed failure notice unavailable'); } finally {
+      if (this.activeScope === scope) { this.activeScope = undefined; this.activeAbort = undefined; }
+      try {
       for (const child of await this.inbox.records()) if (child.control?.targetRun === runId && child.attempt) {
         await this.inbox.transition(child.id, child.attempt, 'quarantined', child.state === 'consumed' ? 'consumed_target_outcome_uncertain' : 'not_consumed');
         this.liveAttempts.delete(child.attempt);
       }
-      this.activeInbox = null; this.liveAttempts.delete(attempt); await this.setup().scheduler.rearm();
+      } catch { console.error('child quarantine deferred to host recovery'); } finally {
+        if (this.activeInbox?.runId === runId) this.activeInbox = null;
+        // Serial owner execution is over; retained child claims are recovered as uncertain.
+        this.liveAttempts.clear();
+        await this.setup().scheduler.rearm();
+      }
+      }
     }
   }
 
@@ -554,6 +625,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       if (selected === 1) {
         try { await finalOutbox.drain({
           allowed: async r => r.payload.chat_id === owner && r.ownerSubject === String(owner)
+            && (!r.bot || r.bot === this.env.TELEGRAM_BOT_TOKEN?.split(':')[0])
             && r.doName === (this.ctx.storage.kv.get<string>('do_name') ?? '')
             && this.ctx.storage.kv.get<boolean>('telegram_unlinked') !== true,
           send: payload => call('sendMessage', payload), settled: settleFinal,
@@ -651,7 +723,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     return Response.json(result);
   }
 
-  private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false): Promise<void> {
+  private async turn(update: unknown, channel: ChannelKind = 'telegram', durable = false, scope?: RunEffectScope): Promise<void> {
     const { listener, owner, call, desk, ledger, updates, control, log, ready } = this.setup(channel);
     await ready;
     if (!listener) {
@@ -717,7 +789,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     }
     if (durable) {
       const parsed = await new TelegramPollingAdapter({ getUpdates: async () => [update] }, 0).poll(0);
-      for (const inbound of parsed.accepted) await listener.handle(inbound);
+      for (const inbound of parsed.accepted) { scope?.admit(); await listener.handle({ ...inbound, ...(scope ? { runScope: scope } : {}) }); }
     } else await listener.pollOnce(new TelegramPollingAdapter({ getUpdates: async () => [update] }, offset), 0);
   }
 
@@ -782,7 +854,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     const captureText = resolveCaptureText(this.env);
     const turnReceiptUrls = new Map<string, Set<string>>();
     const log = (entry: TurnLogEntry) => {
-      if (entry.hop === 'tool_create_artifact' || entry.hop === 'tool_revise_artifact') {
+      if ((!entry.trace.startsWith('tg-') || this.activeInbox?.updateId === Number(entry.trace.slice(3))) && (entry.hop === 'tool_create_artifact' || entry.hop === 'tool_revise_artifact')) {
         try {
           const url = receiptUrl(entry.hop.slice(5), JSON.parse(entry.text?.output ?? 'null'));
           if (url) { const urls = turnReceiptUrls.get(entry.trace) ?? new Set<string>(); urls.add(url); turnReceiptUrls.set(entry.trace, urls); }
@@ -1115,7 +1187,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
         await api.sendMessage({ chat_id: owner, text: `From ${from}:\n${lines.join('\n')}` });
         log({ trace: 'artifact:relay', hop: 'artifact_relay', ms: 0, ok: true, detail: artifacts.map((artifact) => artifact.kind).join(',') });
         return true;
-      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN); return result; }), undefined,
+      }), connectServiceHandler(google), searchEpisodesHandler(episodes), webSearchHandler(this.env.BRAVE_SEARCH_API_KEY), browsePageHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY), browseActHandler(this.env.BROWSERBASE_API_KEY, this.env.BROWSERBASE_PROJECT_ID, this.env.OPENAI_API_KEY, desk.record, desk.proposeBrowserSubmit), callMcpToolHandler(this.env.WALDO_MCP_SERVERS, desk, mcpGoogleAuth), sendMessageHandler(desk), ...loopHandlers(loops)], undefined, this.env.WALDO_TOOL_OFFLOAD !== '0', toolOutputLedger(storage), offerConnect, undefined, (texts, scope) => redactConversationEntries(this.ctx.storage, texts, FORGOTTEN, scope).then(async (result) => { await redactToolOutputLedger(this.ctx.storage, texts, FORGOTTEN, scope); return result; }), undefined,
       () => standingOrdersPrompt(orders), runs, undefined,
       parseEgressAllowlistEnv(this.env.WALDO_EGRESS_ALLOWLIST),
       (trace) => healthContext.latest(trace),
@@ -1135,6 +1207,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
     };
     const listener = owner > 0 ? new TelegramOwnerListener({
       ownerTelegramId: owner, surface: channel, api, ...responder, log,
+      chooseReaction: turn => { const capability = turn.runScope; if (capability) capability.admit(); return responder.chooseReaction(turn); },
       respond: (turn, time) => {
         if (turn.media) files.record(turn.media, turn.text ?? '', Date.now());
         return responder.respond(turn, time);
@@ -1142,14 +1215,18 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       ...(channel === 'telegram' ? { queueFinal: async (turn: import('./telegram-polling').TelegramInboundTurn, payload: import('./telegram-final-outbox').FinalPayload, emoji: string) => {
         // Capture probes remain inert and exercise the original immediate mock path.
         if (probeCapture.current !== null) { await api.sendMessage(payload); return; }
-        if (this.activeInbox && this.activeInbox.updateId !== turn.updateId) throw new Error('final run mismatch');
-        await finalOutbox.enqueue({ id: this.activeInbox ? `turn:${this.activeInbox.id}` : `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
-          ...(this.activeInbox?.runId && this.activeInbox.attempt ? { inbox: { id: this.activeInbox.id, runId: this.activeInbox.runId, attempt: this.activeInbox.attempt } } : {}),
+        const captured = this.activeInbox;
+        if (turn.runScope && (!captured || captured.runId !== turn.runScope.runId || captured.attempt !== turn.runScope.attempt || captured.updateId !== turn.updateId)) throw new ClosedRunError();
+        const input = { id: captured ? `turn:${captured.id}` : `turn:${turn.updateId}`, trace: ownerTurnTrace(channel, turn.updateId), payload: { ...payload, text: redactSecretUrls(payload.text).text },
+          ...(captured?.runId && captured.attempt ? { inbox: { id: captured.id, runId: captured.runId, attempt: captured.attempt } } : {}),
           receiptUrls: [...(turnReceiptUrls.get(ownerTurnTrace(channel, turn.updateId)) ?? [])],
           ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
           ...(turn.messageId === null ? {} : { reaction: { message_id: turn.messageId, emoji } }),
-        });
-        if (this.activeInbox?.attempt) await this.inbox.transition(this.activeInbox.id, this.activeInbox.attempt, 'awaiting_delivery');
+        };
+        if (turn.runScope && captured) await finalOutbox.enqueueFenced(input, work => turn.runScope!.commit(() => {
+          work(); this.closeRunAtomic(captured, 'final_committed', true);
+        }));
+        else await finalOutbox.enqueue(input);
         turnReceiptUrls.delete(ownerTurnTrace(channel, turn.updateId));
         await scheduler.rearm();
       } } : {}),
@@ -1183,7 +1260,7 @@ export class TelegramOwnerDO extends DurableObject<TelegramWebhookEnv> {
       try {
         const text = (await responder.remind(trace, owner, note, time)).trim() || note;
         if (channel === 'telegram') {
-          await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text }, ...(this.activeInbox?.runId && this.activeInbox.attempt ? { inbox: { id: this.activeInbox.id, runId: this.activeInbox.runId, attempt: this.activeInbox.attempt } } : {}),
+          await finalOutbox.enqueue({ id: `reminder:${entry.id}:${entry.occurrence_at}`, trace, payload: { chat_id: owner, text: redactSecretUrls(text).text },
           receiptUrls: [...(turnReceiptUrls.get(trace) ?? [])],
             ownerSubject: String(owner), doName: identity.get<string>('do_name') ?? '',
             reminder: { id: entry.id, occurrence: entry.occurrence_at, runId: run.id, schedulerRunId: scheduler.runningRunId(entry.id, entry.occurrence_at), once: entry.recurrence === null },
