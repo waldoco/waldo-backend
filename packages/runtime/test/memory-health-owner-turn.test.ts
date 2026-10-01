@@ -66,3 +66,23 @@ it('a lab-value-only claim is stored by the real writer path and a no-op writer 
   expect(memorySection).toContain('HbA1c was 9.1 last week'); // system prompt memory section, from the store
   expect(ownerSection).not.toContain('Answer again');
 });
+
+// Characterisation: the writer proposes a lab value whose evidence the owner never said. Through
+// the real owner turn the claim is stored as inferred (not stated) and the next reply's system
+// prompt carries it with that label. Whether such a claim should be recallable is not decided here.
+it('an invented lab-only claim (evidence not in the owner message) is stored as inferred and reaches the next reply prompt', async () => {
+  let stored: Array<{ source: string; origin: string | null | undefined; text: string }> = [];
+  let memorySection = '';
+  await session('owner-turn-health-invented', op('owner, tg-1: "my HbA1c was 7.2 last month"', 'HbA1c was 7.2 last month'), 'I felt tired today', async ({ store, turn2 }) => {
+    stored = store.claims().map((c) => ({ source: c.source, origin: (c as { origin?: string | null }).origin, text: c.text }));
+    await turn2();
+    const sys = system();
+    memorySection = sys.slice(sys.indexOf('Owner memory'));
+  });
+  expect(stored.map((c) => [c.source, c.text])).toEqual([['inferred', 'HbA1c was 7.2 last month']]);
+  expect(memorySection).toContain('HbA1c was 7.2 last month');
+  expect(memorySection).toContain('source="inferred" provenance="provisional"');
+  expect(stored[0]!.origin).toBe('agent');
+  // The rendered evidence still reads as an owner quote the owner never said.
+  expect(memorySection).toContain('evidence: owner, tg-1: "my HbA1c was 7.2 last month"');
+});
