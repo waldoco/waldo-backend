@@ -1,11 +1,11 @@
 # Channel adapter extraction (design only, no code)
 
 Status: draft proposal for review. Evidence layers kept apart: SOURCE = code at beta-mvp df7726c; REFERENCE = docs fetched 2026-10-02. Nothing here is LIVE-verified, and no code is changed by this document.
-Decision attribution: this is an analysis answering the owner's 2026-10-02 question ("isn't a Telegram-specific DO wrong vs mature harnesses?"). It is not an owner decision. Codex owns `telegram-owner-do.ts` and `console-signin.ts`; this document edits neither.
+Decision attribution: this is an analysis answering the owner's 2026-10-02 12:57 message: "Isn’t that wrong like how other agents and mature harness have this designed ??" (a reply to the answer that Telegram turns run in a per-owner TelegramOwnerDO; relayed by the main agent, not read by me from the owner channel). It is not an owner decision. Codex owns `telegram-owner-do.ts` and `console-signin.ts`; this document edits neither.
 
 ## 1. What exists today (SOURCE)
 
-- `src/channels/telegram-owner-do.ts` is 1,658 lines. `telegram` appears about 115 times and `whatsapp` about 28.
+- `src/channels/telegram-owner-do.ts` is 1,658 lines. Occurrence counts (`grep -o`, whole file at df7726c): `telegram` 73 case-sensitive / 147 case-insensitive; `whatsapp` 28 case-sensitive / 41 case-insensitive.
 - `type ChannelKind = 'telegram' | 'whatsapp'` (line 152). `setup(channel)` (line 889) is the composition root: memory, tools, scheduler, outbox, responder. `turn(update, channel)` (line 783) runs a turn. WhatsApp turns already run through this same DO (line 421). The console surface also uses the DO (`index.ts:160`, `console-signin.ts:132`).
 - The turn loop is channel-neutral: `owner-turn.ts` `createOwnerResponder` consumes an `OwnerTurnEnvelope` (`owner-turn-envelope.ts`: "Auth and provider parsing happen in adapters. This is the admitted content boundary").
 - Per-platform transport already lives in separate files: `telegram-api`, `telegram-polling`, `telegram-webhook`, `telegram-final-outbox`, `telegram-link-*`, `telegram-media`, `whatsapp-api`, `whatsapp-webhook`, and `imessage/{ingress,admission,media}`. The iMessage files already emit `OwnerTurnEnvelope` but are not reachable from the Worker entry today.
@@ -55,7 +55,7 @@ Both are a channel-neutral core, per-platform adapters, and a shared session sto
 
 ## 6. Open question: two cores
 
-`RunLoopDO` and `TracerDO` are bound in `wrangler.jsonc` but the Telegram path does not call them (`RunLoopDO` serves the owner-root route at `index.ts:220`; `TracerDO` has no caller outside its binding). Telegram turns share the tracer table schemas, not the tracer loop. A channel-neutral core decision should also say which core wins: fold the Telegram turn path onto the run loop, or keep the owner turn path as the core and retire or park the run-loop stack.
+`RunLoopDO` and `TracerDO` are bound in `wrangler.jsonc`. By reading source (a grep of callers, not a runtime trace), the Telegram path does not call them (`RunLoopDO` serves the owner-root route at `index.ts:220`; `TracerDO` has no caller outside its binding). Telegram turns share the tracer table schemas, not the tracer loop. A channel-neutral core decision should also say which core wins: fold the Telegram turn path onto the run loop, or keep the owner turn path as the core and retire or park the run-loop stack.
 
 ## 7. Not decided here
 
