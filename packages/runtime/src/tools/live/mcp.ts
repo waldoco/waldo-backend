@@ -119,7 +119,7 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
     const servers = mcpServers(serversRaw);
     const found = servers.find((s) => s.name === server);
     if (!found) {
-      return { ok: false, code: 'not_found', error: servers.length ? `Unknown MCP server "${server}". Configured: ${servers.map((s) => s.name).join(', ')}` : 'No MCP servers are configured on this Waldo yet.' };
+      return { ok: false, code: 'not_found', error: servers.length ? `Unknown MCP server "${server}". Configured: ${servers.map((s) => s.name).join(', ')}` : 'No MCP servers are configured on this Waldo yet.', source_taint: 'external' };
     }
     if (desk) {
       const proposal_id = await desk.proposeMcpCall({ server, tool, args });
@@ -135,7 +135,7 @@ export const callMcpToolHandler = (serversRaw: string | undefined, desk?: McpDes
         return { ok: false, code: 'auth_failed', error: CONNECT_SENT_TEXT, source_taint: 'external', connect: { status: 'auth_required', service: 'google', reason: error.reason, ...(error.feature === undefined ? {} : { feature: error.feature }) } };
       }
       const message = error instanceof Error ? error.message : String(error);
-      return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message };
+      return { ok: false, code: error instanceof ToolExecutionError ? 'rejected' : 'transient', error: message, source_taint: 'external' };
     }
   },
 });
