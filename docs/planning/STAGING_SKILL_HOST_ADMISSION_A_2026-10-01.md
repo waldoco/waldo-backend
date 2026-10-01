@@ -79,3 +79,9 @@ Required in either option:
 4. connectorSkills[] and the mutable repository reader are empty in the local composer. The current-connector snapshot has no source until the mapping and a connections read (waldo.owner_id_for exists for connections) are wired. Do not populate it from fixtures.
 5. Existing active-row count against the 24-row limit is read from the repository at activation, not hard-coded.
 Red-first proofs added: suspended owner, unlinked presence, two owners sharing a subject string, do_name reused after unlink, resume after revocation, fixture principal rejected on staging.
+
+## Decision log: identity mapping choice (2026-10-02, 00:00 IST)
+Decision: option (b), do_name as the principal key, staging only. Made under the owner's September 30 decide-and-log rule; relayed by the main agent from the owner's 23:51 IST direction to take the open items over. No migration, no hosted SQL, no production.
+Guards that stay in force: the allowlist names exact do_names and fails closed outside staging; the principal comes from the authenticated directory row, never from a message, request parameter or model; option (a) (owners.id from a signed RPC plus a reviewed tenant_ref policy) remains required before any wider enablement and is still an owner-go item.
+Known weakness accepted for staging: do_name is a routing label, not a persistent id. The red-first proof "do_name reused after unlink" must pass before the staging binding is switched on.
+Reversal: remove the staging allowlist entry; default and production paths are unchanged.
