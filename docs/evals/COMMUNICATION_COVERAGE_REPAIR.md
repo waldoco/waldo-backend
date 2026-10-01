@@ -39,3 +39,20 @@ pagination and the previous sampled-page limitation. The isolated native Google
 adapter denies mailPage until it has a concrete fixture mapping. No fixture row
 injection, sender unmasking, account metadata, proxy live deployment or hosted
 query is claimed. The new method is read-only and requires no intent/send grant.
+
+## Host account metadata projection
+
+connect_service can now report the existing host google.state() account list through
+an allowlisted projection: id, email, granted calendar/mail/tasks booleans, recorded
+health category and a provenance label. No refresh/access token, raw provider error,
+scopes blob or message body is projected. A mail-only connected account is no longer
+mistaken for absence because the calendar client is unavailable. Capability metadata
+and last recorded health do not prove a fresh successful provider read.
+
+This reuses the existing owner-readable host-metadata seam (source_taint:null), not
+a global PII bypass. Sender/body tool outputs remain external and keep masking;
+tests exercise both through PostToolUse sanitising. Host account identity says
+nothing about who authored an inbound message or a notification display name.
+No new account API, owner-DO mutation, hook or sanitiser rule is introduced. Other
+model/prose/log destinations retain their current privacy rules; no full end-to-end
+model reply or live account metadata trial is claimed.
