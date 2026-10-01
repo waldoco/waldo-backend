@@ -11,7 +11,7 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 full_sha=$(git rev-parse HEAD)
-branch=${WORKERS_CI_BRANCH:-$(git symbolic-ref --quiet --short HEAD || true)}
-preview_name=$(node scripts/runtime-preview-name.mjs "$branch")
+branch=$(git symbolic-ref --quiet --short HEAD || true)
+preview_name=$(node scripts/runtime-preview-name.mjs "$branch" "${WORKERS_CI_BRANCH:-}")
 cd packages/runtime
 exec pnpm exec wrangler preview --worker-name waldo-runtime-staging --ignore-base-config --var "WALDO_RELEASE:${full_sha}" --name "${preview_name}"
