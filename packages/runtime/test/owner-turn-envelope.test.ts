@@ -94,3 +94,14 @@ it('external quote is sanitised before joining owner content', async () => {
   expect(JSON.stringify(captured.inputs)).toContain('[REDACTED_INSTRUCTION]');
   expect(JSON.stringify(captured.inputs)).toContain('external quoted data');
 });
+it('admitted plural loaded images reach the model in order without truncation', async () => {
+  captured.inputs = [];
+  const responder = createOwnerResponder('fixture-key');
+  const first = { kind: 'image' as const, filename: 'first.png', mime_type: 'image/png', data_base64: 'AQ==' };
+  const second = { ...first, filename: 'second.png', data_base64: 'Ag==' };
+  await responder.respond({ traceId: 'plural-images', conversationRef: 'imessage-opaque', surface: 'imessage', service: 'iMessage', text: 'Compare these', attachments: [first, second] }, time);
+  const body = JSON.stringify(captured.inputs);
+  expect(body).toContain('data:image/png;base64,AQ==');
+  expect(body).toContain('data:image/png;base64,Ag==');
+  expect(body.indexOf('AQ==')).toBeLessThan(body.indexOf('Ag=='));
+});

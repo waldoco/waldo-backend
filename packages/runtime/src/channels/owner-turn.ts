@@ -22,7 +22,7 @@ import { applyClaimOps, type ClaimOutcome, applyPromotion, CLAIM_OPS_SCHEMA, exc
 import { restoreConversation, type ConversationStore } from './conversation-store';
 import { reactionInstruction, reactionSchema } from './reactions';
 import type { TurnLogEntry, TurnTimer } from './owner-turn-types';
-import { REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
+import { ownerTurnAttachments, REPLY_QUOTE_LIMIT, type OwnerResponder, type ReplyContext } from './owner-turn-envelope';
 import type { DispatchToolOptions, ToolDispatcherContext } from '../tools/dispatcher';
 import type { LLMAttachment } from '@waldo/contracts';
 import { STOPPED_REPLY, turnControl } from './turn-control';
@@ -386,7 +386,7 @@ export const createOwnerResponder = (
       await restored;
       const id = turn.traceId;
       const media = turn.attachment || turn.mediaNote ? { attachment: turn.attachment, note: turn.mediaNote } : undefined;
-      pending = media?.attachment ? [media.attachment] : undefined;
+      pending = ownerTurnAttachments(turn);
       turnWriting = memory !== undefined && memoryWrites && !probeGuard?.suppressMemory;
       recordedHeard = 0;
       memoryReceipts.length = 0;
