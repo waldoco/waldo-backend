@@ -115,7 +115,7 @@ export const googleHandlers = (google: GoogleAccess, desk: EffectDesk, clock: Ow
       const fetched=page? page.messages : await client.newMail(since,limit);
       const messages = fetched.filter(item => { const at = Date.parse(item.at); return Number.isFinite(at) && at >= since && at < Date.parse(to); }).map(quarantineMailItem);
       return { since: from, from: date_range?.from ?? from, to, timezone: clock.timezone, messages, query, next_page_token:page?.next_page_token??null,result_size_estimate:page?.result_size_estimate??null, coverage: {
-        lower_bound_query: 'previous_epoch_second_then_exact_timestamp_filter',
+        lower_bound_query: paged?'previous_epoch_second_then_exact_timestamp_filter':'legacy_adapter_lower_bound_unverified',
         cursor_query_binding: page_token?'caller_supplied_window_not_authenticated_to_cursor':'first_page',
         scope: 'inbox_primary_category', account_selection: 'connected_adapter_account_not_all_accounts',
         retrieval_window: date_range ? 'explicit_date_range' : 'rolling_24_hours', page_limit: limit,

@@ -13,7 +13,7 @@ it('honors the upper date bound and labels the primary-inbox page as incomplete'
 it('reports actual rolling-window instants, not today or all-account coverage',async()=>{
  const handler=googleHandlers({client:async()=>({newMail:async()=>[]} as never)},desk,clock).find(h=>h.name==='get_communication')!;
  const result=await handler.handle(getCommunicationArgsSchema.parse({}) as never);
- expect(result).toMatchObject({ok:true,data:{from:'2026-09-30T02:30:00.000Z',to:'2026-10-01T02:30:00.000Z',coverage:{complete:false,account_selection:'connected_adapter_account_not_all_accounts',retrieval_window:'rolling_24_hours'}}});
+ expect(result).toMatchObject({ok:true,data:{from:'2026-09-30T02:30:00.000Z',to:'2026-10-01T02:30:00.000Z',coverage:{complete:false,account_selection:'connected_adapter_account_not_all_accounts',retrieval_window:'rolling_24_hours',lower_bound_query:'legacy_adapter_lower_bound_unverified'}}});
 });
 it('reports a truncated sampled page even when upper-bound filtering removes every row',async()=>{
  const handler=googleHandlers({client:async()=>({newMail:async()=>Array.from({length:10},()=>messages[3])} as never)},desk,clock).find(h=>h.name==='get_communication')!;
